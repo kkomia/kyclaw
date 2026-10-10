@@ -11,6 +11,7 @@ import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { IPC_CHANNELS, type WindowState } from '../shared/ipc'
+import { attachContextMenu } from './context-menu'
 import {
   readWindowState,
   windowStatePath,
@@ -74,6 +75,9 @@ export function createMainWindow(): BrowserWindow {
   })
 
   mainWindow = win
+
+  // 客户端内右键菜单：只放编辑类有用项，浏览器自带项一律没有入口（见 main/context-menu.ts）
+  attachContextMenu(win)
 
   // 还原上次的最大化态要在 loadURL 之前：窗口还藏着，先定好尺寸再让渲染端按最终尺寸布局
   if (saved.maximized) win.maximize()
