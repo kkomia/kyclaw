@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { defaultSettings } from '../../shared/settings'
 
 /**
  * preload 桥：白名单方法 + 与主进程共用的通道名 / schema。
@@ -140,14 +141,7 @@ describe('preload：window.kyclaw.settings', () => {
 
   it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
     const { kyclawApi } = await loadPreload()
-    const persisted = {
-      theme: 'dark',
-      fontTier: 'large',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
-    }
+    const persisted = { ...defaultSettings(), theme: 'dark' as const, fontTier: 'large' as const }
     mocks.invoke.mockResolvedValueOnce(persisted)
 
     await expect(kyclawApi.settings.get()).resolves.toEqual(persisted)
@@ -159,27 +153,13 @@ describe('preload：window.kyclaw.settings', () => {
 
     for (const bad of [{ theme: 'blue' }, { theme: 'dark' }, 'dark', null]) {
       mocks.invoke.mockResolvedValueOnce(bad)
-      await expect(kyclawApi.settings.get()).resolves.toEqual({
-        theme: 'system',
-        fontTier: 'default',
-        providers: [],
-        workspaces: [],
-        permissions: { rules: [] },
-        mcpServers: []
-      })
+      await expect(kyclawApi.settings.get()).resolves.toEqual(defaultSettings())
     }
   })
 
   it('update 把补丁原样发给 settings:update，回吐落盘后的完整设置', async () => {
     const { kyclawApi } = await loadPreload()
-    const updated = {
-      theme: 'light',
-      fontTier: 'default',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
-    }
+    const updated = { ...defaultSettings(), theme: 'light' as const }
     mocks.invoke.mockResolvedValueOnce(updated)
 
     await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual(updated)
@@ -190,14 +170,7 @@ describe('preload：window.kyclaw.settings', () => {
     const { kyclawApi } = await loadPreload()
     mocks.invoke.mockResolvedValueOnce({ theme: 'light' })
 
-    await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual({
-      theme: 'system',
-      fontTier: 'default',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
-    })
+    await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual(defaultSettings())
   })
 
   it('setProviderKey 原样发给 settings:set-provider-key，只把 {hasKey:true} 交给上层', async () => {
@@ -254,23 +227,10 @@ describe('preload：window.kyclaw.settings', () => {
 
   it('removeProvider 走 settings:remove-provider，回吐合并后的设置（脏数据回默认值）', async () => {
     const { kyclawApi } = await loadPreload()
-    mocks.invoke.mockResolvedValueOnce({
-      theme: 'dark',
-      fontTier: 'default',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
-    })
+    const persisted = { ...defaultSettings(), theme: 'dark' as const }
+    mocks.invoke.mockResolvedValueOnce(persisted)
 
-    await expect(kyclawApi.settings.removeProvider('deepseek')).resolves.toEqual({
-      theme: 'dark',
-      fontTier: 'default',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
-    })
+    await expect(kyclawApi.settings.removeProvider('deepseek')).resolves.toEqual(persisted)
     expect(mocks.invoke).toHaveBeenLastCalledWith('settings:remove-provider', 'deepseek')
   })
 })
@@ -278,18 +238,20 @@ describe('preload：window.kyclaw.settings', () => {
 describe('preload：window.kyclaw.workspace', () => {
   /** 落盘后的设置（含一条工作区），用作 workspace 面回包的样本 */
   const persisted = {
-    theme: 'system',
-    fontTier: 'default',
-    providers: [],
-    workspaces: [{ path: 'D:\\项目', mode: 'ask' }],
-    permissions: { rules: [] },
-    mcpServers: []
+    ...defaultSettings(),
+    workspaces: [{ path: 'D:\\项目', mode: 'ask' as const }]
   }
 
-  it('暴露 workspace 一族（pick / add / setMode / remove）', async () => {
+  it('暴露 workspace 一族（pick / pickDefault / add / setMode / remove）', async () => {
     const { kyclawApi } = await loadPreload()
 
-    expect(Object.keys(kyclawApi.workspace).sort()).toEqual(['add', 'pick', 'remove', 'setMode'])
+    expect(Object.keys(kyclawApi.workspace).sort()).toEqual([
+      'add',
+      'pick',
+      'pickDefault',
+      'remove',
+      'setMode'
+    ])
   })
 
   it('pick 打 workspace:pick（不带入参），回包按同一份 settings schema 解析', async () => {
@@ -324,6 +286,16 @@ describe('preload：window.kyclaw.workspace', () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:remove', 'D:\\项目')
   })
 
+  it('pickDefault 打 workspace:pick-default（不带入参），回包按同一份 settings schema 解析', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ...persisted, defaultWorkspace: 'D:\\项目' })
+
+    await expect(kyclawApi.workspace.pickDefault()).resolves.toMatchObject({
+      defaultWorkspace: 'D:\\项目'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:pick-default')
+  })
+
   it('回包结构不对（跨边界脏数据）→ 默认值：多一个字段的工作区也不许进渲染端', async () => {
     const { kyclawApi } = await loadPreload()
 
@@ -332,13 +304,64 @@ describe('preload：window.kyclaw.workspace', () => {
       workspaces: [{ path: 'D:\\项目', mode: 'ask', extra: 1 }]
     })
 
-    await expect(kyclawApi.workspace.pick()).resolves.toEqual({
-      theme: 'system',
-      fontTier: 'default',
-      providers: [],
-      workspaces: [],
-      permissions: { rules: [] },
-      mcpServers: []
+    await expect(kyclawApi.workspace.pick()).resolves.toEqual(defaultSettings())
+  })
+})
+
+describe('preload：window.kyclaw.projects', () => {
+  const persisted = {
+    ...defaultSettings(),
+    defaultWorkspace: 'D:\\ws',
+    projects: [
+      { id: 'p1', name: '插件', path: 'D:\\ws\\插件', createdAt: '2026-10-11T00:00:00.000Z' }
+    ]
+  }
+
+  it('暴露 projects 一族（base / pickFolder / create / remove）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.projects).sort()).toEqual([
+      'base',
+      'create',
+      'pickFolder',
+      'remove'
+    ])
+  })
+
+  it('base / pickFolder 的两块料按各自 schema 解析；结构不对就抛', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({ base: 'D:\\ws' })
+    await expect(kyclawApi.projects.base()).resolves.toEqual({ base: 'D:\\ws' })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('projects:base')
+
+    mocks.invoke.mockResolvedValueOnce({ path: null })
+    await expect(kyclawApi.projects.pickFolder()).resolves.toEqual({ path: null })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('projects:pick-folder')
+
+    mocks.invoke.mockResolvedValueOnce({ base: '' })
+    await expect(kyclawApi.projects.base()).rejects.toThrow()
+  })
+
+  it('create 把 name/path 装成对象发出去，回吐落盘后的完整设置', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(persisted)
+
+    await expect(kyclawApi.projects.create('插件', 'D:\\ws\\插件')).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('projects:create', {
+      name: '插件',
+      path: 'D:\\ws\\插件'
     })
+  })
+
+  it('remove 走 projects:remove；回包结构不对 → 默认值', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ...persisted, projects: [] })
+
+    await expect(kyclawApi.projects.remove('p1')).resolves.toMatchObject({ projects: [] })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('projects:remove', 'p1')
+
+    mocks.invoke.mockResolvedValueOnce({ projects: [{ id: 'p1' }] })
+    await expect(kyclawApi.projects.remove('p1')).resolves.toEqual(defaultSettings())
   })
 })

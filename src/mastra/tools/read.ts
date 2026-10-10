@@ -33,7 +33,7 @@ export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, 
     outputSchema: z.string(),
     requireApproval: (input) => needsApproval(ctx, 'read', input),
     execute: async (input, context) => {
-      const { abs } = toolTarget(ctx, input.path)
+      const { abs } = toolTarget(ctx, input.path, sessionKey(context))
       const fileStat = await statOrNull(ctx, abs)
       if (fileStat === null || !fileStat.isFile()) {
         throw new Error(`read 失败：${input.path} 不存在或不是文件（目录请用 glob 列出）`)

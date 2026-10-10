@@ -8,6 +8,8 @@
  *   都是它（`GET/PUT/DELETE /api/memory`）。
  * - 用量记账（T14）：chat 路由的 `defaultOptions.onFinish` 从 run 收尾事件里取 usage，
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
+ * - 会话↔项目映射（T18）：同一份 libsql 里的 `session_projects` 表（见 session-projects.ts），
+ *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区 → 授权列表）。
  * - chat 路由用 @mastra/ai-sdk 的 `chatRoute`：`POST /chat/:agentId`，响应是 AI SDK UI 消息流
  *   （SSE）——T7 的 useChat 直接吃这口。
  * - 协议版本 v7（T11）：渲染端是 ai@7；**工具审批 part（`tool-approval-request`）只在 v6 及以后
@@ -24,9 +26,11 @@ import type { Tool } from '@mastra/core/tools'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
+import type { Project } from '../shared/projects'
 import type { McpServerConfig, PermissionRule, Workspace } from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import type { McpToolGate } from './mcp'
+import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { createUsageRecorder, createUsageStore, usageSqlClient, type UsageStore } from './usage'
 
 /** libsql 库文件名（落在 dataDir 下） */
@@ -70,6 +74,8 @@ export interface KyclawMastra {
   memory: MastraMemory
   /** 用量表的读写口（/api/usage 与记账钩子共用一份） */
   usage: UsageStore
+  /** 会话↔项目映射的表读写口 + 内存镜像（/api/projects/mappings 与工具取根共用一份） */
+  sessionProjects: SessionProjectStore
 }
 
 /** libsql 的 file: URL 只认正斜杠（Windows 的反斜杠会被当转义字符） */
@@ -82,6 +88,10 @@ export async function createKyclawMastra(options: {
   resolveModel: ModelResolver
   /** 授权工作区（工具权限边界）；缺省 = 没有工作区 */
   workspaces?: () => readonly Workspace[]
+  /** 默认工作区（T18：没项目的会话用它当根）；缺省 = 没指认 */
+  defaultWorkspace?: () => string | null
+  /** 项目清单（T18）；缺省 = 没有项目 */
+  projects?: () => readonly Project[]
   /** "永久允许"规则（T13：审批记忆落盘的那份设置）；缺省 = 没有规则 */
   permissionRules?: () => readonly PermissionRule[]
   /** MCP server 设置（T12：分级用"只读"标记、agent 现读）；缺省 = 没有 MCP */
@@ -113,10 +123,15 @@ export async function createKyclawMastra(options: {
   // 用量表与既有 Mastra 表同库：建表在这里（服务起来就建好），记账/查询共用这一个 store
   const usage = createUsageStore(usageSqlClient(storage))
   await usage.ensureTable()
+  // 会话↔项目映射（T18）同库同寿命：表在这里建好；内存镜像是工具同步取根的来源
+  const sessionProjects = createSessionProjectStore(storage)
   const mastra = new MastraClass({
     agents: {
       [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel, memory, {
         workspaces: options.workspaces,
+        defaultWorkspace: options.defaultWorkspace,
+        projects: options.projects,
+        projectOf: (threadId) => sessionProjects.get(threadId),
         permissionRules: options.permissionRules,
         mcpServers: options.mcpServers,
         mcpTools: options.mcpTools
@@ -135,5 +150,5 @@ export async function createKyclawMastra(options: {
     }
   })
 
-  return { mastra, storage, memory, usage }
+  return { mastra, storage, memory, usage, sessionProjects }
 }

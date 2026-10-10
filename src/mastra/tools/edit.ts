@@ -41,7 +41,7 @@ export async function createEditTool(ctx: ToolContext): Promise<Tool<EditInput, 
     requireApproval: (input) => needsApproval(ctx, 'edit', input),
     execute: async (input, context) => {
       const session = sessionKey(context)
-      const { abs } = toolTarget(ctx, input.path)
+      const { abs } = toolTarget(ctx, input.path, session)
 
       if (!ctx.state.wasRead(session, abs)) {
         throw new Error(`未读先改：请先用 read 读取 ${abs}，确认原文后再 edit`)

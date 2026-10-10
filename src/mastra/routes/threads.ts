@@ -40,6 +40,11 @@ export interface ThreadsRouterOptions {
    * 生产 = `agent.abortThreadStream({threadId, resourceId})`；测试可不给（就不取消）。
    */
   abortThreadRun?: (threadId: string) => void
+  /**
+   * 线程真被删掉之后的钩子（T18：会话↔项目映射跟着清）。真删了才调，幂等路径（线程本就不存在）不调；
+   * 是"顺带的旁路"，不该拖慢/弄坏删除本身——实现方自己吞错（见 main/agent/service.ts）。
+   */
+  onThreadDeleted?: (threadId: string) => void
 }
 
 /** 存储线程 → 列表项（title 空串归一成 null；时间转 ISO） */
@@ -136,6 +141,8 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       }
       // deleteThread 连消息与线程级工作记忆一起收（@mastra/memory 的行为）
       await memory.deleteThread(params.data.id)
+      // 真删掉了才叫钩子（T18 的映射清理）；不存在的线程走的是幂等路径，不动映射
+      options.onThreadDeleted?.(params.data.id)
     }
     // 不存在也回 ok：删除是幂等的，重试/双端点一次不该报错
     return context.json({ ok: true })

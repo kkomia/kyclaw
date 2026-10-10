@@ -187,3 +187,41 @@ describe('工作区组 · 通道缺失', () => {
     expect(await screen.findByTestId('workspace-error')).toHaveTextContent('工作区通道不可用')
   })
 })
+
+describe('工作区组 · 默认工作区（T18）', () => {
+  it('没指认：显示「未指定」+ 更改位置入口', async () => {
+    await mount(defaultSettings())
+
+    expect(screen.getByTestId('default-workspace')).toHaveTextContent('默认工作区')
+    expect(screen.getByTestId('default-workspace-path')).toHaveTextContent('未指定')
+    expect(screen.getByTestId('default-workspace-change')).toHaveTextContent('更改位置')
+  })
+
+  it('已指认：显示落盘的路径（完整值走应用内 Tooltip，不用原生 title）', async () => {
+    await mount({ ...defaultSettings(), defaultWorkspace: PROJECT })
+
+    expect(screen.getByTestId('default-workspace-path')).toHaveTextContent(PROJECT)
+    expect(screen.getByTestId('default-workspace-path')).not.toHaveAttribute('title')
+  })
+
+  it('点「更改位置」→ workspace:pickDefault，指认后行里就是新路径（以落盘为准）', async () => {
+    const bridge = await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('default-workspace-change'))
+
+    await waitFor(() => expect(bridge.workspace.pickDefault).toHaveBeenCalled())
+    await waitFor(() => {
+      expect(screen.getByTestId('default-workspace-path')).toHaveTextContent(PICKED_WORKSPACE)
+    })
+  })
+
+  it('指认失败（选到不可用的路径）：行内报原因，指认保持原样', async () => {
+    const bridge = await mount(defaultSettings())
+    bridge.workspace.pickDefault.mockRejectedValueOnce(new Error('路径不存在或不可访问'))
+
+    fireEvent.click(screen.getByTestId('default-workspace-change'))
+
+    expect(await screen.findByTestId('workspace-error')).toHaveTextContent('路径不存在或不可访问')
+    expect(screen.getByTestId('default-workspace-path')).toHaveTextContent('未指定')
+  })
+})

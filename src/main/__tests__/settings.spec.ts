@@ -23,6 +23,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large' as const,
       providers: [],
       workspaces: [],
+      defaultWorkspace: null,
+      projects: [],
       permissions: { rules: [] },
       mcpServers: []
     }
@@ -62,13 +64,20 @@ describe('设置存储（userData 下的 settings.json）', () => {
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
     first.workspaces.push({ path: 'D:/leaked', mode: 'ask' })
     first.permissions.rules.push({ tool: 'write', workspace: 'D:/leaked', mode: 'allow' })
+    first.projects.push({
+      id: 'leaked',
+      name: 'leaked',
+      path: 'D:/leaked',
+      createdAt: '2026-10-11T00:00:00.000Z'
+    })
 
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])
+    expect(DEFAULT_SETTINGS.projects).toEqual([])
     expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers）读出空表：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -81,8 +90,35 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large',
       providers: [],
       workspaces: [],
+      defaultWorkspace: null,
+      projects: [],
       permissions: { rules: [] },
       mcpServers: []
+    })
+  })
+
+  it('T18 的字段往返：默认工作区与项目清单一起落盘读回', () => {
+    const file = settingsPath(dir)
+    const project = {
+      id: 'p1',
+      name: '插件',
+      path: join(dir, '插件'),
+      createdAt: '2026-10-11T00:00:00.000Z'
+    }
+
+    writeSettings(file, {
+      ...DEFAULT_SETTINGS,
+      workspaces: [
+        { path: join(dir, '插件'), mode: 'ask' },
+        { path: join(dir, '默认'), mode: 'ask' }
+      ],
+      defaultWorkspace: join(dir, '默认'),
+      projects: [project]
+    })
+
+    expect(readSettings(file)).toMatchObject({
+      defaultWorkspace: join(dir, '默认'),
+      projects: [project]
     })
   })
 

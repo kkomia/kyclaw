@@ -8,10 +8,14 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { workspaceModeSchema, type WorkspaceMode } from '@shared/settings'
 
 /**
- * 设置页「工作区」组（T10 起；T13 收紧 full 入口）：授权目录列表 + 原生选择器添加 + 移除 + 访问模式切换。
+ * 设置页「工作区」组（T10 起；T13 收紧 full 入口；T18 加"默认工作区"）。
  *
  * 分工：
- *   - 加 / 删 / 切模式都走 workspace:* 通道（主进程校验路径、落盘 settings.json 的 workspaces）；
+ *   - 第一行是 **默认工作区**（T18，地位对齐 Kimi「其他 → 通用 → 存储位置」）：未指定项目的会话
+ *     （侧栏直接点「新建会话」的那些）在它里面读写文件；「更改位置」走原生选择器，选中目录会以
+ *     ask 并进授权列表并记为默认（主进程 `workspace:pick-default`）。
+ *   - 下面是授权目录列表：加 / 删 / 切模式都走 workspace:* 通道（主进程校验路径、落盘 settings.json
+ *     的 workspaces）；
  *   - 添加一律以「每次询问」落盘（`workspace:add` 不收 mode）—— **完全访问只能显式切换**：
  *     点「完全访问」先弹受控确认框（说明它会放行这个文件夹里的写操作），确认后才走 `setMode`；
  *     点「每次询问」是收紧方向，直接切；
@@ -31,11 +35,13 @@ function messageOf(error: unknown): string {
 
 export function WorkspaceSettings(): React.JSX.Element {
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
+  const defaultWorkspace = useSettingsStore((state) => state.settings.defaultWorkspace)
   const pickWorkspace = useSettingsStore((state) => state.pickWorkspace)
+  const pickDefaultWorkspace = useSettingsStore((state) => state.pickDefaultWorkspace)
   const setWorkspaceMode = useSettingsStore((state) => state.setWorkspaceMode)
   const removeWorkspace = useSettingsStore((state) => state.removeWorkspace)
 
-  /** 正在进行的动作（'pick' 或某条工作区的路径）：期间禁掉其余控件，避免连点打架 */
+  /** 正在进行的动作（'pick' / 'pick-default' 或某条工作区的路径）：期间禁掉其余控件，避免连点打架 */
   const [pending, setPending] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   /** 等确认切到「完全访问」的那条工作区（null = 没有确认框） */
@@ -64,6 +70,43 @@ export function WorkspaceSettings(): React.JSX.Element {
 
   return (
     <div data-testid="workspace-settings" className="flex flex-col gap-4">
+      {/* 默认工作区（T18）：一行「标签 + 说明 + 位置 + 更改位置」，与授权列表分开 —— 它是设置，不是一条授权 */}
+      <section
+        data-testid="default-workspace"
+        className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+      >
+        <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
+          <span className="text-b2 text-ink">默认工作区</span>
+          <span className="text-c1 text-ink-secondary">
+            未指定项目的会话（新建会话）在这里读写文件。
+          </span>
+        </div>
+        {defaultWorkspace === null ? (
+          <span data-testid="default-workspace-path" className="text-b2 text-ink-tertiary">
+            未指定
+          </span>
+        ) : (
+          <Tooltip label={defaultWorkspace} side="bottom" align="start">
+            <span
+              data-testid="default-workspace-path"
+              tabIndex={0}
+              className="min-w-0 max-w-[45%] truncate rounded-button-sm text-b2 text-ink"
+            >
+              {defaultWorkspace}
+            </span>
+          </Tooltip>
+        )}
+        <Button
+          size="sm"
+          data-testid="default-workspace-change"
+          loading={pending === 'pick-default'}
+          disabled={pending !== undefined && pending !== 'pick-default'}
+          onClick={() => void run('pick-default', pickDefaultWorkspace)}
+        >
+          更改位置
+        </Button>
+      </section>
+
       {workspaces.length === 0 ? (
         <p data-testid="workspace-empty" className="text-b2 text-ink-secondary">
           还没有授权的工作区：添加一个文件夹，助手只能读写它里面的文件。

@@ -6,10 +6,13 @@
  * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces（T10）就地定义在下面，
  * 元素的取值只有 path + mode 两个字段；permissions.rules（T13）是审批记忆的"永久允许"；
  * mcpServers（T12）的取值在下面（元素形状 + 缺省），业务校验与路由在 shared/mcp.ts 与
- * mastra/routes/mcp.ts。追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
+ * mastra/routes/mcp.ts；projects（T18）的元素 schema 在 shared/projects.ts，defaultWorkspace 是
+ * 「未指定项目的会话」用的那个默认工作区（地位 = Kimi「其他 → 通用 → 存储位置」）。
+ * 追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
  */
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
+import { projectSchema } from './projects'
 
 /** 落盘文件名（userData 下） */
 export const SETTINGS_FILE = 'settings.json'
@@ -85,6 +88,15 @@ export const appSettingsSchema = z.strictObject({
   providers: z.array(providerConfigSchema),
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
   workspaces: z.array(workspaceSchema),
+  /**
+   * T18 的默认工作区：**未指定项目的会话**用它当文件工具的根（见 main/projects.ts 的 sessionRoots）。
+   * 存的是 `checkWorkspacePath` 归一后的路径，且一定同时是 workspaces 里的一条（指认时就并进去，
+   * 模式 ask —— full 仍然只能由用户在设置页显式切换）；null = 没指认，那种情况下会话的根回退到
+   * 整份授权列表（T10 既有口径）。写入只有 workspace:pick-default 一条路（原生选择器）。
+   */
+  defaultWorkspace: z.string().min(1).nullable(),
+  /** T18 的项目列表（增删走 projects:* 通道：路径要先过 checkWorkspacePath） */
+  projects: z.array(projectSchema),
   /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
   permissions: permissionsSchema,
   /** T12 的 MCP server 列表（增删改走 PUT /api/mcp/servers，见 mastra/routes/mcp.ts） */
@@ -94,12 +106,14 @@ export const appSettingsSchema = z.strictObject({
 /**
  * settings:update 的入参形状：只给要改的字段（缺省字段保持原值）。
  * **不含 workspaces**：授权目录的写入必须在主进程过路径校验，不能从渲染端直接改。
+ * **不含 defaultWorkspace / projects**：同理 —— 两者的路径都要过 `checkWorkspacePath`（否则
+ * 渲染端能塞一个没校验过的根进授权边界），各走自己的通道（workspace:pick-default、projects:*）。
  * **不含 mcpServers**：MCP 配置的写入只有 PUT /api/mcp/servers 一条路（同一条带上
  * "启用必须配置完整"的校验），不另开一条不过校验的口子。
  */
 export const appSettingsPatchSchema = appSettingsSchema
   .partial()
-  .omit({ workspaces: true, mcpServers: true })
+  .omit({ workspaces: true, defaultWorkspace: true, projects: true, mcpServers: true })
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>
@@ -117,6 +131,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontTier: 'default',
   providers: [],
   workspaces: [],
+  defaultWorkspace: null,
+  projects: [],
   permissions: { rules: [] },
   mcpServers: []
 }
@@ -127,6 +143,7 @@ export function defaultSettings(): AppSettings {
     ...DEFAULT_SETTINGS,
     providers: [],
     workspaces: [],
+    projects: [],
     permissions: { rules: [] },
     mcpServers: []
   }

@@ -28,7 +28,7 @@ export async function createWriteTool(ctx: ToolContext): Promise<Tool<WriteInput
     outputSchema: z.string(),
     requireApproval: (input) => needsApproval(ctx, 'write', input),
     execute: async (input, context) => {
-      const { abs } = toolTarget(ctx, input.path)
+      const { abs } = toolTarget(ctx, input.path, sessionKey(context))
 
       return await ctx.state.runExclusive(abs, async () => {
         const existing = await statOrNull(ctx, abs)

@@ -103,8 +103,18 @@ export class ToolState {
   }
 }
 
-/** 授权工作区来源：数组，或"现读设置"的取值函数（用户中途加工作区不必重启 agent） */
-export type WorkspaceRoots = readonly Workspace[] | (() => readonly Workspace[])
+/** 授权工作区来源：数组，或"按会话现取"的取值函数（T18：会话的项目/默认工作区中途变，下一轮就跟着变） */
+export type WorkspaceRoots =
+  readonly Workspace[] | ((session: string | undefined) => readonly Workspace[])
+
+/**
+ * **审批口径**：`session === undefined` 时取值函数要给的那份 —— 实现方（agents/kyclaw.ts）
+ * 给的是**整份授权列表**（超集）。为什么审批不按会话收窄：Mastra 的 `requireApproval` 回调
+ * 只拿得到 `(input, { requestContext, workspace })`，**没有线程 id**，判不了"这个会话的项目是哪个"。
+ * 取超集只可能多问，不会漏问 —— 而真正能落盘的写必须经执行层的会话根（子集）解析，
+ * 所以不存在"审批放行、执行越界"的组合（方向判据见 needsApproval 头注）。
+ */
+export type ApprovalRoots = (session: undefined) => readonly Workspace[]
 
 /** "永久允许"规则来源（T13）：批准过"永久允许"的 (工具, 工作区) 落在这里；现读设置 */
 export type PermissionRuleSource = () => readonly PermissionRule[]
@@ -133,8 +143,8 @@ export function createToolContext(options: {
   }
 }
 
-export function workspaceRoots(ctx: ToolContext): readonly Workspace[] {
-  return typeof ctx.roots === 'function' ? ctx.roots() : ctx.roots
+export function workspaceRoots(ctx: ToolContext, session?: string): readonly Workspace[] {
+  return typeof ctx.roots === 'function' ? ctx.roots(session) : ctx.roots
 }
 
 /** 会话键 = agent 线程 id（Mastra 的 tool 执行上下文里带着它）；拿不到就落公共桶 */
@@ -153,9 +163,17 @@ export interface ResolvedTarget {
 
 export type TargetResolution = ({ ok: true } & ResolvedTarget) | { ok: false; reason: string }
 
-/** 目标 → 落在哪个工作区、归一后的绝对路径；一个都落不上就带着原因返回（不抛） */
-export function resolveTarget(ctx: ToolContext, target: string): TargetResolution {
-  const roots = workspaceRoots(ctx)
+/**
+ * 目标 → 落在哪个工作区、归一后的绝对路径；一个都落不上就带着原因返回（不抛）。
+ * `session` 决定用哪份根（T18）：工具执行时传 `sessionKey(context)`（会话的项目/默认工作区）；
+ * **不传 = 审批口径**（整份授权列表，见 WorkspaceRoots 头注）。
+ */
+export function resolveTarget(
+  ctx: ToolContext,
+  target: string,
+  session?: string
+): TargetResolution {
+  const roots = workspaceRoots(ctx, session)
   if (roots.length === 0) return { ok: false, reason: NO_WORKSPACE_REASON }
 
   let firstReason = ''
@@ -168,8 +186,8 @@ export function resolveTarget(ctx: ToolContext, target: string): TargetResolutio
 }
 
 /** 工具里用这个：解析不到直接抛（错误进工具卡，模型看到原因） */
-export function toolTarget(ctx: ToolContext, target: string): ResolvedTarget {
-  const resolved = resolveTarget(ctx, target)
+export function toolTarget(ctx: ToolContext, target: string, session?: string): ResolvedTarget {
+  const resolved = resolveTarget(ctx, target, session)
   if (!resolved.ok) throw new Error(`无法使用路径「${target}」：${resolved.reason}`)
   return { abs: resolved.abs, workspace: resolved.workspace }
 }
@@ -178,10 +196,10 @@ export function toolTarget(ctx: ToolContext, target: string): ResolvedTarget {
  * glob/grep 的起始目录：没给 path 时，恰好一个工作区就用它；多个工作区必须显式指定
  * （默默挑第一个会让模型搜错根还以为搜过了）。
  */
-export function scanRoot(ctx: ToolContext, target?: string): ResolvedTarget {
-  if (target !== undefined && target.trim() !== '') return toolTarget(ctx, target)
+export function scanRoot(ctx: ToolContext, target?: string, session?: string): ResolvedTarget {
+  if (target !== undefined && target.trim() !== '') return toolTarget(ctx, target, session)
 
-  const roots = workspaceRoots(ctx)
+  const roots = workspaceRoots(ctx, session)
   if (roots.length === 0) throw new Error(NO_WORKSPACE_REASON)
   if (roots.length > 1) {
     throw new Error(
@@ -214,6 +232,12 @@ export function scanRoot(ctx: ToolContext, target?: string): ResolvedTarget {
  * 叫 path 的入参。能证明安全的是"工具自己的执行受引擎约束"（内置五件套），不是"路径看起来
  * 像是不用管的"。v1 曾用"有 path 但解析不出去 → 不问"，对内置工具安全，对 MCP 工具是静默
  * 绕过审批的漏洞，已按此分叉修掉。
+ *
+ * T18（会话根）与这一层的关系：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)`
+ * 不传 session）。执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts
+ * 的 sessionRoots）——两者是"超集 / 子集"关系：任何能落盘的写都落在审批看过的那条工作区条目上
+ * （同一条目决定 mode 与规则），所以审批不会比执行松；反过来，用户批准一次不在会话范围内的写
+ * 会以工具错误收场（fail closed，不落盘），不会静默越界。
  */
 export function needsApproval(ctx: ToolContext, tool: string, input: unknown): boolean {
   const toolClass = ctx.classify(tool, input)

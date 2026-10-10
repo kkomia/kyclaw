@@ -11,7 +11,7 @@
 import { basename, join, matchesGlob, relative, sep } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, scanRoot, statOrNull, type ToolContext } from './guard'
+import { needsApproval, scanRoot, sessionKey, statOrNull, type ToolContext } from './guard'
 
 /** 命中上限（spec §5.1 输出截断限额） */
 export const GREP_MAX_HITS = 100
@@ -47,8 +47,8 @@ export async function createGrepTool(ctx: ToolContext): Promise<Tool<GrepInput, 
     inputSchema: grepInputSchema,
     outputSchema: z.string(),
     requireApproval: (input) => needsApproval(ctx, 'grep', input),
-    execute: async (input) => {
-      const base = scanRoot(ctx, input.path)
+    execute: async (input, context) => {
+      const base = scanRoot(ctx, input.path, sessionKey(context))
       const baseStat = await statOrNull(ctx, base.abs)
       if (baseStat === null || !baseStat.isDirectory()) {
         throw new Error(`grep 失败：${input.path ?? base.abs} 不是目录`)

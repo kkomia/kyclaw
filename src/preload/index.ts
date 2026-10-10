@@ -11,11 +11,14 @@ import {
   agentEndpointSchema,
   connectionTestResultSchema,
   IPC_CHANNELS,
+  projectBaseSchema,
+  projectFolderSchema,
   providerKeyStatesSchema,
   setProviderKeyResultSchema,
   windowStateSchema,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawProjectsApi,
   type KyclawSettingsApi,
   type KyclawWindowApi,
   type KyclawWorkspaceApi
@@ -100,7 +103,32 @@ const workspaceApi: KyclawWorkspaceApi = {
   setMode: async (path, mode) =>
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.setMode, path, mode)),
   remove: async (path) =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.remove, path))
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.remove, path)),
+  pickDefault: async () =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.pickDefault))
+}
+
+/**
+ * 项目面（T18）：创建对话框要的两块料 + 建/删。
+ * 回包与设置同一份 schema（建/删回吐完整设置）；`base` / `pickFolder` 各自的形状也过 schema，
+ * 结构不对就抛（半截路径没法用）。
+ */
+const projectsApi: KyclawProjectsApi = {
+  base: async () => {
+    const parsed = projectBaseSchema.safeParse(await ipcRenderer.invoke(IPC_CHANNELS.projects.base))
+    if (!parsed.success) throw new Error('[kyclaw] 项目基底响应结构不合法')
+    return parsed.data
+  },
+  pickFolder: async () => {
+    const parsed = projectFolderSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.projects.pickFolder)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 项目文件夹响应结构不合法')
+    return parsed.data
+  },
+  create: async (name, path) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.create, { name, path })),
+  remove: async (id) => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.remove, id))
 }
 
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */
@@ -118,6 +146,7 @@ export const kyclawApi: KyclawApi = {
   window: windowApi,
   settings: settingsApi,
   workspace: workspaceApi,
+  projects: projectsApi,
   agent: agentApi
 }
 

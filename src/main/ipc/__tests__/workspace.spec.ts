@@ -75,6 +75,7 @@ describe('workspace 通道 handler：注册与入参闸门', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'workspace:add',
       'workspace:pick',
+      'workspace:pick-default',
       'workspace:remove',
       'workspace:set-mode'
     ])

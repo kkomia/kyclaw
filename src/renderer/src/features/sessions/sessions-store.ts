@@ -22,6 +22,7 @@ import {
   renameThread
 } from '../../lib/threads-api'
 import { dropThreadChat } from '../chat/thread-chats'
+import { useProjectsStore } from '../projects/projects-store'
 
 /** 新建会话的草稿 id（第一轮请求带着它，服务端据此建线程） */
 export function newThreadId(): string {
@@ -43,8 +44,13 @@ export interface SessionsState {
   ensureLoaded: () => Promise<void>
   refresh: () => Promise<void>
   select: (threadId: string) => void
-  /** 新建：开一个草稿（不发请求；第一轮对话时才落成真线程） */
-  startNew: () => void
+  /**
+   * 新建：开一个草稿（不发请求；第一轮对话时才落成真线程）。
+   * T18：`projectId` 非空时把这个新会话记进项目映射（服务端据此给它项目工作区的根）；
+   * 归属由调用方决定（点项目行 = 那个项目；「新建会话」= 当前会话的项目，见 ProjectsSection）。
+   * 返回新草稿的 id（调用方要拿它做后续动作）。
+   */
+  startNew: (projectId?: string | null) => string
   remove: (threadId: string) => Promise<void>
   rename: (threadId: string, title: string) => Promise<void>
   /** 一轮结束（isError/isAbort 由调用方先过滤）：标题 + 刷新 + 完成通知 */
@@ -112,8 +118,13 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     }))
   },
 
-  startNew: () => {
-    set({ activeId: newThreadId() })
+  startNew: (projectId = null) => {
+    const threadId = newThreadId()
+    set({ activeId: threadId })
+    // 归属记在服务端（映射表）：新建会话的那一刻就写，第一轮工具调用读到的是它。
+    // 失败由 projects-store 回滚 + 落 error（这个会话就按"没有项目"跑，不会悄悄用错根）。
+    if (projectId !== null) void useProjectsStore.getState().assignSession(threadId, projectId)
+    return threadId
   },
 
   remove: async (threadId) => {

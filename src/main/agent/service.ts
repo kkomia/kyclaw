@@ -15,6 +15,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
 import { createMcpRouter } from '../../mastra/routes/mcp'
 import { createMemoryRouter } from '../../mastra/routes/memory'
+import { createProjectsRouter } from '../../mastra/routes/projects'
 import { createThreadsRouter } from '../../mastra/routes/threads'
 import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
@@ -23,6 +24,7 @@ import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { McpLifecycle } from '../mcp/lifecycle'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
+import type { Project } from '../../shared/projects'
 import type { AppSettings, McpServerConfig, PermissionRule, Workspace } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
@@ -42,6 +44,9 @@ export const MEMORY_ROUTE_PREFIX = '/api/memory'
 
 /** 用量 API 的挂载前缀（T14；token 与花费的窗口统计） */
 export const USAGE_ROUTE_PREFIX = '/api/usage'
+
+/** 项目映射 API 的挂载前缀（T18；会话↔项目映射的读/写） */
+export const PROJECTS_ROUTE_PREFIX = '/api/projects'
 
 /** 端口尝试上限（显式端口被占时换端口重试的次数） */
 const DEFAULT_PORT_ATTEMPTS = 5
@@ -70,6 +75,12 @@ export interface AgentServerOptions {
    * 缺省 = 从 dataDir/settings.json 的 workspaces 读（与设置页写入的是同一份）。
    */
   workspaces?: () => readonly Workspace[]
+  /**
+   * 默认工作区（T18）：**现读**；缺省 = 从 dataDir/settings.json 读。未指定项目的会话用它当根。
+   */
+  defaultWorkspace?: () => string | null
+  /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */
+  projects?: () => readonly Project[]
   /**
    * "永久允许"规则（T13）：同样是**现读**的取值函数（审批卡里点"永久允许"落进 settings.json，
    * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
@@ -201,20 +212,31 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     options.resolveModel ??
     (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
   // 工具权限边界走同一份 settings.json（设置页的 workspace:* 通道写的也是它）；
-  // "永久允许"规则（T13）同样现读，审批卡点完下一轮就生效
+  // "永久允许"规则（T13）同样现读，审批卡点完下一轮就生效；默认工作区与项目清单（T18）同理 ——
+  // 用户在侧栏建项目 / 指认默认工作区，下一个会话/下一轮工具调用就反映出来
   const settingsFor = (): AppSettings => readSettings(settingsPath(options.dataDir))
   const workspacesFor = options.workspaces ?? (() => settingsFor().workspaces)
+  const defaultWorkspaceFor = options.defaultWorkspace ?? (() => settingsFor().defaultWorkspace)
+  const projectsFor = options.projects ?? (() => settingsFor().projects)
   const permissionRulesFor = options.permissionRules ?? (() => settingsFor().permissions.rules)
   const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory, usage } = await createKyclawMastra({
+  const { mastra, storage, memory, usage, sessionProjects } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
     workspaces: workspacesFor,
+    defaultWorkspace: defaultWorkspaceFor,
+    projects: projectsFor,
     permissionRules: permissionRulesFor,
     mcpServers: mcpServersFor,
     mcpTools: (gate) => mcpLifecycle.tools(gate)
+  })
+
+  // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
+  // （退化为默认工作区），下一轮写入/重启还会再试 —— 一条副线不该让整个对话起不来。
+  await sessionProjects.load().catch((error: unknown) => {
+    console.warn('[kyclaw] 会话↔项目映射载入失败（这些会话按无项目处理，不影响对话）', error)
   })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
@@ -252,9 +274,19 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       abortThreadRun: (threadId) => {
         const agent = mastra.getAgentById(KYCLAW_AGENT_ID)
         agent?.abortThreadStream({ threadId, resourceId: LOCAL_USER_RESOURCE_ID })
+      },
+      // T18：会话没了，它的项目映射也一起摘掉（别在映射表里留一条指向不存在会话的行）。
+      // 尽力而为：清理失败只记日志，不影响删除本身。
+      onThreadDeleted: (threadId) => {
+        void sessionProjects.clear(threadId).catch((error: unknown) => {
+          console.warn('[kyclaw] 删除会话后清理项目映射失败（不影响删除本身）', error)
+        })
       }
     })
   )
+
+  // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）
+  app.route(PROJECTS_ROUTE_PREFIX, createProjectsRouter({ store: sessionProjects }))
 
   // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）；
   // 写完立即让 lifecycle 对齐连接（启停/删除当场生效，子进程随之下线/上线）

@@ -8,7 +8,14 @@
 import { isAbsolute, join } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { insideWorkspace, needsApproval, scanRoot, statOrNull, type ToolContext } from './guard'
+import {
+  insideWorkspace,
+  needsApproval,
+  scanRoot,
+  sessionKey,
+  statOrNull,
+  type ToolContext
+} from './guard'
 
 /** glob 结果上限（spec §5.1 输出截断限额） */
 export const GLOB_MAX_RESULTS = 200
@@ -34,8 +41,8 @@ export async function createGlobTool(ctx: ToolContext): Promise<Tool<GlobInput, 
     inputSchema: globInputSchema,
     outputSchema: z.string(),
     requireApproval: (input) => needsApproval(ctx, 'glob', input),
-    execute: async (input) => {
-      const base = scanRoot(ctx, input.path)
+    execute: async (input, context) => {
+      const base = scanRoot(ctx, input.path, sessionKey(context))
       const baseStat = await statOrNull(ctx, base.abs)
       if (baseStat === null || !baseStat.isDirectory()) {
         throw new Error(`glob 失败：${input.path ?? base.abs} 不是目录`)

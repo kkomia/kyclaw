@@ -75,6 +75,6 @@ export function removeWorkspace(workspaces: readonly Workspace[], path: string):
 }
 
 /** 同一个路径的两种写法（Windows：大小写不敏感、分隔符等价）—— path.relative 归一后为空的即同一条 */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   return relative(resolve(a), resolve(b)) === ''
 }

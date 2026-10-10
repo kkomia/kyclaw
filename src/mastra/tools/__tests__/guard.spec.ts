@@ -7,8 +7,10 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { classifyToolCall } from '../../../main/permission/classify'
 import {
   DEFAULT_SESSION,
+  createToolContext,
   needsApproval,
   nodeToolFs,
   resolveTarget,
@@ -202,6 +204,53 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
 
     expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
     expect(needsApproval(bed.ctx, 'mcp__b__write', { path: 'a.txt', content: 'x' })).toBe(true)
+  })
+})
+
+describe('会话根（T18）：function roots 按会话取，审批不传会话走超集', () => {
+  /** 造一个"按会话给根"的 ctx：t1 用第一个根，其余会话用整份列表 */
+  function sessionBed(): TestBed {
+    const bed = createBed()
+    const second = createBed()
+    const all = [bed.roots[0], { path: second.root, mode: 'ask' as const }]
+    const ctx = createToolContext({
+      roots: (session) => (session === 't1' ? [bed.roots[0]] : all),
+      classify: classifyToolCall
+    })
+    bed.ctx = ctx
+    bed.roots.push({ path: second.root, mode: 'ask' })
+    return bed
+  }
+
+  it('工具执行：session=t1 只能落在它自己的根里；不传 session（审批口径）看整份列表', () => {
+    const bed = sessionBed()
+    try {
+      const other = bed.roots[1]
+      writeFileSync(join(other.path, 'x.txt'), 'x')
+
+      // t1：目标在第二个工作区里 → 拒
+      expect(resolveTarget(bed.ctx, join(other.path, 'x.txt'), 't1').ok).toBe(false)
+      // 审批口径（不传）：目标解析得到（超集）
+      expect(resolveTarget(bed.ctx, join(other.path, 'x.txt')).ok).toBe(true)
+      expect(
+        needsApproval(bed.ctx, 'write', { path: join(other.path, 'x.txt'), content: 'y' })
+      ).toBe(true)
+
+      // scanRoot 同样跟着会话走：t1 恰好一个根 → 直接用它；审批口径下两个根 → 要求显式指定
+      expect(scanRoot(bed.ctx, undefined, 't1').abs).toBe(bed.root)
+      expect(() => scanRoot(bed.ctx)).toThrow(/多个授权工作区/)
+    } finally {
+      bed.dispose()
+    }
+  })
+
+  it('数组形态的根不吃 session（T10 的测试口径不受影响）', () => {
+    const bed = createBed()
+    try {
+      expect(resolveTarget(bed.ctx, 'a.txt', '任意会话').ok).toBe(true)
+    } finally {
+      bed.dispose()
+    }
   })
 })
 

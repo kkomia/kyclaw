@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
+import { registerProjectsIpc } from './ipc/projects'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
@@ -49,6 +50,7 @@ if (!app.requestSingleInstanceLock()) {
     registerWindowIpc()
     registerSettingsIpc(userDataDir)
     registerWorkspaceIpc(userDataDir)
+    registerProjectsIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
     showMainWindow()
     createTray()

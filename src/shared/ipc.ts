@@ -52,7 +52,22 @@ export const IPC_CHANNELS = {
     /** 切换一个**已授权**工作区的访问模式（入参 [path, mode]，返回合并后的 AppSettings） */
     setMode: 'workspace:set-mode',
     /** 移除一个工作区（入参 [path]，返回合并后的 AppSettings） */
-    remove: 'workspace:remove'
+    remove: 'workspace:remove',
+    /**
+     * T18：打开原生选择器指认**默认工作区**（无入参，取消=不改动；返回合并后的 AppSettings）。
+     * 选中目录会以 ask 并进授权列表，再写 settings.defaultWorkspace —— 未指定项目的会话用它当根。
+     */
+    pickDefault: 'workspace:pick-default'
+  },
+  projects: {
+    /** T18：空白项目的默认基底目录（无入参，返回 { base }；创建对话框的默认路径用） */
+    base: 'projects:base',
+    /** T18：打开原生选择器挑一个**已存在**的文件夹（无入参，返回 { path | null }；不落盘、不授权） */
+    pickFolder: 'projects:pick-folder',
+    /** T18：创建项目（入参 [{ name, path }]，路径缺失就建目录；返回合并后的 AppSettings） */
+    create: 'projects:create',
+    /** T18：删除项目（入参 [id]；只摘清单，不动磁盘、不动授权列表） */
+    remove: 'projects:remove'
   },
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
@@ -94,6 +109,27 @@ export const workspaceSetModeArgsSchema = z.tuple([z.string().min(1), workspaceM
 
 /** workspace:remove 的入参：[path] */
 export const workspaceRemoveArgsSchema = z.tuple([z.string().min(1)])
+
+/**
+ * projects:create 的入参：单元素对象 { name, path }。
+ * name 非空（业务侧的字符校验在 main/ipc/projects.ts，闸门只管形状）；path 由对话框给
+ * （空白项目 = 默认基底 + 名称；现有文件夹 = 原生选择器挑的），主进程校验/建目录。
+ */
+export const projectCreateArgsSchema = z.tuple([
+  z.strictObject({
+    name: z.string().min(1),
+    path: z.string().min(1)
+  })
+])
+
+/** projects:remove 的入参：[id] */
+export const projectRemoveArgsSchema = z.tuple([z.string().min(1)])
+
+/** projects:base 的回包：创建对话框的默认基底目录 */
+export const projectBaseSchema = z.strictObject({ base: z.string().min(1) })
+
+/** projects:pick-folder 的回包：挑中的文件夹（归一后）或 null（取消） */
+export const projectFolderSchema = z.strictObject({ path: z.string().min(1).nullable() })
 
 /** 写密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
 export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(true) })
@@ -190,6 +226,24 @@ export interface KyclawWorkspaceApi {
   setMode(path: string, mode: WorkspaceMode): Promise<AppSettings>
   /** 移除一个工作区（不在列表里是空操作） */
   remove(path: string): Promise<AppSettings>
+  /** 指认默认工作区（原生选择器；取消 = 不改动）——未指定项目的会话用它当根 */
+  pickDefault(): Promise<AppSettings>
+}
+
+/**
+ * preload 暴露给渲染端的项目面（T18）：创建/删除项目 + 创建对话框要的两块料。
+ * 项目路径与授权目录同源校验（主进程 `checkWorkspacePath`），所以不并进 settings:update
+ * （补丁 schema 里也没有 projects/defaultWorkspace）。
+ */
+export interface KyclawProjectsApi {
+  /** 空白项目的默认基底目录（创建对话框的默认路径用） */
+  base(): Promise<{ base: string }>
+  /** 打开原生选择器挑一个已存在的文件夹（取消 = null）；只回路径，不落盘、不授权 */
+  pickFolder(): Promise<{ path: string | null }>
+  /** 创建项目：路径不存在就建目录，随后经校验进项目清单 + 授权列表（ask） */
+  create(name: string, path: string): Promise<AppSettings>
+  /** 删除项目：只摘清单（会话映射由渲染端清理；磁盘与授权列表不动） */
+  remove(id: string): Promise<AppSettings>
 }
 
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
@@ -197,5 +251,6 @@ export interface KyclawApi {
   window: KyclawWindowApi
   settings: KyclawSettingsApi
   workspace: KyclawWorkspaceApi
+  projects: KyclawProjectsApi
   agent: KyclawAgentApi
 }

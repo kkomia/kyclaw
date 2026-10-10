@@ -7,6 +7,10 @@ import {
   IpcInputError,
   noArgsSchema,
   parseIpcArgs,
+  projectBaseSchema,
+  projectCreateArgsSchema,
+  projectFolderSchema,
+  projectRemoveArgsSchema,
   providerIdArgsSchema,
   providerKeyArgsSchema,
   providerKeyStatesSchema,
@@ -190,7 +194,8 @@ describe('IPC 契约：workspace 通道', () => {
       pick: 'workspace:pick',
       add: 'workspace:add',
       setMode: 'workspace:set-mode',
-      remove: 'workspace:remove'
+      remove: 'workspace:remove',
+      pickDefault: 'workspace:pick-default'
     })
   })
 
@@ -250,11 +255,58 @@ describe('IPC 契约：workspace 通道', () => {
   })
 })
 
+describe('IPC 契约：projects 通道（T18）', () => {
+  it('通道名是固定字面量', () => {
+    expect(IPC_CHANNELS.projects).toEqual({
+      base: 'projects:base',
+      pickFolder: 'projects:pick-folder',
+      create: 'projects:create',
+      remove: 'projects:remove'
+    })
+  })
+
+  it('projects:create 只收 [{name, path}]（两个都非空，多键/缺键都不合法）', () => {
+    expect(
+      parseIpcArgs(projectCreateArgsSchema, [{ name: '插件', path: 'D:\\ws' }], 'projects:create')
+    ).toEqual([{ name: '插件', path: 'D:\\ws' }])
+
+    for (const bad of [
+      [],
+      ['插件'],
+      [{ name: '插件' }],
+      [{ path: 'D:\\ws' }],
+      [{ name: '', path: 'D:\\ws' }],
+      [{ name: '插件', path: '' }],
+      [{ name: '插件', path: 'D:\\ws', mode: 'full' }]
+    ]) {
+      expect(
+        parseIpcArgs.bind(null, projectCreateArgsSchema, bad as unknown[], 'projects:create'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('projects:remove 只收 [id]；base / pick-folder 的回包形状锁死', () => {
+    expect(parseIpcArgs(projectRemoveArgsSchema, ['p1'], 'projects:remove')).toEqual(['p1'])
+    for (const bad of [[], [''], ['p1', 'x']]) {
+      expect(
+        parseIpcArgs.bind(null, projectRemoveArgsSchema, bad as unknown[], 'projects:remove'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+
+    expect(projectBaseSchema.safeParse({ base: 'D:\\ws' }).success).toBe(true)
+    expect(projectBaseSchema.safeParse({ base: '' }).success).toBe(false)
+    expect(projectFolderSchema.safeParse({ path: null }).success).toBe(true)
+    expect(projectFolderSchema.safeParse({ path: 'D:\\ws' }).success).toBe(true)
+    expect(projectFolderSchema.safeParse({}).success).toBe(false)
+  })
+})
+
 describe('IPC 契约：agent 通道', () => {
   it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
     expect(IPC_CHANNELS.agent).toEqual({ endpoint: 'agent:endpoint' })
   })
-
   it('端点 payload 只收 { baseUrl, token } 两个字符串，缺键/错型/多键都不合法', () => {
     expect(
       agentEndpointSchema.safeParse({ baseUrl: 'http://127.0.0.1:43210', token: 'abc' }).success

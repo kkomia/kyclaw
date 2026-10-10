@@ -12,12 +12,14 @@ import {
  * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers、workspaces、mcpServers 为空数组 / 权限规则为空', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers 为空数组 / 权限规则为空 / 默认工作区未指认', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
       providers: [],
       workspaces: [],
+      defaultWorkspace: null,
+      projects: [],
       permissions: { rules: [] },
       mcpServers: []
     })
@@ -119,6 +121,59 @@ describe('工作区 schema（T10：授权目录 = path + mode）', () => {
     expect(
       appSettingsPatchSchema.safeParse({ workspaces: [{ path: 'D:\\ws', mode: 'full' }] }).success
     ).toBe(false)
+    expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
+  })
+})
+
+describe('默认工作区与项目 schema（T18）', () => {
+  it('defaultWorkspace 只收 null 或非空字符串；projects 元素必须是 {id, name, path, createdAt}', () => {
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, defaultWorkspace: 'D:\\ws' }).success
+    ).toBe(true)
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, defaultWorkspace: null }).success
+    ).toBe(true)
+    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, defaultWorkspace: '' }).success).toBe(
+      false
+    )
+    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, defaultWorkspace: 1 }).success).toBe(
+      false
+    )
+
+    const project = {
+      id: 'p1',
+      name: '插件',
+      path: 'D:\\ws\\插件',
+      createdAt: '2026-10-11T00:00:00.000Z'
+    }
+    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, projects: [project] }).success).toBe(
+      true
+    )
+
+    for (const bad of [
+      [{ name: 'x', path: 'D:\\ws', createdAt: 'x' }], // 缺 id
+      [{ ...project, name: '' }], // 空名字
+      [{ ...project, path: '' }], // 空路径
+      [{ ...project, extra: 1 }], // 多键
+      'D:\\ws' // 不是数组
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, projects: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+  })
+
+  it('补丁 schema 里没有 defaultWorkspace / projects：两者都要过主进程的路径校验，各走专用通道', () => {
+    expect(appSettingsPatchSchema.safeParse({ defaultWorkspace: 'D:\\ws' }).success).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ defaultWorkspace: null }).success).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ projects: [] }).success).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({
+        projects: [{ id: 'p', name: 'x', path: 'D:\\ws', createdAt: '2026-10-11T00:00:00.000Z' }]
+      }).success
+    ).toBe(false)
+    // 别的字段照旧可以打补丁
     expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
   })
 })

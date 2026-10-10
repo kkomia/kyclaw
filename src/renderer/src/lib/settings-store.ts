@@ -5,7 +5,8 @@ import {
   type AppSettingsPatch,
   type WorkspaceMode
 } from '@shared/settings'
-import type { KyclawWorkspaceApi } from '@shared/ipc'
+import type { Project } from '@shared/projects'
+import type { KyclawProjectsApi, KyclawWorkspaceApi } from '@shared/ipc'
 import { withAllowedRule } from '@shared/permissions'
 import type { ProviderConfig } from '@shared/providers'
 import { setFontTier, setTheme } from './theme'
@@ -22,6 +23,8 @@ import { setFontTier, setTheme } from './theme'
  * 工作区（pickWorkspace / addWorkspace / setWorkspaceMode / removeWorkspace）同理：路径合法性判在主进程，
  * 失败（选了 UNC / 目录没了 / 切一个不在列表里的路径）必须把原因交回给设置页行内显示，
  * 这里的副本一律以落盘回吐为准。
+ * 项目（createProject / removeProject / pickProjectFolder）与默认工作区（pickDefaultWorkspace）
+ * 是同一族：项目路径与授权目录同源校验（都过 checkWorkspacePath），失败也要能回行内显示。
  * 审批卡"永久允许"落下的规则（allowToolForever）也归这一族：写没写进去要让用户看见
  * （调用方把失败露到界面上），不能静默当成"已经永远允许了"。
  */
@@ -34,6 +37,13 @@ function applyAppearance(settings: AppSettings): void {
 function workspaceApi(): KyclawWorkspaceApi {
   const api = window.kyclaw?.workspace
   if (!api) throw new Error('工作区通道不可用（window.kyclaw 缺失），改动没有保存')
+  return api
+}
+
+/** 项目通道（缺失=浏览器/单测环境）：项目动作共用这一个入口与同一句交代 */
+function projectsApi(): KyclawProjectsApi {
+  const api = window.kyclaw?.projects
+  if (!api) throw new Error('项目通道不可用（window.kyclaw 缺失），改动没有保存')
   return api
 }
 
@@ -64,6 +74,16 @@ export interface SettingsState {
   setWorkspaceMode: (path: string, mode: WorkspaceMode) => Promise<void>
   /** 移除一个工作区（不在列表里是空操作） */
   removeWorkspace: (path: string) => Promise<void>
+  /** T18：指认默认工作区（原生选择器；取消 = 什么都没发生） */
+  pickDefaultWorkspace: () => Promise<void>
+  /** T18：空白项目的默认基底目录（创建对话框的默认路径用） */
+  projectBase: () => Promise<string>
+  /** T18：创建项目（路径不存在就建目录）；成功回新项目，失败抛给调用方 */
+  createProject: (name: string, path: string) => Promise<Project | null>
+  /** T18：删除项目（只摘清单；失败抛给调用方） */
+  removeProject: (id: string) => Promise<void>
+  /** T18：挑一个项目文件夹（原生选择器；取消回 null）——只回路径，不落盘、不授权 */
+  pickProjectFolder: () => Promise<string | null>
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -131,5 +151,31 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   removeWorkspace: async (path) => {
     set({ settings: await workspaceApi().remove(path) })
+  },
+
+  pickDefaultWorkspace: async () => {
+    set({ settings: await workspaceApi().pickDefault() })
+  },
+
+  projectBase: async () => {
+    const { base } = await projectsApi().base()
+    return base
+  },
+
+  createProject: async (name, path) => {
+    const before = new Set(get().settings.projects.map((project) => project.id))
+    const settings = await projectsApi().create(name, path)
+    set({ settings })
+    // 新项目 = 落盘回包里多出来的那条（按 id 差集找，别用路径字符串比 —— 主进程会 realpath 归一）
+    return settings.projects.find((project) => !before.has(project.id)) ?? null
+  },
+
+  removeProject: async (id) => {
+    set({ settings: await projectsApi().remove(id) })
+  },
+
+  pickProjectFolder: async () => {
+    const { path } = await projectsApi().pickFolder()
+    return path
   }
 }))

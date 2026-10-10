@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Ellipsis } from 'lucide-react'
 import { Button } from '../../components/ui/button'
+import { cn } from '../../components/ui/cn'
 import { Dialog } from '../../components/ui/dialog'
 import { IconButton } from '../../components/ui/icon-button'
 import { Input } from '../../components/ui/input'
@@ -34,6 +35,15 @@ export interface SessionListProps {
   sessions: SessionListEntry[]
   activeId: string | null
   notices?: Record<string, true>
+  /**
+   * 分组标题（今天/更早）：平铺区开着；项目名下的会话列表关掉（项目标题已经是分组，
+   * 再来一层"今天"只会让缩进更深）。
+   */
+  showGroups?: boolean
+  /** 空态那行"还没有会话"：项目名下不显示（项目标题下空着就是空着） */
+  emptyHint?: boolean
+  /** 列表容器的追加类（默认自带滚动；嵌进外层滚动容器时用 overflow-visible 覆写） */
+  listClassName?: string
   onSelect: (threadId: string) => void
   onRename: (threadId: string, title: string) => void
   onDelete: (threadId: string) => void
@@ -79,6 +89,9 @@ export function SessionList({
   sessions,
   activeId,
   notices = {},
+  showGroups = true,
+  emptyHint = true,
+  listClassName,
   onSelect,
   onRename,
   onDelete
@@ -101,22 +114,29 @@ export function SessionList({
     setRenameTarget(null)
   }
 
-  const groups = groupSessions(sessions)
+  const groups = showGroups
+    ? groupSessions(sessions)
+    : [{ key: 'earlier' as const, label: '', sessions }]
 
   return (
     <>
       <ul
         data-testid="session-list"
-        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2"
+        className={cn(
+          'flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2',
+          listClassName
+        )}
       >
-        {sessions.length === 0 ? (
+        {emptyHint && sessions.length === 0 ? (
           <li data-testid="session-list-empty" className="px-2 py-1 text-c1 text-ink-tertiary">
             还没有会话
           </li>
         ) : null}
         {groups.map((group) => (
-          <li key={group.key} data-testid={GROUP_TESTID[group.key]}>
-            <p className="px-2 pt-2 pb-1 text-c2 text-ink-tertiary">{group.label}</p>
+          <li key={group.key} data-testid={showGroups ? GROUP_TESTID[group.key] : undefined}>
+            {group.label === '' ? null : (
+              <p className="px-2 pt-2 pb-1 text-c2 text-ink-tertiary">{group.label}</p>
+            )}
             <ul className="flex flex-col gap-0.5">
               {group.sessions.map((session) => {
                 const selected = session.id === activeId
