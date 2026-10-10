@@ -45,3 +45,21 @@ pnpm package
 # 类型 + lint + 格式 + 单测 + 构建
 pnpm check
 ```
+
+## 更新与追踪（试点）
+
+两个都**默认关**，不配就什么都不做（不发请求、不报错、不弹窗）。
+
+- **更新**（electron-updater + generic 源）：地址由环境变量 `KYCLAW_UPDATE_URL` 现给，指向一个
+  放着 `latest.yml` 的静态目录（Gitee Release 直链 / 本机模拟源都行）；没给地址的开发态实例
+  安静待着，设置页「关于」栏只写「未配置更新源」。检出后自动下载，但**安装要用户点"重启并安装"**。
+- **追踪**（Langfuse）：设置页「追踪」栏填服务地址 + 公私钥（地址落 settings.json，密钥经
+  safeStorage 落 secrets.json），三项齐了下一次启动开始上报。服务地址可以是官方云
+  （`https://cloud.langfuse.com`）或自托管实例。
+
+```bash
+# 本机模拟更新源的起法（冒烟用，见 .superpowers/sdd/*/smoke-t17/）
+node make-feed.mjs update-feed 1.0.1   # 造 latest.yml + 假安装包
+node serve-feed.mjs update-feed 8555   # 静态伺服
+KYCLAW_UPDATE_URL=http://127.0.0.1:8555/ pnpm dev
+```

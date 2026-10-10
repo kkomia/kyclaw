@@ -217,3 +217,31 @@ describe('外观 · 与落盘设置一致', () => {
     expect(screen.getByTestId('font-large')).toHaveAttribute('aria-pressed', 'true')
   })
 })
+
+describe('「追踪」/「关于」栏（T17）', () => {
+  it('「追踪」栏：Langfuse 组在这一栏里（默认关的口径）', async () => {
+    installKyclawBridge()
+    renderPage('/settings/tracing')
+
+    expect(screen.getByTestId('settings-group-tracing')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-group-tracing')).toHaveTextContent('Langfuse')
+    await screen.findByTestId('langfuse-status')
+  })
+
+  it('「关于」栏：版本与更新组在这一栏里（当前版本 + 检查更新入口）', async () => {
+    installKyclawBridge()
+    renderPage('/settings/about')
+
+    expect(screen.getByTestId('settings-group-about')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-group-about')).toHaveTextContent('版本与更新')
+    await screen.findByTestId('about-check')
+  })
+
+  it('两栏都只渲自己那一组（栏目页口径不变）', () => {
+    installKyclawBridge()
+    renderPage('/settings/about')
+
+    expect(screen.queryByTestId('settings-group-tracing')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-appearance')).not.toBeInTheDocument()
+  })
+})

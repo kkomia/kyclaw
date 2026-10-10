@@ -5,6 +5,8 @@ import {
   connectionTestResultSchema,
   IPC_CHANNELS,
   IpcInputError,
+  langfuseKeysArgsSchema,
+  langfuseStateSchema,
   noArgsSchema,
   parseIpcArgs,
   projectBaseSchema,
@@ -14,8 +16,11 @@ import {
   providerIdArgsSchema,
   providerKeyArgsSchema,
   providerKeyStatesSchema,
+  setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
   settingsUpdateArgsSchema,
+  updateStateSchema,
+  updateStatusSchema,
   windowStateSchema,
   workspaceAddArgsSchema,
   workspaceRemoveArgsSchema,
@@ -314,5 +319,110 @@ describe('IPC 契约：agent 通道', () => {
     expect(agentEndpointSchema.safeParse({ baseUrl: 'http://127.0.0.1:43210' }).success).toBe(false)
     expect(agentEndpointSchema.safeParse({ baseUrl: 1, token: 'abc' }).success).toBe(false)
     expect(agentEndpointSchema.safeParse({ baseUrl: 'x', token: 'y', port: 1 }).success).toBe(false)
+  })
+})
+
+describe('IPC 契约：updates 通道（T17）', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.updates).toEqual({
+      state: 'updates:state',
+      check: 'updates:check',
+      install: 'updates:install',
+      stateChanged: 'updates:state-changed'
+    })
+  })
+
+  it('状态：相位是七个固定取值，只带该相位下的字段（缺键/多键/错型都不合法）', () => {
+    expect(updateStatusSchema.safeParse({ phase: 'idle' }).success, 'idle').toBe(true)
+    expect(updateStatusSchema.safeParse({ phase: 'checking' }).success).toBe(true)
+    expect(updateStatusSchema.safeParse({ phase: 'up-to-date' }).success).toBe(true)
+    expect(updateStatusSchema.safeParse({ phase: 'available', version: '1.0.1' }).success).toBe(
+      true
+    )
+    expect(
+      updateStatusSchema.safeParse({ phase: 'downloading', version: '1.0.1', percent: 42 }).success
+    ).toBe(true)
+    expect(updateStatusSchema.safeParse({ phase: 'downloaded', version: '1.0.1' }).success).toBe(
+      true
+    )
+    expect(updateStatusSchema.safeParse({ phase: 'error', message: '连不上' }).success).toBe(true)
+
+    for (const bad of [
+      {},
+      { phase: 'ready' },
+      { phase: 'idle', percent: 1 },
+      { phase: 'idle', extra: 1 },
+      { phase: 'downloading', percent: '42' }
+    ]) {
+      expect(updateStatusSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
+  it('整态：当前版本 + 有没有配源 + 状态（三者齐，别的键不收）', () => {
+    const state = { currentVersion: '1.0.0', configured: true, status: { phase: 'up-to-date' } }
+    expect(updateStateSchema.safeParse(state).success).toBe(true)
+
+    for (const bad of [
+      { currentVersion: '1.0.0', configured: true },
+      { currentVersion: 1, configured: true, status: { phase: 'idle' } },
+      { currentVersion: '1.0.0', configured: 'yes', status: { phase: 'idle' } },
+      { ...state, feedUrl: 'http://x' }
+    ]) {
+      expect(updateStateSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+})
+
+describe('IPC 契约：telemetry 通道（T17）', () => {
+  it('通道名是固定字面量', () => {
+    expect(IPC_CHANNELS.telemetry).toEqual({
+      langfuseState: 'telemetry:langfuse-state',
+      setLangfuseKeys: 'telemetry:set-langfuse-keys',
+      clearLangfuseKeys: 'telemetry:clear-langfuse-keys'
+    })
+  })
+
+  it('Langfuse 状态：地址是原文，两个密钥只有"有没有 / 要不要重录"，active 是布尔', () => {
+    const state = {
+      endpoint: 'https://cloud.langfuse.com',
+      publicKey: { hasKey: true, needsReentry: false },
+      secretKey: { hasKey: false, needsReentry: false },
+      active: false
+    }
+    expect(langfuseStateSchema.safeParse(state).success).toBe(true)
+
+    for (const bad of [
+      { ...state, endpoint: 1 },
+      { ...state, publicKey: true },
+      { ...state, secretKey: { hasKey: true } },
+      { ...state, active: 'no' },
+      { ...state, extra: 1 },
+      { ...state, publicKey: undefined }
+    ]) {
+      expect(langfuseStateSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
+  it('写密钥：两段非空字符串；回包只有 {hasKeys:true}（含明文/多字段一律不收）', () => {
+    expect(
+      parseIpcArgs(langfuseKeysArgsSchema, ['pk', 'sk'], 'telemetry:set-langfuse-keys')
+    ).toEqual(['pk', 'sk'])
+    for (const bad of [[], ['pk'], ['pk', 'sk', 'x'], ['', 'sk'], [1, 'sk']]) {
+      expect(
+        parseIpcArgs.bind(
+          null,
+          langfuseKeysArgsSchema,
+          bad as unknown[],
+          'telemetry:set-langfuse-keys'
+        ),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+
+    expect(setLangfuseKeysResultSchema.safeParse({ hasKeys: true }).success).toBe(true)
+    expect(setLangfuseKeysResultSchema.safeParse({ hasKeys: true, publicKey: 'pk' }).success).toBe(
+      false
+    )
+    expect(setLangfuseKeysResultSchema.safeParse({ hasKeys: false }).success).toBe(false)
   })
 })

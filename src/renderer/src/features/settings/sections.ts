@@ -1,4 +1,13 @@
-import { Brain, ChartColumn, Cpu, FolderOpen, Palette, type LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  Brain,
+  ChartColumn,
+  Cpu,
+  FolderOpen,
+  Info,
+  Palette,
+  type LucideIcon
+} from 'lucide-react'
 
 /**
  * 设置页的栏目表（唯一来源）：左侧设置菜单、内容区、路由 /settings/:section 都读这一份。
@@ -7,6 +16,8 @@ import { Brain, ChartColumn, Cpu, FolderOpen, Palette, type LucideIcon } from 'l
  *
  * round 5 变更：撤掉「工具与 MCP」栏 —— MCP 管理迁到主页侧栏的「插件」（/plugins），
  * 设置为唯一导航源、插件页为 MCP/技能的进入点；旧的 /settings/tools 深链会回落默认栏。
+ * T17 追加两栏：「追踪」（Langfuse，默认关）与「关于」（版本与更新）——都是显式配置项，
+ * 放在设置里而不是首页菜单（雷点 3）。
  */
 export interface SettingsSection {
   id: string
@@ -53,6 +64,20 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     navTestId: 'settings-nav-usage',
     groupTestId: 'settings-group-usage',
     icon: ChartColumn
+  },
+  {
+    id: 'tracing',
+    label: '追踪',
+    navTestId: 'settings-nav-tracing',
+    groupTestId: 'settings-group-tracing',
+    icon: Activity
+  },
+  {
+    id: 'about',
+    label: '关于',
+    navTestId: 'settings-nav-about',
+    groupTestId: 'settings-group-about',
+    icon: Info
   }
 ]
 

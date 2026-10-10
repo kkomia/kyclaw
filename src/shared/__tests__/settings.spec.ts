@@ -12,7 +12,7 @@ import {
  * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers 为空数组 / 权限规则为空 / 默认工作区未指认', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers 为空数组 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
@@ -21,7 +21,8 @@ describe('AppSettings schema', () => {
       defaultWorkspace: null,
       projects: [],
       permissions: { rules: [] },
-      mcpServers: []
+      mcpServers: [],
+      langfuse: { endpoint: '' }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
   })
@@ -34,9 +35,11 @@ describe('AppSettings schema', () => {
     const first = defaultSettings()
     first.theme = 'dark'
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
+    first.langfuse.endpoint = 'https://leaked.example'
 
     expect(DEFAULT_SETTINGS.theme).toBe('system')
     expect(DEFAULT_SETTINGS.providers).toEqual([])
+    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
     expect(defaultSettings()).toEqual(DEFAULT_SETTINGS)
   })
 
@@ -207,6 +210,42 @@ describe('权限规则 schema（T13：审批记忆的"永久允许"）', () => {
     expect(
       appSettingsPatchSchema.safeParse({ permissions: { rules: [{ tool: 'edit' }] } }).success
     ).toBe(false)
+  })
+})
+
+describe('Langfuse 设置 schema（T17：只有服务地址，密钥不在这里）', () => {
+  it('langfuse 必须是 { endpoint: string }（空串 = 没配）；密钥字段一律不收（strict）', () => {
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, langfuse: { endpoint: '' } }).success
+    ).toBe(true)
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        langfuse: { endpoint: 'https://cloud.langfuse.com' }
+      }).success
+    ).toBe(true)
+
+    for (const bad of [
+      {},
+      { endpoint: 1 },
+      { endpoint: '', secretKey: 'sk-leaked' },
+      'https://cloud.langfuse.com'
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, langfuse: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+  })
+
+  it('补丁可以改地址（设置页「追踪」栏走这条路），形状必须合法', () => {
+    expect(
+      appSettingsPatchSchema.parse({ langfuse: { endpoint: 'https://cloud.langfuse.com' } })
+    ).toEqual({ langfuse: { endpoint: 'https://cloud.langfuse.com' } })
+    expect(appSettingsPatchSchema.safeParse({ langfuse: { endpoint: 1 } }).success).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ langfuse: { endpoint: '', extra: 1 } }).success).toBe(
+      false
+    )
   })
 })
 

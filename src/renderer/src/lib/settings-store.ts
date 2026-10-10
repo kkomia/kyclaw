@@ -62,6 +62,8 @@ export interface SettingsState {
   update: (patch: AppSettingsPatch) => Promise<void>
   /** 保存 provider 列表（模型设置页）：以落盘结果为准，失败抛给调用方 */
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
+  /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
+  saveLangfuseEndpoint: (endpoint: string) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
   /** 审批卡"永久允许"：追加一条规则并落盘；以落盘结果为准，失败抛给调用方 */
@@ -124,6 +126,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const api = window.kyclaw?.settings
     if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），provider 没有保存')
     set({ settings: await api.update({ providers }) })
+  },
+
+  saveLangfuseEndpoint: async (endpoint) => {
+    // 与 provider 同族：失败抛给调用方，界面上要能看见"没存进去"
+    set({ settings: await settingsApi().update({ langfuse: { endpoint } }) })
   },
 
   removeProvider: async (id) => {

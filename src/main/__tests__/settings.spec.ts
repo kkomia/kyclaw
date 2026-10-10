@@ -26,7 +26,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       defaultWorkspace: null,
       projects: [],
       permissions: { rules: [] },
-      mcpServers: []
+      mcpServers: [],
+      langfuse: { endpoint: 'https://cloud.langfuse.com' }
     }
 
     writeSettings(file, settings)
@@ -59,7 +60,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     }
   })
 
-  it('读出来的默认值是新的（含新数组），调用方改了不污染模块级默认', () => {
+  it('读出来的默认值是新的（含新数组/新对象），调用方改了不污染模块级默认', () => {
     const first = readSettings(settingsPath(dir))
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
     first.workspaces.push({ path: 'D:/leaked', mode: 'ask' })
@@ -70,14 +71,16 @@ describe('设置存储（userData 下的 settings.json）', () => {
       path: 'D:/leaked',
       createdAt: '2026-10-11T00:00:00.000Z'
     })
+    first.langfuse.endpoint = 'https://leaked.example'
 
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])
     expect(DEFAULT_SETTINGS.projects).toEqual([])
     expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
+    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects）读出空值：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -93,7 +96,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       defaultWorkspace: null,
       projects: [],
       permissions: { rules: [] },
-      mcpServers: []
+      mcpServers: [],
+      langfuse: { endpoint: '' }
     })
   })
 

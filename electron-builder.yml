@@ -1,6 +1,9 @@
 # 打包配置（T15）：NSIS 用户级安装包 → dist/。
 # 没有代码签名证书：产物未签名，装的时候 SmartScreen 会拦一下（选"仍要运行"），见 task-15-report。
-# 更新通道（electron-updater + Gitee generic）留 T17，这里不写 publish（否则会往包里塞一份假的 app-update.yml）。
+# 更新通道（T17）：**仍然不写 publish** —— 没有真 Gitee 仓库可发，写了只会往包里塞一份指向不存在
+# 地址的 app-update.yml（一启动就报错）。试点期的更新地址由 env `KYCLAW_UPDATE_URL` 现给
+# （本机模拟源 / 内测切通道，见 src/main/updater.ts）；真发布时再加
+# publish: { provider: generic, url: <Gitee Release 直链> }，代码里那条"打包内 app-update.yml"的路会自动接上。
 appId: com.kkomia.kyclaw
 productName: kyclaw
 directories:

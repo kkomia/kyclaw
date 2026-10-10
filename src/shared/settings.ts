@@ -7,7 +7,8 @@
  * 元素的取值只有 path + mode 两个字段；permissions.rules（T13）是审批记忆的"永久允许"；
  * mcpServers（T12）的取值在下面（元素形状 + 缺省），业务校验与路由在 shared/mcp.ts 与
  * mastra/routes/mcp.ts；projects（T18）的元素 schema 在 shared/projects.ts，defaultWorkspace 是
- * 「未指定项目的会话」用的那个默认工作区（地位 = Kimi「其他 → 通用 → 存储位置」）。
+ * 「未指定项目的会话」用的那个默认工作区（地位 = Kimi「其他 → 通用 → 存储位置」）；
+ * langfuse（T17）只有服务地址一项——公私钥走 secrets.json（safeStorage）。
  * 追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
  */
 import { z } from './zod'
@@ -51,6 +52,16 @@ export const permissionRuleSchema = z.strictObject({
 
 export const permissionsSchema = z.strictObject({
   rules: z.array(permissionRuleSchema)
+})
+
+/**
+ * Langfuse 追踪的**非密钥**部分（T17）：只放服务地址。
+ * 公私钥与 provider 密钥同待遇——safeStorage 密文落 secrets.json（main/secrets.ts），
+ * 所以这里没有它们。三项齐 = 开启导出（缺一不导出、也不报错，见 mastra/telemetry.ts）。
+ * 空串 = 没配（默认关），也就是"内容不出机器"的默认姿态（R18 的遥测禁用不受影响）。
+ */
+export const langfuseSettingsSchema = z.strictObject({
+  endpoint: z.string()
 })
 
 /**
@@ -100,7 +111,9 @@ export const appSettingsSchema = z.strictObject({
   /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
   permissions: permissionsSchema,
   /** T12 的 MCP server 列表（增删改走 PUT /api/mcp/servers，见 mastra/routes/mcp.ts） */
-  mcpServers: z.array(mcpServerSchema)
+  mcpServers: z.array(mcpServerSchema),
+  /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
+  langfuse: langfuseSettingsSchema
 })
 
 /**
@@ -123,6 +136,7 @@ export type PermissionRule = z.infer<typeof permissionRuleSchema>
 export type Permissions = z.infer<typeof permissionsSchema>
 export type McpTransport = z.infer<typeof mcpTransportSchema>
 export type McpServerConfig = z.infer<typeof mcpServerSchema>
+export type LangfuseSettings = z.infer<typeof langfuseSettingsSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 
@@ -134,7 +148,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultWorkspace: null,
   projects: [],
   permissions: { rules: [] },
-  mcpServers: []
+  mcpServers: [],
+  langfuse: { endpoint: '' }
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -145,6 +160,7 @@ export function defaultSettings(): AppSettings {
     workspaces: [],
     projects: [],
     permissions: { rules: [] },
-    mcpServers: []
+    mcpServers: [],
+    langfuse: { endpoint: '' }
   }
 }

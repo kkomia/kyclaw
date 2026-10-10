@@ -11,17 +11,23 @@ import {
   agentEndpointSchema,
   connectionTestResultSchema,
   IPC_CHANNELS,
+  langfuseStateSchema,
   projectBaseSchema,
   projectFolderSchema,
   providerKeyStatesSchema,
+  setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
+  updateStateSchema,
   windowStateSchema,
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawProjectsApi,
   type KyclawSettingsApi,
+  type KyclawTelemetryApi,
+  type KyclawUpdatesApi,
   type KyclawWindowApi,
-  type KyclawWorkspaceApi
+  type KyclawWorkspaceApi,
+  type UpdateState
 } from '../shared/ipc'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 
@@ -142,12 +148,72 @@ const agentApi: KyclawAgentApi = {
   }
 }
 
+/**
+ * 更新面（T17）：状态读取/手动检查/重启安装 + 订阅推送。
+ * 与窗口状态推送同一套纪律：payload 过同一份 schema，结构不对就不交给上层。
+ * 结构不对一律抛（不做"回退默认值"）：更新状态是给用户看的判断依据，编一个"未配置"比报错更糟。
+ */
+const updatesApi: KyclawUpdatesApi = {
+  state: async () => parseUpdateState(await ipcRenderer.invoke(IPC_CHANNELS.updates.state)),
+  check: async () => parseUpdateState(await ipcRenderer.invoke(IPC_CHANNELS.updates.check)),
+  install: async () => {
+    await ipcRenderer.invoke(IPC_CHANNELS.updates.install)
+  },
+  onStateChanged: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = updateStateSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.updates.stateChanged, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.updates.stateChanged, handler)
+    }
+  }
+}
+
+function parseUpdateState(payload: unknown): UpdateState {
+  const parsed = updateStateSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 更新状态响应结构不合法')
+  return parsed.data
+}
+
+/**
+ * 可观测面（T17）：Langfuse 的配置状态 + 写/清密钥。
+ * 密钥回包只有 {hasKeys:true}（多一个字段都不交给上层，防"顺手回显明文"）；
+ * 状态回包结构不对就抛（半截状态没法显示）。
+ */
+const telemetryApi: KyclawTelemetryApi = {
+  langfuseState: async () => {
+    const parsed = langfuseStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.telemetry.langfuseState)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Langfuse 状态响应结构不合法')
+    return parsed.data
+  },
+  setLangfuseKeys: async (publicKey, secretKey) => {
+    const parsed = setLangfuseKeysResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.telemetry.setLangfuseKeys, publicKey, secretKey)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Langfuse 密钥保存响应结构不合法')
+    return parsed.data
+  },
+  clearLangfuseKeys: async () => {
+    const parsed = langfuseStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.telemetry.clearLangfuseKeys)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Langfuse 状态响应结构不合法')
+    return parsed.data
+  }
+}
+
 export const kyclawApi: KyclawApi = {
   window: windowApi,
   settings: settingsApi,
   workspace: workspaceApi,
   projects: projectsApi,
-  agent: agentApi
+  agent: agentApi,
+  updates: updatesApi,
+  telemetry: telemetryApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。

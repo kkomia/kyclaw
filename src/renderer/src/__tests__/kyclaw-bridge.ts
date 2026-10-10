@@ -1,5 +1,12 @@
 import { vi, type Mock } from 'vitest'
-import type { ConnectionTestResult, KyclawAgentApi, KyclawApi, KyclawWindowApi } from '@shared/ipc'
+import type {
+  ConnectionTestResult,
+  KyclawAgentApi,
+  KyclawApi,
+  KyclawWindowApi,
+  LangfuseState,
+  UpdateState
+} from '@shared/ipc'
 import {
   defaultSettings,
   type AppSettings,
@@ -38,6 +45,27 @@ export interface ProjectsApiStub {
   pickFolder: Mock<() => Promise<{ path: string | null }>>
   create: Mock<(name: string, path: string) => Promise<AppSettings>>
   remove: Mock<(id: string) => Promise<AppSettings>>
+}
+
+/** 更新面（T17）：`push` 是测试用的"模拟主进程推送"，其余都是真实 API 的形状 */
+export interface UpdatesApiStub {
+  state: Mock<() => Promise<UpdateState>>
+  check: Mock<() => Promise<UpdateState>>
+  install: Mock<() => Promise<void>>
+  onStateChanged: Mock<(listener: (state: UpdateState) => void) => () => void>
+  push: (state: UpdateState) => void
+}
+
+/**
+ * 可观测面（T17）：密钥"有状态"（写/清之后状态跟着变），地址直接读共享设置副本
+ * —— 与主进程口径一致（地址在 settings.json，密钥在另一处）。
+ * `active` 是本次运行有没有真挂上导出，测试直接改这个值。
+ */
+export interface TelemetryApiStub {
+  langfuseState: Mock<() => Promise<LangfuseState>>
+  setLangfuseKeys: Mock<(publicKey: string, secretKey: string) => Promise<{ hasKeys: true }>>
+  clearLangfuseKeys: Mock<() => Promise<LangfuseState>>
+  active: boolean
 }
 
 /** 桥里面的共享状态：settings 面与 workspace / projects 面读写同一份设置 */
@@ -213,28 +241,80 @@ export function agentApiStub(): KyclawAgentApi {
   }
 }
 
-/** installKyclawBridge 的返回值：settings 面的方法（原样）+ workspace / projects 面的方法 */
+/** 更新面：未配源的默认状态（挂载时拉一次、之后测试想推就 push） */
+export function updatesApiStub(
+  initial: UpdateState = { currentVersion: '1.0.0', configured: false, status: { phase: 'idle' } }
+): UpdatesApiStub {
+  const listeners = new Set<(state: UpdateState) => void>()
+  let current = initial
+  return {
+    state: vi.fn(async () => current),
+    check: vi.fn(async () => current),
+    install: vi.fn(async () => {}),
+    onStateChanged: vi.fn((listener: (state: UpdateState) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    }),
+    push: (state: UpdateState) => {
+      current = state
+      for (const listener of listeners) listener(state)
+    }
+  }
+}
+
+/** 可观测面：地址由 `endpointOf` 现读（装桥时给共享设置副本），密钥"有状态" */
+export function telemetryApiStub(endpointOf: () => string = () => ''): TelemetryApiStub {
+  const keys = { publicKey: false, secretKey: false }
+  const stub: TelemetryApiStub = {
+    active: false,
+    langfuseState: vi.fn(async () => ({
+      endpoint: endpointOf(),
+      publicKey: { hasKey: keys.publicKey, needsReentry: false },
+      secretKey: { hasKey: keys.secretKey, needsReentry: false },
+      active: stub.active
+    })),
+    setLangfuseKeys: vi.fn(async () => {
+      keys.publicKey = true
+      keys.secretKey = true
+      return { hasKeys: true as const }
+    }),
+    clearLangfuseKeys: vi.fn(async () => {
+      keys.publicKey = false
+      keys.secretKey = false
+      return stub.langfuseState()
+    })
+  }
+  return stub
+}
+
+/** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
   projects: ProjectsApiStub
+  updates: UpdatesApiStub
+  telemetry: TelemetryApiStub
 }
 
-/** 装桥并返回各面的 spy（settings / workspace / projects 共享同一份设置副本） */
+/** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
 export function installKyclawBridge(initial: AppSettings = defaultSettings()): KyclawBridgeStubs {
   const state: BridgeState = { current: initial }
   const settings = settingsApi(state)
   const workspace = workspaceApi(state)
   const projects = projectsApi(state)
+  const updates = updatesApiStub()
+  const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
     workspace,
     projects,
-    agent: agentApiStub()
+    agent: agentApiStub(),
+    updates,
+    telemetry
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
-  return { ...settings, workspace, projects }
+  return { ...settings, workspace, projects, updates, telemetry }
 }
 
 export function clearKyclawBridge(): void {

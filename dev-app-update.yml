@@ -1,0 +1,6 @@
+# 开发态更新配置（T17）：electron-updater 的 forceDevUpdateConfig 打开时读这份，
+# 拿 updaterCacheDirName 之类的本地设置；更新地址仍由 KYCLAW_UPDATE_URL 现给（见 src/main/updater.ts）。
+# 故意不配 publish、不进安装包（electron-builder.yml 的 files 里排除它）。
+provider: generic
+url: http://127.0.0.1:8555/
+updaterCacheDirName: kyclaw-updater

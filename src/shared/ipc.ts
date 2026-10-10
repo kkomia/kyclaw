@@ -72,6 +72,24 @@ export const IPC_CHANNELS = {
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
     endpoint: 'agent:endpoint'
+  },
+  updates: {
+    /** 读当前更新状态（返回 UpdateState） */
+    state: 'updates:state',
+    /** 手动检查更新（无入参，返回检查结束时的 UpdateState） */
+    check: 'updates:check',
+    /** 重启并安装（只在"已下载"阶段有意义；无入参） */
+    install: 'updates:install',
+    /** 主进程 → 渲染端：更新状态变化推送 */
+    stateChanged: 'updates:state-changed'
+  },
+  telemetry: {
+    /** Langfuse 配置状态（无入参，返回 LangfuseState） */
+    langfuseState: 'telemetry:langfuse-state',
+    /** 写 Langfuse 公私钥（入参 [publicKey, secretKey]，返回 {hasKeys:true}——永远不回明文） */
+    setLangfuseKeys: 'telemetry:set-langfuse-keys',
+    /** 清除 Langfuse 公私钥（无入参，返回清除后的 LangfuseState） */
+    clearLangfuseKeys: 'telemetry:clear-langfuse-keys'
   }
 } as const
 
@@ -151,6 +169,72 @@ export type ConnectionTestResult = z.infer<typeof connectionTestResultSchema>
 /** 无入参通道的入参 schema：ipcRenderer.invoke 不给参数时 args 为空数组 */
 export const noArgsSchema = z.tuple([])
 
+/**
+ * 更新通道（T17）的状态机取值：idle 未检查过 / checking 检查中 / up-to-date 已是最新 /
+ * available 检出新版本 / downloading 下载中 / downloaded 已下载待安装 / error 出错。
+ */
+export const updatePhaseSchema = z.enum([
+  'idle',
+  'checking',
+  'up-to-date',
+  'available',
+  'downloading',
+  'downloaded',
+  'error'
+])
+
+/**
+ * 一次更新检视的状态：按相位判别（每个相位只带自己那几个字段——`idle` 带上 percent 是形状错误，
+ * 不是"多余信息"）。version 只在有新版本时给；percent 只在下载中给；message 只在 error 时给
+ * （已截断、不带栈）。
+ */
+export const updateStatusSchema = z.discriminatedUnion('phase', [
+  z.strictObject({ phase: z.literal('idle') }),
+  z.strictObject({ phase: z.literal('checking') }),
+  z.strictObject({ phase: z.literal('up-to-date') }),
+  z.strictObject({ phase: z.literal('available'), version: z.string().optional() }),
+  z.strictObject({
+    phase: z.literal('downloading'),
+    version: z.string().optional(),
+    percent: z.number().optional()
+  }),
+  z.strictObject({ phase: z.literal('downloaded'), version: z.string().optional() }),
+  z.strictObject({ phase: z.literal('error'), message: z.string().optional() })
+])
+
+/**
+ * 渲染端看到的更新全貌：当前版本 + 有没有配更新源 + 状态。
+ * `configured=false` 时"检查更新"只回状态（不发网络请求）——开发态/未配置的路径不报错、不骚扰。
+ */
+export const updateStateSchema = z.strictObject({
+  currentVersion: z.string(),
+  configured: z.boolean(),
+  status: updateStatusSchema
+})
+
+export type UpdatePhase = z.infer<typeof updatePhaseSchema>
+export type UpdateStatus = z.infer<typeof updateStatusSchema>
+export type UpdateState = z.infer<typeof updateStateSchema>
+
+/**
+ * Langfuse 的配置状态（T17）：地址是落盘设置的原文，公私钥只有"有没有"。
+ * `active` = 本次启动的 agent 服务真把导出挂上了（配置改动要重启应用才生效，UI 拿它说人话）。
+ */
+export const langfuseStateSchema = z.strictObject({
+  endpoint: z.string(),
+  publicKey: providerKeyStateSchema,
+  secretKey: providerKeyStateSchema,
+  active: z.boolean()
+})
+
+export type LangfuseState = z.infer<typeof langfuseStateSchema>
+
+/** telemetry:set-langfuse-keys 的入参：[publicKey, secretKey]（都非空；明文只在主进程内存里短暂存在） */
+export const langfuseKeysArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
+
+/** 写 Langfuse 密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
+export const setLangfuseKeysResultSchema = z.strictObject({ hasKeys: z.literal(true) })
+
 /** 跨边界入参不合法（主进程侧抛这个，不静默忽略） */
 export class IpcInputError extends Error {
   constructor(channel: string, detail: string) {
@@ -210,6 +294,33 @@ export interface KyclawAgentApi {
 }
 
 /**
+ * preload 暴露给渲染端的更新面（T17）：当前版本 + 状态 + 手动检查/安装。
+ * 状态由主进程推（`updates:state-changed`，进度边走边推），所以这里有订阅；
+ * 检查本身是异步长事（下载在后台继续），check() 只等到"检查"这一步落地。
+ */
+export interface KyclawUpdatesApi {
+  state(): Promise<UpdateState>
+  /** 手动检查更新：返回检查结束时的状态；下载进度随后经 onStateChanged 推 */
+  check(): Promise<UpdateState>
+  /** 重启并安装（只在"已下载"阶段有意义） */
+  install(): Promise<void>
+  /** 订阅更新状态变化，返回退订函数 */
+  onStateChanged(listener: (state: UpdateState) => void): () => void
+}
+
+/**
+ * preload 暴露给渲染端的可观测面（T17）：Langfuse 的配置状态 + 写/清密钥。
+ * 与 provider 密钥同一套纪律：**只在写方向上见到明文**，读回来只有"有没有"。
+ */
+export interface KyclawTelemetryApi {
+  langfuseState(): Promise<LangfuseState>
+  /** 写公私钥：成功只回 {hasKeys:true}（明文永不回渲染端） */
+  setLangfuseKeys(publicKey: string, secretKey: string): Promise<{ hasKeys: true }>
+  /** 清除公私钥（地址仍在设置里，用户想彻底关就在「追踪」栏把地址清空保存） */
+  clearLangfuseKeys(): Promise<LangfuseState>
+}
+
+/**
  * preload 暴露给渲染端的工作区面：授权目录的增删与访问模式。
  * 为什么单独一族（不并进 settings:update）：工作区路径必须在主进程校验
  * （存在、是目录、非 UNC），补丁 schema 里没有 workspaces 这个字段。
@@ -253,4 +364,6 @@ export interface KyclawApi {
   workspace: KyclawWorkspaceApi
   projects: KyclawProjectsApi
   agent: KyclawAgentApi
+  updates: KyclawUpdatesApi
+  telemetry: KyclawTelemetryApi
 }

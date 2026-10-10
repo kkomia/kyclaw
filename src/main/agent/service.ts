@@ -21,6 +21,7 @@ import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
+import type { LangfuseExportConfig } from '../../mastra/telemetry'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { McpLifecycle } from '../mcp/lifecycle'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
@@ -91,6 +92,11 @@ export interface AgentServerOptions {
    * 缺省 = 从 dataDir/settings.json 的 mcpServers 读。
    */
   mcpServers?: () => readonly McpServerConfig[]
+  /**
+   * T17：Langfuse 追踪配置（现读）。生产由 main/index.ts 注入"读设置 + safeStorage 密钥"的实现；
+   * 缺省 = null（不导出）——本模块刻意不 import electron，读不到 safeStorage 里的密钥。
+   */
+  langfuse?: () => LangfuseExportConfig | null
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -99,6 +105,8 @@ export interface AgentServerOptions {
 
 export interface AgentServerHandle extends AgentEndpoint {
   port: number
+  /** T17：本次装配的追踪状态（设置页「追踪」栏用它说"已开启 / 重启后开启"） */
+  telemetry: { langfuse: boolean }
   /** 断开监听、收掉 Mastra 与 storage；重复调用是空操作 */
   stop(): Promise<void>
 }
@@ -220,9 +228,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const projectsFor = options.projects ?? (() => settingsFor().projects)
   const permissionRulesFor = options.permissionRules ?? (() => settingsFor().permissions.rules)
   const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
+  // 追踪（T17）：缺省不导出（密钥在 safeStorage 里，本模块读不到；生产由 main/index.ts 注入）
+  const langfuseFor = options.langfuse ?? ((): LangfuseExportConfig | null => null)
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory, usage, sessionProjects } = await createKyclawMastra({
+  const { mastra, storage, memory, usage, sessionProjects, telemetry } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
     workspaces: workspacesFor,
@@ -230,7 +240,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     projects: projectsFor,
     permissionRules: permissionRulesFor,
     mcpServers: mcpServersFor,
-    mcpTools: (gate) => mcpLifecycle.tools(gate)
+    mcpTools: (gate) => mcpLifecycle.tools(gate),
+    langfuse: langfuseFor
   })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
@@ -345,6 +356,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     baseUrl: `http://${HOST}:${port}`,
     token,
     port,
+    telemetry,
     stop: async () => {
       if (stopped) return
       stopped = true

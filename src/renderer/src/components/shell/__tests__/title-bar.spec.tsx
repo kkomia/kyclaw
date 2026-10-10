@@ -4,6 +4,8 @@ import {
   agentApiStub,
   projectsApiStub,
   settingsApiStub,
+  telemetryApiStub,
+  updatesApiStub,
   workspaceApiStub
 } from '@renderer/__tests__/kyclaw-bridge'
 import type { KyclawWindowApi } from '@shared/ipc'
@@ -19,14 +21,16 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     onStateChanged: vi.fn(() => () => {}),
     ...overrides
   }
-  // T5 起 KyclawApi 多了 settings 面、T6 起多了 agent 面、T18 起多了 projects 面：
-  // 本文件只测窗口面，其余给桩即可
+  // T5 起 KyclawApi 多了 settings 面、T6 起多了 agent 面、T18 起多了 projects 面、T17 起多了
+  // updates / telemetry 面：本文件只测窗口面，其余给桩即可
   window.kyclaw = {
     window: api,
     settings: settingsApiStub(),
     workspace: workspaceApiStub(),
     projects: projectsApiStub(),
-    agent: agentApiStub()
+    agent: agentApiStub(),
+    updates: updatesApiStub(),
+    telemetry: telemetryApiStub()
   }
   return api
 }

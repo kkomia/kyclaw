@@ -365,3 +365,128 @@ describe('preload：window.kyclaw.projects', () => {
     await expect(kyclawApi.projects.remove('p1')).resolves.toEqual(defaultSettings())
   })
 })
+
+describe('preload：window.kyclaw.updates（T17）', () => {
+  const STATE = { currentVersion: '1.0.0', configured: true, status: { phase: 'idle' } }
+
+  it('暴露 updates 一族（读 / 检查 / 安装 / 订阅）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.updates).sort()).toEqual([
+      'check',
+      'install',
+      'onStateChanged',
+      'state'
+    ])
+  })
+
+  it('state / check 打约定通道，返回值按 schema 解析后交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce(STATE)
+    await expect(kyclawApi.updates.state()).resolves.toEqual(STATE)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('updates:state')
+
+    mocks.invoke.mockResolvedValueOnce({ ...STATE, status: { phase: 'up-to-date' } })
+    await expect(kyclawApi.updates.check()).resolves.toMatchObject({
+      status: { phase: 'up-to-date' }
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('updates:check')
+  })
+
+  it('state / check 的返回值结构不对（跨边界脏数据）→ 抛，不编造"未配置"糊弄上层', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    for (const bad of [
+      { currentVersion: '1.0.0' },
+      { ...STATE, status: { phase: 'ready' } },
+      null
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(bad)
+      await expect(kyclawApi.updates.state()).rejects.toThrow()
+    }
+  })
+
+  it('install 打 updates:install（无入参）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    await kyclawApi.updates.install()
+
+    expect(mocks.invoke).toHaveBeenLastCalledWith('updates:install')
+  })
+
+  it('onStateChanged：合法推送转给监听方，脏 payload 丢掉，退订摘同一个监听器', async () => {
+    const { kyclawApi } = await loadPreload()
+    const listener = vi.fn()
+
+    const unsubscribe = kyclawApi.updates.onStateChanged(listener)
+    expect(mocks.on).toHaveBeenCalledWith('updates:state-changed', expect.any(Function))
+
+    const push = pushedListener()
+    push({}, { ...STATE, status: { phase: 'downloading', percent: 40 } })
+    push({}, { currentVersion: '1.0.0' })
+    push({}, null)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith({
+      currentVersion: '1.0.0',
+      configured: true,
+      status: { phase: 'downloading', percent: 40 }
+    })
+
+    unsubscribe()
+    expect(mocks.removeListener).toHaveBeenCalledWith('updates:state-changed', push)
+  })
+})
+
+describe('preload：window.kyclaw.telemetry（T17）', () => {
+  const STATE = {
+    endpoint: 'https://cloud.langfuse.com',
+    publicKey: { hasKey: true, needsReentry: false },
+    secretKey: { hasKey: true, needsReentry: false },
+    active: false
+  }
+
+  it('暴露 telemetry 一族（状态 / 写密钥 / 清密钥）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.telemetry).sort()).toEqual([
+      'clearLangfuseKeys',
+      'langfuseState',
+      'setLangfuseKeys'
+    ])
+  })
+
+  it('setLangfuseKeys 原样发给通道，只把 {hasKeys:true} 交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKeys: true })
+
+    await expect(kyclawApi.telemetry.setLangfuseKeys('pk-test', 'sk-test')).resolves.toEqual({
+      hasKeys: true
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      'telemetry:set-langfuse-keys',
+      'pk-test',
+      'sk-test'
+    )
+  })
+
+  it('setLangfuseKeys 回包多带任何字段（比如顺手回显明文）→ 整个响应不合法，抛错不交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKeys: true, publicKey: 'pk-test' })
+
+    await expect(kyclawApi.telemetry.setLangfuseKeys('pk-test', 'sk-test')).rejects.toThrow()
+  })
+
+  it('langfuseState / clearLangfuseKeys 按 schema 解析；结构不对就抛', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce(STATE)
+    await expect(kyclawApi.telemetry.langfuseState()).resolves.toEqual(STATE)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('telemetry:langfuse-state')
+
+    mocks.invoke.mockResolvedValueOnce({ ...STATE, publicKey: { hasKey: false } })
+    await expect(kyclawApi.telemetry.clearLangfuseKeys()).rejects.toThrow()
+    expect(mocks.invoke).toHaveBeenLastCalledWith('telemetry:clear-langfuse-keys')
+  })
+})

@@ -10,6 +10,8 @@
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
  * - 会话↔项目映射（T18）：同一份 libsql 里的 `session_projects` 表（见 session-projects.ts），
  *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区 → 授权列表）。
+ * - 追踪（T17）：Langfuse exporter **默认关**；地址 + 公私钥配齐（选项 `langfuse` 现读）才挂上
+ *   observability 入口，判定与装配在 telemetry.ts。
  * - chat 路由用 @mastra/ai-sdk 的 `chatRoute`：`POST /chat/:agentId`，响应是 AI SDK UI 消息流
  *   （SSE）——T7 的 useChat 直接吃这口。
  * - 协议版本 v7（T11）：渲染端是 ai@7；**工具审批 part（`tool-approval-request`）只在 v6 及以后
@@ -31,6 +33,7 @@ import type { McpServerConfig, PermissionRule, Workspace } from '../shared/setti
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import type { McpToolGate } from './mcp'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
+import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
 import { createUsageRecorder, createUsageStore, usageSqlClient, type UsageStore } from './usage'
 
 /** libsql 库文件名（落在 dataDir 下） */
@@ -76,6 +79,8 @@ export interface KyclawMastra {
   usage: UsageStore
   /** 会话↔项目映射的表读写口 + 内存镜像（/api/projects/mappings 与工具取根共用一份） */
   sessionProjects: SessionProjectStore
+  /** T17：本次装配有没有挂上 Langfuse 导出（设置页拿它说"已开启 / 重启后开启"） */
+  telemetry: { langfuse: boolean }
 }
 
 /** libsql 的 file: URL 只认正斜杠（Windows 的反斜杠会被当转义字符） */
@@ -98,6 +103,11 @@ export async function createKyclawMastra(options: {
   mcpServers?: () => readonly McpServerConfig[]
   /** MCP 工具来源（T12：lifecycle.tools）；缺省 = 没有 MCP 工具 */
   mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
+  /**
+   * T17：Langfuse 追踪配置（现读的取值函数，由 main/index.ts 读设置 + safeStorage 密钥后注入）。
+   * 缺省 = 不导出；返回 null（没配齐）同样不导出——见 telemetry.ts 的口径。
+   */
+  langfuse?: () => LangfuseExportConfig | null
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass } = await import('@mastra/libsql')
@@ -125,6 +135,8 @@ export async function createKyclawMastra(options: {
   await usage.ensureTable()
   // 会话↔项目映射（T18）同库同寿命：表在这里建好；内存镜像是工具同步取根的来源
   const sessionProjects = createSessionProjectStore(storage)
+  // 追踪（T17）：默认关——没配齐（或建不起来）就没有 observability，Mastra 自己走 no-op
+  const observability = await langfuseObservabilityQuietly(options.langfuse?.() ?? null)
   const mastra = new MastraClass({
     agents: {
       [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel, memory, {
@@ -138,6 +150,7 @@ export async function createKyclawMastra(options: {
       })
     },
     storage,
+    ...(observability === null ? {} : { observability }),
     server: {
       apiRoutes: [
         chatRoute({
@@ -150,5 +163,12 @@ export async function createKyclawMastra(options: {
     }
   })
 
-  return { mastra, storage, memory, usage, sessionProjects }
+  return {
+    mastra,
+    storage,
+    memory,
+    usage,
+    sessionProjects,
+    telemetry: { langfuse: observability !== null }
+  }
 }

@@ -1,6 +1,9 @@
 /**
  * 应用入口：单实例锁 + 窗口 + 托盘 + 窗口 IPC + 内嵌 agent 服务。
  * 后台服务、设置等后续任务各自挂进来（T5 起），这里只做应用生命周期。
+ *
+ * T17 起多了两族接线：更新通道（updater.ts，源没配就是"什么都不做"的实例）与追踪通道
+ * （telemetry，Langfuse 默认关）——两者都不挡窗口、失败只记日志。
  */
 import { app } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
@@ -8,10 +11,19 @@ import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
 import { registerProjectsIpc } from './ipc/projects'
 import { registerSettingsIpc } from './ipc/settings'
+import { registerTelemetryIpc } from './ipc/telemetry'
+import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
 import { getProviderKey, secretsPath } from './secrets'
 import { readSettings, settingsPath } from './settings'
+import { readLangfuseConfig } from './telemetry'
+import {
+  createInertUpdater,
+  createKyclawUpdater,
+  hasBundledUpdateConfig,
+  UPDATE_URL_ENV
+} from './updater'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
 import { resolveModel } from '../mastra/model'
@@ -35,6 +47,9 @@ if (!app.requestSingleInstanceLock()) {
   /** 内嵌服务当前对外暴露的端点；服务没起来（或起失败）保持 null，IPC 侧会抛错 */
   let agentEndpoint: AgentEndpoint | null = null
 
+  /** 内嵌服务的追踪状态（T17）：服务没起来 = 没挂上导出 */
+  let agentTelemetry: { langfuse: boolean } | null = null
+
   app.whenReady().then(() => {
     // Windows 任务栏归组/通知：AUMID 与 electron-builder.yml 的 appId 一致
     electronApp.setAppUserModelId(APP_USER_MODEL_ID)
@@ -52,8 +67,33 @@ if (!app.requestSingleInstanceLock()) {
     registerWorkspaceIpc(userDataDir)
     registerProjectsIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
+    // 追踪通道（T17）：地址读 settings.json（与设置页写的是同一份），密钥在 secrets.json
+    registerTelemetryIpc({
+      dataDir: userDataDir,
+      secretsFile,
+      langfuseActive: () => agentTelemetry?.langfuse ?? false
+    })
     showMainWindow()
     createTray()
+
+    // 更新通道（T17）：通道面立刻可用（渲染端一挂载就拉状态），装配是异步的（electron-updater 是
+    // 动态 import）——装好后顶上并广播一次。没配更新源时就是个"什么都不做"的实例：
+    // 不检查、不报错、不发网络请求（开发态与未配置的默认路径）。
+    let updater = createInertUpdater(app.getVersion())
+    registerUpdatesIpc(() => updater)
+    void createKyclawUpdater({
+      currentVersion: app.getVersion(),
+      envUrl: process.env[UPDATE_URL_ENV],
+      isPackaged: app.isPackaged,
+      // 真发布时 electron-builder 会把 app-update.yml 写进 resources/；没有 = 没配源
+      hasBundledConfig: hasBundledUpdateConfig(process.resourcesPath),
+      onChange: pushUpdateState
+    }).then((ready) => {
+      updater = ready
+      pushUpdateState(ready.state())
+      // 启动检查：静默。结果只落在设置页的状态行里（没有弹窗、没有通知）
+      void ready.check()
+    })
 
     // 服务启动不挡窗口：先让壳起来，端点好了再挂上（渲染端要端点时会等它）
     startAgentServer({
@@ -64,10 +104,13 @@ if (!app.requestSingleInstanceLock()) {
         const providers = readSettings(settingsPath(userDataDir)).providers
         const resolved = await resolveModel(providers, (id) => getProviderKey(secretsFile, id))
         return resolved.model
-      }
+      },
+      // 追踪（T17）：启动时读一次——配齐了就挂 Langfuse 导出，改配置要重启应用才生效
+      langfuse: () => readLangfuseConfig(userDataDir, secretsFile)
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
+        agentTelemetry = handle.telemetry
         console.log(`[kyclaw] agent 服务已启动：${handle.baseUrl}`)
         if (is.dev) {
           console.log(`[kyclaw] agent token（仅开发期打印，便于 curl 本地联调）：${handle.token}`)
