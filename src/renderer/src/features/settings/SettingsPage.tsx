@@ -10,7 +10,7 @@ import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from 
 /**
  * 设置页（T5 起「外观」，T8 起「模型」；UI 返工 R1 改成栏目页）：
  * 左列由 SettingsNav 给（返回 + 栏目菜单），这里只渲染**当前栏目**的内容。
- * 栏目表在 sections.tsx（唯一来源），URL 是 /settings/:section；脏值回落默认栏。
+ * 栏目表在 sections.ts（唯一来源），URL 是 /settings/:section；脏值回落默认栏。
  *
  * 三选/三档的取值直接来自 shared/settings 的 schema（options 顺序就是显示顺序），
  * 免得 UI 里再抄一份字面量、跟落盘校验漂开。

@@ -84,7 +84,7 @@ export function ChatPage(): React.JSX.Element {
   if (!transport) {
     return (
       <ChatFrame>
-        <p data-testid="chat-connecting" className="p-6 text-b2 text-ink-tertiary">
+        <p data-testid="chat-connecting" className="p-4 text-b2 text-ink-tertiary">
           正在连接…
         </p>
       </ChatFrame>
@@ -94,7 +94,7 @@ export function ChatPage(): React.JSX.Element {
   if (activeId === null) {
     return (
       <ChatFrame>
-        <p data-testid="chat-loading" className="p-6 text-b2 text-ink-tertiary">
+        <p data-testid="chat-loading" className="p-4 text-b2 text-ink-tertiary">
           正在载入会话…
         </p>
       </ChatFrame>
@@ -173,7 +173,7 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
   if (!chat) {
     return (
       <ChatFrame>
-        <p data-testid="chat-loading" className="p-6 text-b2 text-ink-tertiary">
+        <p data-testid="chat-loading" className="p-4 text-b2 text-ink-tertiary">
           正在载入会话…
         </p>
       </ChatFrame>
