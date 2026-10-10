@@ -231,22 +231,21 @@
   }
 }
 
-/* 内容列（页面级容器）：限宽 --content-max-width，在"没有被覆盖层侧栏遮挡的区域"里居中。
-   侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 宽窗下
-   居中结果正好落在这条线右侧，窄窗 / 工作台展开时则会把内容压到侧栏底下。所以这里
-   以 --content-safe-left（侧栏展开 = 240，收起 = 0）为"安全左边"，取"居中位置"与它
-   的较大者：够宽时就是纯居中，不够宽时右移到安全线内并按可用宽度收窄 —— 内容任何
-   状态下都完整可见、不被裁，也不横向溢出。
+/* 内容列（页面级容器）：限宽 --content-max-width，在**实际可见区** [safe-left, 100%] 里居中。
+   侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 可见区就是"侧栏右缘
+   到主列右缘"这一段。所以居中基准也要用这段：先扣掉安全左边，再在剩下的宽度里取居中位置，
+   最后把安全左边加回去（可见区 < 上限时退化成"填满可见区"，不留空档）。
+   早期版本按整个主列居中 → 侧栏开着时内容贴侧栏、右侧空一大截（1280 宽下 ≈1 / ≈240 CSS）。
 
    动效（雷点 5）：`width` 与 `margin-left` 都从 --content-safe-left 推出来，所以**过渡的是这条
    变量本身**（@property 注册成 <length> 才能过渡，见下）：侧栏开合时两者逐帧同步变化，
-   不会出现"宽度一帧跳到位、位移还在路上"的硬切 / 瞬态溢出。窗口 resize 不改这条变量，
-   因此拉伸窗口时内容列不滞后。 */
+   不会出现"宽度一帧跳到位、位移还在路上"的硬切 / 瞬态溢出（而且内容沿着可见区平滑重居中）。
+   窗口 resize 不改这条变量，因此拉伸窗口时内容列不滞后。 */
 @utility content-column {
   width: min(calc(100% - var(--content-safe-left)), var(--content-max-width));
-  margin-left: max(
-    calc((100% - min(calc(100% - var(--content-safe-left)), var(--content-max-width))) / 2),
-    var(--content-safe-left)
+  margin-left: calc(
+    var(--content-safe-left) +
+      max(calc((100% - var(--content-safe-left) - var(--content-max-width)) / 2), 0px)
   );
   margin-right: auto;
 }

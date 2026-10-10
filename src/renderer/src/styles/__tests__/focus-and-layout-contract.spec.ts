@@ -35,6 +35,17 @@ describe('内容列 · 动效契约（复核 Important #1）', () => {
     expect(utility).toContain('var(--content-safe-left)')
     expect(utility).not.toContain('transition')
   })
+
+  it('居中基准是可见区 [safe-left, 100%]：先扣安全边取居中，再加回安全边（R2 D1）', () => {
+    const utility = /@utility content-column \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
+    const normalized = utility.replace(/\s+/g, ' ')
+
+    // 旧口径（按整个主列居中，max(居中, safeLeft)）在侧栏开时贴边 + 右侧留一大截空档
+    expect(normalized).toContain(
+      'margin-left: calc( var(--content-safe-left) + max(calc((100% - var(--content-safe-left) - var(--content-max-width)) / 2), 0px) );'
+    )
+    expect(normalized).not.toContain('max( calc((100% - min(')
+  })
 })
 
 describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
