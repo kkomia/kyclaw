@@ -96,37 +96,58 @@ describe('工作区组 · 添加（原生选择器）', () => {
   })
 })
 
-describe('工作区组 · 模式切换', () => {
-  it('点「完全访问」→ workspace:add(path, full)，选中态跟落盘值走', async () => {
+describe('工作区组 · 模式切换（T13：full 走显式确认）', () => {
+  it('点「完全访问」→ 弹确认框；确认后 setMode(path, full)，选中态跟落盘值走', async () => {
     const bridge = await mount(withWorkspaces({ path: PROJECT, mode: 'ask' }))
 
     fireEvent.click(screen.getByTestId('workspace-0-mode-full'))
 
-    await waitFor(() => expect(bridge.workspace.add).toHaveBeenCalledWith(PROJECT, 'full'))
+    // 确认前不落盘
+    expect(bridge.workspace.setMode).not.toHaveBeenCalled()
+    expect(await screen.findByTestId('workspace-full-confirm')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('workspace-full-confirm'))
+
+    await waitFor(() => expect(bridge.workspace.setMode).toHaveBeenCalledWith(PROJECT, 'full'))
     await waitFor(() =>
       expect(screen.getByTestId('workspace-0-mode-full')).toHaveAttribute('aria-pressed', 'true')
     )
     expect(screen.getByTestId('workspace-0-mode-ask')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('再点「每次询问」切回来', async () => {
+  it('确认框里取消 → 什么都不改（还是「每次询问」）', async () => {
+    const bridge = await mount(withWorkspaces({ path: PROJECT, mode: 'ask' }))
+
+    fireEvent.click(screen.getByTestId('workspace-0-mode-full'))
+    fireEvent.click(await screen.findByTestId('workspace-full-cancel'))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('workspace-full-confirm')).not.toBeInTheDocument()
+    )
+    expect(bridge.workspace.setMode).not.toHaveBeenCalled()
+    expect(screen.getByTestId('workspace-0-mode-ask')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('点「每次询问」（收紧方向）→ 直接切，不弹确认', async () => {
     const bridge = await mount(withWorkspaces({ path: PROJECT, mode: 'full' }))
 
     fireEvent.click(screen.getByTestId('workspace-0-mode-ask'))
 
-    await waitFor(() => expect(bridge.workspace.add).toHaveBeenCalledWith(PROJECT, 'ask'))
+    await waitFor(() => expect(bridge.workspace.setMode).toHaveBeenCalledWith(PROJECT, 'ask'))
     await waitFor(() =>
       expect(screen.getByTestId('workspace-0-mode-ask')).toHaveAttribute('aria-pressed', 'true')
     )
+    expect(screen.queryByTestId('workspace-full-confirm')).not.toBeInTheDocument()
   })
 
   it('切模式失败：选中态不变（不乐观改），行内报错', async () => {
     const bridge = await mount(withWorkspaces({ path: PROJECT, mode: 'ask' }))
-    bridge.workspace.add.mockRejectedValueOnce(new Error('ipc 断了'))
+    bridge.workspace.setMode.mockRejectedValueOnce(new Error('这个文件夹不在授权列表里'))
 
     fireEvent.click(screen.getByTestId('workspace-0-mode-full'))
+    fireEvent.click(await screen.findByTestId('workspace-full-confirm'))
 
-    expect(await screen.findByTestId('workspace-error')).toHaveTextContent('ipc 断了')
+    expect(await screen.findByTestId('workspace-error')).toHaveTextContent('不在授权列表里')
     expect(screen.getByTestId('workspace-0-mode-ask')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('workspace-0-mode-full')).toHaveAttribute('aria-pressed', 'false')
   })

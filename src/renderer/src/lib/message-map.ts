@@ -17,8 +17,10 @@
  * 认不出的 part 跳过、坏工具调用跳过、content 不是 parts 结构就当空消息，
  * 绝不让一条脏存储数据把整个会话回灌炸掉。
  *
- * 审批态（approval-requested/responded、output-denied）暂按"进行中"回放成 input-available，
- * 审批 UI 是 T12/T13 的事，那一步再回来补映射。
+ * 审批态（T13）：T11 的审批流会把工具调用以 `state='output-denied'`（拒绝）或
+ * `state='call'`（还在等审批）存进库 —— 前者按"已拒绝"回放（工具卡显示红签，不再误报"调用中"），
+ * 后者仍按"进行中"回放（重启后那次挂起的审批已经作废：审批 id 与快照都随进程内存消失，
+ * 用户要重新发起，见 task-13 报告"疑虑"）。
  */
 import type { UIMessage } from 'ai'
 import type { StoredMessage } from '@shared/threads'
@@ -45,6 +47,15 @@ function toolErrorText(invocation: Record<string, unknown>): string {
   return '工具执行失败'
 }
 
+/** 存储里的 approval 对象（Mastra 把 v7 客户端回灌的那份原样存下来：{id, approved, reason?}） */
+function approvalOf(invocation: Record<string, unknown>): Record<string, unknown> | null {
+  const approval = invocation.approval
+  if (!isRecord(approval)) return null
+  const id = approval.id
+  if (typeof id !== 'string' || id === '') return null
+  return approval
+}
+
 function mapToolPart(part: Record<string, unknown>): Part | null {
   const invocation = part.toolInvocation
   if (!isRecord(invocation)) return null
@@ -61,6 +72,17 @@ function mapToolPart(part: Record<string, unknown>): Part | null {
       return { type, toolCallId, state: 'input-streaming', input }
     case 'call':
       return { type, toolCallId, state: 'input-available', input }
+    case 'output-denied': {
+      // 用户拒绝了这次调用：回放成"已拒绝"（带 approval，形状与 v7 客户端一致；缺 id 用 toolCallId 兜底）
+      const approval = approvalOf(invocation)
+      return {
+        type,
+        toolCallId,
+        state: 'output-denied',
+        input,
+        approval: { ...(approval ?? {}), id: approval?.id ?? toolCallId, approved: false }
+      } as Part
+    }
     case 'output-error':
       return {
         type,
@@ -81,7 +103,7 @@ function mapToolPart(part: Record<string, unknown>): Part | null {
       }
       return { type, toolCallId, state: 'output-available', input, output: invocation.result }
     default:
-      // 审批态 / 未知态：按"进行中"回放（审批映射见文件头说明）
+      // 未知态：按"进行中"回放（猜不出来的一律不冒充完成）
       return { type, toolCallId, state: 'input-available', input }
   }
 }

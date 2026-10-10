@@ -47,8 +47,10 @@ export const IPC_CHANNELS = {
   workspace: {
     /** 打开原生选择器添加一个授权目录（无入参，取消=不改动；返回合并后的 AppSettings） */
     pick: 'workspace:pick',
-    /** 添加工作区 / 切换它的访问模式（入参 [path, mode]，返回合并后的 AppSettings） */
+    /** 添加工作区（入参 [path]；**一律以 ask 落盘**，返回合并后的 AppSettings） */
     add: 'workspace:add',
+    /** 切换一个**已授权**工作区的访问模式（入参 [path, mode]，返回合并后的 AppSettings） */
+    setMode: 'workspace:set-mode',
     /** 移除一个工作区（入参 [path]，返回合并后的 AppSettings） */
     remove: 'workspace:remove'
   },
@@ -81,8 +83,14 @@ export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(
 /** settings:test-provider / settings:remove-provider 的入参：[id] */
 export const providerIdArgsSchema = z.tuple([z.string().min(1)])
 
-/** workspace:add 的入参：[path, mode]（path 是不是真目录由主进程校验，这里只保证形状） */
-export const workspaceAddArgsSchema = z.tuple([z.string().min(1), workspaceModeSchema])
+/**
+ * workspace:add 的入参：[path]（path 是不是真目录由主进程校验，这里只保证形状）。
+ * **没有 mode**：新加的工作区一律以 ask 落盘 —— 渲染端不能"顺手"把 full 塞进授权列表。
+ */
+export const workspaceAddArgsSchema = z.tuple([z.string().min(1)])
+
+/** workspace:set-mode 的入参：[path, mode]（切模式只对已在授权列表里的路径生效） */
+export const workspaceSetModeArgsSchema = z.tuple([z.string().min(1), workspaceModeSchema])
 
 /** workspace:remove 的入参：[path] */
 export const workspaceRemoveArgsSchema = z.tuple([z.string().min(1)])
@@ -169,12 +177,17 @@ export interface KyclawAgentApi {
  * preload 暴露给渲染端的工作区面：授权目录的增删与访问模式。
  * 为什么单独一族（不并进 settings:update）：工作区路径必须在主进程校验
  * （存在、是目录、非 UNC），补丁 schema 里没有 workspaces 这个字段。
+ *
+ * 加与切模式**分成两条**（T13 收紧）：`add` 一律以 ask 落盘、`setMode` 只认已在列表里的路径 ——
+ * "完全访问"必须是用户在设置里对**已授权目录**的显式动作，不能随添加目录一起静默生效。
  */
 export interface KyclawWorkspaceApi {
-  /** 打开原生选择器添加一个工作区（取消 = 不改动），返回合并后的完整设置 */
+  /** 打开原生选择器添加一个工作区（取消 = 不改动；一律 ask），返回合并后的完整设置 */
   pick(): Promise<AppSettings>
-  /** 添加工作区 / 切模式：没有就新增、已在列表里就切到 mode */
-  add(path: string, mode: WorkspaceMode): Promise<AppSettings>
+  /** 添加工作区（一律 ask）；已在列表里是幂等的空操作（不动它的模式） */
+  add(path: string): Promise<AppSettings>
+  /** 切换一个已授权工作区的访问模式；路径不在列表里会被拒绝 */
+  setMode(path: string, mode: WorkspaceMode): Promise<AppSettings>
   /** 移除一个工作区（不在列表里是空操作） */
   remove(path: string): Promise<AppSettings>
 }

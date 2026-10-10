@@ -19,7 +19,7 @@ import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import { readSettings, settingsPath } from '../settings'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
-import type { Workspace } from '../../shared/settings'
+import type { AppSettings, PermissionRule, Workspace } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
@@ -57,6 +57,11 @@ export interface AgentServerOptions {
    * 缺省 = 从 dataDir/settings.json 的 workspaces 读（与设置页写入的是同一份）。
    */
   workspaces?: () => readonly Workspace[]
+  /**
+   * "永久允许"规则（T13）：同样是**现读**的取值函数（审批卡里点"永久允许"落进 settings.json，
+   * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
+   */
+  permissionRules?: () => readonly PermissionRule[]
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -177,13 +182,16 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const resolveModelFor: ModelResolver =
     options.resolveModel ??
     (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
-  // 工具权限边界走同一份 settings.json（设置页的 workspace:* 通道写的也是它）
-  const workspacesFor =
-    options.workspaces ?? (() => readSettings(settingsPath(options.dataDir)).workspaces)
+  // 工具权限边界走同一份 settings.json（设置页的 workspace:* 通道写的也是它）；
+  // "永久允许"规则（T13）同样现读，审批卡点完下一轮就生效
+  const settingsFor = (): AppSettings => readSettings(settingsPath(options.dataDir))
+  const workspacesFor = options.workspaces ?? (() => settingsFor().workspaces)
+  const permissionRulesFor = options.permissionRules ?? (() => settingsFor().permissions.rules)
   const { mastra, storage, memory } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
-    workspaces: workspacesFor
+    workspaces: workspacesFor,
+    permissionRules: permissionRulesFor
   })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')

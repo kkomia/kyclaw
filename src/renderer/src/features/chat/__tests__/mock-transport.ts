@@ -17,10 +17,26 @@ export interface MockRequest {
 
 export interface MockTransport {
   transport: ChatTransport<UIMessage>
-  /** 每次请求（含 regenerate / 编辑重发）都记一条 */
+  /** 每次请求（含 regenerate / 编辑重发 / 审批续跑）都记一条 */
   requests: MockRequest[]
   /** 推一段文本增量（首段自动补 text-start） */
   push: (delta: string) => void
+  /**
+   * 推一次"工具调用 + 服务端要求审批"（T13）：part 落到 `approval-requested`，
+   * 等用户决策后由 Chat 的 sendAutomaticallyWhen 自动续跑（那次请求会记进 requests）。
+   */
+  requestApproval: (options: {
+    toolCallId: string
+    toolName: string
+    input: unknown
+    approvalId: string
+  }) => void
+  /**
+   * 推一次"工具执行完成"（T13 的审批续跑里，服务端执行完会回 tool-output-available）。
+   * 与 requestApproval 配对：缺了它，part 会一直停在 approval-responded，
+   * AI SDK 的 lastAssistantMessageIsCompleteWithApprovalResponses 会再触发一次自动续跑。
+   */
+  toolOutput: (toolCallId: string, output: unknown) => void
   /** 结束当前流（text-end + finish） */
   finish: () => void
   /** 半截流上断掉（模拟断网/断流）：已推的内容留在消息里，错误抛给上层 */
@@ -94,6 +110,16 @@ export function createMockTransport(): MockTransport {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
       startText()
       controller.enqueue({ type: 'text-delta', id: activeTextId, delta })
+    },
+    requestApproval({ toolCallId, toolName, input, approvalId }) {
+      if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      controller.enqueue({ type: 'tool-input-start', toolCallId, toolName })
+      controller.enqueue({ type: 'tool-input-available', toolCallId, toolName, input })
+      controller.enqueue({ type: 'tool-approval-request', approvalId, toolCallId })
+    },
+    toolOutput(toolCallId, output) {
+      if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      controller.enqueue({ type: 'tool-output-available', toolCallId, output })
     },
     finish() {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')

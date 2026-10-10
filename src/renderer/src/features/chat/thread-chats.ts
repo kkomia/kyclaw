@@ -12,15 +12,26 @@
  *   - 首次进入某会话：拉服务端历史（message-map 回灌）→ 建 Chat（初值即历史）；
  *   - 出错（历史拉不到）时不缓存失败，交给 UI 重试（重试 = dropThreadChat + 重新挂载）；
  *   - 删除会话时 dropThreadChat 丢掉内存态。
+ *
+ * 审批（T13）：Chat 挂 `sendAutomaticallyWhen = lastAssistantMessageIsCompleteWithApprovalResponses`，
+ * 用户做完决策（addToolApprovalResponse）后自动把消息发回服务端续跑；onFinish 里把
+ * "还停在等审批"的轮次标出来（awaitingApproval），渲染端据此不把它当完成轮。
  */
 import { Chat } from '@ai-sdk/react'
+import { lastAssistantMessageIsCompleteWithApprovalResponses } from 'ai'
 import type { ChatTransport, UIMessage } from 'ai'
 import { mapStoredMessages } from '../../lib/message-map'
 import { fetchThreadMessages } from '../../lib/threads-api'
+import { hasPendingApproval } from './approval'
 
 export interface TurnOutcome {
   isError: boolean
   isAbort: boolean
+  /**
+   * 这一轮结束时仍停在"等审批"（挂起轮）：onFinish 照样以 isError:false/isAbort:false 触发，
+   * 但语义上**不是完成轮** —— 标题生成/完成通知都得等用户做完决策、resume 那一轮跑完再走。
+   */
+  awaitingApproval: boolean
 }
 
 export interface ThreadChatRuntime {
@@ -48,7 +59,18 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
     return new Chat<UIMessage>({
       transport: runtime.transport,
       messages,
-      onFinish: ({ isError, isAbort }) => runtime.onTurnEnd(threadId, { isError, isAbort })
+      onFinish: ({ message, isError, isAbort }) =>
+        runtime.onTurnEnd(threadId, {
+          isError,
+          isAbort,
+          awaitingApproval: hasPendingApproval(message)
+        }),
+      /**
+       * 审批回灌（T13）：`addToolApprovalResponse` 只把 part 改成 approval-responded，
+       * **不会自己再发请求** —— 什么时候续跑由这个判定决定：最后一条助手消息里所有
+       * 审批都有了回应、且没有别的待办时，自动把消息发回服务端执行工具（AI SDK 官方判定）。
+       */
+      sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses
     })
   })()
 

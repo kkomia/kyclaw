@@ -3,7 +3,8 @@
  *
  * 工具集（T11）：五个文件工具（read/write/edit/glob/grep），全部经 guard 装配——
  * 路径只认授权工作区（T10 的 realpath 引擎）、写类按 spec §5.2 挂审批（requireApproval）。
- * 工作区列表用**取值函数**传（现读设置）：用户中途加工作区，下一轮工具就能用，不必重启服务。
+ * 工作区列表与"永久允许"规则（T13）都用**取值函数**传（现读设置）：用户中途加工作区、
+ * 批准一条永久规则，下一轮工具就能用，不必重启服务。
  *
  * 模型走 Mastra 的 **DynamicArgument**（函数形式）：每次对话重新解析（读 settings + secrets），
  * 所以用户配好 provider/密钥后**不用重启**，下一轮就是真模型；配置半截时解析抛错，
@@ -16,7 +17,7 @@
  */
 import type { Agent } from '@mastra/core/agent'
 import type { MastraMemory } from '@mastra/core/memory'
-import type { Workspace } from '../../shared/settings'
+import type { PermissionRule, Workspace } from '../../shared/settings'
 import { classifyToolCall } from '../../main/permission/classify'
 import { createToolContext } from '../tools/guard'
 import { createEditTool } from '../tools/edit'
@@ -36,6 +37,8 @@ export type ModelResolver = () => Promise<KyclawModel>
 export interface KyclawAgentTools {
   /** 授权工作区（缺省 = 没有工作区：文件工具会明确报"先去设置里添加"） */
   workspaces?: () => readonly Workspace[]
+  /** "永久允许"规则（缺省 = 没有规则：写类除 full 工作区外一律问） */
+  permissionRules?: () => readonly PermissionRule[]
 }
 
 /** kyclaw 的身份与行为底线 */
@@ -54,7 +57,8 @@ export async function createKyclawAgent(
 
   const ctx = createToolContext({
     roots: toolOptions?.workspaces ?? (() => []),
-    classify: classifyToolCall
+    classify: classifyToolCall,
+    permissionRules: toolOptions?.permissionRules
   })
   const tools = {
     read: await createReadTool(ctx),

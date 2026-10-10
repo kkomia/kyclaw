@@ -22,7 +22,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       theme: 'dark' as const,
       fontTier: 'large' as const,
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     }
 
     writeSettings(file, settings)
@@ -59,9 +60,28 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const first = readSettings(settingsPath(dir))
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
     first.workspaces.push({ path: 'D:/leaked', mode: 'ask' })
+    first.permissions.rules.push({ tool: 'write', workspace: 'D:/leaked', mode: 'allow' })
 
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])
+    expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
+  })
+
+  it('旧的落盘文件（T13 之前没有 permissions 字段）读出空规则表：升级不丢原有设置', () => {
+    const file = settingsPath(dir)
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      'utf8'
+    )
+
+    expect(readSettings(file)).toEqual({
+      theme: 'dark',
+      fontTier: 'large',
+      providers: [],
+      workspaces: [],
+      permissions: { rules: [] }
+    })
   })
 
   it('目录还不存在时写入会自己建目录（userData 首次创建）', () => {

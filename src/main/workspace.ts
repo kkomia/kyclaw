@@ -7,6 +7,9 @@
  *
  * 归一：校验通过后存的是 realpath 结果 —— 用户从原生选择器交回来的路径直接进授权列表，
  * 大小写/分隔符/链接写法不同不该变成两条授权。
+ *
+ * 加与切模式分开（T13）：`addWorkspace` 只以 ask 新增；`setWorkspaceMode` 只认已授权路径。
+ * 这样"完全访问"必须是对已有目录的一次显式切换（设置页里带确认），不能随添加静默生效。
  */
 import { realpathSync, statSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
@@ -37,16 +40,30 @@ export function checkWorkspacePath(input: string): WorkspacePathCheck {
 }
 
 /**
- * workspace:add 的实现：列表里没有就新增，已经在列表里就把它切到 mode（一行一条，不重复）。
- * 存储的 path 以调用方给的（已归一的）为准 —— 切模式时顺带把更规范的写法写回去。
+ * workspace:add 的实现：列表里没有就**以 ask 新增**；已经在列表里就保持它的模式不动
+ * （重选同一个目录不该把用户开过的 full 悄悄降级，也不该把新目录直接当 full 收进来 ——
+ * full 只能经 setWorkspaceMode 的显式切换，见下）。
  */
-export function upsertWorkspace(
+export function addWorkspace(workspaces: readonly Workspace[], path: string): Workspace[] {
+  const index = workspaces.findIndex((workspace) => samePath(workspace.path, path))
+  if (index < 0) return [...workspaces, { path, mode: 'ask' }]
+  // 已在列表里：只把更规范的写法写回去，模式保持
+  return workspaces.map((workspace, at) =>
+    at === index ? { path, mode: workspace.mode } : workspace
+  )
+}
+
+/**
+ * workspace:set-mode 的实现：**只认已在授权列表里的路径**（T13 收紧 full 入口）。
+ * 不在列表里回 null，调用方抛错 —— "切模式"不能变成"加一个 full 工作区"的捷径。
+ */
+export function setWorkspaceMode(
   workspaces: readonly Workspace[],
   path: string,
   mode: WorkspaceMode
-): Workspace[] {
+): Workspace[] | null {
   const index = workspaces.findIndex((workspace) => samePath(workspace.path, path))
-  if (index < 0) return [...workspaces, { path, mode }]
+  if (index < 0) return null
   return workspaces.map((workspace, at) => (at === index ? { path, mode } : workspace))
 }
 

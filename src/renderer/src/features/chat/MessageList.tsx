@@ -1,5 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
+import type { Workspace } from '@shared/settings'
+import type { ApprovalDecision } from './ApprovalCard'
+import type { ApprovalRequest } from './approval'
 import { Message } from './Message'
 
 /**
@@ -11,6 +14,9 @@ export interface MessageListProps {
   messages: UIMessage[]
   status: ChatStatus
   onEdit?: (messageId: string, text: string) => void
+  /** 授权工作区列表与审批决策回调：透传给审批卡（T13） */
+  workspaces?: readonly Workspace[]
+  onApprovalDecision?: (request: ApprovalRequest, decision: ApprovalDecision) => void
 }
 
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
@@ -28,7 +34,13 @@ function tailSignature(messages: UIMessage[]): string {
   return `${messages.length}:${size}`
 }
 
-export function MessageList({ messages, status, onEdit }: MessageListProps): React.JSX.Element {
+export function MessageList({
+  messages,
+  status,
+  onEdit,
+  workspaces,
+  onApprovalDecision
+}: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
 
@@ -59,6 +71,8 @@ export function MessageList({ messages, status, onEdit }: MessageListProps): Rea
             message={message}
             streaming={status === 'streaming' && message.id === lastAssistantId}
             onEdit={onEdit}
+            workspaces={workspaces}
+            onApprovalDecision={onApprovalDecision}
           />
         ))}
       </div>

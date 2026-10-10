@@ -18,8 +18,9 @@ import { setFontTier, setTheme } from './theme'
  *
  * provider 的保存（saveProviders / removeProvider）与外观不同：**不发乐观态、失败会抛**——
  * 模型/密钥配错了是要让用户看见的，UI 也不该显示一条其实没落盘的 provider。
- * 工作区（pickWorkspace / addWorkspace / removeWorkspace）同理：路径合法性判在主进程，
- * 失败（选了 UNC / 目录没了）必须把原因交回给设置页行内显示，这里的副本一律以落盘回吐为准。
+ * 工作区（pickWorkspace / addWorkspace / setWorkspaceMode / removeWorkspace）同理：路径合法性判在主进程，
+ * 失败（选了 UNC / 目录没了 / 切一个不在列表里的路径）必须把原因交回给设置页行内显示，
+ * 这里的副本一律以落盘回吐为准。
  */
 function applyAppearance(settings: AppSettings): void {
   setTheme(settings.theme)
@@ -45,8 +46,10 @@ export interface SettingsState {
   removeProvider: (id: string) => Promise<void>
   /** 打开原生选择器添加一个工作区（取消 = 什么都没发生） */
   pickWorkspace: () => Promise<void>
-  /** 添加工作区 / 切换它的访问模式（主进程 upsert：没有就新增，有就切模式） */
-  addWorkspace: (path: string, mode: WorkspaceMode) => Promise<void>
+  /** 添加工作区（一律以 ask 落盘；已在列表里是幂等空操作） */
+  addWorkspace: (path: string) => Promise<void>
+  /** 切换一个已授权工作区的访问模式（full 属于这里：设置页里带确认的显式动作） */
+  setWorkspaceMode: (path: string, mode: WorkspaceMode) => Promise<void>
   /** 移除一个工作区（不在列表里是空操作） */
   removeWorkspace: (path: string) => Promise<void>
 }
@@ -101,8 +104,12 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ settings: await workspaceApi().pick() })
   },
 
-  addWorkspace: async (path, mode) => {
-    set({ settings: await workspaceApi().add(path, mode) })
+  addWorkspace: async (path) => {
+    set({ settings: await workspaceApi().add(path) })
+  },
+
+  setWorkspaceMode: async (path, mode) => {
+    set({ settings: await workspaceApi().setMode(path, mode) })
   },
 
   removeWorkspace: async (path) => {

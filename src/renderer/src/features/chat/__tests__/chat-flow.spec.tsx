@@ -364,7 +364,11 @@ describe('出错与重试', () => {
       control.finish()
     })
 
-    expect(runtime.onTurnEnd).toHaveBeenCalledWith('thread-ok', { isError: false, isAbort: false })
+    expect(runtime.onTurnEnd).toHaveBeenCalledWith('thread-ok', {
+      isError: false,
+      isAbort: false,
+      awaitingApproval: false
+    })
   })
 
   it('出错收尾：onTurnEnd(threadId, isError=true)', async () => {
@@ -380,7 +384,8 @@ describe('出错与重试', () => {
     await waitFor(() => {
       expect(runtime.onTurnEnd).toHaveBeenCalledWith('thread-fail', {
         isError: true,
-        isAbort: false
+        isAbort: false,
+        awaitingApproval: false
       })
     })
   })

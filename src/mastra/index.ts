@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
-import type { Workspace } from '../shared/settings'
+import type { PermissionRule, Workspace } from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 
 /** libsql 库文件名（落在 dataDir 下） */
@@ -57,6 +57,8 @@ export async function createKyclawMastra(options: {
   resolveModel: ModelResolver
   /** 授权工作区（工具权限边界）；缺省 = 没有工作区 */
   workspaces?: () => readonly Workspace[]
+  /** "永久允许"规则（T13：审批记忆落盘的那份设置）；缺省 = 没有规则 */
+  permissionRules?: () => readonly PermissionRule[]
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass } = await import('@mastra/libsql')
@@ -70,7 +72,8 @@ export async function createKyclawMastra(options: {
   const mastra = new MastraClass({
     agents: {
       [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel, memory, {
-        workspaces: options.workspaces
+        workspaces: options.workspaces,
+        permissionRules: options.permissionRules
       })
     },
     storage,

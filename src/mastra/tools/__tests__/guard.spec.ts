@@ -112,6 +112,48 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
       needsApproval(bed.ctx, 'write', { path: join(bed.outside, 'x.txt'), content: 'x' })
     ).toBe(false)
   })
+
+  it('"永久允许"规则：同工具 + 同工作区放行（T13 的审批记忆）', () => {
+    bed.rules.push({ tool: 'write', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(false)
+    // 粒度 = 工具 + 工作区：换个工具、或换个工作区都要继续问
+    expect(needsApproval(bed.ctx, 'edit', { path: 'a.txt', oldText: 'x', newText: 'y' })).toBe(true)
+
+    const second = createBed()
+    try {
+      bed.roots.push({ path: second.root, mode: 'ask' })
+      expect(
+        needsApproval(bed.ctx, 'write', { path: join(second.root, 'b.txt'), content: 'x' })
+      ).toBe(true)
+    } finally {
+      bed.roots.pop()
+      second.dispose()
+    }
+  })
+
+  it('规则随设置现读：批准前问、规则进来后放行（不需要重启 agent）', () => {
+    expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
+    bed.rules.push({ tool: 'write', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(false)
+    bed.rules.length = 0
+    expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
+  })
+
+  it('危险类（delete/move）不受规则影响：永远问', () => {
+    bed.rules.push({ tool: 'delete', workspace: bed.root, mode: 'allow' })
+    bed.rules.push({ tool: 'move', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(true)
+  })
+
+  it('MCP 工具名按最后一段匹配规则（mcp__server__write 命中 write 的规则）', () => {
+    bed.rules.push({ tool: 'write', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'mcp__fs__write', { path: 'a.txt', content: 'x' })).toBe(false)
+    expect(needsApproval(bed.ctx, 'mcp__fs__edit', { path: 'a.txt' })).toBe(true)
+  })
 })
 
 describe('sessionKey / ToolState：会话级 read 记录与同文件队列', () => {

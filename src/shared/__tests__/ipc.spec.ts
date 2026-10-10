@@ -14,7 +14,8 @@ import {
   settingsUpdateArgsSchema,
   windowStateSchema,
   workspaceAddArgsSchema,
-  workspaceRemoveArgsSchema
+  workspaceRemoveArgsSchema,
+  workspaceSetModeArgsSchema
 } from '../ipc'
 import { DEFAULT_SETTINGS } from '../settings'
 
@@ -188,31 +189,47 @@ describe('IPC 契约：workspace 通道', () => {
     expect(IPC_CHANNELS.workspace).toEqual({
       pick: 'workspace:pick',
       add: 'workspace:add',
+      setMode: 'workspace:set-mode',
       remove: 'workspace:remove'
     })
   })
 
-  it('workspace:add 只收 [path, mode]：path 非空、mode 只收 ask / full', () => {
-    expect(parseIpcArgs(workspaceAddArgsSchema, ['D:\\ws', 'ask'], 'workspace:add')).toEqual([
-      'D:\\ws',
-      'ask'
-    ])
-    expect(parseIpcArgs(workspaceAddArgsSchema, ['D:\\ws', 'full'], 'workspace:add')).toEqual([
-      'D:\\ws',
-      'full'
-    ])
+  it('workspace:add 只收 [path]（T13：不收入参 mode，一律 ask 落盘）', () => {
+    expect(parseIpcArgs(workspaceAddArgsSchema, ['D:\\ws'], 'workspace:add')).toEqual(['D:\\ws'])
+
+    for (const bad of [
+      [],
+      [''],
+      ['D:\\ws', 'full'],
+      ['D:\\ws', 'ask'],
+      ['D:\\ws', 'ask', 'extra'],
+      [1],
+      [null]
+    ]) {
+      expect(
+        parseIpcArgs.bind(null, workspaceAddArgsSchema, bad as unknown[], 'workspace:add'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('workspace:set-mode 只收 [path, mode]：path 非空、mode 只收 ask / full', () => {
+    expect(
+      parseIpcArgs(workspaceSetModeArgsSchema, ['D:\\ws', 'full'], 'workspace:set-mode')
+    ).toEqual(['D:\\ws', 'full'])
+    expect(
+      parseIpcArgs(workspaceSetModeArgsSchema, ['D:\\ws', 'ask'], 'workspace:set-mode')
+    ).toEqual(['D:\\ws', 'ask'])
 
     for (const bad of [
       [],
       ['D:\\ws'],
-      [''],
+      ['', 'full'],
       ['D:\\ws', 'always'],
-      ['D:\\ws', 'ask', 'extra'],
-      [1, 'ask'],
-      ['D:\\ws', 1]
+      ['D:\\ws', 'full', 'x']
     ]) {
       expect(
-        parseIpcArgs.bind(null, workspaceAddArgsSchema, bad as unknown[], 'workspace:add'),
+        parseIpcArgs.bind(null, workspaceSetModeArgsSchema, bad as unknown[], 'workspace:set-mode'),
         JSON.stringify(bad)
       ).toThrow(IpcInputError)
     }

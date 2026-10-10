@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import type { UIMessage } from 'ai'
 import { Button } from '@renderer/components/ui/button'
+import type { Workspace } from '@shared/settings'
+import { ApprovalCard, type ApprovalDecision } from './ApprovalCard'
+import { approvalRequestOf, type ApprovalRequest } from './approval'
 import { ReasoningPart } from './parts/ReasoningPart'
 import { TextPart } from './parts/TextPart'
 import { ToolCard, type ToolCardPart } from './parts/ToolCard'
@@ -8,13 +11,20 @@ import { ToolCard, type ToolCardPart } from './parts/ToolCard'
 /**
  * 一条消息（用户 / 助手两种形态）。
  * 用户消息：右侧气泡 + 悬停出现的「编辑」（编辑 = 截断重发，见 ChatPage 的 editResend）；
- * 助手消息：左对齐的 part 流（文本 / 思考 / 工具卡在后面几步各自接上）。
+ * 助手消息：左对齐的 part 流（文本 / 思考 / 工具卡 / 审批卡）。
  */
 export interface MessageProps {
   message: UIMessage
   /** 这一条正在流式（最后一条助手消息且会话处于 streaming） */
   streaming?: boolean
   onEdit?: (messageId: string, text: string) => void
+  /** 渲染端那份授权工作区列表（审批卡判记忆粒度用） */
+  workspaces?: readonly Workspace[]
+  /**
+   * 审批决策回调（工具 part 处于 approval-requested 时出现审批卡）。
+   * 没有这个回调时不渲染审批卡、退回静态工具卡 —— 没接线的位置不该给"点了没用"的按钮。
+   */
+  onApprovalDecision?: (request: ApprovalRequest, decision: ApprovalDecision) => void
 }
 
 /** 用户消息里的纯文本（气泡里不渲染 markdown：用户输入按原样显示） */
@@ -69,7 +79,13 @@ function toToolCardPart(part: MessagePart): ToolCardPart | null {
   }
 }
 
-export function Message({ message, streaming = false, onEdit }: MessageProps): React.JSX.Element {
+export function Message({
+  message,
+  streaming = false,
+  onEdit,
+  workspaces,
+  onApprovalDecision
+}: MessageProps): React.JSX.Element {
   // null = 不在编辑；string = 编辑中的草稿
   const [draft, setDraft] = useState<string | null>(null)
 
@@ -162,6 +178,18 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
               key={`reasoning-${index}`}
               text={part.text}
               streaming={isStreamingTail}
+            />
+          )
+        }
+        // 等审批的调用由审批卡接管（带 diff 与四决策）；没接决策回调时退回静态工具卡
+        const approval = approvalRequestOf(part)
+        if (approval !== null && onApprovalDecision !== undefined) {
+          return (
+            <ApprovalCard
+              key={`approval-${index}`}
+              request={approval}
+              workspaces={workspaces ?? []}
+              onDecide={(decision) => onApprovalDecision(approval, decision)}
             />
           )
         }

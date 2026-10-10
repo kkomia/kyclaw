@@ -12,12 +12,13 @@ import {
  * 这里盯两件事：默认值就是文档写的那四个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers 与 workspaces 为空数组', () => {
+  it('默认值：跟随系统 / 默认字号 / providers 与 workspaces 为空数组 / 权限规则为空', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
   })
@@ -118,6 +119,38 @@ describe('工作区 schema（T10：授权目录 = path + mode）', () => {
       appSettingsPatchSchema.safeParse({ workspaces: [{ path: 'D:\\ws', mode: 'full' }] }).success
     ).toBe(false)
     expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
+  })
+})
+
+describe('权限规则 schema（T13：审批记忆的"永久允许"）', () => {
+  it('元素必须是 {tool, workspace, mode:"allow"}，粒度 = 工具 + 工作区', () => {
+    const rules = [{ tool: 'write', workspace: 'D:\\项目\\demo', mode: 'allow' }]
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, permissions: { rules } }).success
+    ).toBe(true)
+
+    for (const bad of [
+      { rules: [{ tool: 'write', workspace: 'D:\\ws' }] }, // 缺 mode
+      { rules: [{ tool: '', workspace: 'D:\\ws', mode: 'allow' }] }, // 空工具名
+      { rules: [{ tool: 'write', workspace: '', mode: 'allow' }] }, // 空工作区
+      { rules: [{ tool: 'write', workspace: 'D:\\ws', mode: 'deny' }] }, // 只有 allow 会落盘
+      { rules: [{ tool: 'write', workspace: 'D:\\ws', mode: 'allow', extra: 1 }] }, // 多键
+      { rules: 'D:\\ws' }, // 不是数组
+      {} // 缺 rules
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, permissions: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+  })
+
+  it('补丁可以整表替换规则（审批卡的"永久允许"走这条路），但形状必须合法', () => {
+    const permissions = { rules: [{ tool: 'edit', workspace: 'D:\\ws', mode: 'allow' }] }
+    expect(appSettingsPatchSchema.parse({ permissions })).toEqual({ permissions })
+    expect(
+      appSettingsPatchSchema.safeParse({ permissions: { rules: [{ tool: 'edit' }] } }).success
+    ).toBe(false)
   })
 })
 

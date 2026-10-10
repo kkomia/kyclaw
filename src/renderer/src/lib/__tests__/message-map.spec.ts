@@ -238,6 +238,74 @@ describe('mapStoredMessages：工具调用回放', () => {
     expect(message.parts.map((part) => part.type)).toEqual(['text', 'tool-read_file', 'text'])
   })
 
+  it('被拒绝的调用（T13）按"已拒绝"回放：形状就是存储里的真身（含 approval）', () => {
+    // 样本抄自实机库（%APPDATA%/kyclaw.db）：T11 的审批流把拒绝存成 state='output-denied' + approval
+    const [message] = mapStoredMessages([
+      stored('assistant', [
+        {
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'output-denied',
+            toolCallId: 'call-denied',
+            toolName: 'write',
+            args: { path: 'rejected.txt', content: 'x\n' },
+            approval: { id: 'run-1::call-denied', approved: false, reason: '用户拒绝了这次操作' },
+            updatedAt: 1791641475362
+          }
+        }
+      ])
+    ])
+
+    expect(message.parts).toEqual([
+      {
+        type: 'tool-write',
+        toolCallId: 'call-denied',
+        state: 'output-denied',
+        input: { path: 'rejected.txt', content: 'x\n' },
+        approval: { id: 'run-1::call-denied', approved: false, reason: '用户拒绝了这次操作' }
+      }
+    ])
+  })
+
+  it('拒绝态缺 approval.id 时用 toolCallId 兜底（v7 的 output-denied part 要求有 id）', () => {
+    const [message] = mapStoredMessages([
+      stored('assistant', [
+        {
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'output-denied',
+            toolCallId: 'call-bare',
+            toolName: 'edit',
+            args: { path: 'a.txt' }
+          }
+        }
+      ])
+    ])
+
+    expect(message.parts[0]).toMatchObject({
+      state: 'output-denied',
+      approval: { id: 'call-bare', approved: false }
+    })
+  })
+
+  it('还停在等审批的调用（call）仍按"进行中"回放：重启后那次挂起已经作废，不冒充可审批', () => {
+    const [message] = mapStoredMessages([
+      stored('assistant', [
+        {
+          type: 'tool-invocation',
+          toolInvocation: {
+            state: 'call',
+            toolCallId: 'call-pending',
+            toolName: 'write',
+            args: { path: 'a.txt', content: 'x' }
+          }
+        }
+      ])
+    ])
+
+    expect(message.parts[0]).toMatchObject({ state: 'input-available' })
+  })
+
   it('坏的工具 part（缺 toolName/toolCallId、args 缺失）被跳过', () => {
     const [message] = mapStoredMessages([
       stored('assistant', [

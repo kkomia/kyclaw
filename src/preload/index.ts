@@ -91,12 +91,14 @@ const settingsApi: KyclawSettingsApi = {
 /**
  * 工作区面：授权目录的增删与访问模式。回包与设置同一份 schema（就是落盘后的完整设置），
  * 结构不对就当没读到（回默认值）——不给渲染端半截对象。
- * 路径合法性不由这里管：主进程会在写授权列表之前校验（存在、是目录、非 UNC）。
+ * 路径合法性不由这里管：主进程会在写授权列表之前校验（存在、是目录、非 UNC）；
+ * `add` 一律 ask、`setMode` 只认已授权路径（T13：full 只能显式切换）。
  */
 const workspaceApi: KyclawWorkspaceApi = {
   pick: async () => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.pick)),
-  add: async (path, mode) =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.add, path, mode)),
+  add: async (path) => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.add, path)),
+  setMode: async (path, mode) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.setMode, path, mode)),
   remove: async (path) =>
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.remove, path))
 }

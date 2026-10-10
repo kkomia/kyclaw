@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { classifyToolCall } from '../../../main/permission/classify'
-import type { Workspace, WorkspaceMode } from '../../../shared/settings'
+import type { PermissionRule, Workspace, WorkspaceMode } from '../../../shared/settings'
 import { createToolContext, type ToolContext, type ToolFs } from '../guard'
 
 export interface TestBed {
@@ -19,11 +19,15 @@ export interface TestBed {
   outside: string
   /** 授权列表（可原地改：切 mode、清空） */
   roots: Workspace[]
+  /** "永久允许"规则表（可原地改：加规则、清空） */
+  rules: PermissionRule[]
   ctx: ToolContext
   dispose(): void
 }
 
-export function createBed(options: { mode?: WorkspaceMode; fs?: ToolFs } = {}): TestBed {
+export function createBed(
+  options: { mode?: WorkspaceMode; fs?: ToolFs; rules?: PermissionRule[] } = {}
+): TestBed {
   const tmp = mkdtempSync(join(tmpdir(), 'kyclaw-tools-'))
   const rootRaw = join(tmp, 'ws')
   const outsideRaw = join(tmp, 'outside')
@@ -33,13 +37,20 @@ export function createBed(options: { mode?: WorkspaceMode; fs?: ToolFs } = {}): 
   const root = realpathSync.native(rootRaw)
   const outside = realpathSync.native(outsideRaw)
   const roots: Workspace[] = [{ path: root, mode: options.mode ?? 'ask' }]
-  const ctx = createToolContext({ roots, classify: classifyToolCall, fs: options.fs })
+  const rules: PermissionRule[] = options.rules ?? []
+  const ctx = createToolContext({
+    roots,
+    classify: classifyToolCall,
+    fs: options.fs,
+    permissionRules: () => rules
+  })
 
   return {
     tmp,
     root,
     outside,
     roots,
+    rules,
     ctx,
     dispose() {
       try {

@@ -5,7 +5,8 @@
  *      （`resolveInsideWorkspace`），调用方拿它去碰文件系统——绝不回退到模型给的原始字符串
  *      （原始串里的链接与 `..` 由系统解释，是另一条逃逸通道，见 permission/realpath.ts 头注释）。
  *   2. **审批判定**（spec §5.2）：只读放行；危险（delete/move）永远问；写类默认问，
- *      只有写操作的目标明确落在 mode='full' 的工作区时才放行。
+ *      只有写操作的目标明确落在 mode='full' 的工作区、或落了"永久允许"规则（T13，粒度
+ *      工具 + 工作区）时才放行。
  *   3. **会话状态**：edit 的"未读先改"记录（按会话隔离，会话键 = agent 线程 id）+
  *      同文件串行队列（并发 edit 不丢更新）。
  *
@@ -13,7 +14,8 @@
  */
 import { globSync } from 'node:fs'
 import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import type { Workspace } from '../../shared/settings'
+import type { PermissionRule, Workspace } from '../../shared/settings'
+import { isAllowedByRules } from '../../shared/permissions'
 import { type ToolClass } from '../../main/permission/classify'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
 
@@ -104,23 +106,30 @@ export class ToolState {
 /** 授权工作区来源：数组，或"现读设置"的取值函数（用户中途加工作区不必重启 agent） */
 export type WorkspaceRoots = readonly Workspace[] | (() => readonly Workspace[])
 
+/** "永久允许"规则来源（T13）：批准过"永久允许"的 (工具, 工作区) 落在这里；现读设置 */
+export type PermissionRuleSource = () => readonly PermissionRule[]
+
 export interface ToolContext {
   roots: WorkspaceRoots
   classify: ToolClassifier
   fs: ToolFs
   state: ToolState
+  permissionRules: PermissionRuleSource
 }
 
 export function createToolContext(options: {
   roots: WorkspaceRoots
   classify: ToolClassifier
   fs?: ToolFs
+  /** 缺省 = 没有任何"永久允许"规则（工具单测的默认口径） */
+  permissionRules?: PermissionRuleSource
 }): ToolContext {
   return {
     roots: options.roots,
     classify: options.classify,
     fs: options.fs ?? nodeToolFs,
-    state: new ToolState()
+    state: new ToolState(),
+    permissionRules: options.permissionRules ?? (() => [])
   }
 }
 
@@ -189,8 +198,9 @@ export function scanRoot(ctx: ToolContext, target?: string): ResolvedTarget {
 /**
  * 审批判定（spec §5.2）：
  *   - 只读（classify）→ 放行；
- *   - 危险（delete/move）→ 永远问；
- *   - 写类 → 默认问；只有"目标明确落在 mode='full' 的工作区"才放行。
+ *   - 危险（delete/move）→ 永远问（Full access 与"永久允许"规则都不放行）；
+ *   - 写类 → 默认问；写操作的目标明确落在 mode='full' 的工作区，或 (工具, 工作区) 命中
+ *     一条"永久允许"规则时才放行。
  *
  * 目标不在工作区（且拿不到可判定目标）时的口径：
  *   - 入参里根本没有可解析的 path（MCP 工具、未知工具）→ **问**：不知道它要干什么，保守；
@@ -207,7 +217,8 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
   if (target === null) return true
   const resolved = resolveTarget(ctx, target)
   if (!resolved.ok) return false
-  return resolved.workspace.mode !== 'full'
+  if (resolved.workspace.mode === 'full') return false
+  return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
 }
 
 function inputPath(input: unknown): string | null {

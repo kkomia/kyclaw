@@ -2,8 +2,12 @@ import { Wrench } from 'lucide-react'
 
 /**
  * 工具卡：工具名 + 状态 + 入参/结果（静态呈现）。
- * 本轮不做审批交互（那是 T12/T13 的审批卡），所以这里没有按钮，只有状态。
- * 的状态取自 AI SDK 的 tool part 状态机；未知状态原样显示，不猜。
+ * 状态取自 AI SDK 的 tool part 状态机（spec §7.1：input-streaming → input-available →
+ * （approval-requested → approval-responded）→ output-available / output-error；v7 另有
+ * output-denied 这一档）；未知状态原样显示，不猜。
+ *
+ * 审批交互不在这里：`approval-requested` 的 part 由审批卡（ApprovalCard）接管渲染，
+ * 本卡只负责"已回应/执行完成"之后的静态收束（含被拒绝）。
  */
 export interface ToolCardPart {
   toolName: string
@@ -23,6 +27,22 @@ const STATE_LABELS: Record<string, string> = {
   'output-denied': '已拒绝'
 }
 
+/** 状态语气（决定状态签的取色）：进行中=中性、等审批=警告、出错/被拒=危险、完成=中性 */
+type ToolTone = 'pending' | 'waiting' | 'error'
+
+const STATE_TONES: Record<string, ToolTone> = {
+  'approval-requested': 'waiting',
+  'approval-responded': 'waiting',
+  'output-error': 'error',
+  'output-denied': 'error'
+}
+
+const TONE_CLASS: Record<ToolTone, string> = {
+  pending: 'text-ink-tertiary',
+  waiting: 'text-warning',
+  error: 'text-danger'
+}
+
 function formatValue(value: unknown): string {
   if (typeof value === 'string') return value
   try {
@@ -34,12 +54,14 @@ function formatValue(value: unknown): string {
 
 export function ToolCard({ part }: { part: ToolCardPart }): React.JSX.Element {
   const output = part.errorText ?? part.output
+  const tone = STATE_TONES[part.state] ?? 'pending'
 
   return (
     <div
       data-testid="tool-card"
       data-tool={part.toolName}
       data-state={part.state}
+      data-tone={tone}
       className="flex flex-col gap-1.5 rounded-panel border-(length:--hairline-width) border-hairline bg-secondary px-3 py-2"
     >
       <div className="flex items-center gap-2">
@@ -47,7 +69,7 @@ export function ToolCard({ part }: { part: ToolCardPart }): React.JSX.Element {
         <span className="font-mono text-c1 text-ink-secondary">{part.toolName}</span>
         <span
           data-testid="tool-state"
-          className="ml-auto rounded-badge bg-(--fill-selected) px-1.5 py-0.5 text-c2 text-ink-tertiary"
+          className={`ml-auto rounded-badge bg-(--fill-selected) px-1.5 py-0.5 text-c2 ${TONE_CLASS[tone]}`}
         >
           {STATE_LABELS[part.state] ?? part.state}
         </span>

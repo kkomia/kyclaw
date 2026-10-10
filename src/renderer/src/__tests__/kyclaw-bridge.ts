@@ -27,7 +27,8 @@ export interface SettingsApiStub {
 
 export interface WorkspaceApiStub {
   pick: Mock<() => Promise<AppSettings>>
-  add: Mock<(path: string, mode: WorkspaceMode) => Promise<AppSettings>>
+  add: Mock<(path: string) => Promise<AppSettings>>
+  setMode: Mock<(path: string, mode: WorkspaceMode) => Promise<AppSettings>>
   remove: Mock<(path: string) => Promise<AppSettings>>
 }
 
@@ -83,15 +84,28 @@ function workspaceApi(state: BridgeState): WorkspaceApiStub {
       }
       return state.current
     }),
-    add: vi.fn(async (path: string, mode: WorkspaceMode) => {
+    // 与主进程同口径：add 一律 ask；已在列表里保持原模式
+    add: vi.fn(async (path: string) => {
       const exists = state.current.workspaces.some((workspace) => same(workspace.path, path))
       state.current = {
         ...state.current,
         workspaces: exists
           ? state.current.workspaces.map((workspace) =>
-              same(workspace.path, path) ? { path, mode } : workspace
+              same(workspace.path, path) ? { path, mode: workspace.mode } : workspace
             )
-          : [...state.current.workspaces, { path, mode }]
+          : [...state.current.workspaces, { path, mode: 'ask' as const }]
+      }
+      return state.current
+    }),
+    // 与主进程同口径：只认已授权路径，不在列表里就拒绝
+    setMode: vi.fn(async (path: string, mode: WorkspaceMode) => {
+      const exists = state.current.workspaces.some((workspace) => same(workspace.path, path))
+      if (!exists) throw new Error('这个文件夹不在授权列表里：请先添加它，再切换访问模式')
+      state.current = {
+        ...state.current,
+        workspaces: state.current.workspaces.map((workspace) =>
+          same(workspace.path, path) ? { path, mode } : workspace
+        )
       }
       return state.current
     }),

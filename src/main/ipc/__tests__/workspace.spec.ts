@@ -71,11 +71,12 @@ afterEach(() => {
 const workspaces = (): Workspace[] => readSettings(settingsPath(dir)).workspaces
 
 describe('workspace 通道 handler：注册与入参闸门', () => {
-  it('三条通道都注册了', () => {
+  it('四条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'workspace:add',
       'workspace:pick',
-      'workspace:remove'
+      'workspace:remove',
+      'workspace:set-mode'
     ])
   })
 
@@ -85,10 +86,16 @@ describe('workspace 通道 handler：注册与入参闸门', () => {
     )
   })
 
-  it('workspace:add / remove 的入参先过闸门（非法调用不碰磁盘）', () => {
+  it('workspace:add / set-mode / remove 的入参先过闸门（非法调用不碰磁盘）', () => {
     const add = handlerOf(IPC_CHANNELS.workspace.add)
-    for (const args of [[], [project], ['', 'ask'], [project, 'always'], [project, 'ask', 'x']]) {
+    // add 只收 [path]：带 mode 的旧调用形状直接拒（full 不能再从这条路进来）
+    for (const args of [[], [''], [project, 'full'], [project, 'ask'], [1], [project, 'x']]) {
       expect(() => add(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
+    }
+
+    const setMode = handlerOf(IPC_CHANNELS.workspace.setMode)
+    for (const args of [[], ['', 'ask'], [project], [project, 'always'], [project, 'full', 'x']]) {
+      expect(() => setMode(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
     }
 
     const remove = handlerOf(IPC_CHANNELS.workspace.remove)
@@ -164,31 +171,30 @@ describe('workspace:pick（原生选择器）', () => {
   })
 })
 
-describe('workspace:add（新增与切模式）', () => {
-  it('新路径 + full：落盘', () => {
-    const next = handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'full')
+describe('workspace:add（新增，一律 ask）', () => {
+  it('新路径：以 ask 落盘（不收入参 mode，full 走 set-mode）', () => {
+    const next = handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
 
-    expect(next).toEqual({ ...DEFAULT_SETTINGS, workspaces: [{ path: realProject, mode: 'full' }] })
-    expect(workspaces()).toEqual([{ path: realProject, mode: 'full' }])
+    expect(next).toEqual({ ...DEFAULT_SETTINGS, workspaces: [{ path: realProject, mode: 'ask' }] })
+    expect(workspaces()).toEqual([{ path: realProject, mode: 'ask' }])
   })
 
-  it('已在列表里：只切模式，不会多出一行', () => {
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'ask')
+  it('已在列表里（已是 full）：幂等，不把模式降级也不多出一行', () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'full')
 
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'full')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
 
     expect(workspaces()).toEqual([{ path: realProject, mode: 'full' }])
   })
 
   it('不是目录 / 不吃 UNC：抛错，已落盘的授权列表保持原样', async () => {
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'ask')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
 
-    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, join(dir, '无'), 'ask')).toThrow(
+    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, join(dir, '无'))).toThrow(
       /路径不存在/
     )
-    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, '\\\\srv\\share', 'ask')).toThrow(
-      /UNC/
-    )
+    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, '\\\\srv\\share')).toThrow(/UNC/)
 
     expect(workspaces()).toEqual([{ path: realProject, mode: 'ask' }])
   })
@@ -201,7 +207,36 @@ describe('workspace:add（新增与切模式）', () => {
     mocks.handlers.clear()
     registerWorkspaceIpc(blocked)
 
-    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'ask')).toThrow()
+    expect(() => handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)).toThrow()
+  })
+})
+
+describe('workspace:set-mode（切模式：只认已授权路径）', () => {
+  it('已授权路径：切到 full 落盘并回吐', () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+
+    const next = handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'full')
+
+    expect(next).toEqual({ ...DEFAULT_SETTINGS, workspaces: [{ path: realProject, mode: 'full' }] })
+    expect(workspaces()).toEqual([{ path: realProject, mode: 'full' }])
+  })
+
+  it('不在授权列表里的路径：抛错，不落盘、不新增', () => {
+    expect(() => handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'full')).toThrow(
+      /不在授权列表/
+    )
+
+    expect(workspaces()).toEqual([])
+  })
+
+  it('切回 ask 同样只认已授权路径', () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'full')
+
+    expect(handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'ask')).toEqual({
+      ...DEFAULT_SETTINGS,
+      workspaces: [{ path: realProject, mode: 'ask' }]
+    })
   })
 })
 
@@ -209,8 +244,9 @@ describe('workspace:remove', () => {
   it('移除后回吐剩下的列表（其余条目不动）', () => {
     const other = join(dir, '另一个')
     mkdirSync(other)
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'full')
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, other, 'ask')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project, 'full')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, other)
 
     const next = handlerOf(IPC_CHANNELS.workspace.remove)(EVENT, project)
 
@@ -219,7 +255,7 @@ describe('workspace:remove', () => {
   })
 
   it('移一个不在列表里的路径：空操作，不抛', () => {
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'ask')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
 
     expect(handlerOf(IPC_CHANNELS.workspace.remove)(EVENT, join(dir, '无'))).toEqual({
       ...DEFAULT_SETTINGS,
@@ -228,7 +264,7 @@ describe('workspace:remove', () => {
   })
 
   it('移除不需要路径此刻仍然存在（用户先删了文件夹也要能把它从列表里去掉）', () => {
-    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project, 'ask')
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
     rmSync(project, { recursive: true, force: true })
 
     expect(handlerOf(IPC_CHANNELS.workspace.remove)(EVENT, project)).toEqual(DEFAULT_SETTINGS)

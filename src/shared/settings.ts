@@ -4,7 +4,7 @@
  * 落盘在主进程的 userData/settings.json（main/settings.ts），与窗口状态的 window-state.json 分开——
  * 窗口几何是"壳自己的事"，设置是"用户的事"，坏一个不该带走另一个。
  * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces（T10）就地定义在下面，
- * 元素的取值只有 path + mode 两个字段。
+ * 元素的取值只有 path + mode 两个字段；permissions.rules（T13）是审批记忆的"永久允许"。
  */
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
@@ -33,13 +33,30 @@ export const workspaceSchema = z.strictObject({
   mode: workspaceModeSchema
 })
 
+/**
+ * 审批记忆的"永久允许"规则（T13）：某工具（归一后的名字）在某工作区里不再逐次询问。
+ * `mode` 目前只有 `allow` 一档（"拒绝"不落盘，那是一次性动作）；危险类工具不受规则影响。
+ * 渲染端经 settings:update 整表替换，主进程落盘前会再校验一遍。
+ */
+export const permissionRuleSchema = z.strictObject({
+  tool: z.string().min(1),
+  workspace: z.string().min(1),
+  mode: z.literal('allow')
+})
+
+export const permissionsSchema = z.strictObject({
+  rules: z.array(permissionRuleSchema)
+})
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
   /** T8 的 provider 列表（模型与密钥页；密钥不在里面，见 main/secrets.ts） */
   providers: z.array(providerConfigSchema),
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
-  workspaces: z.array(workspaceSchema)
+  workspaces: z.array(workspaceSchema),
+  /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
+  permissions: permissionsSchema
 })
 
 /**
@@ -52,6 +69,8 @@ export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>
 export type WorkspaceMode = z.infer<typeof workspaceModeSchema>
 export type Workspace = z.infer<typeof workspaceSchema>
+export type PermissionRule = z.infer<typeof permissionRuleSchema>
+export type Permissions = z.infer<typeof permissionsSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 
@@ -59,10 +78,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   fontTier: 'default',
   providers: [],
-  workspaces: []
+  workspaces: [],
+  permissions: { rules: [] }
 }
 
-/** 默认值的新副本（含新数组）：调用方拿到的对象随便改，不污染模块级默认 */
+/** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
 export function defaultSettings(): AppSettings {
-  return { ...DEFAULT_SETTINGS, providers: [], workspaces: [] }
+  return { ...DEFAULT_SETTINGS, providers: [], workspaces: [], permissions: { rules: [] } }
 }

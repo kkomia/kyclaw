@@ -5,6 +5,9 @@
  *
  * pick 走原生选择器（`dialog.showOpenDialog`）：选中的目录直接进列表（默认 ask 模式），
  * 用户取消就是"什么都没发生"。渲染端永远拿不到"不校验就写授权列表"的能力。
+ *
+ * 加与切模式分开（T13）：`add` 不收入参里的 mode（一律 ask），`setMode` 只认已授权路径 ——
+ * "完全访问"是设置页里对已有目录的显式切换（带确认），不再有"顺手加一个 full"的口子。
  */
 import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron'
 import {
@@ -12,11 +15,12 @@ import {
   noArgsSchema,
   parseIpcArgs,
   workspaceAddArgsSchema,
-  workspaceRemoveArgsSchema
+  workspaceRemoveArgsSchema,
+  workspaceSetModeArgsSchema
 } from '../../shared/ipc'
 import type { AppSettings, WorkspaceMode } from '../../shared/settings'
 import { readSettings, settingsPath, updateSettings } from '../settings'
-import { checkWorkspacePath, removeWorkspace, upsertWorkspace } from '../workspace'
+import { addWorkspace, checkWorkspacePath, removeWorkspace, setWorkspaceMode } from '../workspace'
 
 export function registerWorkspaceIpc(userDataDir: string): void {
   const file = settingsPath(userDataDir)
@@ -34,12 +38,21 @@ export function registerWorkspaceIpc(userDataDir: string): void {
 
     const picked = result.canceled ? undefined : result.filePaths[0]
     if (picked === undefined) return readSettings(file)
-    return saveWorkspace(file, picked, 'ask')
+    return saveNewWorkspace(file, picked)
   })
 
   ipcMain.handle(IPC_CHANNELS.workspace.add, (_event, ...args) => {
-    const [path, mode] = parseIpcArgs(workspaceAddArgsSchema, args, IPC_CHANNELS.workspace.add)
-    return saveWorkspace(file, path, mode)
+    const [path] = parseIpcArgs(workspaceAddArgsSchema, args, IPC_CHANNELS.workspace.add)
+    return saveNewWorkspace(file, path)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.workspace.setMode, (_event, ...args) => {
+    const [path, mode] = parseIpcArgs(
+      workspaceSetModeArgsSchema,
+      args,
+      IPC_CHANNELS.workspace.setMode
+    )
+    return switchWorkspaceMode(file, path, mode)
   })
 
   ipcMain.handle(IPC_CHANNELS.workspace.remove, (_event, ...args) => {
@@ -49,13 +62,19 @@ export function registerWorkspaceIpc(userDataDir: string): void {
   })
 }
 
-/** 校验路径 → 合并进列表落盘。校验不过就把原因抛给渲染端（设置页行内显示），绝不写进授权列表 */
-function saveWorkspace(file: string, path: string, mode: WorkspaceMode): AppSettings {
+/** 校验路径（存在、是目录、非 UNC）→ 以 ask 加进列表落盘。校验不过就带原因抛给渲染端 */
+function saveNewWorkspace(file: string, path: string): AppSettings {
   const checked = checkWorkspacePath(path)
   if (!checked.ok) throw new Error(checked.reason)
 
   const current = readSettings(file)
-  return updateSettings(file, {
-    workspaces: upsertWorkspace(current.workspaces, checked.path, mode)
-  })
+  return updateSettings(file, { workspaces: addWorkspace(current.workspaces, checked.path) })
+}
+
+/** 切一个**已授权**目录的访问模式；不在列表里就抛（渲染端行内显示这句原因） */
+function switchWorkspaceMode(file: string, path: string, mode: WorkspaceMode): AppSettings {
+  const current = readSettings(file)
+  const next = setWorkspaceMode(current.workspaces, path, mode)
+  if (next === null) throw new Error('这个文件夹不在授权列表里：请先添加它，再切换访问模式')
+  return updateSettings(file, { workspaces: next })
 }

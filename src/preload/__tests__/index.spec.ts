@@ -140,7 +140,13 @@ describe('preload：window.kyclaw.settings', () => {
 
   it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
     const { kyclawApi } = await loadPreload()
-    const persisted = { theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }
+    const persisted = {
+      theme: 'dark',
+      fontTier: 'large',
+      providers: [],
+      workspaces: [],
+      permissions: { rules: [] }
+    }
     mocks.invoke.mockResolvedValueOnce(persisted)
 
     await expect(kyclawApi.settings.get()).resolves.toEqual(persisted)
@@ -156,14 +162,21 @@ describe('preload：window.kyclaw.settings', () => {
         theme: 'system',
         fontTier: 'default',
         providers: [],
-        workspaces: []
+        workspaces: [],
+        permissions: { rules: [] }
       })
     }
   })
 
   it('update 把补丁原样发给 settings:update，回吐落盘后的完整设置', async () => {
     const { kyclawApi } = await loadPreload()
-    const updated = { theme: 'light', fontTier: 'default', providers: [], workspaces: [] }
+    const updated = {
+      theme: 'light',
+      fontTier: 'default',
+      providers: [],
+      workspaces: [],
+      permissions: { rules: [] }
+    }
     mocks.invoke.mockResolvedValueOnce(updated)
 
     await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual(updated)
@@ -178,7 +191,8 @@ describe('preload：window.kyclaw.settings', () => {
       theme: 'system',
       fontTier: 'default',
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     })
   })
 
@@ -240,14 +254,16 @@ describe('preload：window.kyclaw.settings', () => {
       theme: 'dark',
       fontTier: 'default',
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     })
 
     await expect(kyclawApi.settings.removeProvider('deepseek')).resolves.toEqual({
       theme: 'dark',
       fontTier: 'default',
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     })
     expect(mocks.invoke).toHaveBeenLastCalledWith('settings:remove-provider', 'deepseek')
   })
@@ -259,13 +275,14 @@ describe('preload：window.kyclaw.workspace', () => {
     theme: 'system',
     fontTier: 'default',
     providers: [],
-    workspaces: [{ path: 'D:\\项目', mode: 'ask' }]
+    workspaces: [{ path: 'D:\\项目', mode: 'ask' }],
+    permissions: { rules: [] }
   }
 
-  it('暴露 workspace 一族（pick / add / remove）', async () => {
+  it('暴露 workspace 一族（pick / add / setMode / remove）', async () => {
     const { kyclawApi } = await loadPreload()
 
-    expect(Object.keys(kyclawApi.workspace).sort()).toEqual(['add', 'pick', 'remove'])
+    expect(Object.keys(kyclawApi.workspace).sort()).toEqual(['add', 'pick', 'remove', 'setMode'])
   })
 
   it('pick 打 workspace:pick（不带入参），回包按同一份 settings schema 解析', async () => {
@@ -276,12 +293,20 @@ describe('preload：window.kyclaw.workspace', () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:pick')
   })
 
-  it('add 把 [path, mode] 原样发给 workspace:add', async () => {
+  it('add 把 path 发给 workspace:add（T13：不再带 mode）', async () => {
     const { kyclawApi } = await loadPreload()
     mocks.invoke.mockResolvedValueOnce(persisted)
 
-    await expect(kyclawApi.workspace.add('D:\\项目', 'full')).resolves.toEqual(persisted)
-    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:add', 'D:\\项目', 'full')
+    await expect(kyclawApi.workspace.add('D:\\项目')).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:add', 'D:\\项目')
+  })
+
+  it('setMode 把 [path, mode] 发给 workspace:set-mode', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(persisted)
+
+    await expect(kyclawApi.workspace.setMode('D:\\项目', 'full')).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:set-mode', 'D:\\项目', 'full')
   })
 
   it('remove 把 path 发给 workspace:remove', async () => {
@@ -304,7 +329,8 @@ describe('preload：window.kyclaw.workspace', () => {
       theme: 'system',
       fontTier: 'default',
       providers: [],
-      workspaces: []
+      workspaces: [],
+      permissions: { rules: [] }
     })
   })
 })

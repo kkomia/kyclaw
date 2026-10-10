@@ -117,7 +117,11 @@ describe('流式中切走：不掐流、可收回', () => {
       control.finish()
     })
     await waitFor(() => {
-      expect(onTurnEnd).toHaveBeenCalledWith('thread-a', { isError: false, isAbort: false })
+      expect(onTurnEnd).toHaveBeenCalledWith('thread-a', {
+        isError: false,
+        isAbort: false,
+        awaitingApproval: false
+      })
     })
 
     // 切回 A：完整结果都在（消息留在 Chat 实例里）
