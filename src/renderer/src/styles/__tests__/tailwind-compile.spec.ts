@@ -111,4 +111,11 @@ describe('Tailwind 编译护栏', () => {
     expect(css).toContain('animation: shimmer var(--duration-loop-slow) linear infinite')
     expect(css).toContain('@keyframes shimmer')
   })
+
+  it('无边框窗口的拖拽区工具类（drag-region / no-drag）真进产物', async () => {
+    const css = flatten(await compileCandidates(['drag-region', 'no-drag']))
+
+    expect(css).toContain('-webkit-app-region: drag')
+    expect(css).toContain('-webkit-app-region: no-drag')
+  })
 })

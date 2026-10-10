@@ -1,5 +1,7 @@
+import { AppShell } from './components/shell/AppShell'
+
 function App(): React.JSX.Element {
-  return <div data-testid="app-root" className="h-full bg-canvas text-ink" />
+  return <AppShell />
 }
 
 export default App

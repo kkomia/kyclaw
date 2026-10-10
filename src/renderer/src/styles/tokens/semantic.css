@@ -71,6 +71,12 @@
   --icon-opacity-disabled: 0.26;
   --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
 
+  /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400）。
+     几何在明暗两套下一致，所以只在这里声明、不进深色块。 */
+  --titlebar-height: 42px;
+  --sidebar-width: 240px;
+  --work-panel-width: 400px;
+
   /* 按钮（§7：主按钮＝墨色 Labels-Primary 实心、禁用＝Fills-F3 底 + Labels-Quaternary 字；
      hover/active 取同族档，深浅两套由原样层解析） */
   --button-primary-bg: var(--Labels-Primary);

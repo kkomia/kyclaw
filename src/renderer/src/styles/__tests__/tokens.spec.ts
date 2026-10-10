@@ -676,3 +676,20 @@ describe('样式入口接线', () => {
     expect(mainSource).toContain('initTheme')
   })
 })
+
+describe('T4 壳布局尺寸（spec §6.2 三栏骨架 / 附录 A）', () => {
+  const shellRoot = semantic.get(':root') ?? new Map<string, string>()
+
+  it('顶栏 42 / 侧栏 240 / 工作台 400 都在语义层有 token（壳不写裸数值）', () => {
+    expectDecl(shellRoot, '--titlebar-height', '42px', 'semantic :root')
+    expectDecl(shellRoot, '--sidebar-width', '240px', 'semantic :root')
+    expectDecl(shellRoot, '--work-panel-width', '400px', 'semantic :root')
+  })
+
+  it('壳 token 不随主题分档（几何在明暗下一致）', () => {
+    const darkShell = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
+    for (const name of ['--titlebar-height', '--sidebar-width', '--work-panel-width']) {
+      expect(darkShell.has(name), `深色档不该重写几何 ${name}`).toBe(false)
+    }
+  })
+})

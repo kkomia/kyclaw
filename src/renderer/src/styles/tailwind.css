@@ -105,6 +105,17 @@
   }
 }
 
+/* 无边框窗口的拖拽区：-webkit-app-region 不是标准属性、也没有 Tailwind 工具类，
+   固化成两个 utility（顶栏 = drag-region，里面的按钮组 = no-drag）。
+   注意 drag 区会吞点击，所以可点元素必须落在 no-drag 容器里。 */
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   /* 让原生控件与滚动条跟随主题（Chromium 用它决定默认色）。 */
   :root {
