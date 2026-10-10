@@ -77,18 +77,39 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
   })
 
-  it('T5 装配：侧栏 = 新建会话 + 会话列表 + 底部导航；右栏 = 工作台空态', () => {
+  it('T5 装配：侧栏 = 新建会话 + 会话列表 + 底部单一入口；右栏 = 工作台空态', () => {
     renderShell()
 
     const sidebar = screen.getByTestId('sidebar')
     expect(screen.getByTestId('new-session')).toBeInTheDocument()
     expect(screen.getByTestId('session-list')).toBeInTheDocument()
-    expect(screen.getByTestId('sidebar-nav')).toBeInTheDocument()
-    expect(sidebar).toContainElement(screen.getByTestId('sidebar-nav'))
+    // 单一入口（雷点 3：首页只放精简菜单，设置/记忆/用量收进二级菜单）
+    expect(screen.getByTestId('sidebar-footer')).toBeInTheDocument()
+    expect(sidebar).toContainElement(screen.getByTestId('sidebar-footer'))
     expect(sidebar).toContainElement(screen.getByTestId('new-session'))
+    expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
 
     expect(screen.getByTestId('work-panel')).toContainElement(
       screen.getByTestId('work-panel-empty')
     )
+  })
+
+  it('设置页：侧栏换成设置菜单（返回 + 栏目），会话视图让位', () => {
+    renderShell('/settings')
+
+    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-back')).toBeInTheDocument()
+    expect(screen.queryByTestId('session-list')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
+  })
+
+  it('data-sidebar 跟随折叠状态（内容列的安全边靠它算）', () => {
+    renderShell()
+
+    expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
+
+    fireEvent.click(screen.getByTestId('sidebar-toggle'))
+
+    expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
   })
 })

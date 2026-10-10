@@ -7,7 +7,8 @@ import { UsagePage } from './features/usage/UsagePage'
 
 /**
  * 路由表：壳是布局路由（element 不带 path），主列的 <Outlet/> 渲染子路由内容。
- * 四条页面路由 + 根路径/未知路径统一落到 /chat（主列永远有内容）。
+ * 四条页面路由（设置页按栏目 /settings/:section，不带栏目落到默认栏）+ 根路径/未知路径统一落到 /chat
+ * （主列永远有内容）。
  */
 export function AppRoutes(): React.JSX.Element {
   return (
@@ -15,7 +16,7 @@ export function AppRoutes(): React.JSX.Element {
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/chat" replace />} />
         <Route path="/chat" element={<ChatPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/:section?" element={<SettingsPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/usage" element={<UsagePage />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />

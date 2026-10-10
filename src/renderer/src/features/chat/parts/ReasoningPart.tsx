@@ -38,7 +38,7 @@ export function ReasoningPart({ text, streaming = false }: ReasoningPartProps): 
       {open ? (
         <div
           data-testid="reasoning-text"
-          className="mt-1 text-c1 break-words whitespace-pre-wrap text-ink-tertiary"
+          className="animate-fade-in mt-1 text-c1 break-words whitespace-pre-wrap text-ink-tertiary"
         >
           {text}
         </div>

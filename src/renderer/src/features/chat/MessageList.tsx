@@ -52,12 +52,7 @@ export function MessageList({ messages, status, onEdit }: MessageListProps): Rea
         stickyRef.current = view.scrollHeight - view.scrollTop - view.clientHeight < STICK_THRESHOLD
       }}
     >
-      <div className="flex w-full flex-col gap-6 px-6 py-6">
-        {messages.length === 0 ? (
-          <p data-testid="message-list-empty" className="text-b2 text-ink-tertiary">
-            开始一段对话。消息会流式出现在这里。
-          </p>
-        ) : null}
+      <div className="flex w-full flex-col gap-6 px-4 py-6">
         {messages.map((message) => (
           <Message
             key={message.id}

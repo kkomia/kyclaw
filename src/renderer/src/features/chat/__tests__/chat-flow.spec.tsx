@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
@@ -114,6 +114,18 @@ describe('线程上下文', () => {
     })
     expect(loadHistory).toHaveBeenCalledWith(THREAD_ID)
     expect(screen.getByTestId('message-list')).toHaveTextContent('聊到会话管理。')
+  })
+})
+
+describe('活动会话落在限宽内容列（P0 回归）', () => {
+  it('message-list / composer 都在 chat-page 这一层限宽列里', async () => {
+    const control = createMockTransport()
+    await renderSession(control, makeRuntime(control).runtime)
+
+    const frame = screen.getByTestId('chat-page')
+    expect(frame).toHaveClass('content-column')
+    expect(within(frame).getByTestId('message-list')).toBeInTheDocument()
+    expect(within(frame).getByTestId('composer')).toBeInTheDocument()
   })
 })
 

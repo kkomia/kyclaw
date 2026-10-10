@@ -85,7 +85,7 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
       <article
         data-testid={`message-${message.id}`}
         data-role="user"
-        className="group flex flex-col items-end gap-1.5"
+        className="animate-message-in group flex flex-col items-end gap-1.5"
       >
         {draft === null ? (
           <>
@@ -148,7 +148,7 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
       data-testid={`message-${message.id}`}
       data-role="assistant"
       data-streaming={streaming ? 'true' : undefined}
-      className="flex flex-col gap-2"
+      className="animate-message-in flex flex-col gap-2"
     >
       {message.parts.map((part, index) => {
         // 光标（细竖线）只挂在最后一个可渲染的 part 上：末尾可能是不渲染的 file / step-start

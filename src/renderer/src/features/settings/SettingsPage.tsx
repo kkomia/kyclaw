@@ -3,12 +3,14 @@ import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
 import type { ReactNode } from 'react'
+import { useLocation } from 'react-router'
 import { ModelSettings } from './ModelSettings'
+import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
 
 /**
- * 设置页（T5 做「外观」组；T8 落地「模型」组）。
- * 其余四组（工具 / 工作区 / 记忆 / 用量）先把分组结构与占位文案立起来，
- * 各自的任务落地时替换组内内容。
+ * 设置页（T5 起「外观」，T8 起「模型」；UI 返工 R1 改成栏目页）：
+ * 左列由 SettingsNav 给（返回 + 栏目菜单），这里只渲染**当前栏目**的内容。
+ * 栏目表在 sections.tsx（唯一来源），URL 是 /settings/:section；脏值回落默认栏。
  *
  * 三选/三档的取值直接来自 shared/settings 的 schema（options 顺序就是显示顺序），
  * 免得 UI 里再抄一份字面量、跟落盘校验漂开。
@@ -25,13 +27,15 @@ const FONT_LABELS: Record<FontTier, string> = {
   large: '大'
 }
 
-const PENDING_GROUPS: Array<{ title: string; note: string; testId: string }> = [
-  { title: '工具', note: '工具与权限开关尚未接入', testId: 'settings-group-tools' },
-  { title: '工作区', note: '授权工作区尚未接入', testId: 'settings-group-workspaces' },
-  { title: '记忆', note: '记忆设置尚未接入', testId: 'settings-group-memory' },
-  { title: '用量', note: '用量与可观测设置尚未接入', testId: 'settings-group-usage' }
-]
+/** 还没接内容的栏目：一句状态就够（不写实现细节，也不靠小字解释设计） */
+const PENDING_SECTIONS: Record<string, string> = {
+  workspaces: '工作区与授权还没做',
+  tools: '工具与 MCP 开关还没做',
+  memory: '记忆的查看与编辑还没做',
+  usage: '用量统计还没做'
+}
 
+/** 栏目卡片组：组用底色分层（不描边），组内控件自己带一条 hairline —— 避免近距多层框线 */
 function SettingsGroup({
   title,
   testId,
@@ -43,8 +47,8 @@ function SettingsGroup({
 }): React.JSX.Element {
   return (
     <section data-testid={testId} className="flex flex-col gap-3">
-      <h2 className="text-b1 font-medium text-ink">{title}</h2>
-      <div className="rounded-panel border border-hairline p-4">{children}</div>
+      <h2 className="text-b2 text-ink-secondary">{title}</h2>
+      <div className="rounded-panel bg-secondary p-4">{children}</div>
     </section>
   )
 }
@@ -77,49 +81,63 @@ function OptionRow({
   )
 }
 
-export function SettingsPage(): React.JSX.Element {
+function AppearanceOptions(): React.JSX.Element {
   const settings = useSettingsStore((state) => state.settings)
   const update = useSettingsStore((state) => state.update)
 
   return (
+    <div className="flex flex-col gap-4">
+      <OptionRow
+        label="主题"
+        options={themeModeSchema.options.map((mode) => ({
+          key: `theme-${mode}`,
+          label: THEME_LABELS[mode],
+          selected: settings.theme === mode,
+          onSelect: () => void update({ theme: mode })
+        }))}
+      />
+      <OptionRow
+        label="字号"
+        options={fontTierSchema.options.map((tier) => ({
+          key: `font-${tier}`,
+          label: FONT_LABELS[tier],
+          selected: settings.fontTier === tier,
+          onSelect: () => void update({ fontTier: tier })
+        }))}
+      />
+    </div>
+  )
+}
+
+export function SettingsPage(): React.JSX.Element {
+  const section = settingsSectionFromPath(useLocation().pathname)
+  const meta = findSettingsSection(section) ?? SETTINGS_SECTIONS[0]
+
+  return (
     <div
       data-testid="settings-page"
-      className="mx-auto flex min-h-0 w-full max-w-(--content-max-width) flex-1 flex-col gap-6 overflow-y-auto p-6"
+      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
     >
-      <h1 className="text-t1 font-medium text-ink">设置</h1>
+      <h1 className="text-t1 font-medium text-ink">{meta.label}</h1>
 
-      <SettingsGroup title="外观" testId="settings-group-appearance">
-        <div className="flex flex-col gap-4">
-          <OptionRow
-            label="主题"
-            options={themeModeSchema.options.map((mode) => ({
-              key: `theme-${mode}`,
-              label: THEME_LABELS[mode],
-              selected: settings.theme === mode,
-              onSelect: () => void update({ theme: mode })
-            }))}
-          />
-          <OptionRow
-            label="字号"
-            options={fontTierSchema.options.map((tier) => ({
-              key: `font-${tier}`,
-              label: FONT_LABELS[tier],
-              selected: settings.fontTier === tier,
-              onSelect: () => void update({ fontTier: tier })
-            }))}
-          />
-        </div>
-      </SettingsGroup>
-
-      <SettingsGroup title="模型" testId="settings-group-model">
-        <ModelSettings />
-      </SettingsGroup>
-
-      {PENDING_GROUPS.map((group) => (
-        <SettingsGroup key={group.testId} title={group.title} testId={group.testId}>
-          <p className="text-b2 text-ink-tertiary">{group.note}</p>
-        </SettingsGroup>
-      ))}
+      {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
+      <div key={meta.id} className="animate-page-in flex flex-col gap-6">
+        {meta.id === 'appearance' ? (
+          <SettingsGroup title="主题与字号" testId="settings-group-appearance">
+            <AppearanceOptions />
+          </SettingsGroup>
+        ) : null}
+        {meta.id === 'model' ? (
+          <SettingsGroup title="模型" testId="settings-group-model">
+            <ModelSettings />
+          </SettingsGroup>
+        ) : null}
+        {PENDING_SECTIONS[meta.id] === undefined ? null : (
+          <SettingsGroup title={meta.label} testId={meta.groupTestId}>
+            <p className="text-b2 text-ink-secondary">{PENDING_SECTIONS[meta.id]}</p>
+          </SettingsGroup>
+        )}
+      </div>
     </div>
   )
 }

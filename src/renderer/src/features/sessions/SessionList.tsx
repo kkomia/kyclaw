@@ -111,7 +111,7 @@ export function SessionList({
       >
         {sessions.length === 0 ? (
           <li data-testid="session-list-empty" className="px-2 py-1 text-c1 text-ink-tertiary">
-            还没有会话，点上面「新建会话」开始。
+            还没有会话
           </li>
         ) : null}
         {groups.map((group) => (

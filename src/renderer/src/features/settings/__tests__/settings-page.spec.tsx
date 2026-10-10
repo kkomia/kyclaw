@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
@@ -6,10 +7,17 @@ import { DEFAULT_SETTINGS, defaultSettings } from '@shared/settings'
 import { SettingsPage } from '../SettingsPage'
 
 /**
- * 设置页「外观」组：主题三选 → setTheme、字号三档 → setFontTier，
- * 断言落在 html[data-theme] / html[data-font-size]（机制的唯一出口）与落盘调用上。
- * 其余五组本任务只有占位文案。
+ * 设置页（UI 返工 R1 起是栏目页）：默认栏是「外观」（主题三选 → setTheme、字号三档 → setFontTier，
+ * 断言落在 html[data-theme] / html[data-font-size] 与落盘调用上）；其余栏目各自的占位文案。
+ * 栏目切换与左列设置菜单由 routes.spec 走真实路由钉（这里只渲一栏的内容）。
  */
+function renderPage(path = '/settings'): void {
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <SettingsPage />
+    </MemoryRouter>
+  )
+}
 const html = (): HTMLElement => document.documentElement
 
 function installMatchMedia(matches: boolean): void {
@@ -39,35 +47,44 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('设置页骨架', () => {
-  it('六组都在：外观与模型是功能组，其余四组是占位', () => {
-    render(<SettingsPage />)
+describe('设置页骨架（栏目页）', () => {
+  it('默认栏是「外观」：只渲当前栏，其余栏不进 DOM', () => {
+    renderPage()
 
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-page')).toHaveClass('content-column')
     expect(screen.getByTestId('settings-group-appearance')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-group-model')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-group-tools')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-group-workspaces')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-group-memory')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-group-usage')).toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-model')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-usage')).not.toBeInTheDocument()
+  })
 
-    // 模型组（T8）：provider 预设入口就在这一组里
+  it('「模型」栏：provider 预设入口在这一栏里', () => {
+    renderPage('/settings/model')
+
     expect(screen.getByTestId('settings-group-model')).toHaveTextContent('添加通道')
+  })
 
-    for (const testId of [
-      'settings-group-tools',
-      'settings-group-workspaces',
-      'settings-group-memory',
-      'settings-group-usage'
+  it('还没做的栏目：一句状态就够（不写实现细节）', () => {
+    for (const [section, testId] of [
+      ['tools', 'settings-group-tools'],
+      ['workspaces', 'settings-group-workspaces'],
+      ['memory', 'settings-group-memory'],
+      ['usage', 'settings-group-usage']
     ]) {
-      expect(screen.getByTestId(testId), testId).toHaveTextContent('尚未接入')
+      const view = render(
+        <MemoryRouter initialEntries={[`/settings/${section}`]}>
+          <SettingsPage />
+        </MemoryRouter>
+      )
+      expect(screen.getByTestId(testId), testId).toHaveTextContent('还没做')
+      view.unmount()
     }
   })
 })
 
 describe('外观 · 主题三选', () => {
   it('三档都在（跟随系统 / 亮色 / 暗色），默认档是跟随系统', () => {
-    render(<SettingsPage />)
+    renderPage()
 
     expect(screen.getByTestId('theme-system')).toHaveTextContent('跟随系统')
     expect(screen.getByTestId('theme-light')).toHaveTextContent('亮色')
@@ -80,7 +97,7 @@ describe('外观 · 主题三选', () => {
 
   it('点「暗色」→ html[data-theme]=dark、选中态跟着走、落盘 {theme:dark}', async () => {
     const bridge = installKyclawBridge()
-    render(<SettingsPage />)
+    renderPage()
 
     fireEvent.click(screen.getByTestId('theme-dark'))
 
@@ -95,7 +112,7 @@ describe('外观 · 主题三选', () => {
   it('点「亮色」→ html[data-theme]=light（即使系统是深色）', () => {
     installMatchMedia(true)
     installKyclawBridge()
-    render(<SettingsPage />)
+    renderPage()
 
     fireEvent.click(screen.getByTestId('theme-light'))
 
@@ -106,7 +123,7 @@ describe('外观 · 主题三选', () => {
     installMatchMedia(true)
     installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'light' })
     useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, theme: 'light' } })
-    render(<SettingsPage />)
+    renderPage()
     expect(html().getAttribute('data-theme')).toBeNull()
 
     fireEvent.click(screen.getByTestId('theme-system'))
@@ -118,7 +135,7 @@ describe('外观 · 主题三选', () => {
   it('落盘失败不改 UI（本次改动仍在，只留日志）', async () => {
     const bridge = installKyclawBridge()
     bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
-    render(<SettingsPage />)
+    renderPage()
 
     fireEvent.click(screen.getByTestId('theme-dark'))
 
@@ -130,7 +147,7 @@ describe('外观 · 主题三选', () => {
 
 describe('外观 · 字号三档', () => {
   it('三档都在（小 / 默认 / 大），默认档是默认', () => {
-    render(<SettingsPage />)
+    renderPage()
 
     expect(screen.getByTestId('font-small')).toHaveTextContent('小')
     expect(screen.getByTestId('font-default')).toHaveTextContent('默认')
@@ -140,7 +157,7 @@ describe('外观 · 字号三档', () => {
 
   it('三档各切一遍 → html[data-font-size] 跟着走，落盘只带改动的字段', async () => {
     const bridge = installKyclawBridge()
-    render(<SettingsPage />)
+    renderPage()
 
     for (const tier of ['small', 'large', 'default']) {
       fireEvent.click(screen.getByTestId(`font-${tier}`))
@@ -155,7 +172,7 @@ describe('外观 · 字号三档', () => {
 
   it('切字号不动主题（显式暗色仍是暗色）', () => {
     installKyclawBridge()
-    render(<SettingsPage />)
+    renderPage()
 
     fireEvent.click(screen.getByTestId('theme-dark'))
     fireEvent.click(screen.getByTestId('font-large'))
@@ -171,7 +188,7 @@ describe('外观 · 与落盘设置一致', () => {
     installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'large' })
     await useSettingsStore.getState().load()
 
-    render(<SettingsPage />)
+    renderPage()
 
     expect(html().getAttribute('data-theme')).toBe('dark')
     expect(html().getAttribute('data-font-size')).toBe('large')

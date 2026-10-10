@@ -1,10 +1,15 @@
-import { useState } from 'react'
 import { ArrowUp, Square } from 'lucide-react'
+import { useState } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 
 /**
- * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24、首屏三段＝横幅带 40 + 输入框 111 + 底栏带 49；
- * 发送钮直径 36、图标 28。
+ * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
+ * 结构 = 输入区（自适应，最小 48 / 最大 170，超出内部滚动）+ 底部工具条（48，右端发送钮）；
+ * 发送钮直径 36、图标 28（§4.8 `.send-icon`）。
+ *
+ * 高度按 Kimi 实况页（a84af355 截图：单行输入 + 一行工具条），默认单行时紧凑，
+ * 不再固定三段 "40 + 111 + 49" —— 那是首屏形态，常态下多出来的空白正是用户点名的"过高"。
+ * 字号/提示不做小字说明（雷点 2）：键盘行为靠肌肉记忆与按钮语义，不写提示行。
  *
  * 交互：Enter 发送 / Shift+Enter 换行（输入法合成中不拦截）；流式中发送钮变停止（stop()）；
  * 流式中按下发送不丢内容 —— 交给上层排队（见 ChatPage 的队列）。
@@ -39,40 +44,36 @@ export function Composer({
       data-testid="composer"
       className="mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
     >
-      {/* 横幅带（40）：首屏形态的一部分；流式排队时在这里露一条提示 */}
-      <div data-testid="composer-banner" className="flex h-10 items-center px-4">
-        {queuedCount > 0 ? (
-          <span data-testid="composer-queue" className="text-c2 text-ink-tertiary">
-            已排队 {queuedCount} 条，当前回复结束后自动发出
-          </span>
-        ) : null}
-      </div>
+      {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动 */}
+      <textarea
+        data-testid="composer-input"
+        aria-label="输入消息"
+        rows={1}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || event.shiftKey) return
+          // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
+          if (event.nativeEvent.isComposing) return
+          event.preventDefault()
+          submit()
+        }}
+        placeholder="输入你的问题"
+        className="field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary)"
+      />
 
-      {/* 输入框带（111） */}
-      <div className="px-4">
-        <textarea
-          data-testid="composer-input"
-          aria-label="输入消息"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey) return
-            // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
-            if (event.nativeEvent.isComposing) return
-            event.preventDefault()
-            submit()
-          }}
-          placeholder="输入你的问题，Enter 发送"
-          className="h-[111px] w-full resize-none bg-transparent py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary)"
-        />
-      </div>
-
-      {/* 底栏带（49） */}
+      {/* 工具条：左边只放真实状态（排队条数），右端发送 / 停止 */}
       <div
         data-testid="composer-footer"
-        className="flex h-[49px] items-center justify-between px-4"
+        className="flex h-(--composer-toolbar-height) items-center gap-3 px-3"
       >
-        <span className="text-c2 text-ink-tertiary">Enter 发送 · Shift+Enter 换行</span>
+        <span className="min-w-0 flex-1 truncate">
+          {queuedCount > 0 ? (
+            <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
+              已排队 {queuedCount} 条，当前回复结束后自动发出
+            </span>
+          ) : null}
+        </span>
         {busy ? (
           <button
             type="button"

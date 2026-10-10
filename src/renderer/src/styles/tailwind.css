@@ -84,6 +84,99 @@
   /* 动效：spinner 统一 1s linear infinite（§6.5），时长引用工程阶梯的 --duration-loop。
      inline 之后工具类里就是 animation: spin var(--duration-loop) linear infinite。 */
   --animate-spin: spin var(--duration-loop) linear infinite;
+
+  /* 浮层 / 页面 / 消息的进出场（雷点 5：全站不允许硬切）。
+     曲线取 §6.4 的 --clp-ease-open / -close（抽屉与浮层那对）；
+     时长取工程阶梯：浮层进场 .2s、退场 .15s、页面与消息 .3s（主档）。 */
+  --animate-overlay-in: overlay-in var(--duration-base) var(--clp-ease-open) both;
+  --animate-overlay-out: overlay-out var(--duration-quick) var(--clp-ease-close) both;
+  --animate-fade-in: fade-in var(--duration-base) var(--motion-ease-inout) both;
+  --animate-fade-out: fade-out var(--duration-quick) var(--motion-ease-inout) both;
+  --animate-page-in: fade-in var(--duration-main) var(--motion-ease-inout) both;
+  --animate-message-in: message-in var(--duration-main) var(--clp-ease-out) both;
+  /* 弹窗自带 -translate-x/y-1/2 居中，所以关键帧里要把这半程位移一起写进去 */
+  --animate-dialog-in: dialog-in var(--duration-base) var(--clp-ease-open) both;
+  --animate-dialog-out: dialog-out var(--duration-quick) var(--clp-ease-close) both;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes dialog-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* 骨架屏 shimmer（§6.6 的 shimmer 关键帧：background-position 200% → 0）。
@@ -115,6 +208,39 @@
 
 @utility no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* 浮层的变形原点：Radix 把"从触发元素长出来"的点放在这两个变量里（菜单 / 气泡各一个名字），
+   退到 center 是兜底（没有变量时也能正常缩放）。 */
+@utility overlay-origin {
+  transform-origin: var(
+    --radix-dropdown-menu-content-transform-origin,
+    var(--radix-popover-content-transform-origin, center)
+  );
+}
+
+/* 内容列（页面级容器）：限宽 --content-max-width，在"没有被覆盖层侧栏遮挡的区域"里居中。
+   侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 宽窗下
+   居中结果正好落在这条线右侧，窄窗 / 工作台展开时则会把内容压到侧栏底下。所以这里
+   以 --content-safe-left（侧栏展开 = 240，收起 = 0）为"安全左边"，取"居中位置"与它
+   的较大者：够宽时就是纯居中，不够宽时右移到安全线内并按可用宽度收窄 —— 内容任何
+   状态下都完整可见、不被裁，也不横向溢出。
+   过渡：侧栏开合时给 margin 一条主档动效，避免硬切（P3 第 5 条）。 */
+@utility content-column {
+  width: min(calc(100% - var(--content-safe-left)), var(--content-max-width));
+  margin-left: max(
+    calc((100% - min(calc(100% - var(--content-safe-left)), var(--content-max-width))) / 2),
+    var(--content-safe-left)
+  );
+  margin-right: auto;
+  transition: margin-left var(--motion-main) var(--motion-ease-inout);
+}
+
+@layer base {
+  /* 侧栏展开 = 内容列的安全左边推进到侧栏右缘；写在壳根的 data-sidebar 上，内容列继承。 */
+  [data-sidebar='expanded'] {
+    --content-safe-left: var(--sidebar-width);
+  }
 }
 
 @layer base {

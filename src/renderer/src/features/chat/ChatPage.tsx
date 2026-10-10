@@ -27,12 +27,14 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-/** 对话页的外框：路由断言（routes.spec）认的限宽居中列 */
+/** 对话页的外框：限宽居中列（.content-column，见 styles/tailwind.css）——
+ *  活动会话的整列（消息区 + 发送框）都必须挂在这一层里，否则会横向铺满主列被覆盖层侧栏裁掉。
+ *  routes.spec 认的也是这一层。 */
 function ChatFrame({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <section
       data-testid="chat-page"
-      className="mx-auto flex min-h-0 w-full max-w-(--content-max-width) flex-1 flex-col"
+      className="content-column animate-page-in flex min-h-0 flex-1 flex-col"
     >
       {children}
     </section>
@@ -72,7 +74,7 @@ export function ChatPage(): React.JSX.Element {
   if (error) {
     return (
       <ChatFrame>
-        <div className="px-6 pt-6">
+        <div className="px-4 pt-6">
           <ErrorCard error={error} onRetry={retry} />
         </div>
       </ChatFrame>
@@ -83,7 +85,7 @@ export function ChatPage(): React.JSX.Element {
     return (
       <ChatFrame>
         <p data-testid="chat-connecting" className="p-6 text-b2 text-ink-tertiary">
-          正在连接本地 agent 服务…
+          正在连接…
         </p>
       </ChatFrame>
     )
@@ -161,7 +163,7 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
   if (resolveError) {
     return (
       <ChatFrame>
-        <div className="px-6 pt-6">
+        <div className="px-4 pt-6">
           <ErrorCard error={resolveError} onRetry={retry} />
         </div>
       </ChatFrame>
@@ -178,7 +180,11 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
     )
   }
 
-  return <ActiveChat chat={chat} threadId={threadId} />
+  return (
+    <ChatFrame>
+      <ActiveChat chat={chat} threadId={threadId} />
+    </ChatFrame>
+  )
 }
 
 interface ActiveChatProps {
@@ -295,16 +301,16 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         onEdit={busy ? undefined : editResend}
       />
       {error ? (
-        <div className="px-6 pt-2">
+        <div className="px-4 pt-2">
           <ErrorCard error={toError(error)} onRetry={retry} />
         </div>
       ) : null}
       {syncError ? (
-        <div className="px-6 pt-2">
+        <div className="px-4 pt-2">
           <ErrorCard error={syncError} onRetry={retryPendingSync} />
         </div>
       ) : null}
-      <div className="shrink-0 px-6 pt-4 pb-6">
+      <div className="shrink-0 px-4 pt-4 pb-6">
         <Composer
           busy={busy}
           queuedCount={queuedCount}

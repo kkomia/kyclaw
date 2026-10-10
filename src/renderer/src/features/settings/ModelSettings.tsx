@@ -215,13 +215,9 @@ export function ModelSettings(): React.JSX.Element {
 
   return (
     <div data-testid="model-settings" className="flex flex-col gap-4">
-      <p className="text-b2 text-ink-tertiary">
-        密钥保存在系统安全存储里（加密落盘、不回显）；配置好即为当前模型，下一轮对话直接生效。
-      </p>
-
       {providers.length === 0 ? (
-        <p data-testid="model-empty" className="text-b2 text-ink-tertiary">
-          还没有配置任何模型通道：从下面的预设添加一个，或选「自定义」填自己的端点。
+        <p data-testid="model-empty" className="text-b2 text-ink-secondary">
+          还没有模型通道：从下面的预设里加一个，或选「自定义」。
         </p>
       ) : (
         providers.map((provider) => {
@@ -288,7 +284,7 @@ export function ModelSettings(): React.JSX.Element {
                   autoComplete="off"
                   data-testid={`provider-${provider.id}-key`}
                   value={draft.key}
-                  placeholder={keyState?.hasKey ? '已保存（不回显）；要换就填新的' : '粘贴 API Key'}
+                  placeholder={keyState?.hasKey ? '已保存；要换就填新的' : '粘贴 API Key'}
                   onChange={(event) => patchDraft(provider, { key: event.target.value })}
                 />
               </label>
@@ -298,7 +294,7 @@ export function ModelSettings(): React.JSX.Element {
                   data-testid={`provider-${provider.id}-reentry`}
                   className="text-c1 text-ink-secondary"
                 >
-                  已存的密钥在这台机器上解不开（换过机器或系统账户），请重新录入并保存。
+                  已存的密钥在这台机器上读不到，请重新录入。
                 </p>
               ) : null}
 

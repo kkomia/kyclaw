@@ -44,7 +44,7 @@ export function SessionsController(): React.JSX.Element {
       <NewSessionButton onNew={startNew} />
       {error !== null ? (
         <p data-testid="session-load-error" className="px-4 pb-1 text-c1 text-danger">
-          会话列表未同步（{error}）
+          会话列表加载失败
           <Button
             size="sm"
             variant="ghost"

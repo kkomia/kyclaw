@@ -9,7 +9,6 @@ export function WorkPanelEmpty(): React.JSX.Element {
     >
       <Wrench aria-hidden="true" className="size-(--icon-size-lg) text-ink-tertiary" />
       <p className="text-b2 text-ink">工作台</p>
-      <p className="text-c1 text-ink-tertiary">产出物与文件预览会显示在这里</p>
     </div>
   )
 }

@@ -234,9 +234,11 @@ describe('SessionsController：加载失败', () => {
     server.failNext(new Error('连接被拒绝'))
     renderController()
 
+    // 界面只说"加载失败"（雷点 2.2：不把后端错误原文写给用户看），原文留给控制台
     await waitFor(() => {
-      expect(screen.getByTestId('session-load-error')).toHaveTextContent('连接被拒绝')
+      expect(screen.getByTestId('session-load-error')).toHaveTextContent('会话列表加载失败')
     })
+    expect(screen.getByTestId('session-load-error')).not.toHaveTextContent('连接被拒绝')
 
     fireEvent.click(screen.getByTestId('session-load-retry'))
 

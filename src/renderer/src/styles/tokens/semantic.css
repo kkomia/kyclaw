@@ -71,6 +71,13 @@
   --icon-opacity-disabled: 0.26;
   --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
 
+  /* 输入卡内部两段（§4.5：输入框内部最小 / 最大高 48px / 170px；§0.2 实测 111 与 114
+     那对是"首屏整张输入框"，不是常态高度 —— 常态取自适应 + 这两个界）。
+     工具条：Kimi 实测 49（像素扫描误差 ±1），取 4 的倍数 48 —— 36 的按钮 + 上下 6。 */
+  --composer-input-min-height: 48px;
+  --composer-input-max-height: 170px;
+  --composer-toolbar-height: 48px;
+
   /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
      几何在明暗两套下一致，所以只在这里声明、不进深色块。 */
   --titlebar-height: 42px;
@@ -81,8 +88,12 @@
 
   /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
      侧栏是覆盖层（台账 R13，主列不位移、不加 pl 留白），所以贴左缘的内容会被它盖住 ——
-     页面内容列改成"限宽 + 居中"，让开侧栏那条 240 的左缘；1280 视口下 800 列正好从 240 起。 */
+     页面内容列改成"限宽 + 居中"（.content-column，见 styles/tailwind.css），让开侧栏那条 240 的左缘。
+     窗口够宽时居中结果正好从 240 起（与 Kimi 首页实测数字一致）；窗口不够宽（含工作台展开）
+     时按"安全左边"右移并收窄 —— --content-safe-left 就是那条安全线，由壳根的
+     [data-sidebar='expanded'] 改写成 --sidebar-width。 */
   --content-max-width: 800px;
+  --content-safe-left: 0px;
   /* 对话输入卡（T7）：UI 参考 §4.6 实测输入框宽 768.3 */
   --chat-input-max-width: 768px;
 

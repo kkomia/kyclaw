@@ -50,10 +50,10 @@ export function Dialog({
         <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>
       )}
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-mask" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-mask data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out" />
         <DialogPrimitive.Content
           className={cn(
-            'fixed top-1/2 left-1/2 z-50 max-w-(--overlay-max-width) -translate-x-1/2 -translate-y-1/2 rounded-overlay bg-(--bg-overlay) p-6 shadow-(--shadow-overlay) outline-none',
+            'fixed top-1/2 left-1/2 z-50 max-w-(--overlay-max-width) -translate-x-1/2 -translate-y-1/2 rounded-overlay bg-(--bg-overlay) p-6 shadow-(--shadow-overlay) outline-none data-[state=open]:animate-dialog-in data-[state=closed]:animate-dialog-out',
             SIZE_CLASS[size],
             className
           )}

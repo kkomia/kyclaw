@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 
 /**
- * 输入卡（Step 4）：UI 参考 §4.6 的实测数值 + 键盘/按钮行为。
+ * 输入卡（UI 返工 R1）：UI 参考 §4.6 的实测数值（宽 768 / 圆角 24 / 发送钮 36）+
+ * 实况页结构（单行输入 + 一行工具条，输入区自适应、封顶后内部滚动），以及键盘/按钮行为。
  * 组件只把 onSend / onStop 抛给上层——队列与截断重发在 ChatPage（chat-flow.spec）。
  */
 function setup(props: Partial<Parameters<typeof Composer>[0]> = {}): {
@@ -20,18 +21,30 @@ function type(text: string): void {
   fireEvent.change(screen.getByTestId('composer-input'), { target: { value: text } })
 }
 
-describe('输入卡结构与尺寸（UI 参考 §4.6）', () => {
-  it('max 768 / 圆角 24 / 三段 40 + 111 + 49 / 发送钮 36', () => {
+describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', () => {
+  it('max 768 / 圆角 24 / 输入区自适应（48–170）/ 工具条 48 / 发送钮 36', () => {
     setup()
 
     expect(screen.getByTestId('composer')).toHaveClass(
       'max-w-(--chat-input-max-width)',
       'rounded-input'
     )
-    expect(screen.getByTestId('composer-banner')).toHaveClass('h-10')
-    expect(screen.getByTestId('composer-input')).toHaveClass('h-[111px]')
-    expect(screen.getByTestId('composer-footer')).toHaveClass('h-[49px]')
+    expect(screen.getByTestId('composer-input')).toHaveClass(
+      'field-sizing-content',
+      'min-h-(--composer-input-min-height)',
+      'max-h-(--composer-input-max-height)',
+      'overflow-y-auto'
+    )
+    expect(screen.getByTestId('composer-footer')).toHaveClass('h-(--composer-toolbar-height)')
     expect(screen.getByTestId('composer-send')).toHaveClass('size-9')
+  })
+
+  it('默认单行紧凑：没有横幅带、也没有键盘提示小字（雷点 2：不靠小字补设计）', () => {
+    setup()
+
+    expect(screen.queryByTestId('composer-banner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('composer')).not.toHaveTextContent('Enter')
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('rows', '1')
   })
 
   it('空输入时发送钮禁用，有内容才可点', () => {

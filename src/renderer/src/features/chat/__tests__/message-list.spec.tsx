@@ -56,11 +56,12 @@ describe('消息列渲染', () => {
     expect(screen.getByTestId('message-a1')).toHaveAttribute('data-role', 'assistant')
   })
 
-  it('空会话给出空态提示（消息列本身仍在）', () => {
+  it('空会话：消息列为空，不留提示小字（雷点 2：不靠小字补设计）', () => {
     render(<MessageList messages={[]} status="ready" />)
 
-    expect(screen.getByTestId('message-list')).toBeInTheDocument()
-    expect(screen.getByTestId('message-list-empty')).toBeInTheDocument()
+    const list = screen.getByTestId('message-list')
+    expect(list).toBeInTheDocument()
+    expect(list).toHaveTextContent('')
   })
 })
 

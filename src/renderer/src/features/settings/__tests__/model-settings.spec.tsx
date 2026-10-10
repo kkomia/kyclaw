@@ -61,7 +61,7 @@ describe('模型组 · provider 的增删与默认', () => {
   it('一条都没有：空态 + 预设入口都在', async () => {
     await mount(defaultSettings())
 
-    expect(screen.getByTestId('model-empty')).toHaveTextContent('还没有配置任何模型通道')
+    expect(screen.getByTestId('model-empty')).toHaveTextContent('还没有模型通道')
     for (const preset of ['deepseek', 'moonshot', 'openai', 'anthropic']) {
       expect(screen.getByTestId(`add-preset-${preset}`), preset).toBeInTheDocument()
     }

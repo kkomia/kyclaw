@@ -12,6 +12,8 @@ export interface MenuActionItem {
   disabled?: boolean
   /** 危险动作：红字，高亮时铺危险浅底（§2.7 的红色一对） */
   danger?: boolean
+  /** 当前项（菜单里也能是导航入口）：选中底 Fills-F2 + aria-current="page" */
+  selected?: boolean
   /** 条目的 data-testid（R4：关键交互节点给 E2E 稳定选择器） */
   testId?: string
   onSelect?: (id: string) => void
@@ -70,12 +72,14 @@ export function Menu({
                 key={entry.id}
                 data-testid={entry.testId}
                 disabled={entry.disabled}
+                aria-current={entry.selected === true ? 'page' : undefined}
                 onSelect={() => entry.onSelect?.(entry.id)}
                 className={cn(
                   'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled)',
                   entry.danger
                     ? 'text-danger data-[highlighted]:bg-danger-bg'
-                    : 'data-[highlighted]:bg-hover'
+                    : 'data-[highlighted]:bg-hover',
+                  entry.selected === true && 'bg-selected'
                 )}
               >
                 {entry.icon === undefined ? null : (

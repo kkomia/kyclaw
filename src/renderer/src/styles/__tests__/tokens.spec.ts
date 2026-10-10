@@ -560,6 +560,7 @@ describe('tailwind.css 接线', () => {
 
     for (const name of referenced) {
       if (name === '--font-sans' || name === '--font-mono') continue // Tailwind 主题命名空间
+      if (name.startsWith('--radix-')) continue // Radix 运行时注入（浮层变形原点），不是我们的 token
       expect(declared.has(name), `两层 token 都没有定义 ${name}`).toBe(true)
     }
   })
