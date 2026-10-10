@@ -719,3 +719,21 @@ describe('T5 导航项与新建会话尺寸（附录 A 实测值）', () => {
     expectDecl(t5root, '--content-max-width', '800px', 'semantic :root')
   })
 })
+
+describe('壳 · 窄窗兜底阈值（R2 修复轮）', () => {
+  const root = semantic.get(':root') ?? new Map<string, string>()
+  const appShell = readSource('../../components/shell/AppShell.tsx')
+
+  it('阈值 token = 1120px（侧栏 240 + 内容最小可读宽 480 + 工作台 400）', () => {
+    expectDecl(root, '--work-panel-collapse-width', '1120px', 'semantic :root')
+  })
+
+  it('token 与 AppShell 的 TS 兜底同值：只改一处不会两边漂开', () => {
+    const fromToken = Number.parseFloat(root.get('--work-panel-collapse-width') ?? '')
+    const fromTs = /COLLAPSE_WIDTH_FALLBACK\s*=\s*(\d+)/.exec(appShell)?.[1]
+
+    expect(fromTs, 'AppShell.tsx 里没找到 COLLAPSE_WIDTH_FALLBACK').toBeDefined()
+    expect(fromToken, 'token 值解析失败').toBeGreaterThan(0)
+    expect(fromToken).toBe(Number(fromTs))
+  })
+})

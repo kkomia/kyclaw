@@ -89,15 +89,15 @@ export function AppShell(): React.JSX.Element {
             <WorkPanelEmpty />
           </WorkPanel>
         </ContentRegion>
-        {/* 壳上的"凹角"（R2 D2）：内容区压在上面的那块面在可见左缘处要有一个圆角过渡。
-            内容区自己铺满整条主列（R13：主列几何不随侧栏变），它的左上圆角在 x=0 被侧栏盖住，
-            所以在可见左缘（--content-safe-left，跟着侧栏开合过渡）补一个"画布色 + 右下圆角"的小方块，
-            把角切出来 —— 与 Kimi 桌面实测的"顶栏/侧栏一整层、内容区是里面一块圆角面"一致。
-            宽窗下 x=0（侧栏收起）时它正好落在内容区自己的左上角上，画布叠画布，看不见。 */}
+        {/* 壳上的"凹角"（R2 D2）：内容区铺满整条主列（R13：主列几何不随侧栏变），它自己的左上凸圆角
+            在 x=0 被侧栏盖住；所以在可见左缘（--content-safe-left，跟着侧栏开合过渡）补一块
+            "画布色 − 圆盘"的小方块（.shell-notch：只涂圆弧以外），把内容卡的**凸圆角**露出来 —— 与
+            Kimi 桌面参考同向。侧栏收起（safe-left = 0）时它正好压在内容卡自己的圆角上，涂的是卡片
+            圆角让出来的那块画布，真正不可见（凹凸方向与遮挡面积的判据见 _notch_check.py）。 */}
         <div
           data-testid="shell-notch"
           aria-hidden="true"
-          className="pointer-events-none absolute top-0 left-(--content-safe-left) z-10 size-(--radius-overlay) rounded-br-overlay bg-canvas"
+          className="shell-notch pointer-events-none absolute top-0 left-(--content-safe-left) z-10 size-(--radius-overlay)"
         />
       </div>
     </div>
