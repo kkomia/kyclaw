@@ -167,16 +167,17 @@ describe('会话记忆（"本会话允许"）：粒度 = 对话（thread）+ 工
     expect(isAllowedForSession('thread-1', 'edit', WS_A.path)).toBe(false)
   })
 
-  it('写法归一后命中（大小写 / 分隔符 / MCP 前缀）', () => {
+  it('写法归一后命中（大小写 / 分隔符）', () => {
     allowForSession('thread-1', 'write', 'D:\\项目\\demo')
 
-    expect(isAllowedForSession('thread-1', 'mcp__fs__write', 'd:/项目/demo')).toBe(true)
+    expect(isAllowedForSession('thread-1', ' WRITE ', 'd:/项目/demo')).toBe(true)
   })
 
-  it('MCP 名按最后一段归一（与 classify 的工具身份同一口径；T12 接入时再重审）', () => {
+  it('MCP 名按整名归一：不串到内置同名工具、也不串到别的 server（T12 重审）', () => {
     allowForSession('thread-1', 'mcp__fs__write', WS_A.path)
 
-    expect(isAllowedForSession('thread-1', 'write', WS_A.path)).toBe(true)
-    expect(isAllowedForSession('thread-1', 'mcp__other__write', WS_A.path)).toBe(true)
+    expect(isAllowedForSession('thread-1', 'mcp__fs__write', WS_A.path)).toBe(true)
+    expect(isAllowedForSession('thread-1', 'write', WS_A.path)).toBe(false)
+    expect(isAllowedForSession('thread-1', 'mcp__other__write', WS_A.path)).toBe(false)
   })
 })

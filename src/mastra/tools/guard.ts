@@ -16,7 +16,7 @@ import { globSync } from 'node:fs'
 import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import type { PermissionRule, Workspace } from '../../shared/settings'
 import { isAllowedByRules } from '../../shared/permissions'
-import { type ToolClass } from '../../main/permission/classify'
+import { isWorkspaceFileTool, type ToolClass } from '../../main/permission/classify'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
 
 /** 工具分级函数（T10 的 classifyToolCall；测试可注入别的实现） */
@@ -199,14 +199,21 @@ export function scanRoot(ctx: ToolContext, target?: string): ResolvedTarget {
  * 审批判定（spec §5.2）：
  *   - 只读（classify）→ 放行；
  *   - 危险（delete/move）→ 永远问（Full access 与"永久允许"规则都不放行）；
- *   - 写类 → 默认问；写操作的目标明确落在 mode='full' 的工作区，或 (工具, 工作区) 命中
- *     一条"永久允许"规则时才放行。
+ *   - 写类 → 按工具身份分两档：
+ *       · **内置工作区文件工具**（write/edit）：执行路径必过引擎。目标明确落在 mode='full' 的
+ *         工作区、或 (工具, 工作区) 命中一条"永久允许"规则才放行；目标解析不到时**不问**
+ *         —— 我们的工具马上会 fail closed 拒掉，弹一张"批了也不会执行"的卡只会误导用户。
+ *       · **其它写类**（MCP 外部工具、未知工具）：执行不走我们的引擎，无法证明"只碰这个工作区"
+ *         （入参里的 path 可能根本不是文件路径）。**一律问**；唯一的放行口子是这个目标能解析进
+ *         某个工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，用户对这张卡
+ *         显式批准过）。工作区的 Full access 不适用：那是对"这个文件夹里的文件操作"的授权，
+ *         不是"放行任意外部工具"。
  *
- * 目标不在工作区（且拿不到可判定目标）时的口径：
- *   - 入参里根本没有可解析的 path（MCP 工具、未知工具）→ **问**：不知道它要干什么，保守；
- *   - 有 path 但解析不出去 → **不问**：我们的写类工具马上会被 guard fail closed 拒掉，
- *     弹一张"批了也不会执行"的审批卡只会误导用户；模型会拿到路径错误并回来找用户加工作区。
- *     （将来若引入"path 参数不是文件路径"的外部工具，要在这一步重新审视。）
+ * 为什么按工具身份分叉，而不是按目标不可解析的原因（T12 重审）：原因不改变一个外部工具
+ * 实际能干什么 —— `mcp__a__write` 带一个工作区外的 path 不代表它只碰那里，它可能只是恰好有个
+ * 叫 path 的入参。能证明安全的是"工具自己的执行受引擎约束"（内置五件套），不是"路径看起来
+ * 像是不用管的"。v1 曾用"有 path 但解析不出去 → 不问"，对内置工具安全，对 MCP 工具是静默
+ * 绕过审批的漏洞，已按此分叉修掉。
  */
 export function needsApproval(ctx: ToolContext, tool: string, input: unknown): boolean {
   const toolClass = ctx.classify(tool, input)
@@ -216,6 +223,14 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
   const target = inputPath(input)
   if (target === null) return true
   const resolved = resolveTarget(ctx, target)
+
+  if (!isWorkspaceFileTool(tool)) {
+    // 外部/未知工具：目标解析不到 → 问；解析到 → 只有全名规则能放行（full 不适用）
+    if (!resolved.ok) return true
+    return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
+  }
+
+  // 内置文件工具：目标解析不到 → 不问（执行即 fail closed）；full 与规则照旧
   if (!resolved.ok) return false
   if (resolved.workspace.mode === 'full') return false
   return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)

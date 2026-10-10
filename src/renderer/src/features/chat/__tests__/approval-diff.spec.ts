@@ -63,10 +63,8 @@ describe('approvalDiff：从工具入参取素材', () => {
     expect(render(lines ?? [])).toEqual(['+第一行', '+第二行'])
   })
 
-  it('MCP 名字按最后一段识别（mcp__fs__write 当 write）', () => {
-    expect(approvalDiff('mcp__fs__write', { path: 'a.txt', content: 'x' })).toEqual([
-      { kind: 'add', text: 'x' }
-    ])
+  it('MCP 名不再当内置 write 认（整名归一，T12 重审）：认不出回 null', () => {
+    expect(approvalDiff('mcp__fs__write', { path: 'a.txt', content: 'x' })).toBeNull()
   })
 
   it('认不出的工具 / 入参形状不对：回 null（卡片退回静态呈现）', () => {

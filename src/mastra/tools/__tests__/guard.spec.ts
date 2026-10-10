@@ -103,14 +103,57 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(true)
   })
 
-  it('未知写类工具（MCP 等）没有可解析的目标：按"问"处理（保守）', () => {
+  it('未知写类工具（没有可解析的目标）：按"问"处理（保守）', () => {
     expect(needsApproval(bed.ctx, 'mcp__foo__do', { anything: 1 })).toBe(true)
   })
 
-  it('写类但目标根本不在工作区：不问——工具马上会被 guard 拒掉，弹卡只是噪音', () => {
+  it('内置写类但目标根本不在工作区：不问——工具马上会被 guard 拒掉，弹卡只是噪音', () => {
     expect(
       needsApproval(bed.ctx, 'write', { path: join(bed.outside, 'x.txt'), content: 'x' })
     ).toBe(false)
+    expect(
+      needsApproval(bed.ctx, 'edit', {
+        path: join(bed.outside, 'x.txt'),
+        oldText: 'a',
+        newText: 'b'
+      })
+    ).toBe(false)
+  })
+
+  it('外部工具（MCP）：有 path 但解析不出去也照问——path 只是它的一个入参，不能证明安全', () => {
+    expect(
+      needsApproval(bed.ctx, 'mcp__a__write', {
+        path: join(bed.outside, 'x.txt'),
+        content: 'x'
+      })
+    ).toBe(true)
+    // 末段叫 write 不代表它是内置 write 工具（整名判定）
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
+  })
+
+  it('外部工具（MCP）：工作区 full 也不放行——Full access 管的是文件夹里的文件操作', () => {
+    bed.roots[0].mode = 'full'
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(true)
+  })
+
+  it('外部工具（MCP）：只有全名命中的"永久允许"规则才放行，且仍要求目标可解析', () => {
+    bed.rules.push({ tool: 'mcp__a__write', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(false)
+    // 目标解析不到 → 无从绑定工作区，规则不生效
+    expect(
+      needsApproval(bed.ctx, 'mcp__a__write', {
+        path: join(bed.outside, 'x.txt'),
+        content: 'x'
+      })
+    ).toBe(true)
+    // 同名不同 server：不命中（T12 串名修复）
+    expect(needsApproval(bed.ctx, 'mcp__b__write', { path: 'a.txt', content: 'x' })).toBe(true)
+    // 内置 write 的规则也不会被 MCP 工具吃到
+    bed.rules.length = 0
+    bed.rules.push({ tool: 'write', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 
   it('"永久允许"规则：同工具 + 同工作区放行（T13 的审批记忆）', () => {
@@ -148,11 +191,17 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(true)
   })
 
-  it('MCP 工具名按最后一段匹配规则（mcp__server__write 命中 write 的规则）', () => {
-    bed.rules.push({ tool: 'write', workspace: bed.root, mode: 'allow' })
+  it('MCP 危险名（mcp__server__delete）即使有全名规则也永远问（末段危险档）', () => {
+    bed.rules.push({ tool: 'mcp__a__delete', workspace: bed.root, mode: 'allow' })
 
-    expect(needsApproval(bed.ctx, 'mcp__fs__write', { path: 'a.txt', content: 'x' })).toBe(false)
-    expect(needsApproval(bed.ctx, 'mcp__fs__edit', { path: 'a.txt' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(true)
+  })
+
+  it('规则不串名：mcp__a__write 的规则不影响内置 write / 别的 server / 别的工具（T12）', () => {
+    bed.rules.push({ tool: 'mcp__a__write', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'mcp__b__write', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 })
 

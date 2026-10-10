@@ -4,6 +4,7 @@ import {
   normalizeToolName,
   normalizeWorkspacePath,
   ruleMatches,
+  toolBasename,
   withAllowedRule
 } from '../permissions'
 
@@ -11,12 +12,28 @@ import {
  * 权限规则（T13「永久允许」）的归一与匹配：粒度 = 工具 + 工作区。
  * 主进程（guard.needsApproval）与渲染端（审批卡写设置）共用这一份 —— 两边对
  * "哪条规则覆盖这次调用"必须是同一个答案，否则会出现"UI 说已永久允许、服务端还在问"。
+ *
+ * T12 重审：工具名匹配用**整名**（`mcp__a__write` ≠ `mcp__b__write` ≠ `write`），
+ * 只有分级才取 `__` 末段（toolBasename）。
  */
-describe('normalizeToolName', () => {
-  it('MCP 名取最后一段；去空白、大小写归一', () => {
+describe('normalizeToolName：整名归一（规则匹配 / 会话记忆）', () => {
+  it('去空白、大小写归一；MCP 名不拆段', () => {
     expect(normalizeToolName('write')).toBe('write')
     expect(normalizeToolName('  Write ')).toBe('write')
-    expect(normalizeToolName('mcp__filesystem__write')).toBe('write')
+    expect(normalizeToolName('mcp__filesystem__write')).toBe('mcp__filesystem__write')
+  })
+
+  it('不同 server 的同名工具、以及内置同名工具，彼此都不相等（T12：串名是越权）', () => {
+    expect(normalizeToolName('mcp__a__write')).not.toBe(normalizeToolName('mcp__b__write'))
+    expect(normalizeToolName('mcp__a__write')).not.toBe(normalizeToolName('write'))
+  })
+})
+
+describe('toolBasename：分级用的末段', () => {
+  it('mcp__server__tool 取最后一段；无 __ 的名字原样', () => {
+    expect(toolBasename('write')).toBe('write')
+    expect(toolBasename(' mcp__shell__delete ')).toBe('delete')
+    expect(toolBasename('mcp__a__b__read')).toBe('read')
   })
 })
 
@@ -36,7 +53,15 @@ describe('ruleMatches / isAllowedByRules', () => {
     expect(ruleMatches(rule, 'write', 'd:/项目/demo')).toBe(true)
     expect(ruleMatches(rule, 'edit', 'D:\\项目\\demo')).toBe(false)
     expect(ruleMatches(rule, 'write', 'D:\\项目\\另一个')).toBe(false)
-    expect(ruleMatches(rule, 'mcp__x__write', 'D:\\项目\\demo')).toBe(true)
+  })
+
+  it('内置 write 的规则不覆盖 mcp__x__write；反向也一样（T12：粒度是整个工具名）', () => {
+    expect(ruleMatches(rule, 'mcp__x__write', 'D:\\项目\\demo')).toBe(false)
+
+    const mcpRule = { tool: 'mcp__x__write', workspace: 'D:\\项目\\demo', mode: 'allow' } as const
+    expect(ruleMatches(mcpRule, 'mcp__x__write', 'D:\\项目\\demo')).toBe(true)
+    expect(ruleMatches(mcpRule, 'mcp__y__write', 'D:\\项目\\demo')).toBe(false)
+    expect(ruleMatches(mcpRule, 'write', 'D:\\项目\\demo')).toBe(false)
   })
 
   it('isAllowedByRules：任一命中即放行；空表一律不放行', () => {
