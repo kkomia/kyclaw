@@ -104,10 +104,15 @@ export function toolDetailOf(input: unknown): string | null {
   return null
 }
 
-/** 结果预览：格式化后的文本恒定切 600 字（超了只切、不提示、无出口） */
+/**
+ * 结果预览：格式化后的文本恒定切 600 **码点**（超了只切、不提示、无出口）。
+ * 用码点而不是 UTF-16 码元切（T16 小修批）：否则第 600 位正好是星平面字符时会吐半个代理对。
+ */
 export function previewOutput(value: unknown): string {
   const text = formatValue(value)
-  return text.length > RESULT_PREVIEW_CHARS ? text.slice(0, RESULT_PREVIEW_CHARS) : text
+  // 码元都不超上限 → 码点更不超，直接返回（省掉一次码点数组）
+  if (text.length <= RESULT_PREVIEW_CHARS) return text
+  return Array.from(text).slice(0, RESULT_PREVIEW_CHARS).join('')
 }
 
 export { formatValue }

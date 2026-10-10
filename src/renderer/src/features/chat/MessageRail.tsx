@@ -9,6 +9,8 @@ import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
  *   - hover（或键盘聚焦）弹出摘要列表：每项 = 用户消息压成一行的文本，当前项横线加长；
  *   - 点节点 / 点摘要项 → 平滑滚动定位（reduced-motion 时直接跳，不动画）。
  * 面板走 opacity/translate 过渡（不硬切）；行为只依赖 DOM 里的消息节点，不碰消息数据。
+ *
+ * 定位（T16 小修批）：贴右缘 `right-2` —— 滚动条宽 6px，早先的 `right-1`（4px）会被它压住 2px。
  */
 export interface MessageRailProps {
   messages: UIMessage[]
@@ -73,7 +75,7 @@ export function MessageRail({
     <nav
       data-testid="message-rail"
       aria-label="消息导览"
-      className="absolute top-1/2 right-1 z-10 -translate-y-1/2"
+      className="absolute top-1/2 right-2 z-10 -translate-y-1/2"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}

@@ -106,6 +106,20 @@ export function readTextFile(file: File): Promise<string> {
   })
 }
 
+/**
+ * 围栏长度（T16 小修批）：内容里最长的一段连续反引号 + 1，下限 3。
+ * 固定三反引号的围栏会被内容自带的 ``` 提前收尾——后面的原文就漏成正文了。
+ */
+function fenceFor(text: string): string {
+  let longest = 0
+  let run = 0
+  for (const char of text) {
+    run = char === '`' ? run + 1 : 0
+    if (run > longest) longest = run
+  }
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
 /** 发送时的组装：正文 → 【引用】行 → 附件块（附件内容包在围栏里，模型按原文读） */
 export function composeOutgoingText(input: {
   text: string
@@ -120,9 +134,9 @@ export function composeOutgoingText(input: {
     blocks.push(`【引用】${references.map((item) => `${item.kind}：${item.label}`).join('；')}`)
   }
   for (const attachment of attachments) {
-    blocks.push(
-      `【附件】${attachment.name}\n\`\`\`\n${attachment.text.replace(/\n+$/, '')}\n\`\`\``
-    )
+    const content = attachment.text.replace(/\n+$/, '')
+    const fence = fenceFor(content)
+    blocks.push(`【附件】${attachment.name}\n${fence}\n${content}\n${fence}`)
   }
   return blocks.join('\n\n')
 }

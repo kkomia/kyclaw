@@ -72,6 +72,14 @@ describe('消息导览轨 · 结构', () => {
     )
   })
 
+  it('贴右缘但让开滚动条：right-2（滚动条宽 6px，right-1 的 4px 会被它压住）', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    const rail = screen.getByTestId('message-rail')
+    expect(rail).toHaveClass('absolute', 'right-2')
+    expect(rail).not.toHaveClass('right-1')
+  })
+
   it('默认收起：摘要列表在 DOM 里但没有展开标记（不硬切，走 opacity 过渡）', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
@@ -154,5 +162,30 @@ describe('消息导览轨 · 当前节点与跳转', () => {
     fireEvent.click(screen.getByTestId('rail-node-u2'))
 
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
+  })
+})
+
+describe('消息导览轨 · 键盘路径', () => {
+  it('Tab 进轨（节点拿到焦点）→ 面板展开；轨内换焦点不收起；Tab 出轨 → 收起', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    const rail = screen.getByTestId('message-rail')
+    const panel = (): HTMLElement => screen.getByTestId('rail-panel')
+    expect(panel()).not.toHaveAttribute('data-open')
+
+    // Tab 到节点 = 焦点落到轨里的按钮（React 的 onFocus 走 focusin）
+    fireEvent.focusIn(screen.getByTestId('rail-node-u2'))
+    expect(panel()).toHaveAttribute('data-open', 'true')
+
+    // 轨内继续 Tab（节点 → 摘要项）：焦点没出轨，面板保持展开
+    fireEvent.focusOut(screen.getByTestId('rail-node-u2'), {
+      relatedTarget: screen.getByTestId('rail-item-u2')
+    })
+    fireEvent.focusIn(screen.getByTestId('rail-item-u2'))
+    expect(panel()).toHaveAttribute('data-open', 'true')
+
+    // Tab 出轨：焦点去了轨外的元素 → 收起
+    fireEvent.focusOut(rail, { relatedTarget: document.body })
+    expect(panel()).not.toHaveAttribute('data-open')
   })
 })

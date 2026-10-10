@@ -112,6 +112,18 @@ describe('ToolCard 行与折叠体', () => {
     expect(within(screen.getByTestId('tool-card')).queryByText(/加载/)).not.toBeInTheDocument()
   })
 
+  it('第 600 位正好是代理对（星平面字符）也只切在整字符上，不吐半个', () => {
+    const long = 'x'.repeat(RESULT_PREVIEW_CHARS - 1) + '😀'.repeat(40)
+    render(<ToolCard part={{ toolName: 'read', state: 'output-available', output: long }} />)
+    fireEvent.click(screen.getByTestId('tool-row'))
+
+    const shown = screen.getByTestId('tool-output').textContent ?? ''
+    expect(Array.from(shown)).toHaveLength(RESULT_PREVIEW_CHARS)
+    expect(shown.endsWith('😀')).toBe(true)
+    // 结尾不能是孤立的高代理（UTF-16 码元切片就会这样）
+    expect(/[\uD800-\uDBFF]$/.test(shown)).toBe(false)
+  })
+
   it('未知状态原样显示、按中性语气渲染（不猜）', () => {
     render(<ToolCard part={{ toolName: 'mcp__x__y', state: 'some-future-state' }} />)
 

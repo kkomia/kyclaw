@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
-import { mcpServersProblems, type McpTestResult } from '@shared/mcp'
+import { mcpServersProblems, URL_PROBLEM, type McpTestResult } from '@shared/mcp'
 import type { McpServerConfig } from '@shared/settings'
 import { PluginsPage } from '../PluginsPage'
 
@@ -336,5 +336,29 @@ describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行
     )
     // 失败是"测试结果"不是"保存错误"：行内错误位不亮
     expect(screen.queryByTestId('mcp-server-0-error')).not.toBeInTheDocument()
+  })
+
+  it('半截地址（http://）：行内 problems 当场说出来；启用被服务端拦下，开关不变', async () => {
+    installMockApi([
+      serverConfig({
+        id: 'remote',
+        name: '远程',
+        transport: 'http',
+        url: 'http://',
+        command: undefined,
+        args: undefined,
+        enabled: false
+      })
+    ])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    // 半截串过得了前缀检查、过不了 new URL：等连接期才炸就太晚了（界面用服务端同一份校验）
+    expect(screen.getByTestId('mcp-server-0-problems')).toHaveTextContent(URL_PROBLEM)
+
+    fireEvent.click(screen.getByTestId('mcp-server-0-enable'))
+    expect(await screen.findByTestId('mcp-server-0-error')).toHaveTextContent(URL_PROBLEM)
+    expect(screen.getByTestId('mcp-server-0-enable')).toHaveAttribute('aria-checked', 'false')
   })
 })
