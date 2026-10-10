@@ -1,9 +1,9 @@
 {
   "name": "kyclaw",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "kyclaw：Kimi 风格三栏桌面应用（Electron + React + 内嵌 Mastra agent）",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": "kkomia",
   "homepage": "https://electron-vite.org",
   "engines": {
     "node": ">=22.13.0"
@@ -20,6 +20,7 @@
     "dev": "electron-vite dev",
     "test": "vitest run",
     "build": "electron-vite build",
+    "package": "node scripts/package.mjs",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --dir",

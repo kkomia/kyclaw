@@ -1,23 +1,46 @@
-appId: com.electron.app
-productName: app
+# 打包配置（T15）：NSIS 用户级安装包 → dist/。
+# 没有代码签名证书：产物未签名，装的时候 SmartScreen 会拦一下（选"仍要运行"），见 task-15-report。
+# 更新通道（electron-updater + Gitee generic）留 T17，这里不写 publish（否则会往包里塞一份假的 app-update.yml）。
+appId: com.kkomia.kyclaw
+productName: kyclaw
 directories:
   buildResources: build
+  output: dist
 files:
   - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,vitest.config.ts,pnpm-workspace.yaml}'
+  # 过程性材料不进包：docs 是设计与走查、.superpowers 是任务书/复核 diff、fixtures/scripts 只给测试与出包用
+  - '!{docs,fixtures,scripts,.superpowers}/**'
+  - '!build/**'
+# asar 里 dlopen 不了 .node：libsql 的原生绑定（@libsql/win32-x64-msvc/index.node）必须解出来，
+# 运行时经 Electron 的 asar 路径重定向落到 app.asar.unpacked。
+# resources/** 是 electron-vite 的 ?asset 资源（托盘/窗口图标），主进程按真实路径读，同样得在 asar 外。
 asarUnpack:
   - resources/**
+  - '**/*.node'
+  - '**/@libsql/**'
 win:
-  executableName: app
+  executableName: kyclaw
+  icon: resources/icon.ico
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico
+  # 用户级安装（不需管理员，装到 %LOCALAPPDATA%\Programs\kyclaw）
+  perMachine: false
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # 卸载保留 userData：%APPDATA%\kyclaw 里是会话库与 safeStorage 密钥，重装还得用
+  deleteAppDataOnUninstall: false
+compression: normal
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -38,6 +61,3 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates

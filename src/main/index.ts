@@ -20,6 +20,9 @@ import type { AgentEndpoint } from '../shared/ipc'
 // 必须在这里、在任何动态 import mastra 之前设置；main/index.ts 是应用最早的执行点。
 process.env.MASTRA_TELEMETRY_DISABLED = 'true'
 
+/** 任务栏归组/通知的 AppUserModelID：与 electron-builder.yml 的 appId 同值（NSIS 快捷方式写的也是它） */
+const APP_USER_MODEL_ID = 'com.kkomia.kyclaw'
+
 // 单实例：后起的实例不建窗口，直接把已运行的那个拉到前台（第二个实例自己退出）
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -32,8 +35,8 @@ if (!app.requestSingleInstanceLock()) {
   let agentEndpoint: AgentEndpoint | null = null
 
   app.whenReady().then(() => {
-    // Windows 任务栏归组用
-    electronApp.setAppUserModelId('com.electron')
+    // Windows 任务栏归组/通知：AUMID 与 electron-builder.yml 的 appId 一致
+    electronApp.setAppUserModelId(APP_USER_MODEL_ID)
 
     // 开发期 F12 开关 DevTools、生产期屏蔽 Ctrl/Cmd+R
     app.on('browser-window-created', (_, window) => {
