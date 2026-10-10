@@ -1,0 +1,664 @@
+/**
+ * 原样层（Kimi token 照抄）+ 工程阶梯（刻意偏离）。
+ *
+ * 数值唯一来源：docs/reference/Kimi-UI-动效与美学-实测-v0.1.md
+ *   §2 颜色（浅色 204 + 本地 9 = 213 条，另加组件级 --glass-view-shadow）
+ *   §3 字阶（ui-* 六档 + markdown-* 八档；三档字号整组换值）
+ *   §5 圆角（十条组件级）· 描边基准 · 阴影
+ *   §6 时长与 --clp-ease-* 四条曲线
+ * token 名照抄参考原文；深色档的选择器落在属性上（:root[data-theme='dark']），
+ * 由 lib/theme.ts 写 html 属性驱动（文档原文是 :root.dark，机制不同、值相同）。
+ *
+ * 本文件里的「工程阶梯」（--space-* / --radius-* / --duration-*）是 spec §6.1 记的
+ * 刻意偏离：Kimi 没有间距/圆角/时长阶梯（§1.12、§4.1、§8.1），我们把它固化成刻度。
+ */
+
+:root {
+  /* ===== §2.1 背景阶梯 ===== */
+  --Bg-GroundPC: #fbfaf9;
+  --Bg-GroundPC-hover: #f3f3f2;
+  --Bg-GroundPC-active: #eeeeed;
+  --Bg-Primary: #fff;
+  --Bg-Primary-hover: #f7f7f7;
+  --Bg-Primary-active: #f2f2f2;
+  --Bg-Primary70: #ffffffb3;
+  --Bg-Primary70-hover: #f4f4f4b5;
+  --Bg-Primary70-active: #edededb6;
+  --Bg-Primary90: #ffffffe6;
+  --Bg-Primary90-hover: #f7f7f7e6;
+  --Bg-Primary90-active: #f1f1f1e7;
+  --Bg-Quaternary: #fff;
+  --Bg-Quaternary-hover: #f7f7f7;
+  --Bg-Quaternary-active: #f2f2f2;
+  --Bg-Secondary: #f5f5f5;
+  --Bg-Secondary-hover: #eee;
+  --Bg-Secondary-active: #e9e9e9;
+  --Bg-Secondary90: #f5f5f5e6;
+  --Bg-Secondary90-hover: #ededede6;
+  --Bg-Secondary90-active: #e7e7e7e7;
+  --Bg-Tertiary: #fff;
+  --Bg-Tertiary-hover: #f7f7f7;
+  --Bg-Tertiary-active: #f2f2f2;
+  --Bg-Tertiary90: #ffffffe6;
+  --Bg-Tertiary90-hover: #f7f7f7e6;
+  --Bg-Tertiary90-active: #f1f1f1e7;
+
+  /* ===== §2.2 分组容器背景 ===== */
+  --BgGp-Primary: #f5f5f5;
+  --BgGp-Primary-hover: #eee;
+  --BgGp-Primary-active: #e9e9e9;
+  --BgGp-Primary90: #f5f5f5e6;
+  --BgGp-Primary90-hover: #ededede6;
+  --BgGp-Primary90-active: #e7e7e7e7;
+  --BgGp-Secondary: #fff;
+  --BgGp-Secondary-hover: #f7f7f7;
+  --BgGp-Secondary-active: #f2f2f2;
+  --BgGp-Secondary90: #ffffffe6;
+  --BgGp-Secondary90-hover: #f7f7f7e6;
+  --BgGp-Secondary90-active: #f1f1f1e7;
+  --BgGp-Tertiary: #f5f5f5;
+  --BgGp-Tertiary-hover: #eee;
+  --BgGp-Tertiary-active: #e9e9e9;
+
+  /* ===== §2.3 文字标签（全部 alpha） ===== */
+  --Labels-Primary: #000000e6;
+  --Labels-Primary-hover: #000000e6;
+  --Labels-Primary-active: #000000e7;
+  --Labels-Secondary: #0009;
+  --Labels-Secondary-hover: #0000009c;
+  --Labels-Secondary-active: #0000009e;
+  --Labels-Tertiary: #00000073;
+  --Labels-Tertiary-hover: #0007;
+  --Labels-Tertiary-active: #0000007a;
+  --Labels-Quaternary: #0000004d;
+  --Labels-Quaternary-hover: #00000052;
+  --Labels-Quaternary-active: #0005;
+
+  /* ===== §2.4 填充 ===== */
+  --Fills-F1: #00000008;
+  --Fills-F1-hover: #0000000f;
+  --Fills-F1-active: #00000014;
+  --Fills-F2: #0000000d;
+  --Fills-F2-hover: #00000014;
+  --Fills-F2-active: #00000019;
+  --Fills-F3: #00000026;
+  --Fills-F3-hover: #0000002d;
+  --Fills-F3-active: #00000031;
+  --Fills-F4: #00000040;
+  --Fills-F4-hover: #00000045;
+  --Fills-F4-active: #00000049;
+
+  /* ===== §2.5 分隔线（全站唯一一档） ===== */
+  --Separators-S1: #00000021;
+  --Separators-S1-hover: #00000028;
+  --Separators-S1-active: #0000002c;
+
+  /* ===== §2.6 品牌色与调色板 ===== */
+  --Colors-Green: #32ff7d;
+  --Colors-Green-hover: #31f779;
+  --Colors-Green-active: #30f277;
+  --Colors-KMBlue: #1783ff;
+  --Colors-KMBlue-hover: #167ff7;
+  --Colors-KMBlue-active: #167cf2;
+  --Colors-Orange: #ff9500;
+  --Colors-Orange-hover: #f79100;
+  --Colors-Orange-active: #f28e00;
+  --Colors-PositiveGreen: #16c456;
+  --Colors-PositiveGreen-hover: #15be53;
+  --Colors-PositiveGreen-active: #15ba52;
+  --Colors-PositiveGreen25: #16c45640;
+  --Colors-PositiveGreen25-hover: #14ae4d45;
+  --Colors-PositiveGreen25-active: #12a24749;
+  --Colors-Purple: #985ffb;
+  --Colors-Purple-hover: #935cf3;
+  --Colors-Purple-active: #905aee;
+  --Colors-Red: #ff3849;
+  --Colors-Red-hover: #f73647;
+  --Colors-Red-active: #f23545;
+  --Colors-Red25: #ff384940;
+  --Colors-Red25-hover: #e3324145;
+  --Colors-Red25-active: #d32e3c49;
+  --Colors-Yellow: #ffd230;
+  --Colors-Yellow-hover: #f7cc2f;
+  --Colors-Yellow-active: #f2c82e;
+
+  /* ===== §2.8 遮罩 ===== */
+  --MaskBg-Base: #0006;
+  --MaskBg-Base-hover: #0000006b;
+  --MaskBg-Base-active: #0000006e;
+  --MaskBg-Dark: #0009;
+  --MaskBg-Dark-hover: #0000009c;
+  --MaskBg-Dark-active: #0000009e;
+  --MaskBg-Gray: #303030e6;
+  --MaskBg-Gray-hover: #2e2e2ee6;
+  --MaskBg-Gray-active: #2d2d2de7;
+  --MaskBg-Icon: #00000040;
+  --MaskBg-Icon-hover: #00000045;
+  --MaskBg-Icon-active: #00000049;
+  --MaskBg-Light: #0000001a;
+  --MaskBg-Light-hover: #00000020;
+  --MaskBg-Light-active: #00000025;
+  --MaskBg-ToastAndroid: #454545;
+  --MaskBg-ToastAndroid-hover: #434343;
+  --MaskBg-ToastAndroid-active: #424242;
+  --MaskBg-ToastIOS: #454545e6;
+  --MaskBg-ToastIOS-hover: #434343e6;
+  --MaskBg-ToastIOS-active: #414141e7;
+  --MaskBg-ToastPC: #2b2b2b;
+  --MaskBg-ToastPC-hover: #2a2a2a;
+  --MaskBg-ToastPC-active: #292929;
+
+  /* ===== §2.9 常色（两主题同值或近似） ===== */
+  --Always-Black: #000;
+  --Always-Black-hover: #000;
+  --Always-Black-active: #000;
+  --Always-TransparencyDarkFill: #0009;
+  --Always-TransparencyDarkFill-hover: #0000009c;
+  --Always-TransparencyDarkFill-active: #0000009e;
+  --Always-TransparencyTagFill: #454545b3;
+  --Always-TransparencyTagFill-hover: #424242b5;
+  --Always-TransparencyTagFill-active: #404040b6;
+  --Always-TransparencyWhite15: #ffffff26;
+  --Always-TransparencyWhite15-hover: #d3d3d32d;
+  --Always-TransparencyWhite15-active: #bdbdbd31;
+  --Always-White: #fff;
+  --Always-White-hover: #f7f7f7;
+  --Always-White-active: #f2f2f2;
+  --Always-WhiteQuaternary: #ffffff6b;
+  --Always-WhiteQuaternary-hover: #eeeeee70;
+  --Always-WhiteQuaternary-active: #e3e3e372;
+  --Always-WhiteSecondary: #ffffffd6;
+  --Always-WhiteSecondary-hover: #f6f6f6d7;
+  --Always-WhiteSecondary-active: #f0f0f0d8;
+  --Always-WhiteTertiary: #ffffff8f;
+  --Always-WhiteTertiary-hover: #f2f2f292;
+  --Always-WhiteTertiary-active: #e9e9e994;
+
+  /* ===== §2.10 其它语义 ===== */
+  --Others-BubbleBlue: #1783ff;
+  --Others-BubbleBlue-hover: #167ff7;
+  --Others-BubbleBlue-active: #167cf2;
+  --Others-BubbleGray_PC: #f5f5f5;
+  --Others-BubbleGray_PC-hover: #eee;
+  --Others-BubbleGray_PC-active: #e9e9e9;
+  --Others-KMBlue10: #1783ff1a;
+  --Others-KMBlue10-hover: #1264c320;
+  --Others-KMBlue10-active: #0f56a725;
+  --Others-KMBlueDisabled: #1783ff66;
+  --Others-KMBlueDisabled-hover: #157aed6b;
+  --Others-KMBlueDisabled-active: #1474e16e;
+  --Others-LightBlueBg: #e8f3ff;
+  --Others-LightBlueBg-hover: #e1ecf7;
+  --Others-LightBlueBg-active: #dce7f2;
+  --Others-LightGreenBg: #16c4561a;
+  --Others-LightGreenBg-hover: #11964220;
+  --Others-LightGreenBg-active: #0e803825;
+  --Others-LightOrangeBg: #ff95001a;
+  --Others-LightOrangeBg-hover: #c3720020;
+  --Others-LightOrangeBg-active: #a7620025;
+  --Others-LightRedBg: #ff4d4d1a;
+  --Others-LightRedBg-hover: #c33b3b20;
+  --Others-LightRedBg-active: #a7323225;
+  --Others-LightYellowBg: #ffc80033;
+  --Others-LightYellowBg-hover: #ddad0039;
+  --Others-LightYellowBg-active: #ca9e003d;
+  --Others-SubLayerBg: #00000014;
+  --Others-SubLayerBg-hover: #0000001b;
+  --Others-SubLayerBg-active: #00000020;
+  --Others-TextSelected: #1783ff33;
+  --Others-TextSelected-hover: #1471dd39;
+  --Others-TextSelected-active: #1268ca3d;
+  --Others-WhiteOnDarkDisabled: #fff;
+  --Others-WhiteOnDarkDisabled-hover: #f7f7f7;
+  --Others-WhiteOnDarkDisabled-active: #f2f2f2;
+
+  /* ===== §2.11 语法高亮（与 UI 主题色无关的独立配色） ===== */
+  --Syntax-Comment: #a1a1a1;
+  --Syntax-Comment-hover: #9c9c9c;
+  --Syntax-Comment-active: #999;
+  --Syntax-Keyword: #a626a4;
+  --Syntax-Keyword-hover: #a1259f;
+  --Syntax-Keyword-active: #9e249c;
+  --Syntax-Literal: #986801;
+  --Syntax-Literal-hover: #936501;
+  --Syntax-Literal-active: #906301;
+  --Syntax-Mark: #526fff;
+  --Syntax-Mark-hover: #506cf7;
+  --Syntax-Mark-active: #4e69f2;
+  --Syntax-Metadata: #c18401;
+  --Syntax-Metadata-hover: #bb8001;
+  --Syntax-Metadata-active: #b77d01;
+  --Syntax-MultilineComment: #a1a1a1;
+  --Syntax-MultilineComment-hover: #9c9c9c;
+  --Syntax-MultilineComment-active: #999;
+  --Syntax-Punctuation: #e45649;
+  --Syntax-Punctuation-hover: #dd5347;
+  --Syntax-Punctuation-active: #d95245;
+  --Syntax-String: #50a14f;
+  --Syntax-String-hover: #4e9c4d;
+  --Syntax-String-active: #4c994b;
+
+  /* ===== §2.12 阴影基色（本地桌面端补的族） ===== */
+  --Shadows-S1: rgba(0, 0, 0, 0.1);
+  --Shadows-S1-hover: rgba(0, 0, 0, 0.127);
+  --Shadows-S1-active: rgba(0, 0, 0, 0.145);
+  --glass-view-shadow: 0 2px 10px 0 #00000003;
+
+  /* ===== §2.13 本地桌面端独有：diff 三态 ===== */
+  --Colors-DiffAdd: #2da44e;
+  --Colors-DiffAdd-hover: rgba(44, 159, 76, 1);
+  --Colors-DiffAdd-active: rgba(43, 156, 74, 1);
+  --Colors-DiffDelete: #d1242f;
+  --Colors-DiffDelete-hover: rgba(203, 35, 46, 1);
+  --Colors-DiffDelete-active: rgba(199, 34, 45, 1);
+}
+
+:root[data-theme='dark'] {
+  /* ===== §2.1 背景阶梯 ===== */
+  --Bg-GroundPC: #181817;
+  --Bg-GroundPC-hover: #242423;
+  --Bg-GroundPC-active: #2f2f2e;
+  --Bg-Primary: #121212;
+  --Bg-Primary-hover: #1e1e1e;
+  --Bg-Primary-active: #2a2a2a;
+  --Bg-Primary70: #121212b3;
+  --Bg-Primary70-hover: #232323b6;
+  --Bg-Primary70-active: #323232ba;
+  --Bg-Primary90: #121212e6;
+  --Bg-Primary90-hover: #1f1f1fe7;
+  --Bg-Primary90-active: #2c2c2ce8;
+  --Bg-Quaternary: #4d4d4d;
+  --Bg-Quaternary-hover: #565656;
+  --Bg-Quaternary-active: #5f5f5f;
+  --Bg-Secondary: #1f1f1f;
+  --Bg-Secondary-hover: #2a2a2a;
+  --Bg-Secondary-active: #353535;
+  --Bg-Secondary90: #1f1f1fe6;
+  --Bg-Secondary90-hover: #2b2b2be7;
+  --Bg-Secondary90-active: #383838e8;
+  --Bg-Tertiary: #292929;
+  --Bg-Tertiary-hover: #343434;
+  --Bg-Tertiary-active: #3e3e3e;
+  --Bg-Tertiary90: #292929e6;
+  --Bg-Tertiary90-hover: #353535e7;
+  --Bg-Tertiary90-active: #414141e8;
+
+  /* ===== §2.2 分组容器背景 ===== */
+  --BgGp-Primary: #121212;
+  --BgGp-Primary-hover: #1e1e1e;
+  --BgGp-Primary-active: #2a2a2a;
+  --BgGp-Primary90: #121212e6;
+  --BgGp-Primary90-hover: #1f1f1fe7;
+  --BgGp-Primary90-active: #2c2c2ce8;
+  --BgGp-Secondary: #1f1f1f;
+  --BgGp-Secondary-hover: #2a2a2a;
+  --BgGp-Secondary-active: #353535;
+  --BgGp-Secondary90: #1f1f1fe6;
+  --BgGp-Secondary90-hover: #2b2b2be7;
+  --BgGp-Secondary90-active: #383838e8;
+  --BgGp-Tertiary: #292929;
+  --BgGp-Tertiary-hover: #343434;
+  --BgGp-Tertiary-active: #3e3e3e;
+
+  /* ===== §2.3 文字标签 ===== */
+  --Labels-Primary: #ffffffd6;
+  --Labels-Primary-hover: #ffffffd8;
+  --Labels-Primary-active: #ffffffda;
+  --Labels-Secondary: #ffffff8f;
+  --Labels-Secondary-hover: #ffffff94;
+  --Labels-Secondary-active: #ffffff9a;
+  --Labels-Tertiary: #ffffff6b;
+  --Labels-Tertiary-hover: #ffffff72;
+  --Labels-Tertiary-active: #ffffff7a;
+  --Labels-Quaternary: #ffffff42;
+  --Labels-Quaternary-hover: #ffffff4c;
+  --Labels-Quaternary-active: #fff5;
+
+  /* ===== §2.4 填充 ===== */
+  --Fills-F1: #ffffff0d;
+  --Fills-F1-hover: #ffffff19;
+  --Fills-F1-active: #ffffff25;
+  --Fills-F2: #ffffff1a;
+  --Fills-F2-hover: #ffffff25;
+  --Fills-F2-active: #ffffff30;
+  --Fills-F3: #ffffff2e;
+  --Fills-F3-hover: #ffffff38;
+  --Fills-F3-active: #ffffff43;
+  --Fills-F4: #ffffff40;
+  --Fills-F4-hover: #ffffff49;
+  --Fills-F4-active: #ffffff53;
+
+  /* ===== §2.5 分隔线 ===== */
+  --Separators-S1: #ffffff1f;
+  --Separators-S1-hover: #ffffff2a;
+  --Separators-S1-active: #ffffff35;
+
+  /* ===== §2.6 品牌色与调色板 ===== */
+  --Colors-Green: #32ff7d;
+  --Colors-Green-hover: #3cff84;
+  --Colors-Green-active: #47ff8a;
+  --Colors-KMBlue: #1a88ff;
+  --Colors-KMBlue-hover: #258eff;
+  --Colors-KMBlue-active: #3194ff;
+  --Colors-Orange: #ff9f0a;
+  --Colors-Orange-hover: #ffa416;
+  --Colors-Orange-active: #ffa923;
+  --Colors-PositiveGreen: #16c456;
+  --Colors-PositiveGreen-hover: #22c75e;
+  --Colors-PositiveGreen-active: #2dca67;
+  --Colors-PositiveGreen25: #16c45640;
+  --Colors-PositiveGreen25-hover: #3fce7349;
+  --Colors-PositiveGreen25-active: #5ed68a53;
+  --Colors-Purple: #a16bff;
+  --Colors-Purple-hover: #a672ff;
+  --Colors-Purple-active: #aa7aff;
+  --Colors-Red: #ff4756;
+  --Colors-Red-hover: #ff505e;
+  --Colors-Red-active: #ff5967;
+  --Colors-Red25: #ff475640;
+  --Colors-Red25-hover: #ff677349;
+  --Colors-Red25-active: #ff808a53;
+  --Colors-Yellow: #ffd230;
+  --Colors-Yellow-hover: #ffd43a;
+  --Colors-Yellow-active: #ffd745;
+
+  /* ===== §2.8 遮罩 ===== */
+  --MaskBg-Base: #0009;
+  --MaskBg-Base-hover: #1515159e;
+  --MaskBg-Base-active: #282828a3;
+  --MaskBg-Dark: #0009;
+  --MaskBg-Dark-hover: #1515159e;
+  --MaskBg-Dark-active: #282828a3;
+  --MaskBg-Gray: #303030e6;
+  --MaskBg-Gray-hover: #3b3b3be7;
+  --MaskBg-Gray-active: #474747e8;
+  --MaskBg-Icon: #454545b3;
+  --MaskBg-Icon-hover: #525252b6;
+  --MaskBg-Icon-active: #5e5e5eba;
+  --MaskBg-Light: #0000004d;
+  --MaskBg-Light-hover: #26262655;
+  --MaskBg-Light-active: #4545455e;
+  --MaskBg-ToastAndroid: #595959;
+  --MaskBg-ToastAndroid-hover: #616161;
+  --MaskBg-ToastAndroid-active: #6a6a6a;
+  --MaskBg-ToastIOS: #595959e6;
+  --MaskBg-ToastIOS-hover: #626262e7;
+  --MaskBg-ToastIOS-active: #6b6b6be8;
+  --MaskBg-ToastPC: #404040;
+  --MaskBg-ToastPC-hover: #4a4a4a;
+  --MaskBg-ToastPC-active: #535353;
+
+  /* ===== §2.9 常色 ===== */
+  --Always-Black: #000;
+  --Always-Black-hover: #0d0d0d;
+  --Always-Black-active: #1a1a1a;
+  --Always-TransparencyDarkFill: #0009;
+  --Always-TransparencyDarkFill-hover: #1515159e;
+  --Always-TransparencyDarkFill-active: #282828a3;
+  --Always-TransparencyTagFill: #454545b3;
+  --Always-TransparencyTagFill-hover: #525252b6;
+  --Always-TransparencyTagFill-active: #5e5e5eba;
+  --Always-TransparencyWhite15: #ffffff26;
+  --Always-TransparencyWhite15-hover: #ffffff31;
+  --Always-TransparencyWhite15-active: #ffffff3c;
+  --Always-White: #fff;
+  --Always-White-hover: #fff;
+  --Always-White-active: #fff;
+  --Always-WhiteQuaternary: #ffffff6b;
+  --Always-WhiteQuaternary-hover: #ffffff72;
+  --Always-WhiteQuaternary-active: #ffffff7a;
+  --Always-WhiteSecondary: #ffffffd6;
+  --Always-WhiteSecondary-hover: #ffffffd8;
+  --Always-WhiteSecondary-active: #ffffffda;
+  --Always-WhiteTertiary: #ffffff8f;
+  --Always-WhiteTertiary-hover: #ffffff94;
+  --Always-WhiteTertiary-active: #ffffff9a;
+
+  /* ===== §2.10 其它语义 ===== */
+  --Others-BubbleBlue: #292929;
+  --Others-BubbleBlue-hover: #343434;
+  --Others-BubbleBlue-active: #3e3e3e;
+  --Others-BubbleGray_PC: #292929;
+  --Others-BubbleGray_PC-hover: #343434;
+  --Others-BubbleGray_PC-active: #3e3e3e;
+  --Others-KMBlue10: #1a88ff1a;
+  --Others-KMBlue10-hover: #69b1ff25;
+  --Others-KMBlue10-active: #93c7ff30;
+  --Others-KMBlueDisabled: #1a88ff66;
+  --Others-KMBlueDisabled-hover: #3596ff6e;
+  --Others-KMBlueDisabled-active: #4ca2ff75;
+  --Others-LightBlueBg: #1e2a38;
+  --Others-LightBlueBg-hover: #293542;
+  --Others-LightBlueBg-active: #353f4c;
+  --Others-LightGreenBg: #16c4561a;
+  --Others-LightGreenBg-hover: #66d89025;
+  --Others-LightGreenBg-active: #91e3af30;
+  --Others-LightOrangeBg: #ff9f0a1a;
+  --Others-LightOrangeBg-hover: #ffc05e25;
+  --Others-LightOrangeBg-active: #ffd28b30;
+  --Others-LightRedBg: #ff52521a;
+  --Others-LightRedBg-hover: #ff8e8e25;
+  --Others-LightRedBg-active: #ffadad30;
+  --Others-LightYellowBg: #ffd23033;
+  --Others-LightYellowBg-hover: #ffdb5b3d;
+  --Others-LightYellowBg-active: #ffe27a47;
+  --Others-SubLayerBg: #ffffff0f;
+  --Others-SubLayerBg-hover: #ffffff1b;
+  --Others-SubLayerBg-active: #ffffff27;
+  --Others-TextSelected: #1a88ff33;
+  --Others-TextSelected-hover: #4aa1ff3d;
+  --Others-TextSelected-active: #6cb3ff47;
+  --Others-WhiteOnDarkDisabled: #fff6;
+  --Others-WhiteOnDarkDisabled-hover: #ffffff6e;
+  --Others-WhiteOnDarkDisabled-active: #ffffff75;
+
+  /* ===== §2.11 语法高亮 ===== */
+  --Syntax-Comment: #5c6370;
+  --Syntax-Comment-hover: #646b77;
+  --Syntax-Comment-active: #6c737e;
+  --Syntax-Keyword: #d55fde;
+  --Syntax-Keyword-hover: #d767e0;
+  --Syntax-Keyword-active: #d96fe1;
+  --Syntax-Literal: #d19a66;
+  --Syntax-Literal-hover: #d39f6e;
+  --Syntax-Literal-active: #d6a475;
+  --Syntax-Mark: #2bbac5;
+  --Syntax-Mark-hover: #36bdc8;
+  --Syntax-Mark-active: #40c1cb;
+  --Syntax-Metadata: #e5c07b;
+  --Syntax-Metadata-hover: #e6c382;
+  --Syntax-Metadata-active: #e6c688;
+  --Syntax-MultilineComment: #5c6370;
+  --Syntax-MultilineComment-hover: #646b77;
+  --Syntax-MultilineComment-active: #6c737e;
+  --Syntax-Punctuation: #ef596f;
+  --Syntax-Punctuation-hover: #f06176;
+  --Syntax-Punctuation-active: #f16a7d;
+  --Syntax-String: #89ca78;
+  --Syntax-String-hover: #8fcd7f;
+  --Syntax-String-active: #95cf86;
+
+  /* ===== §2.12 阴影基色（本地） ===== */
+  --Shadows-S1: rgba(0, 0, 0, 0.4);
+  --Shadows-S1-hover: rgba(30, 30, 30, 0.43);
+  --Shadows-S1-active: rgba(55, 55, 55, 0.46);
+  --glass-view-shadow: 0 2px 10px 2px #0000001a;
+
+  /* ===== §2.13 本地：diff 三态 ===== */
+  --Colors-DiffAdd: #3fb950;
+  --Colors-DiffAdd-hover: rgba(73, 189, 89, 1);
+  --Colors-DiffAdd-active: rgba(82, 192, 98, 1);
+  --Colors-DiffDelete: #f85149;
+  --Colors-DiffDelete-hover: rgba(248, 90, 82, 1);
+  --Colors-DiffDelete-active: rgba(249, 98, 91, 1);
+}
+
+:root {
+  /* ===== §3.1 字阶：字号与行高成对（深色不覆写） =====
+     _Emphasized 孪生尺寸与行高完全相同、差别只在字重，而 §3.3 明确没有字重 token，
+     故不建孪生 token（避免同值两份）。 */
+  --ui-T1-font-size: 18px;
+  --ui-T1-line-height: 26px;
+  --ui-T2-font-size: 16px;
+  --ui-T2-line-height: 24px;
+  --ui-B1-font-size: 15px;
+  --ui-B1-line-height: 22px;
+  --ui-B2-font-size: 14px;
+  --ui-B2-line-height: 20px;
+  --ui-C1-font-size: 12px;
+  --ui-C1-line-height: 18px;
+  --ui-C2-font-size: 10px;
+  --ui-C2-line-height: 14px;
+  --markdown-H1_Content-font-size: 22px;
+  --markdown-H1_Content-line-height: 36px;
+  --markdown-H2_Content-font-size: 20px;
+  --markdown-H2_Content-line-height: 32px;
+  --markdown-H3_Content-font-size: 18px;
+  --markdown-H3_Content-line-height: 28px;
+  --markdown-B1_Content-font-size: 16px;
+  --markdown-B1_Content-line-height: 26px;
+  --markdown-B2_Content-font-size: 15px;
+  --markdown-B2_Content-line-height: 24px;
+  --markdown-B3_Content-font-size: 14px;
+  --markdown-B3_Content-line-height: 22px;
+  --markdown-InlineCode-font-size: 16px;
+  --markdown-InlineCode-line-height: 26px;
+  --markdown-Codeblocks-font-size: 14px;
+  --markdown-Codeblocks-line-height: 22px;
+}
+
+/* §3.2 字号三档 = 整组换值（不是乘法缩放）。与默认档同值的档位也照写：
+   读一个块即得该档完整字阶，不必回头比对默认档。 */
+:root[data-font-size='small'] {
+  --ui-T1-font-size: 16px;
+  --ui-T1-line-height: 24px;
+  --ui-T2-font-size: 14px;
+  --ui-T2-line-height: 20px;
+  --ui-B1-font-size: 14px;
+  --ui-B1-line-height: 20px;
+  /* small 对 ui-B2 / ui-C1 / ui-C2 / markdown-B3 / markdown-Codeblocks 不生效 */
+  --ui-B2-font-size: 14px;
+  --ui-B2-line-height: 20px;
+  --ui-C1-font-size: 12px;
+  --ui-C1-line-height: 18px;
+  --ui-C2-font-size: 10px;
+  --ui-C2-line-height: 14px;
+  --markdown-H1_Content-font-size: 20px;
+  --markdown-H1_Content-line-height: 32px;
+  --markdown-H2_Content-font-size: 18px;
+  --markdown-H2_Content-line-height: 28px;
+  --markdown-H3_Content-font-size: 16px;
+  --markdown-H3_Content-line-height: 26px;
+  --markdown-B1_Content-font-size: 14px;
+  --markdown-B1_Content-line-height: 22px;
+  --markdown-B2_Content-font-size: 14px;
+  --markdown-B2_Content-line-height: 22px;
+  --markdown-B3_Content-font-size: 14px;
+  --markdown-B3_Content-line-height: 22px;
+  --markdown-InlineCode-font-size: 14px;
+  --markdown-InlineCode-line-height: 22px;
+  --markdown-Codeblocks-font-size: 14px;
+  --markdown-Codeblocks-line-height: 22px;
+}
+
+:root[data-font-size='large'] {
+  --ui-T1-font-size: 20px;
+  /* large 对 --ui-T1-line-height 不生效（仍是 26px） */
+  --ui-T1-line-height: 26px;
+  --ui-T2-font-size: 18px;
+  --ui-T2-line-height: 27px;
+  --ui-B1-font-size: 17px;
+  --ui-B1-line-height: 25px;
+  --ui-B2-font-size: 16px;
+  --ui-B2-line-height: 22px;
+  --ui-C1-font-size: 14px;
+  --ui-C1-line-height: 21px;
+  --ui-C2-font-size: 12px;
+  --ui-C2-line-height: 17px;
+  --markdown-H1_Content-font-size: 24px;
+  --markdown-H1_Content-line-height: 39px;
+  --markdown-H2_Content-font-size: 22px;
+  --markdown-H2_Content-line-height: 36px;
+  --markdown-H3_Content-font-size: 20px;
+  --markdown-H3_Content-line-height: 31px;
+  --markdown-B1_Content-font-size: 18px;
+  --markdown-B1_Content-line-height: 29px;
+  --markdown-B2_Content-font-size: 17px;
+  --markdown-B2_Content-line-height: 27px;
+  --markdown-B3_Content-font-size: 16px;
+  --markdown-B3_Content-line-height: 25px;
+  --markdown-InlineCode-font-size: 18px;
+  --markdown-InlineCode-line-height: 29px;
+  --markdown-Codeblocks-font-size: 16px;
+  --markdown-Codeblocks-line-height: 25px;
+}
+
+:root {
+  /* ===== §5.1 圆角（Kimi 只有组件级，十条全在这里；带变体的取默认档） ===== */
+  --chat-input-radius: 24px; /* .chat-action */
+  --flip-digit-border-radius: 4px; /* .flip-digit */
+  --kimi-select-radius: 12px; /* .kimi-select */
+  --km-modal-radius: 20px; /* 16px 是 deregister-verify 变体 */
+  --linear-icon-button-radius: 20px; /* .linear-icon-button */
+  --picker-color-radius: 2px; /* .km-color-picker */
+  --report-radius: 12px; /* .report-page */
+  --settings-card-radius: 16px; /* --flush 变体为 0 */
+  --slide-carousel-radius: 16px; /* .inspiration-banner */
+  --table-border-radius: 12px; /* 16px 是 .infinite-table 变体 */
+
+  /* ===== §5.3 描边：.5px 是基准（242 次），1px 是次要件 ===== */
+  --border-width-hairline: 0.5px;
+  --border-width-base: 1px;
+
+  /* ===== §5.4 阴影：文档点名的两条字面量收成 token ===== */
+  --shadow-input: 0 5px 16px -4px #00000012; /* .chat-editor 那层 */
+  --shadow-popover: 0 4px 16.4px #0000001a; /* 弹层特征值（15 次） */
+
+  /* ===== §6.4 缓动曲线 token（只有这四条，且是组件级） ===== */
+  --clp-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --clp-ease-open: cubic-bezier(0.25, 1, 0.3, 1);
+  --clp-ease-close: cubic-bezier(0.55, 0, 0.18, 1);
+  --clp-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --clp-d: 0.48s;
+
+  /* ===== 工程阶梯①：间距（§4.3 推断的阶梯，Kimi 侧没有 token） =====
+     命名与 Tailwind 间距刻度同源：--space-N 是 4px 网格的第 N 格（--space-2 = 8px），
+     半档用 --space-N-5（对应 Tailwind 的 1.5 / 2.5）。 */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-3-5: 14px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-7-5: 30px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+
+  /* ===== 工程阶梯②：圆角 =====
+     只收 Kimi 用字面值写死、没有原样 token 的档（§4.7 按钮三档 / §5.1 徽章 / §5.2 药丸）；
+     有原样 token 的（输入区 / 弹窗 / 图标按钮 / 下拉 / 设置卡）走 semantic.css 的别名。 */
+  --radius-badge: 4px;
+  --radius-button-sm: 8px;
+  --radius-control: 10px;
+  --radius-button-lg: 12px;
+  --radius-pill: 999px;
+
+  /* ===== 工程阶梯③：时长（§6.5 档位表，每档取该档的代表值） ===== */
+  --duration-micro: 60ms; /* 微反馈 */
+  --duration-micro-slow: 80ms;
+  --duration-quick: 0.15s; /* 快：状态过渡第二档（152 次） */
+  --duration-base: 0.2s; /* 基准（220 次） */
+  --duration-main: 0.3s; /* 主档（271 次） */
+  --duration-shift: 0.38s; /* 大块位移 */
+  --duration-shift-lg: 0.4s;
+  --duration-loop: 1s; /* spinner 常速 */
+  --duration-loop-slow: 1.4s; /* 环形 loading */
+}

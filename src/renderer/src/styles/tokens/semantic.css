@@ -1,0 +1,71 @@
+/**
+ * 语义层：工程名 → 原样层（docs/superpowers/specs/2026-10-10-kyclaw-design.md §6.1）。
+ * 组件只用这一层，不直接引用 Kimi 名（--Bg-* / --Labels-* 等）。
+ *
+ * 条目分三类，取值都有出处：
+ *   1. 纯别名——指向原样层，深色档不用重写（var() 在使用处解析，翻档后跟着翻）；
+ *   2. 文档点名的字面值——--focus-ring（§5.4 焦点环）、--motion-ease-inout（§6.3 的组合）、
+ *      --accent-text（§7：Kimi 只有填充蓝，没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
+ *   3. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
+ *      不照抄 §2.14 的浅色取色（那格与画布同值、分辨不出，照抄会看不见）。
+ */
+
+:root {
+  /* 底 */
+  --bg-canvas: var(--Bg-GroundPC);
+  --bg-primary: var(--Bg-Primary);
+  --bg-secondary: var(--Bg-Secondary);
+  --bg-menu: var(--Bg-Tertiary);
+
+  /* 文字 */
+  --text-primary: var(--Labels-Primary);
+  --text-secondary: var(--Labels-Secondary);
+  --text-tertiary: var(--Labels-Tertiary);
+
+  /* 分隔与填充 */
+  --border-hairline: var(--Separators-S1);
+  --hairline-width: var(--border-width-hairline);
+  --fill-hover: var(--Fills-F1);
+  --fill-selected: var(--Fills-F2);
+  --fill-active: var(--Fills-F3);
+
+  /* 强调与语义状态 */
+  --accent: var(--Colors-KMBlue);
+  --accent-text: #0065dd;
+  --positive: var(--Colors-PositiveGreen);
+  --positive-bg: var(--Others-LightGreenBg);
+  --warning: var(--Colors-Orange);
+  --warning-bg: var(--Others-LightOrangeBg);
+  --danger: var(--Colors-Red);
+  --danger-bg: var(--Others-LightRedBg);
+  --diff-add: var(--Colors-DiffAdd);
+  --diff-delete: var(--Colors-DiffDelete);
+
+  /* 圆角（对应原样层的十个组件级 token 与工程阶梯）
+     --radius-input 指"输入区/输入卡"（§5.1 --chat-input-radius 24px）；
+     普通 input / select 元素用 --radius-field（§4.7 .kimi-select 12px）。 */
+  --radius-field: var(--kimi-select-radius);
+  --radius-panel: var(--settings-card-radius);
+  --radius-overlay: var(--km-modal-radius);
+  --radius-icon-button: var(--linear-icon-button-radius);
+  --radius-input: var(--chat-input-radius);
+
+  /* 动效 */
+  --motion-fast: var(--duration-quick);
+  --motion-main: var(--duration-main);
+  --motion-ease-inout: ease-in-out;
+  --motion-ease-out: var(--clp-ease-out);
+
+  /* 焦点环、蒙层、玻璃、滚动条 */
+  --focus-ring: inset 0 0 0 1px var(--Labels-Primary);
+  --selection: var(--Others-TextSelected);
+  --mask: var(--MaskBg-Base);
+  --blur-glass: 15px;
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: var(--Fills-F2);
+  --scrollbar-thumb-hover: var(--Fills-F3);
+}
+
+:root[data-theme='dark'] {
+  --accent-text: #3194ff;
+}

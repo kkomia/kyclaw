@@ -1,0 +1,153 @@
+/**
+ * 样式入口（唯一）：Tailwind v4 + 两层设计 token。
+ * 由 src/renderer/src/main.tsx 引入；模板残留的 assets/main.css 已删除（不留双重来源）。
+ * 数值口径见 tokens/kimi-tokens.css 与 tokens/semantic.css。
+ */
+@import 'tailwindcss';
+@import './tokens/kimi-tokens.css';
+@import './tokens/semantic.css';
+
+/* dark: 变体对齐 html[data-theme='dark']（lib/theme.ts 写属性）。
+   不用 .dark 类、也不用 prefers-color-scheme 媒体查询：换主题的机制只有一处。 */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* 语义层 → Tailwind 主题。inline 让工具类内联引用语义 token，
+   这样 [data-theme] / [data-font-size] 换档时工具类跟着走。
+   （圆角那组写的是字面值：在 @theme 里写 var(--同名) 会自指，值与工程阶梯一致。） */
+@theme inline {
+  /* 颜色 → bg-canvas / bg-surface / bg-secondary / bg-menu / text-ink / text-ink-secondary /
+     border-hairline / bg-hover / bg-selected / bg-active / text-accent / text-accent-text /
+     text-danger / bg-danger-bg / bg-diff-add … */
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-primary);
+  --color-secondary: var(--bg-secondary);
+  --color-menu: var(--bg-menu);
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-tertiary: var(--text-tertiary);
+  --color-hairline: var(--border-hairline);
+  --color-hover: var(--fill-hover);
+  --color-selected: var(--fill-selected);
+  --color-active: var(--fill-active);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-positive: var(--positive);
+  --color-positive-bg: var(--positive-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-diff-add: var(--diff-add);
+  --color-diff-delete: var(--diff-delete);
+  --color-selection: var(--selection);
+  --color-mask: var(--mask);
+
+  /* 圆角 → rounded-badge / rounded-button-sm / rounded-control / rounded-button-lg /
+     rounded-field / rounded-panel / rounded-overlay / rounded-icon-button / rounded-input / rounded-pill
+     注意：Tailwind 自带的 rounded-sm / rounded-md / rounded-lg 不是我们的档，别用。 */
+  --radius-badge: 4px;
+  --radius-button-sm: 8px;
+  --radius-control: 10px;
+  --radius-button-lg: 12px;
+  --radius-field: var(--kimi-select-radius);
+  --radius-panel: var(--settings-card-radius);
+  --radius-overlay: var(--km-modal-radius);
+  --radius-icon-button: var(--linear-icon-button-radius);
+  --radius-input: var(--chat-input-radius);
+  --radius-pill: 999px;
+
+  /* 字号：ui-* 六档，字号与行高成对 → text-t1 / text-t2 / text-b1 / text-b2 / text-c1 / text-c2 */
+  --text-t1: var(--ui-T1-font-size);
+  --text-t1--line-height: var(--ui-T1-line-height);
+  --text-t2: var(--ui-T2-font-size);
+  --text-t2--line-height: var(--ui-T2-line-height);
+  --text-b1: var(--ui-B1-font-size);
+  --text-b1--line-height: var(--ui-B1-line-height);
+  --text-b2: var(--ui-B2-font-size);
+  --text-b2--line-height: var(--ui-B2-line-height);
+  --text-c1: var(--ui-C1-font-size);
+  --text-c1--line-height: var(--ui-C1-line-height);
+  --text-c2: var(--ui-C2-font-size);
+  --text-c2--line-height: var(--ui-C2-line-height);
+
+  /* 字族：UI 参考 §3.3 只查到「全是字面值、没有 --font-sans」，栈按 spec §6.3 的
+     系统字链；等宽按 spec §11 先挂 Geist Mono（本机没装则逐级回退）。 */
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
+
+  /* 缓动 → ease-main（主档 .3s ease-in-out 的曲线部分；时长走 --motion-main） */
+  --ease-main: var(--motion-ease-inout);
+}
+
+@layer base {
+  /* 让原生控件与滚动条跟随主题（Chromium 用它决定默认色）。 */
+  :root {
+    color-scheme: light;
+  }
+
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* 基础观感：暖白/暖黑底 + alpha 正文色（§1.1 / §1.2）；底色与正文色的过渡用动效主档。 */
+  body {
+    margin: 0;
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--ui-B1-font-size);
+    line-height: var(--ui-B1-line-height);
+    transition:
+      background-color var(--motion-main) var(--motion-ease-inout),
+      color var(--motion-main) var(--motion-ease-inout);
+  }
+
+  /* 焦点环是墨色的（§5.4：inset 0 0 0 1px Labels-Primary 近 30 处），蓝色只做小面积强调。 */
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  ::selection {
+    background-color: var(--selection);
+  }
+
+  /* 滚动条：实测槽宽 5–7px（§4.6），取 6px；槽透明、滑块用当前项填充档。 */
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+
+  ::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: var(--radius-pill);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
+/* 尊重 prefers-reduced-motion（我们自定的一条，UI 参考没有）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
