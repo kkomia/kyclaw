@@ -64,20 +64,26 @@ describe('设置页骨架（栏目页）', () => {
     expect(screen.getByTestId('settings-group-model')).toHaveTextContent('添加通道')
   })
 
-  it('空栏目：一句中性空态（不带"还没做"这类研发口吻）', () => {
-    for (const [section, testId] of [
-      ['memory', 'settings-group-memory'],
-      ['usage', 'settings-group-usage']
-    ]) {
-      const view = render(
-        <MemoryRouter initialEntries={[`/settings/${section}`]}>
-          <SettingsPage />
-        </MemoryRouter>
-      )
-      expect(screen.getByTestId(testId), testId).toHaveTextContent('暂无可调整的设置')
-      expect(screen.getByTestId(testId), testId).not.toHaveTextContent('还没做')
-      view.unmount()
-    }
+  it('「记忆」/「用量」栏（round 5）：真实管理面（复用独立页的面板），不再是占位', async () => {
+    const memoryView = render(
+      <MemoryRouter initialEntries={['/settings/memory']}>
+        <SettingsPage />
+      </MemoryRouter>
+    )
+    expect(screen.getByTestId('settings-group-memory')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-group-memory')).not.toHaveTextContent('暂无可调整的设置')
+    // 无桥环境下也要落到面板自己的错误态（= 真实面板接管了内容区，不是静态占位）
+    await screen.findByTestId('memory-error')
+    memoryView.unmount()
+
+    render(
+      <MemoryRouter initialEntries={['/settings/usage']}>
+        <SettingsPage />
+      </MemoryRouter>
+    )
+    expect(screen.getByTestId('settings-group-usage')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-group-usage')).not.toHaveTextContent('暂无可调整的设置')
+    await screen.findByTestId('usage-error')
   })
 
   it('「工作区」栏：工作区组件在这一栏里（不是占位）', () => {
@@ -89,11 +95,11 @@ describe('设置页骨架（栏目页）', () => {
     )
   })
 
-  it('「工具与 MCP」栏：MCP 组组件在这一栏里（不是占位）', () => {
+  it('「工具与 MCP」栏已迁出（round 5）：深链 /settings/tools 回落默认栏，不再有 MCP 组', () => {
     renderPage('/settings/tools')
 
-    expect(screen.getByTestId('settings-group-tools')).toHaveTextContent('添加 MCP 服务')
-    expect(screen.getByTestId('settings-group-tools')).not.toHaveTextContent('暂无可调整的设置')
+    expect(screen.queryByTestId('settings-group-tools')).not.toBeInTheDocument()
+    expect(screen.getByTestId('settings-group-appearance')).toBeInTheDocument()
   })
 })
 

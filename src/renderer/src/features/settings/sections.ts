@@ -1,9 +1,12 @@
-import { Brain, ChartColumn, Cpu, FolderOpen, Palette, Wrench, type LucideIcon } from 'lucide-react'
+import { Brain, ChartColumn, Cpu, FolderOpen, Palette, type LucideIcon } from 'lucide-react'
 
 /**
  * 设置页的栏目表（唯一来源）：左侧设置菜单、内容区、路由 /settings/:section 都读这一份。
  * 顺序 = 菜单顺序；id 进 URL，改 id 等于改深链，别随手改。
  * 图标按现有功能分组各给一个（lucide 组件，尺寸由菜单项统一给 18 档）。
+ *
+ * round 5 变更：撤掉「工具与 MCP」栏 —— MCP 管理迁到主页侧栏的「插件」（/plugins），
+ * 设置为唯一导航源、插件页为 MCP/技能的进入点；旧的 /settings/tools 深链会回落默认栏。
  */
 export interface SettingsSection {
   id: string
@@ -36,13 +39,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     navTestId: 'settings-nav-workspaces',
     groupTestId: 'settings-group-workspaces',
     icon: FolderOpen
-  },
-  {
-    id: 'tools',
-    label: '工具与 MCP',
-    navTestId: 'settings-nav-tools',
-    groupTestId: 'settings-group-tools',
-    icon: Wrench
   },
   {
     id: 'memory',

@@ -1,4 +1,4 @@
-import { Brain, ChartColumn, ChevronsUpDown, Settings } from 'lucide-react'
+import { ChevronsUpDown, Settings } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { Menu, type MenuEntry } from '../ui/menu'
 import { navItemClass } from './nav-item'
@@ -10,11 +10,9 @@ interface EntrySpec {
   icon: React.ReactNode
 }
 
-/** 二级菜单的条目（雷点 3：能收进二级菜单的一律不铺在首页）。 */
+/** 二级菜单的条目（雷点 3：能收进二级菜单的一律不铺在首页；round 5 去重后只剩设置一项）。 */
 const ENTRIES: EntrySpec[] = [
-  { to: '/settings', label: '设置', testId: 'nav-settings', icon: <Settings /> },
-  { to: '/memory', label: '记忆', testId: 'nav-memory', icon: <Brain /> },
-  { to: '/usage', label: '用量', testId: 'nav-usage', icon: <ChartColumn /> }
+  { to: '/settings', label: '设置', testId: 'nav-settings', icon: <Settings /> }
 ]
 
 /**

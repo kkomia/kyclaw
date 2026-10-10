@@ -5,8 +5,10 @@
  *
  * 条目分四类，取值都有出处：
  *   1. 纯别名——指向原样层，深色档不用重写（var() 在使用处解析，翻档后跟着翻）；
- *   2. 文档点名的字面值——--focus-ring（§5.4 焦点环）、--motion-ease-inout（§6.3 的组合）、
- *      --accent-text（§7：Kimi 只有填充蓝，没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
+ *   2. 文档点名的字面值——--motion-ease-inout（§6.3 的组合）、--accent-text（§7：Kimi 只有填充蓝，
+ *      没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
+ *      （--focus-ring 原也是这类的墨色字面值，R2 round 5 被用户实拍证伪 → 改成分隔线灰，
+ *      出处见其定义处的注释。）
  *   3. 控件尺寸与状态——§4.7 控件高度阶梯、§4.8 图标尺度与不透明度、§7 点名的按钮/菜单/弹层值。
  *      Kimi 侧是组件级字面量（没有原样 token），在这里各起一个工程名；
  *   4. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
@@ -155,8 +157,12 @@
   --motion-ease-inout: ease-in-out;
   --motion-ease-out: var(--clp-ease-out);
 
-  /* 焦点环、蒙层、玻璃、滚动条 */
-  --focus-ring: inset 0 0 0 1px var(--Labels-Primary);
+  /* 焦点环、蒙层、玻璃、滚动条。
+     焦点环颜色（R2 round 5，用户实拍 #7）：**不再是墨色** —— 墨色环在浅色下近黑、深色下近白，
+     就是用户点名的"黑色框线"（hover/选中/聚焦一律不得出现墨色或纯黑/纯白描边）。
+     全局焦点环统一取分隔线灰 Separators-S1（与发送框 round 2 已确立的口径同一档）；
+     条目类的 hover/选中仍靠填充档（Fills-F1 / Fills-F2），焦点环只留给"没有填充可表达"的控件。 */
+  --focus-ring: inset 0 0 0 1px var(--Separators-S1);
   --selection: var(--Others-TextSelected);
   --mask: var(--MaskBg-Base);
   --blur-glass: 15px;

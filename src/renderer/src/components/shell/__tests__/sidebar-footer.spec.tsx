@@ -36,7 +36,7 @@ describe('侧栏底部单一入口', () => {
     expect(screen.getByTestId('sidebar-menu-trigger')).toHaveClass('rounded-control')
   })
 
-  it('默认只有入口本身，三项菜单都在二级菜单里', () => {
+  it('默认只有入口本身，二级菜单只有「设置」（round 5 去重：记忆/用量不再重复出菜单）', () => {
     renderFooter()
 
     const trigger = screen.getByTestId('sidebar-menu-trigger')
@@ -45,28 +45,17 @@ describe('侧栏底部单一入口', () => {
     expect(trigger).toHaveTextContent('kyclaw')
 
     expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
+
+    openMenu()
+
+    expect(screen.getByTestId('nav-settings')).toBeInTheDocument()
+    // 去重（用户实拍 #8）：设置是唯一导航源，弹层不再有记忆/用量
     expect(screen.queryByTestId('nav-memory')).not.toBeInTheDocument()
     expect(screen.queryByTestId('nav-usage')).not.toBeInTheDocument()
-
-    openMenu()
-
-    for (const testId of ['nav-settings', 'nav-memory', 'nav-usage']) {
-      expect(screen.getByTestId(testId), testId).toBeInTheDocument()
-    }
   })
 
-  it('点条目切到对应路由（设置 / 记忆 / 用量）', async () => {
+  it('点「设置」切到 /settings', async () => {
     renderFooter()
-
-    openMenu()
-    fireEvent.click(screen.getByTestId('nav-usage'))
-    await tick()
-    expect(screen.getByTestId('location')).toHaveTextContent('/usage')
-
-    openMenu()
-    fireEvent.click(screen.getByTestId('nav-memory'))
-    await tick()
-    expect(screen.getByTestId('location')).toHaveTextContent('/memory')
 
     openMenu()
     fireEvent.click(screen.getByTestId('nav-settings'))
@@ -74,14 +63,13 @@ describe('侧栏底部单一入口', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/settings')
   })
 
-  it('当前页的条目带选中底 + aria-current=page', () => {
-    renderFooter('/memory')
+  it('在设置页时条目带选中底 + aria-current=page', () => {
+    renderFooter('/settings/appearance')
 
     openMenu()
 
-    expect(screen.getByTestId('nav-memory')).toHaveClass('bg-selected')
-    expect(screen.getByTestId('nav-memory')).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByTestId('nav-settings')).not.toHaveClass('bg-selected')
+    expect(screen.getByTestId('nav-settings')).toHaveClass('bg-selected')
+    expect(screen.getByTestId('nav-settings')).toHaveAttribute('aria-current', 'page')
   })
 
   it('入口本身也是导航项外观（高 36 / hover Fills-F1）', () => {

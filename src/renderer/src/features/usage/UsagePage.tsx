@@ -8,7 +8,8 @@ import { formatCost, formatTokens } from '@renderer/lib/usage-format'
 import { usageRangeSchema, type UsageRange, type UsageResponse } from '@shared/usage'
 
 /**
- * 用量页（T14）：本地记账的窗口统计——今日 / 本月 + 按模型拆分。
+ * 用量面板（T14 起；round 5 从页面里拆出）：本地记账的窗口统计——今日 / 本月 + 按模型拆分。
+ * 面板本体同时被设置页「用量」栏复用（round 5 去重：设置为唯一导航源）。
  *
  * 数据全部来自服务端（/api/usage，libsql 的 usage_runs）：页面不自己算窗口、不自己算价，
  * 与"账在服务端"一致。切换窗口时内容按 key 重新挂一次（进场动效跟着走，不硬切）。
@@ -101,7 +102,7 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
   )
 }
 
-export function UsagePage(): React.JSX.Element {
+export function UsagePanel(): React.JSX.Element {
   const [range, setRange] = useState<UsageRange>('today')
   const [reloadToken, setReloadToken] = useState(0)
   const [state, setState] = useState<{
@@ -130,25 +131,19 @@ export function UsagePage(): React.JSX.Element {
   const current = state !== null && state.key === resolveKey ? state : null
 
   return (
-    <section
-      data-testid="usage-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-t1 font-medium text-ink">用量</h1>
-        <div role="group" aria-label="统计范围" className="flex gap-3">
-          {usageRangeSchema.options.map((option) => (
-            <Chip
-              key={option}
-              data-testid={`usage-range-${option}`}
-              aria-pressed={range === option}
-              className={cn(range === option && 'bg-selected')}
-              onClick={() => setRange(option)}
-            >
-              {RANGE_LABELS[option]}
-            </Chip>
-          ))}
-        </div>
+    <>
+      <div role="group" aria-label="统计范围" className="flex gap-3">
+        {usageRangeSchema.options.map((option) => (
+          <Chip
+            key={option}
+            data-testid={`usage-range-${option}`}
+            aria-pressed={range === option}
+            className={cn(range === option && 'bg-selected')}
+            onClick={() => setRange(option)}
+          >
+            {RANGE_LABELS[option]}
+          </Chip>
+        ))}
       </div>
 
       {current === null ? (
@@ -180,6 +175,19 @@ export function UsagePage(): React.JSX.Element {
           <UsageReport data={current.data} />
         </div>
       )}
+    </>
+  )
+}
+
+/** 用量页（独立路由 /usage）：页级容器 + 标题 + 面板；面板同时被设置页「用量」栏复用。 */
+export function UsagePage(): React.JSX.Element {
+  return (
+    <section
+      data-testid="usage-page"
+      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+    >
+      <h1 className="text-t1 font-medium text-ink">用量</h1>
+      <UsagePanel />
     </section>
   )
 }

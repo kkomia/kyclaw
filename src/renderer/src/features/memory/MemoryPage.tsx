@@ -7,7 +7,7 @@ import { TextPart } from '@renderer/features/chat/parts/TextPart'
 import { clearMemory, fetchMemory, saveMemory } from '@renderer/lib/memory-api'
 
 /**
- * 记忆页（T14）：working memory 的查看 / 编辑 / 清空。
+ * 记忆面板（T14 起；round 5 从页面里拆出）：working memory 的查看 / 编辑 / 清空。
  *
  * 记忆只有一份（resource 作用域，见 src/mastra/index.ts 的装配）：任何会话里助手更新的、
  * 这个页面读写的都是同一份——所以这里不需要选会话。
@@ -23,7 +23,7 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-export function MemoryPage(): React.JSX.Element {
+export function MemoryPanel(): React.JSX.Element {
   const [resolveKey, setResolveKey] = useState(0)
   const [state, setState] = useState<{
     key: number
@@ -97,12 +97,7 @@ export function MemoryPage(): React.JSX.Element {
   const content = current?.content ?? null
 
   return (
-    <section
-      data-testid="memory-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
-    >
-      <h1 className="text-t1 font-medium text-ink">记忆</h1>
-
+    <>
       {current === null ? (
         <div
           data-testid="memory-loading"
@@ -238,6 +233,23 @@ export function MemoryPage(): React.JSX.Element {
           </>
         }
       />
+    </>
+  )
+}
+
+/**
+ * 记忆页（独立路由 /memory）：页级容器 + 标题 + 面板。
+ * 面板本体（MemoryPanel）同时被设置页「记忆」栏复用（round 5 去重：弹层不再有第二入口，
+ * 设置为唯一导航源）——所以内容与交互都装在面板里，页面只是它的壳。
+ */
+export function MemoryPage(): React.JSX.Element {
+  return (
+    <section
+      data-testid="memory-page"
+      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+    >
+      <h1 className="text-t1 font-medium text-ink">记忆</h1>
+      <MemoryPanel />
     </section>
   )
 }

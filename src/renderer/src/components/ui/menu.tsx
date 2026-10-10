@@ -41,6 +41,8 @@ export interface MenuProps {
  * 下拉菜单（UI 参考 §7 的菜单配方）：底 Bg-Tertiary、**无遮罩**、条目高 36、面板内边距 8、
  * 面板圆角 ≈20、条目 hover 用 Fills-F1、条目圆角 10。
  * 键盘：ArrowUp/Down 走条目、Enter 选中、Esc 关闭并还焦点——都由 Radix 提供。
+ * 焦点指示（R2 round 5，用户实拍 #7）：键盘走到哪条**只铺填充**（data-[highlighted]:bg-hover），
+ * 不再叠全局焦点环（focus-visible:shadow-none）——填充已经是可见指示，墨色内环正是用户点名的"黑色框线"。
  */
 export function Menu({
   trigger,
@@ -75,7 +77,7 @@ export function Menu({
                 aria-current={entry.selected === true ? 'page' : undefined}
                 onSelect={() => entry.onSelect?.(entry.id)}
                 className={cn(
-                  'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled)',
+                  'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled) focus-visible:shadow-none',
                   entry.danger
                     ? 'text-danger data-[highlighted]:bg-danger-bg'
                     : 'data-[highlighted]:bg-hover',

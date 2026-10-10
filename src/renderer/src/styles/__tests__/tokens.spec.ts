@@ -411,7 +411,7 @@ describe('语义层（semantic.css）', () => {
     ['--radius-overlay', 'var(--km-modal-radius)'],
     ['--radius-icon-button', 'var(--linear-icon-button-radius)'],
     ['--radius-input', 'var(--chat-input-radius)'],
-    ['--focus-ring', 'inset 0 0 0 1px var(--Labels-Primary)'],
+    ['--focus-ring', 'inset 0 0 0 1px var(--Separators-S1)'],
     ['--selection', 'var(--Others-TextSelected)'],
     ['--mask', 'var(--MaskBg-Base)'],
     ['--blur-glass', '15px'],

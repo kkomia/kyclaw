@@ -1,10 +1,11 @@
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
+import { MemoryPanel } from '@renderer/features/memory/MemoryPage'
+import { UsagePanel } from '@renderer/features/usage/UsagePage'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
-import { McpSettings } from './McpSettings'
 import { ModelSettings } from './ModelSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
@@ -28,9 +29,6 @@ const FONT_LABELS: Record<FontTier, string> = {
   default: '默认',
   large: '大'
 }
-
-/** 还没接内容的栏目：给一句中性空态（雷点 2：不写"还没做"这类研发口吻，也不解释排期） */
-const EMPTY_SECTIONS = new Set(['memory', 'usage'])
 
 /** 栏目卡片组：组用底色分层（不描边），组内控件自己带一条 hairline —— 避免近距多层框线 */
 function SettingsGroup({
@@ -134,15 +132,17 @@ export function SettingsPage(): React.JSX.Element {
             <WorkspaceSettings />
           </SettingsGroup>
         ) : null}
-        {meta.id === 'tools' ? (
-          <SettingsGroup title="工具与 MCP" testId="settings-group-tools">
-            <McpSettings />
-          </SettingsGroup>
+        {/* 记忆 / 用量（round 5 去重）：设置是唯一导航源——面板直接复用独立页的实现（MemoryPanel /
+            UsagePanel），不再套一层分组卡（面板自带 round 5 的 ≤2 层口径），版式与其他组同一内容列。 */}
+        {meta.id === 'memory' ? (
+          <div data-testid="settings-group-memory" className="flex flex-col gap-3">
+            <MemoryPanel />
+          </div>
         ) : null}
-        {EMPTY_SECTIONS.has(meta.id) ? (
-          <SettingsGroup title={meta.label} testId={meta.groupTestId}>
-            <p className="text-b2 text-ink-secondary">暂无可调整的设置</p>
-          </SettingsGroup>
+        {meta.id === 'usage' ? (
+          <div data-testid="settings-group-usage" className="flex flex-col gap-3">
+            <UsagePanel />
+          </div>
         ) : null}
       </div>
     </div>

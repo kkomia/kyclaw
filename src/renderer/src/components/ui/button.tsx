@@ -7,7 +7,7 @@ import { Spinner } from './spinner'
  * 按钮三档（UI 参考 §4.7 .km-button-small / medium / large）：
  * 高 26/32/44、圆角 8/10/12、字号 C1/B2/T2、最小宽 52/62/72、内边距 4×8 / 6×10 / 10×14、间隙 2/4/6。
  * 状态过渡走主档 .3s ease-in-out（§6.5 点名的 .km-button）。
- * 焦点环不在这里写：全局 :focus-visible 给墨色 1px 内环（§5.4）。
+ * 焦点环不在这里写：全局 :focus-visible 给 1px 内环（round 5 起是分隔线灰，不是墨色）。
  */
 const button = cva(
   'inline-flex shrink-0 items-center justify-center whitespace-nowrap font-medium select-none transition-colors duration-(--motion-main) ease-main',

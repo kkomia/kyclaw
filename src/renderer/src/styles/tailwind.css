@@ -94,7 +94,9 @@
   --animate-fade-out: fade-out var(--duration-quick) var(--motion-ease-inout) both;
   --animate-page-in: fade-in var(--duration-main) var(--motion-ease-inout) both;
   --animate-message-in: message-in var(--duration-main) var(--clp-ease-out) both;
-  /* 弹窗自带 -translate-x/y-1/2 居中，所以关键帧里要把这半程位移一起写进去 */
+  /* 弹窗的 -translate-x/y-1/2（v4 的 translate 属性）负责居中；关键帧只动 opacity/scale，
+     不能再写 translate(-50%,-50%) —— 那个时代已经把位移交给 translate 属性了，
+     关键帧里再写一遍就是叠两层位移，弹窗会跑到左上角（round 5 定位到的旧 bug）。 */
   --animate-dialog-in: dialog-in var(--duration-base) var(--clp-ease-open) both;
   --animate-dialog-out: dialog-out var(--duration-quick) var(--clp-ease-close) both;
 }
@@ -102,24 +104,24 @@
 @keyframes dialog-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.96);
+    transform: scale(0.96);
   }
 
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: scale(1);
   }
 }
 
 @keyframes dialog-out {
   from {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: scale(1);
   }
 
   to {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.96);
+    transform: scale(0.96);
   }
 }
 
@@ -230,8 +232,9 @@
    13% 黑压白，实时网页未聚焦态 240 = 更浅的填充灰），聚焦只是把边缘提一档，
    选中/未聚焦差距极小。此前用墨色 --text-primary：暗色下近白、浅色下近黑，对比过重。
 
-   范围说明：本 utility 目前只服务 composer；其余控件的焦点环走全局 `:focus-visible`
-   的墨色口径（R1 已审计，UI 参考 §5.4），本次不改。 */
+   范围与全局口径（round 5 更新）：本 utility 只服务 composer；**全局 `:focus-visible` 的环
+   round 5 起同样是分隔线灰**（semantic 的 --focus-ring），条目类（菜单项等）改纯填充表达
+   （见 menu.tsx 的 focus-visible:shadow-none）——全站不再出现墨色/纯黑/纯白描边。 */
 @utility focus-ring-container {
   &:has(:focus-visible) {
     outline: 1px solid var(--border-hairline);
@@ -335,7 +338,8 @@
       color var(--motion-main) var(--motion-ease-inout);
   }
 
-  /* 焦点环是墨色的（§5.4：inset 0 0 0 1px Labels-Primary 近 30 处），蓝色只做小面积强调。 */
+  /* 全局焦点环（R2 round 5，用户实拍 #7）：**分隔线灰，不是墨色**——墨色环就是用户点名的
+     "hover/选中/聚焦的黑色框线"；蓝色只做小面积强调，条目类的状态一律靠填充档表达。 */
   :focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);

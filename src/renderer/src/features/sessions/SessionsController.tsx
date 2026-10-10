@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { Button } from '../../components/ui/button'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { PluginsNavItem } from '../plugins/PluginsNavItem'
 import { ProjectsSection } from '../projects/ProjectsSection'
 import { useProjectsStore } from '../projects/projects-store'
 import { NewSessionButton } from './NewSessionButton'
@@ -54,6 +55,7 @@ export function SessionsController(): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <NewSessionButton onNew={() => startNew(projectOf(activeId))} />
+      <PluginsNavItem />
       {error !== null ? (
         <p data-testid="session-load-error" className="px-4 pb-1 text-c1 text-danger">
           会话列表加载失败
