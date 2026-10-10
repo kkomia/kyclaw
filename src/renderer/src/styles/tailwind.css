@@ -221,12 +221,20 @@
 
 /* 容器级焦点环（雷点 6：焦点指示也要跟圆角走）。
    圆角卡片里的输入（如发送框里的 textarea）自己没有圆角，全局 `:focus-visible` 的内阴影环
-   画出来就是**压在卡片圆角上的直角方框**。所以把指示画到**卡片**上：墨色 1px、贴内缘、
+   画出来就是**压在卡片圆角上的直角方框**。所以把指示画到**卡片**上：1px、贴内缘、
    随卡片圆角（outline 跟 border-radius，且不占用 box-shadow —— 卡片的投影还在）。
-   口径：UI 参考 §5.4，Kimi 的焦点环是墨色 inset 1px（近 30 处），不是品牌蓝。 */
+
+   颜色口径（R2 修复轮 round 2，用户实拍）：**灰色档**——取分隔线灰 --border-hairline
+   （= Separators-S1，浅 13% 黑 ≈ #dedede / 深 12% 白，两档都是灰）。Kimi 的输入卡边框本来
+   就是这条灰（`.chat-editor` = 1px Separators-S1；实况取样：Kimi 会话页输入卡左缘 222 =
+   13% 黑压白，实时网页未聚焦态 240 = 更浅的填充灰），聚焦只是把边缘提一档，
+   选中/未聚焦差距极小。此前用墨色 --text-primary：暗色下近白、浅色下近黑，对比过重。
+
+   范围说明：本 utility 目前只服务 composer；其余控件的焦点环走全局 `:focus-visible`
+   的墨色口径（R1 已审计，UI 参考 §5.4），本次不改。 */
 @utility focus-ring-container {
   &:has(:focus-visible) {
-    outline: 1px solid var(--text-primary);
+    outline: 1px solid var(--border-hairline);
     outline-offset: -1px;
   }
 }

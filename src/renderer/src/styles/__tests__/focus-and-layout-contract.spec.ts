@@ -9,8 +9,9 @@ function readSource(relativePath: string): string {
 const TAILWIND_CSS = readSource('../tailwind.css')
 
 /**
- * 样式契约（UI 返工 R1 复核修复的两条）——jsdom 不做布局，这里钉的是**样式表里的机制**，
- * 真实观感由窗口级连拍序列证明（smoke-ui-r1/14-*）。
+ * 样式契约（UI 返工 R1 复核修复的两条 + R2 修复轮 round 2 的焦点环颜色）——
+ * jsdom 不做布局，这里钉的是**样式表里的机制**，真实观感由窗口级连拍序列证明（smoke-ui-r1/14-*、
+ * smoke-ui-r2/F*）。
  */
 
 describe('内容列 · 动效契约（复核 Important #1）', () => {
@@ -49,13 +50,15 @@ describe('内容列 · 动效契约（复核 Important #1）', () => {
 })
 
 describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
-  it('容器级焦点环是墨色 1px、贴内缘的 outline（outline 跟 border-radius，且不占 box-shadow）', () => {
+  it('容器级焦点环是分隔线灰 1px、贴内缘的 outline（round 2：灰档，两主题都取灰）', () => {
     const utility = /@utility focus-ring-container \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
 
     expect(utility).toContain(':has(:focus-visible)')
-    expect(utility).toContain('outline: 1px solid var(--text-primary);')
+    expect(utility).toContain('outline: 1px solid var(--border-hairline);')
     expect(utility).toContain('outline-offset: -1px;')
-    // 口径来自 UI 参考 §5.4：焦点环是墨色，不是品牌蓝
+    // round 2 用户实拍：不能再用墨色（暗近白 / 浅近黑，对比过重），也不能是品牌蓝。
+    // --border-hairline = Separators-S1（浅 13% 黑 / 深 12% 白），两档都是灰，值锁在 tokens.spec。
+    expect(utility).not.toContain('var(--text-primary)')
     expect(utility).not.toContain('--accent')
   })
 })
