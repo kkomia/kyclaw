@@ -107,11 +107,19 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
   })
 
-  it('内容区（R2 D2/D4）：中列与工作台同属一块面（上沿圆角 + 主面板底色），侧栏不画右缘线', () => {
+  it('内容区（R2 D2/D4；round 3 四角圆角卡）：一块面 + 右/底留缝 + 一对缺口角', () => {
     renderShell()
 
     const region = screen.getByTestId('content-region')
-    expect(region).toHaveClass('rounded-t-overlay', 'bg-surface', 'overflow-hidden')
+    // round 3：四角圆角（Kimi 式整卡），右/底留出画布缝（--shell-edge-gap = 6，Kimi 实测）
+    expect(region).toHaveClass(
+      'rounded-overlay',
+      'bg-surface',
+      'overflow-hidden',
+      'mr-(--shell-edge-gap)',
+      'mb-(--shell-edge-gap)'
+    )
+    expect(region).not.toHaveClass('rounded-t-overlay')
     // 右栏在内容区里面（不是独立第三根柱子）
     expect(region).toContainElement(screen.getByTestId('main-column'))
     expect(region).toContainElement(screen.getByTestId('work-panel'))
@@ -120,6 +128,18 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('work-panel')).not.toHaveClass('bg-canvas')
     // 侧栏与顶栏同属"壳"那层：靠底色差 + 内容区圆角相接，没有右缘描边
     expect(screen.getByTestId('sidebar')).not.toHaveClass('border-r')
+    // 左缘的两个缺口角：上沿 + 下沿一对（都跟 --content-safe-left 走）
+    expect(screen.getByTestId('shell-notch')).toHaveClass('shell-notch', 'top-0')
+    expect(screen.getByTestId('shell-notch-bottom')).toHaveClass(
+      'shell-notch-bottom',
+      'bottom-(--shell-edge-gap)'
+    )
+    for (const id of ['shell-notch', 'shell-notch-bottom']) {
+      expect(screen.getByTestId(id)).toHaveClass(
+        'left-(--content-safe-left)',
+        'size-(--radius-overlay)'
+      )
+    }
   })
 
   it('窄窗兜底（R2 D4）：窗口宽度低于阈值时自动收起工作台', () => {

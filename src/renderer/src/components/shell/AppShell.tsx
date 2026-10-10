@@ -28,8 +28,9 @@ function collapseWidthThreshold(): number {
  * 侧栏内容 = 会话视图（新建 + 会话列表 + 底部单一入口）或设置视图（设置菜单，由路由决定）；
  * 内容区里的中列渲染当前路由（布局路由的 <Outlet/>）。
  *
- * 两层"面"（R2 D2/D4）：壳 = 画布色（--bg-canvas，顶栏与侧栏同一层，两者之间没有分割线）；
- * 内容区 = 抬起来的一块面（--bg-surface，上沿两个圆角）+ 分隔线分出的工作台 —— 右栏因此不算第三根柱子。
+ * 两层"面"（R2 D2/D4；round 3 起内容区是四角圆角卡）：壳 = 画布色（--bg-canvas，顶栏与侧栏同一层，
+ * 两者之间没有分割线）；内容区 = 抬起来的一块面（--bg-surface，四角圆角 + 右/底留缝）+ 分隔线分出的
+ * 工作台 —— 右栏因此不算第三根柱子。
  * data-sidebar 把"侧栏在不在"交给 CSS：内容列（.content-column）据此把可见区左缘推进到侧栏右缘。
  *
  * 窄窗兜底（R2 D4）：窗口窄到"侧栏 + 内容最小可读宽 + 工作台"都放不下时自动收起工作台，
@@ -89,15 +90,22 @@ export function AppShell(): React.JSX.Element {
             <WorkPanelEmpty />
           </WorkPanel>
         </ContentRegion>
-        {/* 壳上的"凹角"（R2 D2）：内容区铺满整条主列（R13：主列几何不随侧栏变），它自己的左上凸圆角
-            在 x=0 被侧栏盖住；所以在可见左缘（--content-safe-left，跟着侧栏开合过渡）补一块
-            "画布色 − 圆盘"的小方块（.shell-notch：只涂圆弧以外），把内容卡的**凸圆角**露出来 —— 与
-            Kimi 桌面参考同向。侧栏收起（safe-left = 0）时它正好压在内容卡自己的圆角上，涂的是卡片
-            圆角让出来的那块画布，真正不可见（凹凸方向与遮挡面积的判据见 _notch_check.py）。 */}
+        {/* 壳上的"凹角"（R2 D2；round 3 起一对）：内容区是四角圆角卡（ContentRegion 的
+            rounded-overlay + 右/底 --shell-edge-gap 留缝），铺满整条主列（R13：主列几何不随侧栏变），
+            它自己的左上/左下凸圆角在 x=0 被侧栏盖住；所以在可见左缘（--content-safe-left，跟着侧栏
+            开合过渡）补两块"画布色 − 圆盘"的小方块（.shell-notch / .shell-notch-bottom：只涂圆弧
+            以外），把内容卡的凸圆角露出来 —— 与 Kimi 桌面参考同向。侧栏收起（safe-left = 0）时它们
+            正好压在内容卡自己的圆角上，涂的是卡片圆角让出来的那块画布，真正不可见
+            （凹凸方向与遮挡面积的判据见 smoke-ui-r2 的 _notch_check / _corners_check）。 */}
         <div
           data-testid="shell-notch"
           aria-hidden="true"
           className="shell-notch pointer-events-none absolute top-0 left-(--content-safe-left) z-10 size-(--radius-overlay)"
+        />
+        <div
+          data-testid="shell-notch-bottom"
+          aria-hidden="true"
+          className="shell-notch-bottom pointer-events-none absolute bottom-(--shell-edge-gap) left-(--content-safe-left) z-10 size-(--radius-overlay)"
         />
       </div>
     </div>

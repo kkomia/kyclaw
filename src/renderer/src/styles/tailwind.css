@@ -254,6 +254,20 @@
   );
 }
 
+/* 壳上的"凹角"·下沿镜像（R2 修复轮 round 3）：内容区是四角圆角卡（ContentRegion 的
+   rounded-overlay + 右/底 --shell-edge-gap 留缝），但它的左下圆角在 x=0 被侧栏盖住 ——
+   与上沿同一个机制，在可见左缘、卡的下边缘（bottom = --shell-edge-gap）补一块小方块：
+   圆心 = 盒子的**右上角**（100% 0%），涂圆盘以外 → 露出内容卡的凸左下圆角。
+   侧栏收起（safe-left = 0）时正好压在卡片自己的左下圆角上，真正不可见。
+   盒边长与圆半径都用 --radius-overlay，与上沿一对（判据见 smoke-ui-r2/G* 的 _corners_check）。 */
+@utility shell-notch-bottom {
+  background: radial-gradient(
+    circle at 100% 0%,
+    transparent 0 calc(var(--radius-overlay) - 1px),
+    var(--bg-canvas) var(--radius-overlay)
+  );
+}
+
 /* 内容列（页面级容器）：限宽 --content-max-width，在**实际可见区** [safe-left, 100%] 里居中。
    侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 可见区就是"侧栏右缘
    到主列右缘"这一段。所以居中基准也要用这段：先扣掉安全左边，再在剩下的宽度里取居中位置，

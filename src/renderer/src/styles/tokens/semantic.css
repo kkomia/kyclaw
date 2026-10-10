@@ -90,6 +90,9 @@
   --work-panel-width: 400px;
   --nav-item-height: 36px; /* 导航项 / 侧栏会话项：实测 35.9 ≈ 36 */
   --new-session-height: 41px; /* 侧栏「新建会话」块按钮：实测 41.3（宽 224 = 240 − 2×8，走 w-full） */
+  /* 内容卡与窗右缘、窗底的留缝（R2 修复轮 round 3）：Kimi 桌面实测每侧 12 设备像素 @2x = 6 ——
+     内容区是"四角圆角卡"，右、底两侧留出画布缝（左缘靠覆盖层 + shell-notch 补角，见 AppShell）。 */
+  --shell-edge-gap: var(--space-1-5);
 
   /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
      侧栏是覆盖层（台账 R13，主列不位移、不加 pl 留白），所以贴左缘的内容会被它盖住 ——

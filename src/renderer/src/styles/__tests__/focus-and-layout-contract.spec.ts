@@ -9,9 +9,9 @@ function readSource(relativePath: string): string {
 const TAILWIND_CSS = readSource('../tailwind.css')
 
 /**
- * 样式契约（UI 返工 R1 复核修复的两条 + R2 修复轮 round 2 的焦点环颜色）——
+ * 样式契约（UI 返工 R1 复核修复的两条 + R2 修复轮 round 2 的焦点环颜色 / round 3 的缺口角梯度）——
  * jsdom 不做布局，这里钉的是**样式表里的机制**，真实观感由窗口级连拍序列证明（smoke-ui-r1/14-*、
- * smoke-ui-r2/F*）。
+ * smoke-ui-r2/F*、G*）。
  */
 
 describe('内容列 · 动效契约（复核 Important #1）', () => {
@@ -60,5 +60,23 @@ describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
     // --border-hairline = Separators-S1（浅 13% 黑 / 深 12% 白），两档都是灰，值锁在 tokens.spec。
     expect(utility).not.toContain('var(--text-primary)')
     expect(utility).not.toContain('--accent')
+  })
+})
+
+describe('壳 · 缺口角梯度（round 3：防静默回退）', () => {
+  it('shell-notch（上沿）：圆盘补集 —— 圆心在右下、圆盘外才是画布', () => {
+    const utility = /@utility shell-notch \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
+
+    expect(utility).toContain('circle at 100% 100%')
+    expect(utility).toContain('transparent 0 calc(var(--radius-overlay) - 1px)')
+    expect(utility).toContain('var(--bg-canvas) var(--radius-overlay)')
+  })
+
+  it('shell-notch-bottom（下沿镜像）：圆心在右上（100% 0%）', () => {
+    const utility = /@utility shell-notch-bottom \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
+
+    expect(utility).toContain('circle at 100% 0%')
+    expect(utility).toContain('transparent 0 calc(var(--radius-overlay) - 1px)')
+    expect(utility).toContain('var(--bg-canvas) var(--radius-overlay)')
   })
 })

@@ -737,3 +737,23 @@ describe('壳 · 窄窗兜底阈值（R2 修复轮）', () => {
     expect(fromToken).toBe(Number(fromTs))
   })
 })
+
+describe('壳 · 内容卡留缝（R2 修复轮 round 3）', () => {
+  const root = semantic.get(':root') ?? new Map<string, string>()
+  const contentRegion = readSource('../../components/shell/ContentRegion.tsx')
+  const appShell = readSource('../../components/shell/AppShell.tsx')
+
+  it('--shell-edge-gap = 6px（Kimi 桌面实测 12 设备像素 @2x）：右/底留缝与 notch 同源', () => {
+    expectDecl(root, '--shell-edge-gap', 'var(--space-1-5)', 'semantic :root')
+    // 工程阶梯里 6px 已有断言（'--space-1-5', 6），这里钉的是"留缝取的就是这一格"
+  })
+
+  it('内容卡吃四角圆角与右/底留缝；两个缺口角在可见左缘由一对 notch 补', () => {
+    expect(contentRegion).toContain('rounded-overlay')
+    expect(contentRegion).not.toContain('rounded-t-overlay')
+    expect(contentRegion).toContain('mr-(--shell-edge-gap)')
+    expect(contentRegion).toContain('mb-(--shell-edge-gap)')
+    expect(appShell).toContain('shell-notch-bottom')
+    expect(appShell).toContain('bottom-(--shell-edge-gap)')
+  })
+})
