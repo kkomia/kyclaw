@@ -42,6 +42,7 @@ export function SidebarFooter(): React.JSX.Element {
         align="start"
         sideOffset={6}
         items={items}
+        className="min-w-36"
         trigger={
           <button type="button" data-testid="sidebar-menu-trigger" className={navItemClass()}>
             <span

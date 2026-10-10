@@ -63,11 +63,11 @@ describe('Tooltip', () => {
   it('触发元素自身语义不变，弹出时挂上 aria-describedby', () => {
     render(
       <Tooltip label="设置">
-        <Button variant="ghost">⚙</Button>
+        <Button variant="ghost">外观</Button>
       </Tooltip>
     )
 
-    const trigger = screen.getByRole('button', { name: '⚙' })
+    const trigger = screen.getByRole('button', { name: '外观' })
     expect(trigger.tagName).toBe('BUTTON')
 
     fireEvent.focus(trigger)
