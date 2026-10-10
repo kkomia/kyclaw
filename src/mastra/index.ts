@@ -12,8 +12,7 @@
 import { join } from 'node:path'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
-import { createKyclawAgent, KYCLAW_AGENT_ID } from './agents/kyclaw'
-import type { KyclawModel } from './model'
+import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 
 /** libsql 库文件名（落在 dataDir 下） */
 export const AGENT_DB_FILE = 'kyclaw.db'
@@ -33,7 +32,7 @@ function libsqlUrl(dataDir: string): string {
 
 export async function createKyclawMastra(options: {
   dataDir: string
-  model: KyclawModel
+  resolveModel: ModelResolver
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass } = await import('@mastra/libsql')
@@ -41,7 +40,7 @@ export async function createKyclawMastra(options: {
 
   const storage = new LibSQLStoreClass({ id: 'kyclaw-storage', url: libsqlUrl(options.dataDir) })
   const mastra = new MastraClass({
-    agents: { [KYCLAW_AGENT_ID]: await createKyclawAgent(options.model) },
+    agents: { [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel) },
     storage,
     server: { apiRoutes: [chatRoute({ path: CHAT_ROUTE_PATH })] }
   })

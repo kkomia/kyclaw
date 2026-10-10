@@ -125,10 +125,17 @@ describe('preload：window.kyclaw 白名单', () => {
 })
 
 describe('preload：window.kyclaw.settings', () => {
-  it('暴露 settings 一族（get / update 两个方法）', async () => {
+  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除）', async () => {
     const { kyclawApi } = await loadPreload()
 
-    expect(Object.keys(kyclawApi.settings).sort()).toEqual(['get', 'update'])
+    expect(Object.keys(kyclawApi.settings).sort()).toEqual([
+      'get',
+      'providerKeyStates',
+      'removeProvider',
+      'setProviderKey',
+      'testProvider',
+      'update'
+    ])
   })
 
   it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
@@ -173,5 +180,75 @@ describe('preload：window.kyclaw.settings', () => {
       providers: [],
       workspaces: []
     })
+  })
+
+  it('setProviderKey 原样发给 settings:set-provider-key，只把 {hasKey:true} 交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKey: true })
+
+    await expect(kyclawApi.settings.setProviderKey('deepseek', 'sk-test-key')).resolves.toEqual({
+      hasKey: true
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      'settings:set-provider-key',
+      'deepseek',
+      'sk-test-key'
+    )
+  })
+
+  it('setProviderKey 回包多带任何字段（比如顺手回显明文）→ 整个响应不合法，抛错不交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKey: true, key: 'sk-test-key' })
+
+    await expect(kyclawApi.settings.setProviderKey('deepseek', 'sk-test-key')).rejects.toThrow()
+  })
+
+  it('providerKeyStates 按 schema 解析出 { hasKey, needsReentry }；结构不对就抛', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({
+      deepseek: { hasKey: true, needsReentry: false },
+      openai: { hasKey: false, needsReentry: true }
+    })
+
+    await expect(kyclawApi.settings.providerKeyStates()).resolves.toEqual({
+      deepseek: { hasKey: true, needsReentry: false },
+      openai: { hasKey: false, needsReentry: true }
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:provider-key-states')
+
+    mocks.invoke.mockResolvedValueOnce({ deepseek: 'configured' })
+    await expect(kyclawApi.settings.providerKeyStates()).rejects.toThrow()
+  })
+
+  it('testProvider 带上 id，结果按 schema 解析；脏数据（两个分支混在一起）抛错', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ok: true, latencyMs: 812 })
+
+    await expect(kyclawApi.settings.testProvider('deepseek')).resolves.toEqual({
+      ok: true,
+      latencyMs: 812
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:test-provider', 'deepseek')
+
+    mocks.invoke.mockResolvedValueOnce({ ok: false, message: '认证失败', latencyMs: 1 })
+    await expect(kyclawApi.settings.testProvider('deepseek')).rejects.toThrow()
+  })
+
+  it('removeProvider 走 settings:remove-provider，回吐合并后的设置（脏数据回默认值）', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({
+      theme: 'dark',
+      fontTier: 'default',
+      providers: [],
+      workspaces: []
+    })
+
+    await expect(kyclawApi.settings.removeProvider('deepseek')).resolves.toEqual({
+      theme: 'dark',
+      fontTier: 'default',
+      providers: [],
+      workspaces: []
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:remove-provider', 'deepseek')
   })
 })

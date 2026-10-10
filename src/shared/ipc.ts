@@ -8,6 +8,7 @@
  * 窗口几何（宽高/位置）只落盘在主进程（main/store.ts），不过桥：渲染端用不到，越小越稳。
  */
 import { z } from './zod'
+import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import { appSettingsPatchSchema, type AppSettings, type AppSettingsPatch } from './settings'
 
 export const IPC_CHANNELS = {
@@ -27,7 +28,15 @@ export const IPC_CHANNELS = {
     /** 读当前设置（返回 AppSettings） */
     get: 'settings:get',
     /** 打补丁改设置（入参 AppSettingsPatch，返回合并后的 AppSettings） */
-    update: 'settings:update'
+    update: 'settings:update',
+    /** 写一条 provider 的密钥（入参 [id, key]，返回 {hasKey:true}——永远不回明文） */
+    setProviderKey: 'settings:set-provider-key',
+    /** 各 provider 的密钥状态（无入参，返回 { [id]: {hasKey, needsReentry} }） */
+    providerKeyStates: 'settings:provider-key-states',
+    /** 测试连接（入参 [id]，主进程发一条最小请求，返回延迟或错误文案） */
+    testProvider: 'settings:test-provider',
+    /** 删除一条 provider 配置（连同它的密钥；入参 [id]，返回合并后的 AppSettings） */
+    removeProvider: 'settings:remove-provider'
   },
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
@@ -51,6 +60,29 @@ export type AgentEndpoint = z.infer<typeof agentEndpointSchema>
 
 /** settings:update 的入参：单元素元组（payload 形状在 shared/settings.ts） */
 export const settingsUpdateArgsSchema = z.tuple([appSettingsPatchSchema])
+
+/** settings:set-provider-key 的入参：[id, key]（都非空；key 只在主进程内存里短暂存在） */
+export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
+
+/** settings:test-provider / settings:remove-provider 的入参：[id] */
+export const providerIdArgsSchema = z.tuple([z.string().min(1)])
+
+/** 写密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
+export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(true) })
+
+/** settings:provider-key-states 的回包：键是 provider id */
+export const providerKeyStatesSchema = z.record(z.string(), providerKeyStateSchema)
+
+/**
+ * "测试连接"的结果：成功给延迟（ms），失败给一句人话（已抹掉可能被供应商回显的密钥）。
+ * 判别字段是 `ok`，UI 与 preload 用同一份 schema。
+ */
+export const connectionTestResultSchema = z.discriminatedUnion('ok', [
+  z.strictObject({ ok: z.literal(true), latencyMs: z.number() }),
+  z.strictObject({ ok: z.literal(false), message: z.string() })
+])
+
+export type ConnectionTestResult = z.infer<typeof connectionTestResultSchema>
 
 /** 无入参通道的入参 schema：ipcRenderer.invoke 不给参数时 args 为空数组 */
 export const noArgsSchema = z.tuple([])
@@ -98,6 +130,14 @@ export interface KyclawSettingsApi {
   get(): Promise<AppSettings>
   /** 只给要改的字段，返回合并后的完整设置 */
   update(patch: AppSettingsPatch): Promise<AppSettings>
+  /** 写一条 provider 的密钥：成功只回 {hasKey:true}（明文永不回渲染端） */
+  setProviderKey(id: string, key: string): Promise<{ hasKey: true }>
+  /** 各 provider 的密钥状态（键是 provider id；解不开的密钥体现在 needsReentry） */
+  providerKeyStates(): Promise<Record<string, ProviderKeyState>>
+  /** 主进程发一条最小请求验证连通性（返回延迟或错误文案） */
+  testProvider(id: string): Promise<ConnectionTestResult>
+  /** 删除一条 provider 配置（连同它的密钥），返回合并后的完整设置 */
+  removeProvider(id: string): Promise<AppSettings>
 }
 
 /** preload 暴露给渲染端的 agent 服务面（服务未起时 endpoint() 会 reject） */

@@ -57,7 +57,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
   it('读出来的默认值是新的（含新数组），调用方改了不污染模块级默认', () => {
     const first = readSettings(settingsPath(dir))
-    first.providers.push({ id: 'leaked' })
+    first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
     first.workspaces.push({ path: 'D:/leaked' })
 
     expect(DEFAULT_SETTINGS.providers).toEqual([])
@@ -70,6 +70,19 @@ describe('设置存储（userData 下的 settings.json）', () => {
     writeSettings(file, { ...DEFAULT_SETTINGS, theme: 'light' })
 
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ theme: 'light' })
+  })
+
+  it('半截 provider（缺 baseUrl / 空 model）能落盘也能读回：录到一半的状态不该被读盘丢掉', () => {
+    const file = settingsPath(dir)
+    const halfDone = {
+      id: 'custom-1',
+      type: 'openai-compatible' as const,
+      model: '',
+      isDefault: true
+    }
+    writeSettings(file, { ...DEFAULT_SETTINGS, providers: [halfDone] })
+
+    expect(readSettings(file).providers).toEqual([halfDone])
   })
 
   it('写不进去就抛（磁盘满/路径被占），不静默吞掉用户的改动', () => {

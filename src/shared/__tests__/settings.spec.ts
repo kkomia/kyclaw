@@ -29,7 +29,7 @@ describe('AppSettings schema', () => {
   it('defaultSettings() 每次给新对象（含新数组），改返回值不污染模块级默认', () => {
     const first = defaultSettings()
     first.theme = 'dark'
-    first.providers.push({ id: 'leaked' })
+    first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
 
     expect(DEFAULT_SETTINGS.theme).toBe('system')
     expect(DEFAULT_SETTINGS.providers).toEqual([])
@@ -64,6 +64,19 @@ describe('AppSettings schema', () => {
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, workspaces: 'D:/x' }).success).toBe(
       false
     )
+  })
+
+  it('providers 元素过不了 provider schema（错 type / 缺 id / 夹带明文 apiKey）→ 整份设置按坏文件处理', () => {
+    for (const bad of [
+      [{ id: 'x', type: 'gemini', model: 'm', isDefault: false }],
+      [{ type: 'anthropic', model: 'm', isDefault: false }],
+      [{ id: 'x', type: 'anthropic', model: 'm', isDefault: false, apiKey: 'sk-leaked' }]
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, providers: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
   })
 
   it('缺键与多键都不合法（strict：落盘文件的字段集合就是 schema 的字段集合）', () => {

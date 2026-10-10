@@ -3,10 +3,11 @@
  *
  * 落盘在主进程的 userData/settings.json（main/settings.ts），与窗口状态的 window-state.json 分开——
  * 窗口几何是"壳自己的事"，设置是"用户的事"，坏一个不该带走另一个。
- * providers / workspaces 是**占位字段**：本任务（T5）只做外观组（theme / fontTier），
- * 但形状现在就定下来（空数组），T8（模型与密钥）/ T10（工作区）落地时替换元素 schema，不再加字段。
+ * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces 仍是**占位字段**，
+ * T10（工作区）落地时替换元素 schema，不再加字段。
  */
 import { z } from './zod'
+import { providerConfigSchema } from './providers'
 
 /** 落盘文件名（userData 下） */
 export const SETTINGS_FILE = 'settings.json'
@@ -20,8 +21,8 @@ export const fontTierSchema = z.enum(['small', 'default', 'large'])
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
-  /** 占位：T8 的 ProviderConfig[]（本任务不写） */
-  providers: z.array(z.unknown()),
+  /** T8 的 provider 列表（模型与密钥页；密钥不在里面，见 main/secrets.ts） */
+  providers: z.array(providerConfigSchema),
   /** 占位：T10 的授权工作区列表（本任务不写） */
   workspaces: z.array(z.unknown())
 })

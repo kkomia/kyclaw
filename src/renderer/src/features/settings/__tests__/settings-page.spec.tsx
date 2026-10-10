@@ -40,7 +40,7 @@ afterEach(() => {
 })
 
 describe('设置页骨架', () => {
-  it('六组都在：外观是功能组，其余五组是占位', () => {
+  it('六组都在：外观与模型是功能组，其余四组是占位', () => {
     render(<SettingsPage />)
 
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
@@ -51,7 +51,15 @@ describe('设置页骨架', () => {
     expect(screen.getByTestId('settings-group-memory')).toBeInTheDocument()
     expect(screen.getByTestId('settings-group-usage')).toBeInTheDocument()
 
-    for (const testId of ['settings-group-model', 'settings-group-usage']) {
+    // 模型组（T8）：provider 预设入口就在这一组里
+    expect(screen.getByTestId('settings-group-model')).toHaveTextContent('添加通道')
+
+    for (const testId of [
+      'settings-group-tools',
+      'settings-group-workspaces',
+      'settings-group-memory',
+      'settings-group-usage'
+    ]) {
       expect(screen.getByTestId(testId), testId).toHaveTextContent('尚未接入')
     }
   })

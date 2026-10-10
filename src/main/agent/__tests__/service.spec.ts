@@ -1,10 +1,12 @@
 // @vitest-environment node
 /**
- * `startAgentServer` 的对外行为（T6 Review Focus #4）：
+ * `startAgentServer` 的对外行为（T6 Review Focus #4 + T8 模型接入）：
  *   1. 默认（没配 provider）走内置 mock，把 chat 链路真跑起来；
  *   2. token 是唯一闸门：没带 / 带错 → 401，带对 → 200；
  *   3. 端口被占 → 自动换端口（≤ 上限次）；用尽 → 抛错而不是静默失败；
- *   4. stop() 会真的断开监听（端口可立即复用），且可重复调用。
+ *   4. stop() 会真的断开监听（端口可立即复用），且可重复调用；
+ *   5. 模型**每轮重新解析**（配好 provider 不用重启）；配了 provider 却没密钥时对话报错，
+ *      不回 mock 文案（T8 裁决：不得静默回落）。
  * 整个文件共用一个临时 dataDir（用例串行，各自起停自己的服务），收尾时统一清。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -14,6 +16,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MOCK_REPLY_CHUNKS } from '../../../mastra/model'
+import { DEFAULT_SETTINGS } from '../../../shared/settings'
+import { settingsPath, writeSettings } from '../../settings'
 import {
   startAgentServer,
   teardownQuietly,
@@ -203,5 +207,95 @@ describe('startAgentServer', () => {
     expect(calls).toEqual(['shutdown', 'close'])
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  }, 60_000)
+
+  it('模型每轮重新解析：resolveModel 换一条，下一轮回复就跟着换（配好 provider 不用重启，T8）', async () => {
+    const { MockLanguageModelV4, simulateReadableStream } = await import('ai/test')
+
+    /** 一段就吐完的 mock：文本带轮次标记，用来分辨"这轮用的是哪条配置" */
+    function mockSaying(text: string): InstanceType<typeof MockLanguageModelV4> {
+      return new MockLanguageModelV4({
+        provider: 'kyclaw-test-mock',
+        modelId: 'kyclaw-test-mock',
+        doStream: async () => ({
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 't1' },
+              { type: 'text-delta', id: 't1', delta: text },
+              { type: 'text-end', id: 't1' },
+              {
+                type: 'finish',
+                finishReason: { unified: 'stop' as const, raw: 'stop' },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 1, text: 1, reasoning: 0 }
+                }
+              }
+            ],
+            initialDelayInMs: 0,
+            chunkDelayInMs: 0
+          })
+        })
+      })
+    }
+
+    let current = mockSaying('第一轮：mock 配置')
+    const server = await start({ resolveModel: async () => current as never })
+
+    const first = await chat(server.baseUrl, {
+      headers: { authorization: `Bearer ${server.token}` }
+    })
+    const firstBody = await first.text()
+
+    current = mockSaying('第二轮：真 provider 生效')
+    const second = await chat(server.baseUrl, {
+      headers: { authorization: `Bearer ${server.token}` }
+    })
+    const secondBody = await second.text()
+
+    expect(firstBody).toContain('第一轮：mock 配置')
+    expect(secondBody).toContain('第二轮：真 provider 生效')
+    expect(secondBody).not.toContain('第一轮')
+  }, 60_000)
+
+  it('配了 provider 却读不到密钥 → 对话报错（500），不回 mock 文案与假成功（T8 裁决）', async () => {
+    // 缺省 resolver 没有密钥来源：settings 里有 provider 时必然"配置不完整"
+    const withProvider = mkdtempSync(join(tmpdir(), 'kyclaw-agent-configured-'))
+    writeSettings(settingsPath(withProvider), {
+      ...DEFAULT_SETTINGS,
+      providers: [
+        {
+          id: 'deepseek',
+          type: 'openai-compatible',
+          baseUrl: 'https://api.deepseek.com',
+          model: 'deepseek-flash',
+          isDefault: true
+        }
+      ]
+    })
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const server = await start({ dataDir: withProvider })
+
+      const response = await chat(server.baseUrl, {
+        headers: { authorization: `Bearer ${server.token}` }
+      })
+      const body = await response.text()
+
+      expect(response.status).toBe(500)
+      expect(body).not.toContain(MOCK_REPLY_CHUNKS[0])
+      // 具体原因在主进程日志里（UI 侧看到的是错误卡；设置页显示同一句话）
+      expect(errorLog.mock.calls.some((call) => JSON.stringify(call).includes('配置不完整'))).toBe(
+        true
+      )
+    } finally {
+      errorLog.mockRestore()
+      try {
+        rmSync(withProvider, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      } catch {
+        console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）')
+      }
+    }
   }, 60_000)
 })

@@ -1,10 +1,13 @@
 /**
- * 模型解析（R3 离线优先）：把 settings 里的 provider 配置翻译成 AI SDK 模型。
+ * 模型解析（R3 离线优先 + T8 provider 定稿）：把 settings.providers + 密钥翻译成 AI SDK 模型。
  *
- * 三条路：
+ * 四种口径：
  *   - `KYCLAW_FORCE_MOCK=1` 强制内置 mock（T16 E2E / 离线开发用）；
- *   - 没配任何可用 provider → 同样回内置 mock（首次启动、离线都不至于打不开）；
- *   - 配了 → openai-compatible（baseUrl + apiKey + model）或 anthropic。
+ *   - **一条 provider 都没配** → 同样回内置 mock（首次启动、离线都不至于打不开）；
+ *   - 配了且配置完整 → openai-compatible（baseUrl + apiKey + model）/ anthropic；
+ *     DeepSeek 官方端点走官方包 `@ai-sdk/deepseek`（reasoning 等能力贴着自家协议），其余走通用兼容层；
+ *   - 配了但**半截**（缺 key / 缺 baseUrl / 缺模型名）→ 抛 `ProviderConfigError`（"配置不完整：缺 X"），
+ *     绝不静默回落 mock——否则用户会以为自己在用真模型。
  *
  * mock 是 ai/test 的 MockLanguageModelV4 + simulateReadableStream：零网络、逐段增量、可预期，
  * 所以"链路是否真通"能被断言，而不是靠连真模型碰运气。
@@ -14,7 +17,7 @@
  * 原样留在 CJS 产物里），静态 import 只留编译期擦除的类型。
  */
 import type { LanguageModel } from 'ai'
-import { z } from '../shared/zod'
+import { providerConfigProblems, type ProviderConfig } from '../shared/providers'
 
 /** 强制离线的环境变量（值必须是 '1'，避免 "0" 被当真的陷阱） */
 export const FORCE_MOCK_ENV = 'KYCLAW_FORCE_MOCK'
@@ -36,29 +39,11 @@ export const OPENAI_COMPATIBLE_PROVIDER_NAME = 'kyclaw-openai-compatible'
 /** 离线 mock 回吐的文本，按增量切好——服务侧断言与 T16 E2E 共用这一份真身 */
 export const MOCK_REPLY_CHUNKS = ['（kyclaw 离线模式）', '你好，', '我是 kyclaw。'] as const
 
-/**
- * provider 配置的**临时**形状：settings.providers 在 T5 是 `unknown[]` 占位，
- * T8（模型与密钥页）才会定下正式 schema；这里先按"够用就好"的最小字段解析
- * （多余字段被忽略，不 reject——T8 加字段时这里不炸）。
- */
-export const providerConfigSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('openai-compatible'),
-    baseUrl: z.string().min(1),
-    apiKey: z.string().min(1),
-    model: z.string().min(1)
-  }),
-  z.object({
-    kind: z.literal('anthropic'),
-    apiKey: z.string().min(1),
-    model: z.string().min(1)
-  })
-])
+/** DeepSeek 官方 API 的主机名（这个端点走 @ai-sdk/deepseek，其余 openai-compatible 走通用兼容层） */
+export const DEEPSEEK_API_HOST = 'api.deepseek.com'
 
-export type ProviderConfig = z.infer<typeof providerConfigSchema>
-
-/** 模型来源：mock = 离线兜底，其余 = provider 种类 */
-export type ModelSource = 'mock' | ProviderConfig['kind']
+/** 模型来源：mock = 离线兜底，其余 = provider 类型 */
+export type ModelSource = 'mock' | ProviderConfig['type']
 
 /**
  * 我们用到的模型类型：AI SDK 7 的 v4 spec 语言模型。
@@ -74,17 +59,37 @@ export interface ResolvedModel {
   mockReason?: 'forced' | 'unconfigured'
 }
 
-/** 从 settings.providers（unknown[]）里挑出第一条能过 schema 的配置 */
-function pickProviderConfig(providers: readonly unknown[] | undefined): ProviderConfig | undefined {
-  for (const candidate of providers ?? []) {
-    const parsed = providerConfigSchema.safeParse(candidate)
-    if (parsed.success) return parsed.data
+/**
+ * 密钥读取器：主进程注入 `getProviderKey`（secrets.ts）；本模块不 import electron，可在 node 里单测。
+ * 返回 null = 没配过或解不开（两种都当"没有密钥"，由 UI 区分引导重录）。
+ */
+export type ProviderKeyReader = (id: string) => string | null
+
+/** 半截配置：解析处抛它；设置页行内提示用的是同一句文案（providerConfigProblems） */
+export class ProviderConfigError extends Error {
+  readonly problems: readonly string[]
+
+  constructor(id: string, problems: readonly string[]) {
+    super(`provider「${id}」${problems.join('；')}`)
+    this.name = 'ProviderConfigError'
+    this.problems = problems
   }
-  // 配了东西却一条都用不了：别静默——用户会以为自己在用真模型（不打印原文，里面可能有密钥）
-  if (providers && providers.length > 0) {
-    console.warn(`[kyclaw] ${providers.length} 条 provider 配置都识别不了，回落到离线 mock 模型`)
+}
+
+/** 选哪条配置：默认标记优先，没有默认就是第一条（顺序 = 用户在设置页看到的顺序） */
+export function selectProviderConfig(
+  providers: readonly ProviderConfig[]
+): ProviderConfig | undefined {
+  return providers.find((provider) => provider.isDefault) ?? providers[0]
+}
+
+export function isDeepSeekBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  try {
+    return new URL(baseUrl).hostname === DEEPSEEK_API_HOST
+  } catch {
+    return false
   }
-  return undefined
 }
 
 function mockUsage(): {
@@ -132,33 +137,56 @@ async function mockModel(): Promise<KyclawModel> {
   })
 }
 
-async function configuredModel(config: ProviderConfig): Promise<KyclawModel> {
-  if (config.kind === 'openai-compatible') {
-    const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
-    return createOpenAICompatible({
-      name: OPENAI_COMPATIBLE_PROVIDER_NAME,
-      baseURL: config.baseUrl,
-      apiKey: config.apiKey
-    }).chatModel(config.model)
+/**
+ * 按配置造模型（resolveModel 与"测试连接"共用同一条装配路径）。
+ * 调用前配置已被 `providerConfigProblems` 验过（openai-compatible 的 baseUrl 非空）。
+ */
+export async function buildLanguageModel(
+  config: ProviderConfig,
+  apiKey: string
+): Promise<KyclawModel> {
+  if (config.type === 'anthropic') {
+    const { createAnthropic } = await import('@ai-sdk/anthropic')
+    return createAnthropic({ apiKey }).chat(config.model)
   }
 
-  const { createAnthropic } = await import('@ai-sdk/anthropic')
-  return createAnthropic({ apiKey: config.apiKey }).chat(config.model)
+  const baseUrl = config.baseUrl ?? ''
+  if (isDeepSeekBaseUrl(baseUrl)) {
+    const { createDeepSeek } = await import('@ai-sdk/deepseek')
+    return createDeepSeek({ apiKey, baseURL: baseUrl }).chat(config.model)
+  }
+
+  const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
+  return createOpenAICompatible({
+    name: OPENAI_COMPATIBLE_PROVIDER_NAME,
+    baseURL: baseUrl,
+    apiKey
+  }).chatModel(config.model)
 }
 
-/** 按设置解析模型（env 可注入，测试不必动 process.env） */
+/**
+ * 按设置解析模型（env 可注入，测试不必动 process.env）：
+ * 默认标记优先；半截配置抛 ProviderConfigError（"配置不完整：缺 X"），不静默回落 mock。
+ */
 export async function resolveModel(
-  providers: readonly unknown[] | undefined,
+  providers: readonly ProviderConfig[] | undefined,
+  readKey: ProviderKeyReader,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): Promise<ResolvedModel> {
   if (env[FORCE_MOCK_ENV] === '1') {
     return { model: await mockModel(), source: 'mock', mockReason: 'forced' }
   }
 
-  const config = pickProviderConfig(providers)
+  const config = selectProviderConfig(providers ?? [])
   if (!config) {
     return { model: await mockModel(), source: 'mock', mockReason: 'unconfigured' }
   }
 
-  return { model: await configuredModel(config), source: config.kind }
+  const apiKey = readKey(config.id)
+  const problems = providerConfigProblems(config, apiKey !== null)
+  if (apiKey === null || problems.length > 0) {
+    throw new ProviderConfigError(config.id, problems)
+  }
+
+  return { model: await buildLanguageModel(config, apiKey), source: config.type }
 }

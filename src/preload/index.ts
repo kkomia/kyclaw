@@ -9,7 +9,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   agentEndpointSchema,
+  connectionTestResultSchema,
   IPC_CHANNELS,
+  providerKeyStatesSchema,
+  setProviderKeyResultSchema,
   windowStateSchema,
   type KyclawAgentApi,
   type KyclawApi,
@@ -57,7 +60,31 @@ function parseSettings(payload: unknown): AppSettings {
 const settingsApi: KyclawSettingsApi = {
   get: async () => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.get)),
   update: async (patch) =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.update, patch))
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.update, patch)),
+  // 密钥写方向：回包只该是 {hasKey:true}；多一个字段都不交给上层（防"顺手回显明文"）
+  setProviderKey: async (id, key) => {
+    const parsed = setProviderKeyResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.setProviderKey, id, key)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 密钥保存响应结构不合法')
+    return parsed.data
+  },
+  providerKeyStates: async () => {
+    const parsed = providerKeyStatesSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.providerKeyStates)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 密钥状态响应结构不合法')
+    return parsed.data
+  },
+  testProvider: async (id) => {
+    const parsed = connectionTestResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.testProvider, id)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 连接测试响应结构不合法')
+    return parsed.data
+  },
+  removeProvider: async (id) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.removeProvider, id))
 }
 
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */

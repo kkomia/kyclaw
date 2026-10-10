@@ -14,6 +14,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
 import { resolveModel, type KyclawModel } from '../../mastra/model'
+import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import { readSettings, settingsPath } from '../settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
@@ -36,8 +37,13 @@ const ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:5174', 'null
 export interface AgentServerOptions {
   /** 应用数据目录：libsql 库文件落这里（生产 = userData），settings.json 也从这里读 provider */
   dataDir: string
-  /** 注入模型（测试用）；缺省按 settings.providers 解析（没配 → 内置 mock） */
+  /** 注入模型（测试用，整场不变） */
   model?: KyclawModel
+  /**
+   * 每轮对话重新解析模型（**生产用**：main/index.ts 注入"读 settings + secrets"的实现，
+   * 于是用户配好 provider/密钥后不用重启，下一轮就是真模型）。
+   */
+  resolveModel?: ModelResolver
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -121,6 +127,20 @@ export async function teardownQuietly(mastra: Mastra, storage: LibSQLStore): Pro
   }
 }
 
+/**
+ * 缺省模型来源：按 dataDir 下的 settings.providers 解析（没配 provider → 内置 mock）。
+ *
+ * 这里没有密钥来源（密钥在 electron 的 safeStorage 里，本模块刻意不 import electron），
+ * 所以**配了 provider 时会以"配置不完整：缺 API 密钥"失败**——生产路径由 main/index.ts
+ * 注入带 secrets 的 resolveModel；故意的失败好过静默回落 mock（T8 裁决）。
+ */
+function settingsModelResolver(dataDir: string): ModelResolver {
+  return async () => {
+    const providers = readSettings(settingsPath(dataDir)).providers
+    return (await resolveModel(providers, () => null)).model
+  }
+}
+
 export async function startAgentServer(options: AgentServerOptions): Promise<AgentServerHandle> {
   const [{ Hono }, { cors }, { MastraServer }] = await Promise.all([
     import('hono'),
@@ -128,11 +148,14 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     import('@mastra/hono')
   ])
 
-  let model = options.model
-  if (!model) {
-    model = (await resolveModel(readSettings(settingsPath(options.dataDir)).providers)).model
-  }
-  const { mastra, storage } = await createKyclawMastra({ dataDir: options.dataDir, model })
+  const staticModel = options.model
+  const resolveModelFor: ModelResolver =
+    options.resolveModel ??
+    (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
+  const { mastra, storage } = await createKyclawMastra({
+    dataDir: options.dataDir,
+    resolveModel: resolveModelFor
+  })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
 

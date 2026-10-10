@@ -1,20 +1,52 @@
 import { vi, type Mock } from 'vitest'
-import type { KyclawAgentApi, KyclawApi, KyclawWindowApi } from '@shared/ipc'
+import type { ConnectionTestResult, KyclawAgentApi, KyclawApi, KyclawWindowApi } from '@shared/ipc'
 import { defaultSettings, type AppSettings, type AppSettingsPatch } from '@shared/settings'
+import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 
 /**
  * jsdom 里没有真的 preload，`window.kyclaw` 默认不存在。
- * 这些桩给单测用的是一份最小可用的桥：settings 面可断言、window 面是空动作。
+ * 这些桩给单测用的是一份最小可用的桥：settings 面可断言（含"有状态"的密钥/删除语义），
+ * window 面是空动作。
  */
 export interface SettingsApiStub {
   get: Mock<() => Promise<AppSettings>>
   update: Mock<(patch: AppSettingsPatch) => Promise<AppSettings>>
+  setProviderKey: Mock<(id: string, key: string) => Promise<{ hasKey: true }>>
+  providerKeyStates: Mock<() => Promise<Record<string, ProviderKeyState>>>
+  testProvider: Mock<(id: string) => Promise<ConnectionTestResult>>
+  removeProvider: Mock<(id: string) => Promise<AppSettings>>
 }
 
 export function settingsApiStub(initial: AppSettings = defaultSettings()): SettingsApiStub {
+  let current = initial
+  const keyed = new Set<string>()
+
   return {
-    get: vi.fn(async () => initial),
-    update: vi.fn(async (patch: AppSettingsPatch) => ({ ...initial, ...patch }))
+    get: vi.fn(async () => current),
+    update: vi.fn(async (patch: AppSettingsPatch) => {
+      current = { ...current, ...patch }
+      return current
+    }),
+    setProviderKey: vi.fn(async (id: string) => {
+      keyed.add(id)
+      return { hasKey: true as const }
+    }),
+    providerKeyStates: vi.fn(async () => {
+      const states: Record<string, ProviderKeyState> = {}
+      for (const provider of current.providers) {
+        states[provider.id] = { hasKey: keyed.has(provider.id), needsReentry: false }
+      }
+      return states
+    }),
+    testProvider: vi.fn(async () => ({ ok: true as const, latencyMs: 128 })),
+    removeProvider: vi.fn(async (id: string) => {
+      current = {
+        ...current,
+        providers: current.providers.filter((provider: ProviderConfig) => provider.id !== id)
+      }
+      keyed.delete(id)
+      return current
+    })
   }
 }
 

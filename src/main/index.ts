@@ -8,8 +8,11 @@ import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerWindowIpc } from './ipc/window'
+import { getProviderKey, secretsPath } from './secrets'
+import { readSettings, settingsPath } from './settings'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
+import { resolveModel } from '../mastra/model'
 import type { AgentEndpoint } from '../shared/ipc'
 
 // R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
@@ -36,14 +39,26 @@ if (!app.requestSingleInstanceLock()) {
       optimizer.watchWindowShortcuts(window)
     })
 
+    const userDataDir = app.getPath('userData')
+    const secretsFile = secretsPath(userDataDir)
+
     registerWindowIpc()
-    registerSettingsIpc(app.getPath('userData'))
+    registerSettingsIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
     showMainWindow()
     createTray()
 
     // 服务启动不挡窗口：先让壳起来，端点好了再挂上（渲染端要端点时会等它）
-    startAgentServer({ dataDir: app.getPath('userData') })
+    startAgentServer({
+      dataDir: userDataDir,
+      // 每轮对话现读设置与密钥：设置页配好 provider 后下一轮就是真模型，不用重启；
+      // 密钥从 safeStorage 解出来只经过主进程内存（模型构建那一下），不进日志、不回渲染端
+      resolveModel: async () => {
+        const providers = readSettings(settingsPath(userDataDir)).providers
+        const resolved = await resolveModel(providers, (id) => getProviderKey(secretsFile, id))
+        return resolved.model
+      }
+    })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
         console.log(`[kyclaw] agent 服务已启动：${handle.baseUrl}`)

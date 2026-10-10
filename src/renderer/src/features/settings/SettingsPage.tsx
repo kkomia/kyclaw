@@ -3,10 +3,11 @@ import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
 import type { ReactNode } from 'react'
+import { ModelSettings } from './ModelSettings'
 
 /**
- * 设置页（T5 只做「外观」组：主题与字号）。
- * 其余五组（模型 / 工具 / 工作区 / 记忆 / 用量）先把分组结构与占位文案立起来，
+ * 设置页（T5 做「外观」组；T8 落地「模型」组）。
+ * 其余四组（工具 / 工作区 / 记忆 / 用量）先把分组结构与占位文案立起来，
  * 各自的任务落地时替换组内内容。
  *
  * 三选/三档的取值直接来自 shared/settings 的 schema（options 顺序就是显示顺序），
@@ -25,7 +26,6 @@ const FONT_LABELS: Record<FontTier, string> = {
 }
 
 const PENDING_GROUPS: Array<{ title: string; note: string; testId: string }> = [
-  { title: '模型', note: '模型与密钥尚未接入', testId: 'settings-group-model' },
   { title: '工具', note: '工具与权限开关尚未接入', testId: 'settings-group-tools' },
   { title: '工作区', note: '授权工作区尚未接入', testId: 'settings-group-workspaces' },
   { title: '记忆', note: '记忆设置尚未接入', testId: 'settings-group-memory' },
@@ -109,6 +109,10 @@ export function SettingsPage(): React.JSX.Element {
             }))}
           />
         </div>
+      </SettingsGroup>
+
+      <SettingsGroup title="模型" testId="settings-group-model">
+        <ModelSettings />
       </SettingsGroup>
 
       {PENDING_GROUPS.map((group) => (
