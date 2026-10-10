@@ -1,0 +1,114 @@
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { compile } from 'tailwindcss'
+import { describe, expect, it } from 'vitest'
+
+/**
+ * Tailwind 编译护栏。
+ *
+ * T2 报告 §4 记的缺口是"单测不跑 Tailwind 编译器，dark: 与工具类的可用性只有一次性构建证据"。
+ * 这里用 tailwindcss 自带的 compile()（已在依赖里，不引新包）真编译一遍入口样式：
+ *   1. dark: 变体确实产出 `[data-theme='dark']` 作用域的规则（换主题机制只有这一处）；
+ *   2. T3 组件用到的工具类语法（var() 简写、长度/颜色提示、data 与 group-data 变体）真能生成；
+ *   3. shimmer 工具类与动画时长走的是 token。
+ */
+
+const require = createRequire(import.meta.url)
+// 这里传字符串而不传 new URL(...)：jsdom 环境里的 URL 不是 Node 自己的实现，fileURLToPath 认不出来。
+const stylesDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const entryPath = resolve(stylesDir, 'tailwind.css')
+
+/** 真跑一遍 Tailwind：解析 @import、按候选类编译出 CSS（与 electron-vite 里同一份入口）。 */
+async function compileCandidates(candidates: string[]): Promise<string> {
+  const result = await compile(readFileSync(entryPath, 'utf8'), {
+    base: stylesDir,
+    loadStylesheet: async (id, base) => {
+      const path =
+        id === 'tailwindcss' ? require.resolve('tailwindcss/index.css') : resolve(base, id)
+      return { path, base: dirname(path), content: readFileSync(path, 'utf8') }
+    }
+  })
+  return result.build(candidates)
+}
+
+/** 断言前把空白归一，免得断言被源文件/编译器的换行方式左右。 */
+function flatten(css: string): string {
+  return css.replace(/\s+/g, ' ')
+}
+
+describe('Tailwind 编译护栏', () => {
+  it('dark: 变体产出 [data-theme=dark] 作用域规则（不是 .dark、也不是媒体查询）', async () => {
+    const css = flatten(await compileCandidates(['dark:bg-menu']))
+
+    expect(css).toContain(
+      ".dark\\:bg-menu:where([data-theme='dark'], [data-theme='dark'] *) { background-color: var(--bg-menu); }"
+    )
+    expect(css).not.toContain('prefers-color-scheme')
+  })
+
+  it('浅色工具类不带主题条件（对照：同一个 token 的两种写法）', async () => {
+    const css = flatten(await compileCandidates(['bg-menu']))
+    expect(css).toContain('.bg-menu { background-color: var(--bg-menu); }')
+  })
+
+  const UTILITY_CASES: Array<[string, string[]]> = [
+    // [候选类, 产物里必须出现的声明]
+    ['h-(--control-height-sm)', ['height: var(--control-height-sm)']],
+    ['min-w-(--control-min-width-md)', ['min-width: var(--control-min-width-md)']],
+    ['size-(--icon-size-md)', ['width: var(--icon-size-md)', 'height: var(--icon-size-md)']],
+    ['w-(--overlay-width-sm)', ['width: var(--overlay-width-sm)']],
+    ['max-w-(--overlay-max-width)', ['max-width: var(--overlay-max-width)']],
+    ['p-(--menu-pad)', ['padding: var(--menu-pad)']],
+    ['bg-(--button-primary-bg)', ['background-color: var(--button-primary-bg)']],
+    ['text-(--tooltip-fg)', ['color: var(--tooltip-fg)']],
+    ['placeholder:text-(--text-quaternary)', ['color: var(--text-quaternary)']],
+    ['border-(--border-field)', ['border-color: var(--border-field)']],
+    ['border-(length:--hairline-width)', ['border-width: var(--hairline-width)']],
+    ['rounded-(--menu-item-radius)', ['border-radius: var(--menu-item-radius)']],
+    ['opacity-(--icon-opacity)', ['opacity: var(--icon-opacity)']],
+    ['shadow-(--shadow-overlay)', ['--tw-shadow: var(--shadow-overlay)']],
+    ['backdrop-blur-(--blur-glass)', ['--tw-backdrop-blur: blur(var(--blur-glass))']],
+    ['duration-(--motion-main)', ['transition-duration: var(--motion-main)']],
+    ['data-[highlighted]:bg-hover', ['background-color: var(--fill-hover)']],
+    [
+      'group-data-disabled:opacity-(--icon-opacity-disabled)',
+      ['opacity: var(--icon-opacity-disabled)']
+    ],
+    ['group-hover:opacity-(--icon-opacity-hover)', ['opacity: var(--icon-opacity-hover)']]
+  ]
+
+  it.each(UTILITY_CASES)('工具类 %s 生成 token 引用', async (candidate, declarations) => {
+    const css = flatten(await compileCandidates([candidate]))
+
+    for (const declaration of declarations) {
+      expect(css, `${candidate} 缺少 ${declaration}`).toContain(declaration)
+    }
+  })
+
+  it('变量简写要能写进 data-*/group-* 变体（图标按钮的禁用态依赖它）', async () => {
+    const css = flatten(
+      await compileCandidates(['group-data-disabled:opacity-(--icon-opacity-disabled)'])
+    )
+    expect(css).toContain('data-disabled')
+    expect(css).toContain('var(--icon-opacity-disabled)')
+  })
+
+  it('spinner 用 1s linear 常速（--duration-loop，§6.5）', async () => {
+    const css = flatten(await compileCandidates(['animate-spin']))
+    expect(css).toContain('animation: spin var(--duration-loop) linear infinite')
+    expect(css).toContain('@keyframes spin')
+  })
+
+  it('shimmer 工具类与关键帧进产物（§6.6，高光色走 token）', async () => {
+    const css = flatten(await compileCandidates(['shimmer']))
+    expect(css).toContain('.shimmer {')
+    expect(css).toContain(
+      'background-image: linear-gradient(90deg, transparent, var(--skeleton-highlight), transparent)'
+    )
+    expect(css).toContain('background-size: 200% 100%')
+    expect(css).toContain('animation: shimmer var(--duration-loop-slow) linear infinite')
+    expect(css).toContain('@keyframes shimmer')
+  })
+})

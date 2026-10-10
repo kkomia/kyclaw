@@ -79,6 +79,30 @@
 
   /* 缓动 → ease-main（主档 .3s ease-in-out 的曲线部分；时长走 --motion-main） */
   --ease-main: var(--motion-ease-inout);
+
+  /* 动效：spinner 统一 1s linear infinite（§6.5），时长引用工程阶梯的 --duration-loop。
+     inline 之后工具类里就是 animation: spin var(--duration-loop) linear infinite。 */
+  --animate-spin: spin var(--duration-loop) linear infinite;
+}
+
+/* 骨架屏 shimmer（§6.6 的 shimmer 关键帧：background-position 200% → 0）。
+   高光色要按主题换档（--skeleton-highlight），所以固化成 @utility，
+   而不是在组件类名里拼一长串任意值。 */
+@utility shimmer {
+  background-image: linear-gradient(90deg, transparent, var(--skeleton-highlight), transparent);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer var(--duration-loop-slow) linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: 0 0;
+  }
 }
 
 @layer base {

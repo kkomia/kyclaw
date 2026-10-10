@@ -389,7 +389,6 @@ describe('语义层（semantic.css）', () => {
     ['--bg-menu', 'var(--Bg-Tertiary)'],
     ['--text-primary', 'var(--Labels-Primary)'],
     ['--text-secondary', 'var(--Labels-Secondary)'],
-    ['--text-tertiary', 'var(--Labels-Tertiary)'],
     ['--border-hairline', 'var(--Separators-S1)'],
     ['--fill-hover', 'var(--Fills-F1)'],
     ['--fill-selected', 'var(--Fills-F2)'],
@@ -440,6 +439,83 @@ describe('语义层（semantic.css）', () => {
     expect(referenced.length).toBeGreaterThan(20)
     for (const name of referenced) {
       expect(declared.has(name), `原样层没有定义 ${name}`).toBe(true)
+    }
+  })
+})
+
+describe('T3 控件尺寸与组件级 token（UI 验收表数值）', () => {
+  const t3root = semantic.get(':root') ?? new Map<string, string>()
+  const t3dark = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
+
+  it('三级/四级灰用达标档（spec §6.5 刻意偏离；台账 R6）', () => {
+    expectDecl(t3root, '--text-tertiary', '#0000008c', 'semantic :root')
+    expectDecl(t3root, '--text-quaternary', '#00000070', 'semantic :root')
+    expectDecl(t3dark, '--text-tertiary', '#ffffff85', "semantic :root[data-theme='dark']")
+    expectDecl(t3dark, '--text-quaternary', '#ffffff5c', "semantic :root[data-theme='dark']")
+  })
+
+  const CONTROL_TOKENS: Array<[string, string]> = [
+    // 控件高度阶梯（§4.7）
+    ['--control-height-sm', '26px'],
+    ['--control-height-md', '32px'],
+    ['--control-height-lg', '44px'],
+    ['--control-min-width-sm', '52px'],
+    ['--control-min-width-md', '62px'],
+    ['--control-min-width-lg', '72px'],
+    ['--icon-button-size', '36px'],
+    ['--field-height', '40px'],
+    ['--chip-height', '36px'],
+    // 图标与 spinner（§4.7 spinner 16/18/20、§4.8 图标 18 与不透明度三档）
+    ['--icon-size-sm', '16px'],
+    ['--icon-size-md', '18px'],
+    ['--icon-size-lg', '20px'],
+    ['--icon-opacity', '0.56'],
+    ['--icon-opacity-hover', '0.84'],
+    ['--icon-opacity-disabled', '0.26'],
+    ['--spinner-stroke', '1.5px'],
+    // 按钮（§7）
+    ['--button-primary-bg', 'var(--Labels-Primary)'],
+    ['--button-primary-bg-hover', 'var(--Labels-Primary-hover)'],
+    ['--button-primary-bg-active', 'var(--Labels-Primary-active)'],
+    ['--button-primary-fg', 'var(--Bg-Primary)'],
+    ['--button-danger-bg', 'var(--Colors-Red)'],
+    ['--button-danger-bg-hover', 'var(--Colors-Red-hover)'],
+    ['--button-danger-bg-active', 'var(--Colors-Red-active)'],
+    ['--button-danger-fg', 'var(--Always-White)'],
+    ['--text-disabled', 'var(--Labels-Quaternary)'],
+    ['--fill-disabled', 'var(--Fills-F3)'],
+    // 输入框（§4.7 .kimi-select）、菜单（§7）、弹层（§4.5）
+    ['--border-field', 'var(--Fills-F1)'],
+    ['--field-bg', 'var(--Bg-Primary)'],
+    ['--menu-item-height', '36px'],
+    ['--menu-pad', 'var(--space-2)'],
+    ['--menu-item-radius', 'var(--radius-control)'],
+    ['--overlay-width-sm', '360px'],
+    ['--overlay-width-md', '560px'],
+    ['--overlay-max-width', 'calc(100vw - var(--space-8))'],
+    ['--shadow-overlay', '0 4px 16.4px var(--Shadows-S1)'],
+    ['--bg-overlay', 'var(--Bg-Tertiary)'],
+    // 提示与骨架屏
+    ['--tooltip-bg', 'var(--Always-TransparencyDarkFill)'],
+    ['--tooltip-fg', 'var(--Always-WhiteSecondary)'],
+    ['--skeleton-base', 'var(--Fills-F2)'],
+    ['--skeleton-highlight', 'var(--Bg-Primary)']
+  ]
+
+  it.each(CONTROL_TOKENS)('T3 token %s = %s', (name, value) => {
+    expectDecl(t3root, name, value, 'semantic :root')
+  })
+
+  it('深色档只重写必须分档的，别名不重复声明（翻档交给原样层）', () => {
+    expectDecl(t3dark, '--field-bg', 'var(--Bg-Secondary)', "semantic :root[data-theme='dark']")
+    expectDecl(
+      t3dark,
+      '--skeleton-highlight',
+      'var(--Always-TransparencyWhite15)',
+      "semantic :root[data-theme='dark']"
+    )
+    for (const name of ['--button-primary-bg', '--bg-overlay', '--menu-pad', '--icon-opacity']) {
+      expect(t3dark.has(name), `深色档不该重写别名 ${name}`).toBe(false)
     }
   })
 })

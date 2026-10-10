@@ -1,13 +1,19 @@
 /**
  * 语义层：工程名 → 原样层（docs/superpowers/specs/2026-10-10-kyclaw-design.md §6.1）。
- * 组件只用这一层，不直接引用 Kimi 名（--Bg-* / --Labels-* 等）。
+ * 组件只用这一层；工程阶梯（--space-* / --radius-* / --duration-*，台账 R7）允许组件直接引用。
+ * 不直接引用 Kimi 名（--Bg-* / --Labels-* 等）。
  *
- * 条目分三类，取值都有出处：
+ * 条目分四类，取值都有出处：
  *   1. 纯别名——指向原样层，深色档不用重写（var() 在使用处解析，翻档后跟着翻）；
  *   2. 文档点名的字面值——--focus-ring（§5.4 焦点环）、--motion-ease-inout（§6.3 的组合）、
  *      --accent-text（§7：Kimi 只有填充蓝，没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
- *   3. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
+ *   3. 控件尺寸与状态——§4.7 控件高度阶梯、§4.8 图标尺度与不透明度、§7 点名的按钮/菜单/弹层值。
+ *      Kimi 侧是组件级字面量（没有原样 token），在这里各起一个工程名；
+ *   4. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
  *      不照抄 §2.14 的浅色取色（那格与画布同值、分辨不出，照抄会看不见）。
+ *
+ * 刻意偏离（spec §6.5、台账 R6）：三级/四级灰用达标档（三级 ≥4.5:1、四级 ≥3:1），
+ * 不照抄 --Labels-Tertiary / --Labels-Quaternary 的 3.35:1 / 2.11:1。
  */
 
 :root {
@@ -16,18 +22,23 @@
   --bg-primary: var(--Bg-Primary);
   --bg-secondary: var(--Bg-Secondary);
   --bg-menu: var(--Bg-Tertiary);
+  --bg-overlay: var(--Bg-Tertiary);
 
   /* 文字 */
   --text-primary: var(--Labels-Primary);
   --text-secondary: var(--Labels-Secondary);
-  --text-tertiary: var(--Labels-Tertiary);
+  --text-tertiary: #0000008c;
+  --text-quaternary: #00000070;
+  --text-disabled: var(--Labels-Quaternary);
 
   /* 分隔与填充 */
   --border-hairline: var(--Separators-S1);
+  --border-field: var(--Fills-F1);
   --hairline-width: var(--border-width-hairline);
   --fill-hover: var(--Fills-F1);
   --fill-selected: var(--Fills-F2);
   --fill-active: var(--Fills-F3);
+  --fill-disabled: var(--Fills-F3);
 
   /* 强调与语义状态 */
   --accent: var(--Colors-KMBlue);
@@ -40,6 +51,60 @@
   --danger-bg: var(--Others-LightRedBg);
   --diff-add: var(--Colors-DiffAdd);
   --diff-delete: var(--Colors-DiffDelete);
+
+  /* 控件尺寸（§4.7：按钮 26/32/44、图标按钮 36、输入框/下拉 40；chip 高 36 见 §4.6。
+     图标与 spinner 共用一把尺：§4.7 spinner 16/18/20、§4.8 通用图标 18） */
+  --control-height-sm: 26px;
+  --control-height-md: 32px;
+  --control-height-lg: 44px;
+  --control-min-width-sm: 52px;
+  --control-min-width-md: 62px;
+  --control-min-width-lg: 72px;
+  --icon-button-size: 36px;
+  --field-height: 40px;
+  --chip-height: 36px;
+  --icon-size-sm: 16px;
+  --icon-size-md: 18px;
+  --icon-size-lg: 20px;
+  --icon-opacity: 0.56;
+  --icon-opacity-hover: 0.84;
+  --icon-opacity-disabled: 0.26;
+  --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
+
+  /* 按钮（§7：主按钮＝墨色 Labels-Primary 实心、禁用＝Fills-F3 底 + Labels-Quaternary 字；
+     hover/active 取同族档，深浅两套由原样层解析） */
+  --button-primary-bg: var(--Labels-Primary);
+  --button-primary-bg-hover: var(--Labels-Primary-hover);
+  --button-primary-bg-active: var(--Labels-Primary-active);
+  --button-primary-fg: var(--Bg-Primary);
+  --button-danger-bg: var(--Colors-Red);
+  --button-danger-bg-hover: var(--Colors-Red-hover);
+  --button-danger-bg-active: var(--Colors-Red-active);
+  --button-danger-fg: var(--Always-White);
+
+  /* 输入框底（§2.14 实测：浅 #ffffff = Bg-Primary、深 #1f1f1f = Bg-Secondary；
+     两档都是"相对页面抬起"的那一格，故按主题分档，见深色块） */
+  --field-bg: var(--Bg-Primary);
+
+  /* 菜单（§7：条目高 36、面板内边距 8、菜单项圆角 10） */
+  --menu-item-height: 36px;
+  --menu-pad: var(--space-2);
+  --menu-item-radius: var(--radius-control);
+
+  /* 弹层（§4.5：small 360 / medium 560、最大宽 calc(100vw - 32px)。
+     阴影＝§5.4 特征值 0 4px 16.4px × §2.12 阴影基色 → 浅色与验收表的 #0000001a 逐字一致） */
+  --overlay-width-sm: 360px;
+  --overlay-width-md: 560px;
+  --overlay-max-width: calc(100vw - var(--space-8));
+  --shadow-overlay: 0 4px 16.4px var(--Shadows-S1);
+
+  /* 提示气泡（§2.9 深色填充 60% 黑 + 84% 白字，两主题同值） */
+  --tooltip-bg: var(--Always-TransparencyDarkFill);
+  --tooltip-fg: var(--Always-WhiteSecondary);
+
+  /* 骨架屏（shimmer 关键帧在 tailwind.css，§6.6）：底 Fills-F2；高光浅色比底更亮，深色换白高光 */
+  --skeleton-base: var(--Fills-F2);
+  --skeleton-highlight: var(--Bg-Primary);
 
   /* 圆角（对应原样层的十个组件级 token 与工程阶梯）
      --radius-input 指"输入区/输入卡"（§5.1 --chat-input-radius 24px）；
@@ -67,5 +132,10 @@
 }
 
 :root[data-theme='dark'] {
+  /* 深色档只重写"必须分档"的字面值：别名（var() 指向原样层）在使用处解析，不在这里重复声明。 */
   --accent-text: #3194ff;
+  --text-tertiary: #ffffff85;
+  --text-quaternary: #ffffff5c;
+  --field-bg: var(--Bg-Secondary);
+  --skeleton-highlight: var(--Always-TransparencyWhite15);
 }
