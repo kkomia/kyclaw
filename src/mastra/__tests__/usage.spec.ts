@@ -1,0 +1,349 @@
+// @vitest-environment node
+/**
+ * T14 Step 2：用量记账。
+ *
+ * 两层：
+ *   1. 价目与花费计算（纯函数）：已知模型按价目算、未知模型 cost=null、缓存档打折、
+ *      统计窗口的边界（今天 = 本地零点起；本月 = 本地 1 号零点起）；
+ *   2. 真服务集成（startAgentServer：chat 路由 v7 + libsql + Memory + usage 表）：
+ *      一轮对话的 usage 从 chat 流里被记账钩子提取 → 写进 libsql 的 `usage_runs` →
+ *      `GET /api/usage` 能按模型看到 token 与花费。
+ *
+ * 记账钩子的到达位置见 src/mastra/usage.ts 头注（chatRoute 的 defaultOptions.onFinish）。
+ */
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Hono } from 'hono'
+import { LibSQLStore } from '@mastra/libsql'
+import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { startAgentServer, type AgentServerHandle } from '../../main/agent/service'
+import { usageResponseSchema, type UsageResponse } from '../../shared/usage'
+import { threadMemoryBody } from '../../shared/threads'
+import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
+import type { KyclawModel } from '../model'
+import { createUsageRouter } from '../routes/usage'
+import {
+  computeCost,
+  createUsageStore,
+  MODEL_PRICING,
+  pricingFor,
+  rangeStart,
+  summarizeUsage,
+  usageSqlClient,
+  type UsageRun
+} from '../usage'
+
+const USAGE = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 3, text: 3, reasoning: 0 }
+}
+const FINISH_STOP = { unified: 'stop' as const, raw: 'stop' }
+
+/** mock 流的 chunk 类型（从 MockLanguageModelV4 的 doStream 签名上取，避免手抄 spec） */
+type DoStreamResult = Awaited<ReturnType<MockLanguageModelV4['doStream']>>
+type StreamPart = DoStreamResult extends { stream: ReadableStream<infer Part> } ? Part : never
+
+function textScript(text: string): StreamPart[] {
+  return [
+    { type: 'stream-start', warnings: [] },
+    { type: 'text-start', id: 't1' },
+    { type: 'text-delta', id: 't1', delta: text },
+    { type: 'text-end', id: 't1' },
+    { type: 'finish', finishReason: FINISH_STOP, usage: USAGE }
+  ]
+}
+
+/** 造一行 usage_runs（token 从 input/output 推出 total，除非显式给） */
+function run(overrides: {
+  model: string
+  provider?: string | null
+  input?: number
+  output?: number
+  total?: number
+  cost?: number | null
+  at?: Date
+}): UsageRun {
+  const input = overrides.input ?? 0
+  const output = overrides.output ?? 0
+  return {
+    id: `run-${Math.random().toString(36).slice(2)}`,
+    runId: null,
+    model: overrides.model,
+    provider: overrides.provider ?? null,
+    tokens: { input, output, total: overrides.total ?? input + output },
+    cachedInput: null,
+    cost: overrides.cost ?? null,
+    createdAt: (overrides.at ?? new Date()).toISOString()
+  }
+}
+
+/** 从行列表算窗口内的运行总数（断言"记了几行"用） */
+function runCount(usage: UsageResponse): number {
+  return usage.byModel.reduce((sum, row) => sum + row.runs, 0)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+describe('价目与花费计算', () => {
+  it('价目查找：认大小写与 provider 前缀，认 DeepSeek 的现行与遗留模型名，其余 null', () => {
+    expect(pricingFor('deepseek-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
+    expect(pricingFor('DeepSeek-Flash')).toEqual(MODEL_PRICING['deepseek-flash'])
+    expect(pricingFor('deepseek/deepseek-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
+    expect(pricingFor('deepseek-v4-pro')).toEqual(MODEL_PRICING['deepseek-v4-pro'])
+    // 遗留名 deepseek-v4-flash 由 Flash 承载（官方定价页脚注），按 Flash 计价
+    expect(pricingFor('deepseek-v4-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
+    expect(pricingFor('kimi-k3')).toBeNull()
+    expect(pricingFor('')).toBeNull()
+    expect(pricingFor(null)).toBeNull()
+    expect(pricingFor(undefined)).toBeNull()
+  })
+
+  it('花费 = 输入(未命中) + 输入(命中) + 输出，按百万 token 单价折算', () => {
+    const pricing = MODEL_PRICING['deepseek-flash']
+    expect(computeCost(pricing, { input: 1_000_000, output: 1_000_000 })).toBeCloseTo(
+      pricing.inputPerMillion + pricing.outputPerMillion,
+      10
+    )
+    // 全部命中缓存：输入按命中价
+    expect(
+      computeCost(pricing, { input: 1_000_000, output: 0, cachedInput: 1_000_000 })
+    ).toBeCloseTo(pricing.cachedInputPerMillion, 10)
+    // 命中数超过输入数：按输入数封顶（不出现负的"未命中"）
+    expect(
+      computeCost(pricing, { input: 1_000_000, output: 0, cachedInput: 2_000_000 })
+    ).toBeCloseTo(pricing.cachedInputPerMillion, 10)
+    expect(computeCost(pricing, { input: 0, output: 0 })).toBe(0)
+  })
+
+  it('窗口边界：今天 = 本地零点起；本月 = 本地 1 号零点起', () => {
+    const now = new Date(2026, 9, 15, 13, 45, 30) // 2026-10-15 13:45:30（本地）
+    expect(rangeStart('today', now).getTime()).toBe(new Date(2026, 9, 15, 0, 0, 0, 0).getTime())
+    expect(rangeStart('month', now).getTime()).toBe(new Date(2026, 9, 1, 0, 0, 0, 0).getTime())
+  })
+
+  it('汇总：按模型分组（token 降序）、有价部分求和、未知模型让 costIncomplete 为真', () => {
+    const rows: UsageRun[] = [
+      run({ model: 'a-known', provider: 'p', input: 100, output: 50, cost: 0.5 }),
+      run({ model: 'a-known', provider: 'p', input: 30, output: 10, cost: 0.1 }),
+      run({ model: 'b-unknown', provider: null, input: 7, output: 3, cost: null })
+    ]
+
+    const summary = summarizeUsage(rows, 'today')
+    expect(summary.tokens).toEqual({ input: 137, output: 63, total: 200 })
+    expect(summary.cost).toBeCloseTo(0.6, 10)
+    expect(summary.costIncomplete).toBe(true)
+    expect(summary.byModel.map((row) => [row.model, row.runs])).toEqual([
+      ['a-known', 2],
+      ['b-unknown', 1]
+    ])
+    expect(summary.byModel[0]?.tokens).toEqual({ input: 130, output: 60, total: 190 })
+    expect(summary.byModel[0]?.cost).toBeCloseTo(0.6, 10)
+    expect(summary.byModel[1]?.cost).toBeNull()
+  })
+
+  it('汇总边界：空列表 = 全 0 且 cost=null；全是未知模型 = cost=null（不把未知当 0）', () => {
+    expect(summarizeUsage([], 'today')).toMatchObject({
+      tokens: { input: 0, output: 0, total: 0 },
+      cost: null,
+      costIncomplete: false,
+      byModel: []
+    })
+    expect(summarizeUsage([run({ model: 'x', cost: null })], 'today')).toMatchObject({
+      cost: null,
+      costIncomplete: true
+    })
+  })
+})
+
+describe('用量路由：窗口过滤（真 libsql，注入 now）', () => {
+  let dir: string
+  let storage: LibSQLStore
+  let store: ReturnType<typeof createUsageStore>
+  let app: Hono
+
+  const NOW = new Date(2026, 9, 15, 12, 0, 0) // 2026-10-15 12:00（本地）
+
+  async function get(range: string): Promise<UsageResponse> {
+    const response = await app.request(`/api/usage?range=${range}`)
+    expect(response.status).toBe(200)
+    return usageResponseSchema.parse(await response.json())
+  }
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'kyclaw-usage-route-'))
+    storage = new LibSQLStore({
+      id: 'kyclaw-usage-route',
+      url: `file:${join(dir, 'kyclaw.db').replace(/\\/g, '/')}`
+    })
+    store = createUsageStore(usageSqlClient(storage))
+    await store.ensureTable()
+    app = new Hono().route('/api/usage', createUsageRouter({ store, now: () => NOW }))
+  })
+
+  afterAll(async () => {
+    await storage?.close()
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch {
+      console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）：', dir)
+    }
+  })
+
+  it('空窗口：全 0、cost=null、costIncomplete=false、byModel 空', async () => {
+    expect(await get('today')).toMatchObject({
+      range: 'today',
+      tokens: { input: 0, output: 0, total: 0 },
+      cost: null,
+      costIncomplete: false,
+      byModel: []
+    })
+  })
+
+  it('今日只算今天零点之后；本月从 1 号零点起', async () => {
+    await store.insert(
+      run({ model: 'm-today', input: 10, output: 1, at: new Date(2026, 9, 15, 9, 0, 0) })
+    )
+    await store.insert(
+      run({ model: 'm-yesterday', input: 20, output: 2, at: new Date(2026, 9, 14, 23, 0, 0) })
+    )
+    await store.insert(
+      run({ model: 'm-month-start', input: 30, output: 3, at: new Date(2026, 9, 1, 0, 0, 0) })
+    )
+    await store.insert(
+      run({ model: 'm-last-month', input: 40, output: 4, at: new Date(2026, 8, 30, 23, 59, 0) })
+    )
+
+    const today = await get('today')
+    expect(today.range).toBe('today')
+    expect(today.tokens).toEqual({ input: 10, output: 1, total: 11 })
+    expect(today.byModel.map((row) => row.model)).toEqual(['m-today'])
+
+    const month = await get('month')
+    expect(month.range).toBe('month')
+    expect(month.tokens).toEqual({ input: 60, output: 6, total: 66 })
+    expect(month.byModel.map((row) => row.model)).toEqual([
+      'm-month-start',
+      'm-yesterday',
+      'm-today'
+    ])
+  })
+
+  it('脏 range → 400', async () => {
+    const response = await app.request('/api/usage?range=nope')
+    expect(response.status).toBe(400)
+  })
+})
+
+describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage）', () => {
+  let dir: string
+  let server: AgentServerHandle
+  let currentModel: KyclawModel
+
+  function mock(provider: string, modelId: string): KyclawModel {
+    return new MockLanguageModelV4({
+      provider,
+      modelId,
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: textScript('好。'),
+          initialDelayInMs: 0,
+          chunkDelayInMs: 0
+        })
+      })
+    })
+  }
+
+  async function chat(threadId: string, text: string): Promise<void> {
+    const response = await fetch(`${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${server.token}` },
+      body: JSON.stringify({
+        messages: [{ id: `u-${threadId}`, role: 'user', parts: [{ type: 'text', text }] }],
+        ...threadMemoryBody(threadId)
+      })
+    })
+    expect(response.status).toBe(200)
+    await response.text()
+  }
+
+  async function usage(range: 'today' | 'month'): Promise<UsageResponse> {
+    const response = await fetch(`${server.baseUrl}/api/usage?range=${range}`, {
+      headers: { authorization: `Bearer ${server.token}` }
+    })
+    expect(response.status).toBe(200)
+    return usageResponseSchema.parse(await response.json())
+  }
+
+  /** 记账发生在流收尾处：等到窗口里的行数到齐再断言（最多等 5s） */
+  async function waitForRuns(expected: number): Promise<UsageResponse> {
+    const deadline = Date.now() + 5000
+    let last = await usage('today')
+    while (runCount(last) < expected && Date.now() < deadline) {
+      await sleep(50)
+      last = await usage('today')
+    }
+    return last
+  }
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'kyclaw-usage-'))
+    currentModel = mock('deepseek', 'deepseek-flash')
+    server = await startAgentServer({
+      dataDir: dir,
+      resolveModel: async () => currentModel
+    })
+  }, 60_000)
+
+  afterAll(async () => {
+    await server?.stop()
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch {
+      console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）：', dir)
+    }
+  })
+
+  it('已知模型：token 从 chat 流进表，花费按价目算出来', async () => {
+    await chat('thread-usage-known', '你好')
+    const today = await waitForRuns(1)
+
+    expect(today.tokens).toEqual({ input: 1, output: 3, total: 4 })
+    expect(today.costIncomplete).toBe(false)
+    expect(today.cost).toBeCloseTo(
+      computeCost(MODEL_PRICING['deepseek-flash'], { input: 1, output: 3 }),
+      12
+    )
+    expect(today.byModel).toHaveLength(1)
+    expect(today.byModel[0]).toMatchObject({
+      model: 'deepseek-flash',
+      provider: 'deepseek',
+      runs: 1,
+      tokens: { input: 1, output: 3, total: 4 }
+    })
+    expect(today.byModel[0]?.cost).toBeGreaterThan(0)
+    // 本地日历的窗口口径：同一批行在"本月"里也应当出现（今天 ⊂ 本月）
+    expect((await usage('month')).tokens).toEqual(today.tokens)
+  }, 30_000)
+
+  it('未知模型：只记 token，cost=null、costIncomplete=true（不把未知当 0）', async () => {
+    currentModel = mock('kyclaw-test', 'kyclaw-test-mock')
+    await chat('thread-usage-unknown', '再问一句')
+    const today = await waitForRuns(2)
+
+    expect(today.tokens).toEqual({ input: 2, output: 6, total: 8 })
+    expect(today.costIncomplete).toBe(true)
+    const unknown = today.byModel.find((row) => row.model === 'kyclaw-test-mock')
+    expect(unknown).toMatchObject({
+      provider: 'kyclaw-test',
+      runs: 1,
+      tokens: { input: 1, output: 3, total: 4 },
+      cost: null
+    })
+    // 已知模型那一行照常计价
+    expect(today.byModel.find((row) => row.model === 'deepseek-flash')?.cost).toBeGreaterThan(0)
+  }, 30_000)
+})

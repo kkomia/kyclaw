@@ -14,7 +14,9 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
 import { createMcpRouter } from '../../mastra/routes/mcp'
+import { createMemoryRouter } from '../../mastra/routes/memory'
 import { createThreadsRouter } from '../../mastra/routes/threads'
+import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
@@ -34,6 +36,12 @@ export const THREADS_ROUTE_PREFIX = '/api/threads'
 
 /** MCP 管理 API 的挂载前缀（路由本体在 src/mastra/routes/mcp.ts） */
 export const MCP_ROUTE_PREFIX = '/api/mcp'
+
+/** 记忆 API 的挂载前缀（T14；working memory 的查看/编辑/清空） */
+export const MEMORY_ROUTE_PREFIX = '/api/memory'
+
+/** 用量 API 的挂载前缀（T14；token 与花费的窗口统计） */
+export const USAGE_ROUTE_PREFIX = '/api/usage'
 
 /** 端口尝试上限（显式端口被占时换端口重试的次数） */
 const DEFAULT_PORT_ATTEMPTS = 5
@@ -200,7 +208,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory } = await createKyclawMastra({
+  const { mastra, storage, memory, usage } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
     workspaces: workspacesFor,
@@ -261,6 +269,12 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       }
     })
   )
+
+  // 记忆 API（T14）：working memory 的查看/编辑/清空——读写的就是 agent 每轮用的那份记忆
+  app.route(MEMORY_ROUTE_PREFIX, createMemoryRouter({ memory }))
+
+  // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
+  app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage }))
 
   const attempts = Math.max(1, options.attempts ?? DEFAULT_PORT_ATTEMPTS)
   let server: NodeServer | undefined
