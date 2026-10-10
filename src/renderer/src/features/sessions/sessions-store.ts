@@ -9,6 +9,8 @@
  *     如果结束时人不在这个会话上，记一个完成点并发系统通知（spec §7.2 的"完成通知"）。
  *
  * 失败一律落 `error` 字段（侧栏显示 + 重试），不抛给调用方：侧栏不该把整个应用带崩。
+ * 界面文案是产品口径（不写后端原文），**原始 error 一律 `console.error` 留底**，
+ * 生产排障有落点（T9 之后复核指出过：只落文案、原文丢了）。
  */
 import { create } from 'zustand'
 import type { ThreadSummary } from '@shared/threads'
@@ -77,7 +79,10 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
           activeId: state.activeId ?? threads[0]?.id ?? newThreadId()
         }))
       } catch (error) {
-        // 列表没载入也要能继续：开草稿对话（服务通不通由对话页的错误卡说）
+        // 列表没载入也要能继续：开草稿对话（服务通不通由对话页的错误卡说）。
+        // 界面上只说"会话列表加载失败"（雷点 2.2：不把后端原文写给用户看），
+        // 原始 error 落控制台 —— 生产排障（DevTools / 日志）要有落点。
+        console.error('[kyclaw] 会话列表加载失败', error)
         set((state) => ({
           loaded: true,
           error: messageOf(error),
@@ -95,6 +100,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       const threads = await fetchThreads()
       set({ threads, loaded: true, error: null })
     } catch (error) {
+      console.error('[kyclaw] 刷新会话列表失败', error)
       set({ error: messageOf(error) })
     }
   },
@@ -114,6 +120,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     try {
       await deleteThread(threadId)
     } catch (error) {
+      console.error('[kyclaw] 删除会话失败', error)
       set({ error: messageOf(error) })
       return
     }
@@ -137,6 +144,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
         error: null
       }))
     } catch (error) {
+      console.error('[kyclaw] 重命名会话失败', error)
       set({ error: messageOf(error) })
     }
   },
@@ -170,8 +178,9 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
           )
         }))
       }
-    } catch {
+    } catch (error) {
       // 标题生成失败不影响会话本身（服务端已降级；这里连降级都没拿到就用"新会话"显示）
+      console.error('[kyclaw] 生成会话标题失败', error)
     }
     void get().refresh()
   },

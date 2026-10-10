@@ -39,6 +39,14 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(screen.getByTestId('composer-send')).toHaveClass('size-9')
   })
 
+  it('焦点指示由卡片给（跟圆角），输入框自己不再画方框（雷点 6）', () => {
+    setup()
+
+    // 输入框本身没有圆角：它自己画的 inset 环会压在卡片圆角上（深色下就是那个白色直角框）
+    expect(screen.getByTestId('composer')).toHaveClass('focus-ring-container')
+    expect(screen.getByTestId('composer-input')).toHaveClass('focus-visible:shadow-none')
+  })
+
   it('默认单行紧凑：没有横幅带、也没有键盘提示小字（雷点 2：不靠小字补设计）', () => {
     setup()
 

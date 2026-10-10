@@ -64,7 +64,7 @@ describe('设置页骨架（栏目页）', () => {
     expect(screen.getByTestId('settings-group-model')).toHaveTextContent('添加通道')
   })
 
-  it('还没做的栏目：一句状态就够（不写实现细节）', () => {
+  it('空栏目：一句中性空态（不带"还没做"这类研发口吻）', () => {
     for (const [section, testId] of [
       ['tools', 'settings-group-tools'],
       ['memory', 'settings-group-memory'],
@@ -75,7 +75,8 @@ describe('设置页骨架（栏目页）', () => {
           <SettingsPage />
         </MemoryRouter>
       )
-      expect(screen.getByTestId(testId), testId).toHaveTextContent('还没做')
+      expect(screen.getByTestId(testId), testId).toHaveTextContent('暂无可调整的设置')
+      expect(screen.getByTestId(testId), testId).not.toHaveTextContent('还没做')
       view.unmount()
     }
   })
@@ -84,7 +85,9 @@ describe('设置页骨架（栏目页）', () => {
     renderPage('/settings/workspaces')
 
     expect(screen.getByTestId('settings-group-workspaces')).toHaveTextContent('添加文件夹')
-    expect(screen.getByTestId('settings-group-workspaces')).not.toHaveTextContent('还没做')
+    expect(screen.getByTestId('settings-group-workspaces')).not.toHaveTextContent(
+      '暂无可调整的设置'
+    )
   })
 })
 

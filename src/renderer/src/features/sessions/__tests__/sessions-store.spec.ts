@@ -107,17 +107,22 @@ const THREADS: ThreadRow[] = [
   { id: 't-old', title: '更早的会话', updatedAt: '2026-10-08T09:00:00.000Z' }
 ]
 
+/** 失败用例会往控制台打原始 error（产品的排障落点）：这里统一静音，只有断言日志的用例读它 */
+let errorLog: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   installKyclawBridge()
   resetSessionsStore()
   resetThreadChats()
   FakeNotification.instances = []
   vi.stubGlobal('Notification', FakeNotification)
+  errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
 afterEach(() => {
   clearKyclawBridge()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('ensureLoaded / refresh', () => {
@@ -165,6 +170,20 @@ describe('ensureLoaded / refresh', () => {
     expect(state.loaded).toBe(true)
     expect(state.error).toContain('连接被拒绝')
     expect(state.activeId).not.toBeNull()
+  })
+
+  it('失败时原始 error 落 console.error（界面文案产品化，排障有落点）', async () => {
+    const server = installFakeServer(THREADS)
+    const failure = new Error('connect ECONNREFUSED 127.0.0.1:60239')
+    server.failNext(failure)
+
+    await useSessionsStore.getState().ensureLoaded()
+    server.failNext(new Error('500 内部错误'))
+    await useSessionsStore.getState().refresh()
+
+    // 落的是原始 Error 对象本身（不是只剩 message 的字符串）
+    expect(errorLog).toHaveBeenCalledWith('[kyclaw] 会话列表加载失败', failure)
+    expect(errorLog).toHaveBeenCalledWith('[kyclaw] 刷新会话列表失败', expect.any(Error))
   })
 
   it('refresh 成功后清掉错误（重试路径）', async () => {
@@ -219,15 +238,17 @@ describe('新建 / 切换 / 删除 / 重命名', () => {
     expect(useSessionsStore.getState().threads[0].title).toBe('改过的名字')
   })
 
-  it('重命名失败：error 置位（不抛给调用方）', async () => {
+  it('重命名失败：error 置位（不抛给调用方），原始 error 落控制台', async () => {
     const server = installFakeServer(THREADS)
     await useSessionsStore.getState().ensureLoaded()
-    server.failNext(new Error('500'))
+    const failure = new Error('500')
+    server.failNext(failure)
 
     await useSessionsStore.getState().rename('t-new', 'x')
 
     expect(useSessionsStore.getState().error).toContain('500')
     expect(useSessionsStore.getState().threads[0].title).toBe('最近的会话')
+    expect(errorLog).toHaveBeenCalledWith('[kyclaw] 重命名会话失败', failure)
   })
 
   it('删除活跃会话：删掉后选中剩下的第一条', async () => {

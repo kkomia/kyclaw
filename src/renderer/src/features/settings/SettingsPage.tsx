@@ -28,12 +28,8 @@ const FONT_LABELS: Record<FontTier, string> = {
   large: '大'
 }
 
-/** 还没接内容的栏目：一句状态就够（不写实现细节，也不靠小字解释设计） */
-const PENDING_SECTIONS: Record<string, string> = {
-  tools: '工具与 MCP 开关还没做',
-  memory: '记忆的查看与编辑还没做',
-  usage: '用量统计还没做'
-}
+/** 还没接内容的栏目：给一句中性空态（雷点 2：不写"还没做"这类研发口吻，也不解释排期） */
+const EMPTY_SECTIONS = new Set(['tools', 'memory', 'usage'])
 
 /** 栏目卡片组：组用底色分层（不描边），组内控件自己带一条 hairline —— 避免近距多层框线 */
 function SettingsGroup({
@@ -137,11 +133,11 @@ export function SettingsPage(): React.JSX.Element {
             <WorkspaceSettings />
           </SettingsGroup>
         ) : null}
-        {PENDING_SECTIONS[meta.id] === undefined ? null : (
+        {EMPTY_SECTIONS.has(meta.id) ? (
           <SettingsGroup title={meta.label} testId={meta.groupTestId}>
-            <p className="text-b2 text-ink-secondary">{PENDING_SECTIONS[meta.id]}</p>
+            <p className="text-b2 text-ink-secondary">暂无可调整的设置</p>
           </SettingsGroup>
-        )}
+        ) : null}
       </div>
     </div>
   )

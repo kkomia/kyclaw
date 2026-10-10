@@ -42,9 +42,10 @@ export function Composer({
   return (
     <div
       data-testid="composer"
-      className="mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
+      className="focus-ring-container mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
     >
-      {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动 */}
+      {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
+          焦点指示由卡片给（focus-ring-container）：输入框自己没有圆角，自己画环就是直角方框。 */}
       <textarea
         data-testid="composer-input"
         aria-label="输入消息"
@@ -59,7 +60,7 @@ export function Composer({
           submit()
         }}
         placeholder="输入你的问题"
-        className="field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary)"
+        className="field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary) focus-visible:shadow-none"
       />
 
       {/* 工具条：左边只放真实状态（排队条数），右端发送 / 停止 */}
