@@ -26,24 +26,19 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
 
 function renderTitleBar(props: Partial<TitleBarProps> = {}): {
   onToggleSidebar: ReturnType<typeof vi.fn>
-  onToggleWorkPanel: ReturnType<typeof vi.fn>
   rerender: (next: Partial<TitleBarProps>) => void
   unmount: () => void
 } {
   const onToggleSidebar = vi.fn()
-  const onToggleWorkPanel = vi.fn()
   const full: TitleBarProps = {
     sidebarCollapsed: false,
     onToggleSidebar,
-    workPanelOpen: false,
-    onToggleWorkPanel,
     ...props
   }
   const { rerender, unmount } = render(<TitleBar {...full} />)
 
   return {
     onToggleSidebar,
-    onToggleWorkPanel,
     rerender: (next) => rerender(<TitleBar {...full} {...next} />),
     unmount
   }
@@ -67,7 +62,7 @@ describe('TitleBar', () => {
     const bar = screen.getByTestId('titlebar')
     expect(bar).toHaveClass('h-(--titlebar-height)', 'drag-region')
 
-    for (const testId of ['sidebar-toggle', 'work-panel-toggle', 'window-minimize']) {
+    for (const testId of ['sidebar-toggle', 'window-minimize']) {
       expect(screen.getByTestId(testId).closest('.no-drag'), testId).not.toBeNull()
     }
   })
@@ -164,41 +159,19 @@ describe('TitleBar', () => {
     expect(screen.getByTestId('sidebar-toggle')).toHaveAccessibleName('展开侧栏')
   })
 
-  it('工作台面板开关：点击回调 + 按开关态换可访问名', () => {
-    const { onToggleWorkPanel, rerender } = renderTitleBar({ workPanelOpen: false })
+  it('侧栏开关不画外圈（R2 D3；工作台开关 round 4 已搬去内容卡右上角，见 app-shell.spec）：描边透明 + 悬停只铺 Fills-F1', () => {
+    renderTitleBar({ sidebarCollapsed: false })
 
-    const toggle = screen.getByTestId('work-panel-toggle')
-    expect(toggle).toHaveAccessibleName('展开工作台')
-
-    fireEvent.click(toggle)
-    expect(onToggleWorkPanel).toHaveBeenCalledTimes(1)
-
-    rerender({ workPanelOpen: true })
-    expect(screen.getByTestId('work-panel-toggle')).toHaveAccessibleName('收起工作台')
+    const toggle = screen.getByTestId('sidebar-toggle')
+    expect(toggle).toHaveClass('border-transparent', 'hover:bg-hover')
+    // 图标仍是 18 档（IconButton 默认）
+    expect(toggle.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
   })
 
-  it('两个伸缩开关不画外圈（R2 D3）：描边透明 + 悬停只铺 Fills-F1', () => {
-    renderTitleBar({ sidebarCollapsed: false, workPanelOpen: false })
+  it('顶栏不再有工作台开关（round 4：搬进内容卡右上角）', () => {
+    renderTitleBar()
 
-    for (const testId of ['sidebar-toggle', 'work-panel-toggle']) {
-      const toggle = screen.getByTestId(testId)
-      expect(toggle, testId).toHaveClass('border-transparent', 'hover:bg-hover')
-      // 图标仍是 18 档（IconButton 默认）
-      expect(toggle.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
-    }
-  })
-
-  it('工作台开关展开时是 ◧ 形态（R2 D4）：PanelRight，不带收起箭头', () => {
-    const { rerender } = renderTitleBar({ workPanelOpen: true })
-
-    const closed = screen.getByTestId('work-panel-toggle').querySelector('svg')
-    expect(closed?.getAttribute('class') ?? '').toContain('lucide-panel-right')
-    expect(closed?.getAttribute('class') ?? '').not.toContain('lucide-panel-right-close')
-
-    rerender({ workPanelOpen: false })
-    expect(
-      screen.getByTestId('work-panel-toggle').querySelector('svg')?.getAttribute('class') ?? ''
-    ).toContain('lucide-panel-right-open')
+    expect(screen.queryByTestId('work-panel-toggle')).not.toBeInTheDocument()
   })
 
   it('preload 桥缺失（例如浏览器里打开渲染端）也不崩：点键静默无操作', () => {

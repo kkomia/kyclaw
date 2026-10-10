@@ -1,8 +1,10 @@
+import { PanelRight, PanelRightOpen } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { SettingsNav } from '@renderer/features/settings/SettingsNav'
 import { SessionsController } from '@renderer/features/sessions/SessionsController'
+import { IconButton } from '../ui/icon-button'
 import { ContentRegion } from './ContentRegion'
 import { MainColumn } from './MainColumn'
 import { Sidebar } from './Sidebar'
@@ -65,12 +67,7 @@ export function AppShell(): React.JSX.Element {
       data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
       className="flex h-full flex-col overflow-hidden bg-canvas text-ink"
     >
-      <TitleBar
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={toggleSidebar}
-        workPanelOpen={workPanelOpen}
-        onToggleWorkPanel={toggleWorkPanel}
-      />
+      <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
       <div ref={rowRef} className="relative flex min-h-0 flex-1">
         <Sidebar collapsed={sidebarCollapsed}>
           {inSettings ? (
@@ -89,6 +86,17 @@ export function AppShell(): React.JSX.Element {
           <WorkPanel open={workPanelOpen}>
             <WorkPanelEmpty />
           </WorkPanel>
+          {/* 工作台开关（round 4：从顶栏搬到这里 —— 用户裁决 R2 concern ①"右侧边栏属于 chat 的内容"，
+              位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。面板开时同一位就是
+              面板顶右（按钮始终在卡的右上角，不遮挡消息列/输入卡：卡右缘 - 44px，而内容列 800 封顶）。
+              形态与顶栏窗控一致（36 图标钮、无外圈、hover 铺 Fills-F1）；testid / 可访问名不变。 */}
+          <IconButton
+            data-testid="work-panel-toggle"
+            label={workPanelOpen ? '收起工作台' : '展开工作台'}
+            icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
+            className="absolute top-2 right-2 z-10 border-transparent hover:bg-hover"
+            onClick={toggleWorkPanel}
+          />
         </ContentRegion>
         {/* 壳上的"凹角"（R2 D2；round 3 起一对）：内容区是四角圆角卡（ContentRegion 的
             rounded-overlay + 右/底 --shell-edge-gap 留缝），铺满整条主列（R13：主列几何不随侧栏变），

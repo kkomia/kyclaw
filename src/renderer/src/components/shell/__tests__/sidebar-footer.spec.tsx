@@ -27,6 +27,15 @@ function openMenu(): void {
 }
 
 describe('侧栏底部单一入口', () => {
+  it('无顶线（round 4 E1：Kimi 口径）——footer 与侧栏浑然一体，不画分隔线', () => {
+    renderFooter()
+
+    const footer = screen.getByTestId('sidebar-footer')
+    expect(footer).not.toHaveClass('border-t')
+    // 分隔感只靠入口自身的 hover / 选中填充（navItemClass），不靠线
+    expect(screen.getByTestId('sidebar-menu-trigger')).toHaveClass('rounded-control')
+  })
+
   it('默认只有入口本身，三项菜单都在二级菜单里', () => {
     renderFooter()
 

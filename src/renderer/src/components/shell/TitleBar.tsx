@@ -1,13 +1,4 @@
-import {
-  Copy,
-  Minus,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRight,
-  PanelRightOpen,
-  Square,
-  X
-} from 'lucide-react'
+import { Copy, Minus, PanelLeftClose, PanelLeftOpen, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { IconButton } from '../ui/icon-button'
 
@@ -16,15 +7,15 @@ import { IconButton } from '../ui/icon-button'
  * 整条是拖拽区（drag-region），可点元素一律放进 no-drag 容器 —— 拖拽区会吞点击。
  * 窗控三键图标 18（IconButton 的 --icon-size-md），hover 铺 Fills-F1（--fill-hover）；
  * 关闭键 hover 铺 --Colors-Red（语义层 --danger）+ 危险前色。
- * 两个伸缩开关（左：侧栏；右：工作台）**不画外圈**（R2 D3，对照 Kimi 桌面实测截图：顶栏里的图标
- * 只有图标本身 + hover 底色），尺寸/位置与窗控一致（36 高、图标 18）。
- * 工作台开关用 ◧ 形态（PanelRight；R2 D4 参考实况），展开时才是这个形态。
+ * 侧栏伸缩开关**不画外圈**（R2 D3，对照 Kimi 桌面实测截图：顶栏里的图标只有图标本身 + hover 底色），
+ * 尺寸/位置与窗控一致（36 高、图标 18）。
+ *
+ * 工作台（◧）开关 **round 4 已从本组件搬走**（用户裁决 R2 concern ①："右侧边栏打开的是工作区，
+ * 应该属于 chat 的内容，不应该放在顶栏"）—— 现在钉在内容卡右上角，见 AppShell。
  */
 export interface TitleBarProps {
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
-  workPanelOpen: boolean
-  onToggleWorkPanel: () => void
 }
 
 /** 窗口最大化状态：挂载时问一次主进程，之后跟推送走。preload 缺失（浏览器里看渲染端）当 false。 */
@@ -50,12 +41,7 @@ function useMaximized(): boolean {
   return maximized
 }
 
-export function TitleBar({
-  sidebarCollapsed,
-  onToggleSidebar,
-  workPanelOpen,
-  onToggleWorkPanel
-}: TitleBarProps): React.JSX.Element {
+export function TitleBar({ sidebarCollapsed, onToggleSidebar }: TitleBarProps): React.JSX.Element {
   const maximized = useMaximized()
 
   return (
@@ -77,13 +63,6 @@ export function TitleBar({
       <div className="min-w-0 flex-1" />
 
       <div className="no-drag flex items-center gap-1">
-        <IconButton
-          data-testid="work-panel-toggle"
-          label={workPanelOpen ? '收起工作台' : '展开工作台'}
-          icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
-          className="border-transparent hover:bg-hover"
-          onClick={onToggleWorkPanel}
-        />
         <IconButton
           data-testid="window-minimize"
           label="最小化"

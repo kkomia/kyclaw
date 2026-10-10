@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
  * 右栏（工作台）就在这块面里面，靠一条分隔线分界，不再自成第三根柱子。
  *
  * overflow-hidden 是为了让四个圆角真的裁到内容（消息列的滚动区、工作台的滚动区都在里面）。
+ * relative 是给 round 4 搬来的工作台开关（AppShell 里钉在本卡右上角的图标钮）做定位基准。
  */
 export interface ContentRegionProps {
   children?: ReactNode
@@ -21,7 +22,7 @@ export function ContentRegion({ children }: ContentRegionProps): React.JSX.Eleme
   return (
     <div
       data-testid="content-region"
-      className="mr-(--shell-edge-gap) mb-(--shell-edge-gap) flex min-w-0 flex-1 overflow-hidden rounded-overlay bg-surface"
+      className="relative mr-(--shell-edge-gap) mb-(--shell-edge-gap) flex min-w-0 flex-1 overflow-hidden rounded-overlay bg-surface"
     >
       {children}
     </div>
