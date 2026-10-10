@@ -177,6 +177,33 @@ describe('McpLifecycle：连接、命名与 gate', () => {
     await lifecycle.refresh()
     expect(factories()).toBe(2)
   })
+
+  it('createClient 抛错：refresh()/tools() 都不泄 rejection（只记日志），下一轮会重试', async () => {
+    const servers = [config()]
+    const logs: string[] = []
+    let attempts = 0
+    let broken = true
+    const lifecycle = new McpLifecycle({
+      servers: () => servers,
+      createClient: async () => {
+        attempts += 1
+        if (broken) throw new Error('建连接失败：地址半截（http://）')
+        return new FakeClient([{ echo: 'ok' }]) as unknown as McpClient
+      },
+      log: (line) => logs.push(line)
+    })
+
+    // 两个入口都 resolve（调用方拿到的是"这轮没有 MCP 工具"，不是异常）
+    await expect(lifecycle.refresh()).resolves.toBeUndefined()
+    await expect(lifecycle.tools(gateTrue)).resolves.toEqual({})
+    expect(logs.some((line) => line.includes('连接对齐失败'))).toBe(true)
+
+    // 下一轮配置修好：照常连上（没卡在"半对齐"态）
+    broken = false
+    const tools = await lifecycle.tools(gateTrue)
+    expect(Object.keys(tools)).toEqual(['mcp__echo__echo'])
+    expect(attempts).toBeGreaterThanOrEqual(2)
+  })
 })
 
 describe('McpLifecycle：崩溃重启（≤2 次，记日志）', () => {

@@ -18,7 +18,13 @@ import type { Tool } from '@mastra/core/tools'
 import { classifyToolCall, type ToolClass } from '../main/permission/classify'
 import type { ToolClassifier } from './tools/guard'
 import type { McpServerConfig } from '../shared/settings'
-import type { McpFailureKind, McpTestResult, McpToolInfo } from '../shared/mcp'
+import {
+  isHttpUrl,
+  URL_PROBLEM,
+  type McpFailureKind,
+  type McpTestResult,
+  type McpToolInfo
+} from '../shared/mcp'
 import type { MastraMCPServerDefinition } from '@mastra/mcp'
 
 /** 工具名前缀；`mcp__<serverId>__<toolName>` */
@@ -50,8 +56,10 @@ export function parseMcpToolName(name: string): { serverId: string; tool: string
 
 /**
  * MCP 工具的分级（spec §5.2「只读类 MCP 工具」由用户确认）：
+ *   - 末段是 delete/move → **dangerous（永远问）**：这一档先判，用户的"只读"标记也盖不过它
+ *     （危险类工具不受任何放行手段影响，与内置 delete/move 同一口径）；
  *   - 设置里标了只读 → read（放行）；
- *   - 没标 → write（默认询问）；末段是 delete/move 的升级为 dangerous（永远问）。
+ *   - 没标 → write（默认询问）。
  */
 export function classifyMcpToolCall(
   tool: string,
@@ -61,9 +69,12 @@ export function classifyMcpToolCall(
   const parsed = parseMcpToolName(tool)
   if (parsed === null) return classifyToolCall(tool, input)
 
+  // 危险档优先于只读标记：名字像删除/移动的外部工具，勾了"只读"也照问
+  if (classifyToolCall(parsed.tool, input) === 'dangerous') return 'dangerous'
+
   const server = servers.find((candidate) => candidate.id === parsed.serverId)
   if (server?.readOnlyTools.includes(parsed.tool)) return 'read'
-  return classifyToolCall(parsed.tool, input) === 'dangerous' ? 'dangerous' : 'write'
+  return 'write'
 }
 
 /** 注入 agent 的分级器：MCP 名走上面的口径，其余名字回落内置分级（现读设置） */
@@ -90,16 +101,8 @@ export function serverDefinition(
 
   const url = (config.url ?? '').trim()
   if (url === '') throw new Error(`${config.name}：HTTP 服务没有填写地址`)
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    throw new Error(`${config.name}：HTTP 地址不是合法 URL`)
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`${config.name}：HTTP 地址要以 http:// 或 https:// 开头`)
-  }
-  return { url: parsed, timeout: timeoutMs, connectTimeout: timeoutMs }
+  if (!isHttpUrl(url)) throw new Error(`${config.name}：${URL_PROBLEM}`)
+  return { url: new URL(url), timeout: timeoutMs, connectTimeout: timeoutMs }
 }
 
 /** 工具调用的审批判定入口（agent 装配把它接到 guard.needsApproval 上） */

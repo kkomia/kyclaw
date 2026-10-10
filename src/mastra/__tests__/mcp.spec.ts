@@ -25,11 +25,13 @@ import {
   classifyMcpFailure,
   classifyMcpToolCall,
   collectMcpTools,
+  createMcpClassify,
   mcpToolName,
   parseMcpToolName,
   serverDefinition,
   testMcpServer
 } from '../mcp'
+import { createToolContext, needsApproval } from '../tools/guard'
 import { threadMemoryBody } from '../../shared/threads'
 import { readSettings, settingsPath, writeSettings } from '../../main/settings'
 import { defaultSettings, type McpServerConfig, type Workspace } from '../../shared/settings'
@@ -85,6 +87,23 @@ describe('mcp.ts：命名与分级', () => {
     expect(classifyMcpToolCall('read', {}, servers)).toBe('read')
   })
 
+  it('危险档优先于只读标记：勾了"只读"的 mcp__x__delete 仍然永远问（spec §5.2）', () => {
+    const servers = [stdioConfig({ readOnlyTools: ['delete', 'move', 'echo'] })]
+
+    expect(classifyMcpToolCall('mcp__echo__delete', {}, servers)).toBe('dangerous')
+    expect(classifyMcpToolCall('mcp__echo__move', {}, servers)).toBe('dangerous')
+    expect(classifyMcpToolCall('mcp__echo__echo', {}, servers)).toBe('read')
+
+    // 落到审批判定上：同一个"只读"标记，普通工具免问、危险名照问
+    const ctx = createToolContext({
+      roots: [],
+      classify: createMcpClassify(() => servers),
+      permissionRules: () => []
+    })
+    expect(needsApproval(ctx, 'mcp__echo__echo', { path: 'x' })).toBe(false)
+    expect(needsApproval(ctx, 'mcp__echo__delete', { path: 'x' })).toBe(true)
+  })
+
   it('失败分类：握手超时 / 启动失败 / 服务没正常响应', () => {
     expect(classifyMcpFailure({ code: 'REQUEST_TIMEOUT', message: 'Request timed out' }).kind).toBe(
       'handshake-timeout'
@@ -118,6 +137,10 @@ describe('mcp.ts：命名与分级', () => {
         1000
       )
     ).toThrow(/http/)
+    // 半截地址（过得了前缀检查、过不了 new URL）也在这一层被拒
+    expect(() =>
+      serverDefinition(stdioConfig({ transport: 'http', command: undefined, url: 'http://' }), 1000)
+    ).toThrow(/完整/)
   })
 
   it('collectMcpTools：停用的 server 不进工具表；启用并发现到的才进，gate 逐调用生效', () => {
@@ -411,6 +434,71 @@ describe('MCP 管理路由（GET/PUT/test）', () => {
 
     const missing = await authed('/api/mcp/servers/nope/test', { method: 'POST' })
     expect(missing.status).toBe(404)
+  }, 30_000)
+
+  it('PUT 启用的半截 HTTP 地址（http://）→ 400：不落盘、不触发连接对齐、没有未处理 rejection', async () => {
+    const before = readSettings(settingsPath(dir)).mcpServers
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+
+    try {
+      const response = await authed('/api/mcp/servers', {
+        method: 'PUT',
+        body: JSON.stringify({
+          servers: [
+            {
+              id: 'half-url',
+              name: '半截地址',
+              transport: 'http',
+              url: 'http://',
+              enabled: true,
+              readOnlyTools: []
+            }
+          ]
+        })
+      })
+
+      expect(response.status).toBe(400)
+      expect(JSON.stringify(await response.json())).toContain('完整')
+
+      // 给潜在的 rejection / refresh() 一点时间冒出来
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(unhandled).toEqual([])
+      expect(readSettings(settingsPath(dir)).mcpServers).toEqual(before)
+
+      // 真触发一次"写成功但连接对齐失败"：启用一个连不上的 http server → 200 落盘，
+      // refresh() 在后台失败 —— 错误只进日志，没有未处理 rejection
+      const unreachable = {
+        id: 'dead-http',
+        name: '连不上',
+        transport: 'http' as const,
+        url: 'http://127.0.0.1:1/mcp',
+        enabled: true,
+        readOnlyTools: []
+      }
+      const saved = await authed('/api/mcp/servers', {
+        method: 'PUT',
+        body: JSON.stringify({ servers: [...before, unreachable] })
+      })
+      expect(saved.status).toBe(200)
+
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      expect(unhandled).toEqual([])
+      expect(readSettings(settingsPath(dir)).mcpServers.map((server) => server.id)).toContain(
+        'dead-http'
+      )
+
+      // 恢复（让后面的用例看到一份干净的列表）
+      await authed('/api/mcp/servers', {
+        method: 'PUT',
+        body: JSON.stringify({ servers: before })
+      })
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   }, 30_000)
 })
 

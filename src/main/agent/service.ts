@@ -265,7 +265,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       saveServers: (servers) =>
         updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers,
       onServersChanged: () => {
-        void mcpLifecycle.refresh()
+        // 对齐失败必须在这里落地：写盘已经成功，半个 URL / 起不来的 server 只该影响"这条连接"，
+        // 不能让 rejection 冒到主进程（Electron 未处理 rejection 会弹错，而 UI 还显示保存成功）
+        mcpLifecycle.refresh().catch((error) => {
+          console.warn('[kyclaw] MCP 连接对齐失败（下一轮对话会再对齐）', error)
+        })
       }
     })
   )

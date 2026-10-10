@@ -20,6 +20,23 @@ export const MCP_ID_PATTERN = /^[a-z0-9-]{1,32}$/
 
 const ID_PROBLEM = '标识只能用 1–32 位小写字母、数字或短横线（它要进工具名）'
 
+/** HTTP 地址问题的同一句人话（校验层与 serverDefinition 共用） */
+export const URL_PROBLEM = 'HTTP 地址要是完整的 http:// 或 https:// 地址'
+
+/**
+ * HTTP 地址必须能被 URL 解析出来：`http://` 这类半截串过得了前缀检查，却会在 `new URL` 抛错——
+ * 那时已经到连接阶段（保存/启用都显示成功），错误反而落在运行期。这里和 mastra/mcp.ts 的
+ * serverDefinition 用同一把尺（真实解析一次），半截地址在 400 / 行内提示层就被挡下。
+ */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** 单条 server 配置"哪里不完整/不合法"的人话列表（空数组 = 可以启用 / 可以连接） */
 export function mcpServerProblems(server: McpServerConfig): string[] {
   const problems: string[] = []
@@ -31,7 +48,7 @@ export function mcpServerProblems(server: McpServerConfig): string[] {
   } else {
     const url = (server.url ?? '').trim()
     if (url === '') problems.push('HTTP 服务需要填写地址')
-    else if (!/^https?:\/\//i.test(url)) problems.push('HTTP 地址要以 http:// 或 https:// 开头')
+    else if (!isHttpUrl(url)) problems.push(URL_PROBLEM)
   }
   return problems
 }

@@ -166,9 +166,14 @@ export class McpLifecycle {
   /** 与设置对齐：指纹变了换连接（旧连接断开、计数清零），然后把还没发现的启用 server 发现一遍 */
   private async sync(enabled: readonly McpServerConfig[]): Promise<void> {
     if (this.syncing !== undefined) return this.syncing
-    this.syncing = this.syncNow(enabled).finally(() => {
-      this.syncing = undefined
-    })
+    this.syncing = this.syncNow(enabled)
+      // 对齐失败不泄给调用方（工具表只是少几条，对话照走；下一轮会再对齐）
+      .catch((error) => {
+        this.log(`MCP 连接对齐失败（本轮跳过，下一轮再试）：${firstLine(errorText(error))}`)
+      })
+      .finally(() => {
+        this.syncing = undefined
+      })
     return this.syncing
   }
 
@@ -176,11 +181,17 @@ export class McpLifecycle {
     const key = connectionKey(enabled)
     if (this.key !== key) {
       await this.disposeClient()
-      this.key = key
       this.toolsets.clear()
       this.restarts.clear()
       this.failed.clear()
-      if (enabled.length > 0) this.client = await this.createClient(enabled)
+      // 先清指纹再建连接：createClient 抛错时不会卡在"新指纹 + 没有 client"的半对齐态，
+      // 下一轮（或下一次 refresh）会照常重试
+      this.key = undefined
+      if (enabled.length > 0) {
+        const client = await this.createClient(enabled)
+        this.client = client
+      }
+      this.key = key
     }
     if (this.client === undefined) return
 

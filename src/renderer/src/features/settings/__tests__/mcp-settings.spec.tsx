@@ -261,6 +261,30 @@ describe('MCP 组 · 测试连接与只读标记', () => {
     expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent('连接正常')
   })
 
+  it('HTTP 地址半截（http://）：行内提示完整地址问题；启用被服务端拒绝（400 不落盘）', async () => {
+    const api = installMockApi([
+      serverConfig({
+        id: 'remote',
+        name: '远程',
+        transport: 'http',
+        url: 'http://',
+        command: undefined,
+        args: undefined,
+        enabled: false
+      })
+    ])
+    render(<McpSettings />)
+    await screen.findByTestId('mcp-server-0')
+
+    expect(screen.getByTestId('mcp-server-0-problems')).toHaveTextContent('完整')
+    expect(screen.getByTestId('mcp-server-0-url')).toHaveValue('http://')
+
+    fireEvent.click(screen.getByTestId('mcp-server-0-enable'))
+
+    expect(await screen.findByTestId('mcp-server-0-error')).toHaveTextContent('完整')
+    expect(api.state.servers[0].enabled).toBe(false)
+  })
+
   it('读不到列表（服务没起）：页面级错误行内可见，不静默', async () => {
     vi.stubGlobal(
       'fetch',
