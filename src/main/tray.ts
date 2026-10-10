@@ -4,6 +4,7 @@
  */
 import { app, Menu, Tray } from 'electron'
 import { showMainWindow } from './window'
+import { trayMenuTemplate } from './tray-menu'
 import icon from '../../resources/icon.png?asset'
 
 // 托盘必须留模块级引用：Tray 被 GC 掉图标就没了（同 BrowserWindow）
@@ -15,11 +16,12 @@ export function createTray(): void {
   tray = new Tray(icon)
   tray.setToolTip('kyclaw')
   tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '显示主窗口', click: () => void showMainWindow() },
-      { type: 'separator' },
-      { label: '退出 kyclaw', click: () => app.quit() }
-    ])
+    Menu.buildFromTemplate(
+      trayMenuTemplate({
+        show: () => void showMainWindow(),
+        quit: () => app.quit()
+      })
+    )
   )
   // Windows 上单击托盘图标 = 显示窗口（与系统里多数应用一致）
   tray.on('click', () => void showMainWindow())

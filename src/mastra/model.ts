@@ -17,6 +17,8 @@
  * 原样留在 CJS 产物里），静态 import 只留编译期擦除的类型。
  */
 import type { LanguageModel } from 'ai'
+/** 类型专用：mock 的流 part 形状从这里取（import type 会被编译擦掉，不会把 ESM 带进 CJS 产物） */
+import type { MockLanguageModelV4 } from 'ai/test'
 import { providerConfigProblems, type ProviderConfig } from '../shared/providers'
 
 /** 强制离线的环境变量（值必须是 '1'，避免 "0" 被当真的陷阱） */
@@ -38,6 +40,39 @@ export const OPENAI_COMPATIBLE_PROVIDER_NAME = 'kyclaw-openai-compatible'
 
 /** 离线 mock 回吐的文本，按增量切好——服务侧断言与 T16 E2E 共用这一份真身 */
 export const MOCK_REPLY_CHUNKS = ['（kyclaw 离线模式）', '你好，', '我是 kyclaw。'] as const
+
+/**
+ * mock 的"写文件"口令（T16 E2E）：正文里出现 `[[write:<路径>]]` 时，mock 先说一句话、再照它调一次
+ * `write` —— 离线下唯一能把"审批卡 → 允许 → 落盘"整条链路走完的办法（真模型自己决定写不写，
+ * 不需要口令）。只认**最后一条 user 消息**：审批通过后的续跑末条是 tool 消息，不会自己咬尾巴。
+ */
+export const MOCK_WRITE_MARKER = /\[\[write:([^\]\n]+)\]\]/
+
+/** 口令触发的那次写入内容（固定值：E2E 按它断言落盘内容） */
+export const MOCK_WRITE_CONTENT = 'kyclaw 离线 mock 写下的内容。\n'
+
+/** 口令触发时先吐的一句人话（让工具流的"进场"在界面上看得见） */
+const MOCK_WRITE_LEAD = '好，我来创建这个文件。'
+
+/** mock 的 toolCallId（一次流里唯一即可） */
+const MOCK_WRITE_TOOL_CALL_ID = 'mock-write'
+
+/**
+ * prompt 的只读视图：这里只做结构嗅探（末条消息是谁、文本说了什么），
+ * 完整类型由 AI SDK 给 —— 而 AI SDK 是 ESM-only，静态 import 只能留**类型**。
+ */
+type PromptLike = ReadonlyArray<{ role?: unknown; content?: unknown }>
+
+/** 从"末条 user 消息"里读出口令里的路径；没有口令（或末条不是 user）就回 null */
+export function mockWriteTarget(prompt: PromptLike): string | null {
+  const last = prompt.at(-1)
+  if (last === undefined || last.role !== 'user' || !Array.isArray(last.content)) return null
+  const parts = last.content as ReadonlyArray<{ type?: unknown; text?: unknown }>
+  const text = parts
+    .flatMap((part) => (part.type === 'text' && typeof part.text === 'string' ? [part.text] : []))
+    .join('\n')
+  return MOCK_WRITE_MARKER.exec(text)?.[1] ?? null
+}
 
 /** DeepSeek 官方 API 的主机名（这个端点走 @ai-sdk/deepseek，其余 openai-compatible 走通用兼容层） */
 export const DEEPSEEK_API_HOST = 'api.deepseek.com'
@@ -102,7 +137,8 @@ function mockUsage(): {
   }
 }
 
-/** 内置离线模型：流式按 MOCK_REPLY_CHUNKS 逐段吐；generate 也给一份，免得别的路径撞上 "Not implemented" */
+/** 内置离线模型：流式按 MOCK_REPLY_CHUNKS 逐段吐（带写文件口令时改吐一次 write 工具调用）；
+ *  generate 也给一份，免得别的路径撞上 "Not implemented" */
 async function mockModel(): Promise<KyclawModel> {
   const { MockLanguageModelV4, simulateReadableStream } = await import('ai/test')
   const usage = mockUsage()
@@ -112,19 +148,9 @@ async function mockModel(): Promise<KyclawModel> {
   return new MockLanguageModelV4({
     provider: MOCK_PROVIDER_NAME,
     modelId: MOCK_PROVIDER_NAME,
-    doStream: async () => ({
+    doStream: async (options) => ({
       stream: simulateReadableStream({
-        chunks: [
-          { type: 'stream-start', warnings: [] },
-          { type: 'text-start', id: 'mock-text' },
-          ...MOCK_REPLY_CHUNKS.map((delta) => ({
-            type: 'text-delta' as const,
-            id: 'mock-text',
-            delta
-          })),
-          { type: 'text-end', id: 'mock-text' },
-          { type: 'finish', finishReason, usage }
-        ],
+        chunks: mockChunks(options.prompt),
         chunkDelayInMs: MOCK_CHUNK_DELAY_MS
       })
     }),
@@ -135,6 +161,53 @@ async function mockModel(): Promise<KyclawModel> {
       warnings: []
     })
   })
+}
+
+type MockStreamPart =
+  Awaited<ReturnType<MockLanguageModelV4['doStream']>> extends {
+    stream: ReadableStream<infer Part>
+  }
+    ? Part
+    : never
+
+/** 这一轮流什么：有写文件口令 → 一句话 + 一次 write 调用；否则就是那三段离线文本 */
+function mockChunks(prompt: PromptLike): MockStreamPart[] {
+  const target = mockWriteTarget(prompt)
+  if (target === null) {
+    return [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 'mock-text' },
+      ...MOCK_REPLY_CHUNKS.map((delta) => ({
+        type: 'text-delta' as const,
+        id: 'mock-text',
+        delta
+      })),
+      { type: 'text-end', id: 'mock-text' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: mockUsage() }
+    ]
+  }
+
+  const input = JSON.stringify({ path: target, content: MOCK_WRITE_CONTENT })
+  return [
+    { type: 'stream-start', warnings: [] },
+    { type: 'text-start', id: 'mock-text' },
+    { type: 'text-delta', id: 'mock-text', delta: MOCK_WRITE_LEAD },
+    { type: 'text-end', id: 'mock-text' },
+    { type: 'tool-input-start', id: MOCK_WRITE_TOOL_CALL_ID, toolName: 'write' },
+    { type: 'tool-input-delta', id: MOCK_WRITE_TOOL_CALL_ID, delta: input },
+    { type: 'tool-input-end', id: MOCK_WRITE_TOOL_CALL_ID },
+    {
+      type: 'tool-call',
+      toolCallId: MOCK_WRITE_TOOL_CALL_ID,
+      toolName: 'write',
+      input
+    },
+    {
+      type: 'finish',
+      finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+      usage: mockUsage()
+    }
+  ]
 }
 
 /**

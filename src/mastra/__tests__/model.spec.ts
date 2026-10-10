@@ -7,7 +7,14 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { ProviderConfig } from '../../shared/providers'
-import { resolveModel, ProviderConfigError, selectProviderConfig } from '../model'
+import {
+  MOCK_REPLY_CHUNKS,
+  MOCK_WRITE_CONTENT,
+  mockWriteTarget,
+  resolveModel,
+  ProviderConfigError,
+  selectProviderConfig
+} from '../model'
 
 /** 模型对象各家 SDK 的类实例，这里只取断言要看的几个字段 */
 function modelInfo(model: unknown): {
@@ -137,6 +144,86 @@ describe('resolveModel · 配齐了就是真模型', () => {
     expect(resolved.source).toBe('anthropic')
     expect(modelInfo(resolved.model).provider).toBe('anthropic.messages')
     expect(modelInfo(resolved.model).modelId).toBe('claude-sonnet-4-5')
+  })
+})
+
+describe('内置 mock · 写文件口令（T16 E2E 的审批冒烟入口）', () => {
+  /** 跑一遍 mock 的 doStream，把流里的 part 收成数组（真身是什么就断言什么） */
+  async function streamParts(prompt: unknown): Promise<Array<Record<string, unknown>>> {
+    const resolved = await resolveModel([], keyReader(), {})
+    const mock = resolved.model as unknown as {
+      doStream: (options: unknown) => Promise<{
+        stream: ReadableStream<Record<string, unknown>>
+      }>
+    }
+    const { stream } = await mock.doStream({ prompt })
+    const parts: Array<Record<string, unknown>> = []
+    const reader = stream.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+    return parts
+  }
+
+  interface PromptMessage {
+    role: string
+    content: Array<{ type: string; text: string }>
+  }
+
+  function userText(text: string): PromptMessage[] {
+    return [{ role: 'user', content: [{ type: 'text', text }] }]
+  }
+
+  it('末条 user 消息带 [[write:路径]] → 吐一次 write 工具调用（路径 + 固定内容）', async () => {
+    const parts = await streamParts(userText('帮我写个文件 [[write:demo.txt]]'))
+
+    const call = parts.find((part) => part.type === 'tool-call')
+    expect(call).toMatchObject({ toolName: 'write' })
+    expect(JSON.parse(String(call?.input))).toEqual({
+      path: 'demo.txt',
+      content: MOCK_WRITE_CONTENT
+    })
+    // 收尾是 tool-calls（不是 stop）：Mastra 据此去执行工具、再续跑一轮
+    expect(parts.at(-1)).toMatchObject({ type: 'finish', finishReason: { unified: 'tool-calls' } })
+  })
+
+  it('续跑（末条是 tool 消息）不再吐工具调用：只回离线文本，不自己咬尾巴', async () => {
+    const parts = await streamParts([
+      { role: 'user', content: [{ type: 'text', text: '帮我写个文件 [[write:demo.txt]]' }] },
+      { role: 'assistant', content: [{ type: 'text', text: '好，我来创建这个文件。' }] },
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'mock-write', toolName: 'write', output: '已创建' }
+        ]
+      }
+    ])
+
+    expect(parts.some((part) => part.type === 'tool-call')).toBe(false)
+    expect(
+      parts
+        .filter((part) => part.type === 'text-delta')
+        .map((part) => part.delta)
+        .join('')
+    ).toBe(MOCK_REPLY_CHUNKS.join(''))
+  })
+
+  it('普通正文（没有口令）→ 还是那三段离线文本', async () => {
+    const parts = await streamParts(userText('你好'))
+
+    expect(parts.some((part) => part.type === 'tool-call')).toBe(false)
+    expect(parts.at(-1)).toMatchObject({ type: 'finish', finishReason: { unified: 'stop' } })
+  })
+
+  it('口令解析：只认末条 user 消息、路径到 ] 或换行为止', () => {
+    expect(mockWriteTarget(userText('[[write:a/b.txt]] 麻烦你了'))).toBe('a/b.txt')
+    expect(mockWriteTarget(userText('第一行\n[[write:c.txt]]\n第三行'))).toBe('c.txt')
+    expect(
+      mockWriteTarget([{ role: 'assistant', content: [{ type: 'text', text: '[[write:x]]' }] }])
+    ).toBeNull()
+    expect(mockWriteTarget(userText('没有口令'))).toBeNull()
   })
 })
 
