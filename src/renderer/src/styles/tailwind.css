@@ -219,13 +219,29 @@
   );
 }
 
+/* 容器级焦点环（雷点 6：焦点指示也要跟圆角走）。
+   圆角卡片里的输入（如发送框里的 textarea）自己没有圆角，全局 `:focus-visible` 的内阴影环
+   画出来就是**压在卡片圆角上的直角方框**。所以把指示画到**卡片**上：墨色 1px、贴内缘、
+   随卡片圆角（outline 跟 border-radius，且不占用 box-shadow —— 卡片的投影还在）。
+   口径：UI 参考 §5.4，Kimi 的焦点环是墨色 inset 1px（近 30 处），不是品牌蓝。 */
+@utility focus-ring-container {
+  &:has(:focus-visible) {
+    outline: 1px solid var(--text-primary);
+    outline-offset: -1px;
+  }
+}
+
 /* 内容列（页面级容器）：限宽 --content-max-width，在"没有被覆盖层侧栏遮挡的区域"里居中。
    侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 宽窗下
    居中结果正好落在这条线右侧，窄窗 / 工作台展开时则会把内容压到侧栏底下。所以这里
    以 --content-safe-left（侧栏展开 = 240，收起 = 0）为"安全左边"，取"居中位置"与它
    的较大者：够宽时就是纯居中，不够宽时右移到安全线内并按可用宽度收窄 —— 内容任何
    状态下都完整可见、不被裁，也不横向溢出。
-   过渡：侧栏开合时给 margin 一条主档动效，避免硬切（P3 第 5 条）。 */
+
+   动效（雷点 5）：`width` 与 `margin-left` 都从 --content-safe-left 推出来，所以**过渡的是这条
+   变量本身**（@property 注册成 <length> 才能过渡，见下）：侧栏开合时两者逐帧同步变化，
+   不会出现"宽度一帧跳到位、位移还在路上"的硬切 / 瞬态溢出。窗口 resize 不改这条变量，
+   因此拉伸窗口时内容列不滞后。 */
 @utility content-column {
   width: min(calc(100% - var(--content-safe-left)), var(--content-max-width));
   margin-left: max(
@@ -233,13 +249,24 @@
     var(--content-safe-left)
   );
   margin-right: auto;
-  transition: margin-left var(--motion-main) var(--motion-ease-inout);
+}
+
+/* 注册成可过渡的长度：语法必须写死 <length>，inherits: true 让内容列从壳根继承到插值中的值。
+   过渡声明挂在"值真正变化的那个元素"（壳根的 [data-sidebar]）上 —— 后代继承的是逐帧插值结果。 */
+@property --content-safe-left {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
 }
 
 @layer base {
   /* 侧栏展开 = 内容列的安全左边推进到侧栏右缘；写在壳根的 data-sidebar 上，内容列继承。 */
   [data-sidebar='expanded'] {
     --content-safe-left: var(--sidebar-width);
+  }
+
+  [data-sidebar] {
+    transition: --content-safe-left var(--motion-main) var(--motion-ease-inout);
   }
 }
 
