@@ -78,6 +78,11 @@
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 
+  /* 窄窗自动收工作台的阈值（R2 D4 的兜底）：侧栏 240 + 内容列最小可读宽 480 + 工作台 400 = 1120。
+     低于它就把工作台自动收起 —— 720 极窄窗 + 全开的退化态（内容列只剩 ~79px）不再出现。
+     AppShell 的 ResizeObserver 读这条 token（jsdom 读不到时退回同值的兜底常量）。 */
+  --work-panel-collapse-width: 1120px;
+
   /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
      几何在明暗两套下一致，所以只在这里声明、不进深色块。 */
   --titlebar-height: 42px;

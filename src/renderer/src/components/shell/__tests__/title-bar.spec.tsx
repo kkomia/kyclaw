@@ -177,6 +177,30 @@ describe('TitleBar', () => {
     expect(screen.getByTestId('work-panel-toggle')).toHaveAccessibleName('收起工作台')
   })
 
+  it('两个伸缩开关不画外圈（R2 D3）：描边透明 + 悬停只铺 Fills-F1', () => {
+    renderTitleBar({ sidebarCollapsed: false, workPanelOpen: false })
+
+    for (const testId of ['sidebar-toggle', 'work-panel-toggle']) {
+      const toggle = screen.getByTestId(testId)
+      expect(toggle, testId).toHaveClass('border-transparent', 'hover:bg-hover')
+      // 图标仍是 18 档（IconButton 默认）
+      expect(toggle.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
+    }
+  })
+
+  it('工作台开关展开时是 ◧ 形态（R2 D4）：PanelRight，不带收起箭头', () => {
+    const { rerender } = renderTitleBar({ workPanelOpen: true })
+
+    const closed = screen.getByTestId('work-panel-toggle').querySelector('svg')
+    expect(closed?.getAttribute('class') ?? '').toContain('lucide-panel-right')
+    expect(closed?.getAttribute('class') ?? '').not.toContain('lucide-panel-right-close')
+
+    rerender({ workPanelOpen: false })
+    expect(
+      screen.getByTestId('work-panel-toggle').querySelector('svg')?.getAttribute('class') ?? ''
+    ).toContain('lucide-panel-right-open')
+  })
+
   it('preload 桥缺失（例如浏览器里打开渲染端）也不崩：点键静默无操作', () => {
     const api = stubWindowApi()
     Reflect.deleteProperty(window, 'kyclaw')

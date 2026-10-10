@@ -3,7 +3,7 @@ import {
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
+  PanelRight,
   PanelRightOpen,
   Square,
   X
@@ -16,6 +16,9 @@ import { IconButton } from '../ui/icon-button'
  * 整条是拖拽区（drag-region），可点元素一律放进 no-drag 容器 —— 拖拽区会吞点击。
  * 窗控三键图标 18（IconButton 的 --icon-size-md），hover 铺 Fills-F1（--fill-hover）；
  * 关闭键 hover 铺 --Colors-Red（语义层 --danger）+ 危险前色。
+ * 两个伸缩开关（左：侧栏；右：工作台）**不画外圈**（R2 D3，对照 Kimi 桌面实测截图：顶栏里的图标
+ * 只有图标本身 + hover 底色），尺寸/位置与窗控一致（36 高、图标 18）。
+ * 工作台开关用 ◧ 形态（PanelRight；R2 D4 参考实况），展开时才是这个形态。
  */
 export interface TitleBarProps {
   sidebarCollapsed: boolean
@@ -65,6 +68,7 @@ export function TitleBar({
           data-testid="sidebar-toggle"
           label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
           icon={sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          className="border-transparent hover:bg-hover"
           onClick={onToggleSidebar}
         />
       </div>
@@ -76,7 +80,8 @@ export function TitleBar({
         <IconButton
           data-testid="work-panel-toggle"
           label={workPanelOpen ? '收起工作台' : '展开工作台'}
-          icon={workPanelOpen ? <PanelRightClose /> : <PanelRightOpen />}
+          icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
+          className="border-transparent hover:bg-hover"
           onClick={onToggleWorkPanel}
         />
         <IconButton

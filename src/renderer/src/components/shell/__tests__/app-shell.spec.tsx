@@ -1,11 +1,15 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
 
 beforeEach(() => {
   useShellStore.setState({ sidebarCollapsed: false, workPanelOpen: false })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 /** 壳里有路由件（导航链接 / 主列的 Outlet），单测一律套 MemoryRouter 渲染。 */
@@ -101,6 +105,58 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('settings-back')).toBeInTheDocument()
     expect(screen.queryByTestId('session-list')).not.toBeInTheDocument()
     expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
+  })
+
+  it('内容区（R2 D2/D4）：中列与工作台同属一块面（上沿圆角 + 主面板底色），侧栏不画右缘线', () => {
+    renderShell()
+
+    const region = screen.getByTestId('content-region')
+    expect(region).toHaveClass('rounded-t-overlay', 'bg-surface', 'overflow-hidden')
+    // 右栏在内容区里面（不是独立第三根柱子）
+    expect(region).toContainElement(screen.getByTestId('main-column'))
+    expect(region).toContainElement(screen.getByTestId('work-panel'))
+    // 右栏自己不再铺画布底（跟随内容区），只留分隔线
+    expect(screen.getByTestId('work-panel')).toHaveClass('border-hairline')
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('bg-canvas')
+    // 侧栏与顶栏同属"壳"那层：靠底色差 + 内容区圆角相接，没有右缘描边
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('border-r')
+  })
+
+  it('窄窗兜底（R2 D4）：窗口宽度低于阈值时自动收起工作台', () => {
+    const callbacks: ResizeObserverCallback[] = []
+    class FakeResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback)
+      }
+      observe(): void {
+        /* 只收集回调，不需要真的观察 */
+      }
+      unobserve(): void {
+        /* noop */
+      }
+      disconnect(): void {
+        /* noop */
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+
+    expect(callbacks).toHaveLength(1)
+    // 阈值 token 在 jsdom 里读不到 → 用兜底 1120：窄窗（< 1120）收、宽窗不动
+    act(() => {
+      callbacks[0]([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
+
+    act(() => {
+      useShellStore.setState({ workPanelOpen: true })
+    })
+    act(() => {
+      callbacks[0]([{ contentRect: { width: 1400 } } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
   })
 
   it('data-sidebar 跟随折叠状态（内容列的安全边靠它算）', () => {
