@@ -12,6 +12,8 @@ export interface MenuActionItem {
   disabled?: boolean
   /** 危险动作：红字，高亮时铺危险浅底（§2.7 的红色一对） */
   danger?: boolean
+  /** 条目的 data-testid（R4：关键交互节点给 E2E 稳定选择器） */
+  testId?: string
   onSelect?: (id: string) => void
 }
 
@@ -66,6 +68,7 @@ export function Menu({
             return (
               <DropdownMenu.Item
                 key={entry.id}
+                data-testid={entry.testId}
                 disabled={entry.disabled}
                 onSelect={() => entry.onSelect?.(entry.id)}
                 className={cn(

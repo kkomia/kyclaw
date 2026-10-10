@@ -1,21 +1,21 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { NewSessionButton } from '../NewSessionButton'
 
 /**
  * 侧栏「新建会话」块按钮（附录 A：224 × 41；224 = 侧栏 240 − 左右内边距 8×2，所以是 w-full）。
  * 底与文字走 --field-bg / 墨色（实测 深 #1f1f1f 底 + #dbdbdb 字，正是 Bg-Secondary + Labels-Primary）。
- * 本任务只做"点了回到对话页"（T9 接真实会话）。
+ * T9：点击 = 触发 onNew（开草稿会话）+ 回到对话页。
  */
 function LocationProbe(): React.JSX.Element {
   return <div data-testid="location">{useLocation().pathname}</div>
 }
 
-function renderButton(path = '/settings'): void {
+function renderButton(path = '/settings', onNew?: () => void): void {
   render(
     <MemoryRouter initialEntries={[path]}>
-      <NewSessionButton />
+      <NewSessionButton onNew={onNew} />
       <LocationProbe />
     </MemoryRouter>
   )
@@ -40,7 +40,17 @@ describe('新建会话按钮', () => {
     expect(button.querySelector('span[aria-hidden="true"]')).not.toBeNull()
   })
 
-  it('点了回到对话页（T9 之前的最简语义）', () => {
+  it('点了：触发 onNew（开新草稿）并回到对话页', () => {
+    const onNew = vi.fn()
+    renderButton('/settings', onNew)
+
+    fireEvent.click(screen.getByTestId('new-session'))
+
+    expect(onNew).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('location')).toHaveTextContent('/chat')
+  })
+
+  it('没接 onNew 也能用（纯导航；单测/复用场景）', () => {
     renderButton('/settings')
 
     fireEvent.click(screen.getByTestId('new-session'))

@@ -11,6 +11,8 @@ export interface MockRequest {
   messageId: string | undefined
   /** 请求时刻的历史快照（拷一份，免得被 Chat 内部的后续改写污染） */
   messages: UIMessage[]
+  /** per-request 的附加 body（T9：threadId / resourceId 从这里进请求） */
+  body: Record<string, unknown> | undefined
 }
 
 export interface MockTransport {
@@ -49,7 +51,9 @@ export function createMockTransport(): MockTransport {
       requests.push({
         trigger: options.trigger,
         messageId: options.messageId,
-        messages: snapshot(options.messages)
+        messages: snapshot(options.messages),
+        body:
+          options.body === undefined ? undefined : { ...(options.body as Record<string, unknown>) }
       })
 
       if (nextFailure) {

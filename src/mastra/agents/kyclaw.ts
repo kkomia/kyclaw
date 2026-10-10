@@ -1,5 +1,5 @@
 /**
- * kyclaw agent 的装配（身份 + 模型 + 工具集）。
+ * kyclaw agent 的装配（身份 + 模型 + 工具集 + 记忆）。
  *
  * 工具集本任务固定为空：文件/命令类工具在 T11 才进来，现在先不假装有——
  * system 指令里也照实说明"还没有工具"，免得模型编造执行结果。
@@ -8,9 +8,12 @@
  * 所以用户配好 provider/密钥后**不用重启**，下一轮就是真模型；配置半截时解析抛错，
  * 这一轮以错误卡收场——不静默回落 mock（T8 裁决）。
  *
+ * memory（T9）：由 index.ts 建好注入（存储挂在 Mastra 实例上的 libsql）。
+ *
  * Agent 类是 ESM-only（@mastra/core），所以工厂是异步的：运行时靠动态 import() 拿。
  */
 import type { Agent } from '@mastra/core/agent'
+import type { MastraMemory } from '@mastra/core/memory'
 import type { KyclawModel } from '../model'
 
 /** agent id：chat 路由 /chat/kyclaw-agent 与 IPC 契约里都用它 */
@@ -25,7 +28,10 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
 - 你只能看到用户在这个对话里给你的内容；不确定就直说，不要编造事实或执行结果。
 - 当前没有挂任何工具：需要读写文件、跑命令时如实说明你做不到，不要假装做过。`
 
-export async function createKyclawAgent(resolveModel: ModelResolver): Promise<Agent> {
+export async function createKyclawAgent(
+  resolveModel: ModelResolver,
+  memory?: MastraMemory
+): Promise<Agent> {
   const { Agent: AgentClass } = await import('@mastra/core/agent')
 
   return new AgentClass({
@@ -33,6 +39,7 @@ export async function createKyclawAgent(resolveModel: ModelResolver): Promise<Ag
     name: KYCLAW_AGENT_ID,
     instructions: KYCLAW_INSTRUCTIONS,
     model: () => resolveModel(),
-    tools: {}
+    tools: {},
+    ...(memory === undefined ? {} : { memory })
   })
 }

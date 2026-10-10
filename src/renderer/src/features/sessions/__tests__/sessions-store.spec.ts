@@ -1,0 +1,327 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { resetSessionsStore, useSessionsStore } from '../sessions-store'
+
+/**
+ * 会话状态（T9）：线程数据以服务端为准——列表/重命名/删除/标题生成都是 HTTP；
+ * store 只做镜像 + 活跃态 + 完成提醒。
+ * 网络用一个假 fetch 打桩（按路径路由），断言直接看"发了什么请求、store 变成了什么"。
+ */
+interface ThreadRow {
+  id: string
+  title: string | null
+  updatedAt: string
+}
+
+interface FakeServer {
+  threads: ThreadRow[]
+  calls: { method: string; path: string; body: unknown }[]
+  failNext: (error: Error) => void
+  messages: Record<string, unknown[]>
+}
+
+function installFakeServer(initial: ThreadRow[] = []): FakeServer {
+  let failure: Error | null = null
+  const server: FakeServer = {
+    threads: [...initial],
+    messages: {},
+    calls: [],
+    failNext(error) {
+      failure = error
+    }
+  }
+
+  const respond = (payload: unknown): Response =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input))
+      const method = init.method ?? 'GET'
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined
+      server.calls.push({ method, path: url.pathname, body })
+
+      if (failure !== null) {
+        const error = failure
+        failure = null
+        throw error
+      }
+
+      if (url.pathname === '/api/threads' && method === 'GET') {
+        return respond({ threads: server.threads })
+      }
+      const renameMatch = /^\/api\/threads\/([^/]+)$/.exec(url.pathname)
+      if (renameMatch && method === 'PATCH') {
+        const id = decodeURIComponent(renameMatch[1])
+        const updated = { ...server.threads.find((row) => row.id === id)! }
+        updated.title = (body as { title: string }).title
+        server.threads = server.threads.map((row) => (row.id === id ? updated : row))
+        return respond(updated)
+      }
+      if (renameMatch && method === 'DELETE') {
+        const id = decodeURIComponent(renameMatch[1])
+        server.threads = server.threads.filter((row) => row.id !== id)
+        return respond({ ok: true })
+      }
+      const titleMatch = /^\/api\/threads\/([^/]+)\/title$/.exec(url.pathname)
+      if (titleMatch && method === 'POST') {
+        const id = decodeURIComponent(titleMatch[1])
+        const row = server.threads.find((thread) => thread.id === id)
+        const title = row?.title ?? '生成的标题'
+        server.threads = server.threads.map((thread) =>
+          thread.id === id ? { ...thread, title } : thread
+        )
+        return respond({ title, generated: row?.title == null })
+      }
+      const messagesMatch = /^\/api\/threads\/([^/]+)\/messages$/.exec(url.pathname)
+      if (messagesMatch) {
+        return respond({ messages: server.messages[decodeURIComponent(messagesMatch[1])] ?? [] })
+      }
+      throw new Error(`假服务没实现这条路由：${method} ${url.pathname}`)
+    })
+  )
+
+  return server
+}
+
+/** Web Notification 的假件：记下被构造的通知 */
+class FakeNotification {
+  static permission: NotificationPermission = 'granted'
+  static instances: FakeNotification[] = []
+  constructor(
+    readonly title: string,
+    readonly options?: { body?: string }
+  ) {
+    FakeNotification.instances.push(this)
+  }
+  static requestPermission = vi.fn(async () => 'granted' as NotificationPermission)
+}
+
+const THREADS: ThreadRow[] = [
+  { id: 't-new', title: '最近的会话', updatedAt: '2026-10-10T09:00:00.000Z' },
+  { id: 't-old', title: '更早的会话', updatedAt: '2026-10-08T09:00:00.000Z' }
+]
+
+beforeEach(() => {
+  installKyclawBridge()
+  resetSessionsStore()
+  resetThreadChats()
+  FakeNotification.instances = []
+  vi.stubGlobal('Notification', FakeNotification)
+})
+
+afterEach(() => {
+  clearKyclawBridge()
+  vi.unstubAllGlobals()
+})
+
+describe('ensureLoaded / refresh', () => {
+  it('首屏拉列表：选中最近一条，loaded 置位', async () => {
+    installFakeServer(THREADS)
+
+    await useSessionsStore.getState().ensureLoaded()
+
+    const state = useSessionsStore.getState()
+    expect(state.loaded).toBe(true)
+    expect(state.threads.map((thread) => thread.id)).toEqual(['t-new', 't-old'])
+    expect(state.activeId).toBe('t-new')
+    expect(state.error).toBeNull()
+  })
+
+  it('重复调用只打一次 HTTP（对话页和侧栏会同时来要）', async () => {
+    const server = installFakeServer(THREADS)
+
+    await Promise.all([
+      useSessionsStore.getState().ensureLoaded(),
+      useSessionsStore.getState().ensureLoaded()
+    ])
+    await useSessionsStore.getState().ensureLoaded()
+
+    expect(server.calls.filter((call) => call.path === '/api/threads')).toHaveLength(1)
+  })
+
+  it('列表为空：开一个草稿（activeId 有值但不是服务端线程）', async () => {
+    installFakeServer([])
+
+    await useSessionsStore.getState().ensureLoaded()
+
+    const state = useSessionsStore.getState()
+    expect(state.threads).toEqual([])
+    expect(state.activeId).not.toBeNull()
+  })
+
+  it('加载失败：落 error、开草稿顶着（对话还能继续），loaded 也置位', async () => {
+    const server = installFakeServer(THREADS)
+    server.failNext(new Error('连接被拒绝'))
+
+    await useSessionsStore.getState().ensureLoaded()
+
+    const state = useSessionsStore.getState()
+    expect(state.loaded).toBe(true)
+    expect(state.error).toContain('连接被拒绝')
+    expect(state.activeId).not.toBeNull()
+  })
+
+  it('refresh 成功后清掉错误（重试路径）', async () => {
+    const server = installFakeServer(THREADS)
+    server.failNext(new Error('boom'))
+    await useSessionsStore.getState().ensureLoaded()
+    expect(useSessionsStore.getState().error).toContain('boom')
+
+    await useSessionsStore.getState().refresh()
+
+    expect(useSessionsStore.getState().error).toBeNull()
+    expect(useSessionsStore.getState().threads).toHaveLength(2)
+  })
+})
+
+describe('新建 / 切换 / 删除 / 重命名', () => {
+  it('新建：换一个全新的草稿 id', async () => {
+    installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    const before = useSessionsStore.getState().activeId
+
+    useSessionsStore.getState().startNew()
+
+    const after = useSessionsStore.getState().activeId
+    expect(after).not.toBeNull()
+    expect(after).not.toBe(before)
+    expect(useSessionsStore.getState().threads.some((thread) => thread.id === after)).toBe(false)
+  })
+
+  it('切换：activeId 跟着走，并把该会话的完成点清掉', async () => {
+    installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    useSessionsStore.setState({ notices: { 't-old': true } })
+
+    useSessionsStore.getState().select('t-old')
+
+    expect(useSessionsStore.getState().activeId).toBe('t-old')
+    expect(useSessionsStore.getState().notices['t-old']).toBeUndefined()
+  })
+
+  it('重命名：PATCH 到服务端并更新镜像', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+
+    await useSessionsStore.getState().rename('t-new', '改过的名字')
+
+    expect(server.calls).toContainEqual({
+      method: 'PATCH',
+      path: '/api/threads/t-new',
+      body: { title: '改过的名字' }
+    })
+    expect(useSessionsStore.getState().threads[0].title).toBe('改过的名字')
+  })
+
+  it('重命名失败：error 置位（不抛给调用方）', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    server.failNext(new Error('500'))
+
+    await useSessionsStore.getState().rename('t-new', 'x')
+
+    expect(useSessionsStore.getState().error).toContain('500')
+    expect(useSessionsStore.getState().threads[0].title).toBe('最近的会话')
+  })
+
+  it('删除活跃会话：删掉后选中剩下的第一条', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+
+    await useSessionsStore.getState().remove('t-new')
+
+    expect(server.calls.some((call) => call.method === 'DELETE')).toBe(true)
+    const state = useSessionsStore.getState()
+    expect(state.threads.map((thread) => thread.id)).toEqual(['t-old'])
+    expect(state.activeId).toBe('t-old')
+  })
+
+  it('删除非活跃会话：activeId 不动', async () => {
+    installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    useSessionsStore.getState().select('t-new')
+
+    await useSessionsStore.getState().remove('t-old')
+
+    expect(useSessionsStore.getState().activeId).toBe('t-new')
+    expect(useSessionsStore.getState().threads.map((thread) => thread.id)).toEqual(['t-new'])
+  })
+
+  it('删除失败：error 置位、列表不动', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    server.failNext(new Error('db 锁了'))
+
+    await useSessionsStore.getState().remove('t-new')
+
+    expect(useSessionsStore.getState().error).toContain('db 锁了')
+    expect(useSessionsStore.getState().threads).toHaveLength(2)
+  })
+})
+
+describe('handleTurnEnd：标题 + 完成通知', () => {
+  it('人不在这个会话：置完成点 + 发系统通知（带标题）', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    useSessionsStore.getState().select('t-new') // 人在 t-new，完成的是 t-old
+
+    await useSessionsStore.getState().handleTurnEnd('t-old')
+
+    expect(useSessionsStore.getState().notices['t-old']).toBe(true)
+    expect(FakeNotification.instances).toHaveLength(1)
+    expect(FakeNotification.instances[0].options?.body).toContain('更早的会话')
+    // 标题照常生成（有标题就跳过；t-old 已有标题）
+    expect(server.calls.some((call) => call.path === '/api/threads/t-old/title')).toBe(true)
+  })
+
+  it('人在这个会话：不发通知（回复就在眼前）', async () => {
+    installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    useSessionsStore.getState().select('t-old')
+
+    await useSessionsStore.getState().handleTurnEnd('t-old')
+
+    expect(useSessionsStore.getState().notices['t-old']).toBeUndefined()
+    expect(FakeNotification.instances).toHaveLength(0)
+  })
+
+  it('草稿首轮结束：会话进列表（先乐观占位），标题生成后替换', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+
+    // 服务端在对话过程中建了线程（这里模拟刷新能看到的形态：无标题）
+    server.threads = [{ id: draftId, title: null, updatedAt: new Date().toISOString() }]
+
+    await useSessionsStore.getState().handleTurnEnd(draftId)
+
+    const state = useSessionsStore.getState()
+    expect(state.threads.map((thread) => thread.id)).toEqual([draftId])
+    expect(state.threads[0].title).toBe('生成的标题')
+    // 标题从"没有"变成真标题：generated=true 的那次 POST 真的发过
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: `/api/threads/${draftId}/title`,
+      body: undefined
+    })
+  })
+
+  it('标题生成失败不翻车：列表保留乐观条目，error 不动（提示留给对话页）', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    server.failNext(new Error('标题服务 500'))
+
+    await useSessionsStore.getState().handleTurnEnd(draftId)
+
+    const state = useSessionsStore.getState()
+    expect(state.threads.map((thread) => thread.id)).toEqual([draftId])
+    expect(state.threads[0].title).toBeNull()
+  })
+})

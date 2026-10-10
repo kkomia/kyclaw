@@ -15,12 +15,18 @@ function assistantWith(text: string): UIMessage {
   return { id: 'a1', role: 'assistant', parts: [{ type: 'text', text }] }
 }
 
-function renderSession(control: ReturnType<typeof createMockTransport>): void {
+async function renderSession(control: ReturnType<typeof createMockTransport>): Promise<void> {
   render(
     <MemoryRouter>
-      <ChatSession transport={control.transport} />
+      <ChatSession
+        transport={control.transport}
+        threadId="thread-list"
+        runtime={{ transport: control.transport, loadHistory: async () => [], onTurnEnd: () => {} }}
+      />
     </MemoryRouter>
   )
+  // Chat 是异步解析的（首次进入先回灌历史），等输入框出现再交互
+  await screen.findByTestId('composer-input')
 }
 
 /** 在输入框里敲一句话并回车（真实交互路径，不越过 Composer 直接调 sendMessage） */
@@ -95,7 +101,7 @@ describe('滚动跟随', () => {
 describe('流式逐段呈现（mock transport）', () => {
   it('三段文本增量按到达顺序上屏，最后拼成完整回复', async () => {
     const control = createMockTransport()
-    renderSession(control)
+    await renderSession(control)
 
     await act(async () => {
       typeAndSend('你好')

@@ -7,9 +7,14 @@ import { Button } from '../../components/ui/button'
  * 224 = 侧栏 240 − 左右内边距 8×2，所以按钮本身 w-full、外层给 p-2；
  * 41 是实测值，覆盖 Button 的高度档（--new-session-height）。
  * 底与文字按实测取 --field-bg + 墨色（深 #1f1f1f 底 / #dbdbdb 字 = Bg-Secondary + Labels-Primary）。
- * 本任务的最简语义是"回到对话页"，真实新建由 T9 接上。
+ * T9：点击 = 开一个新草稿（onNew，由 SessionsController 接 store）并回到对话页；
+ * 草稿在第一轮发消息时才在服务端落成真线程。
  */
-export function NewSessionButton(): React.JSX.Element {
+export interface NewSessionButtonProps {
+  onNew?: () => void
+}
+
+export function NewSessionButton({ onNew }: NewSessionButtonProps): React.JSX.Element {
   const navigate = useNavigate()
 
   return (
@@ -19,7 +24,10 @@ export function NewSessionButton(): React.JSX.Element {
         variant="ghost"
         icon={<Plus />}
         className="h-(--new-session-height) w-full border border-hairline bg-(--field-bg)"
-        onClick={() => navigate('/chat')}
+        onClick={() => {
+          onNew?.()
+          navigate('/chat')
+        }}
       >
         新建会话
       </Button>

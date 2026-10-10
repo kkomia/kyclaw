@@ -1,5 +1,6 @@
 import { DefaultChatTransport } from 'ai'
 import type { ChatTransport, UIMessage } from 'ai'
+import { threadMemoryBody } from '@shared/threads'
 
 /**
  * 对话传输（T7 裁决）：渲染端直连主进程内嵌的 agent 服务。
@@ -21,4 +22,16 @@ export async function getTransport(): Promise<ChatTransport<UIMessage>> {
     api: agentChatUrl(baseUrl),
     headers: { Authorization: `Bearer ${token}` }
   })
+}
+
+/**
+ * 每轮请求带的线程上下文（T9）：threadId 由会话状态给（草稿就是本地生成的 uuid，
+ * 服务端据此建线程）。形状来自 shared/threads 的 `threadMemoryBody`（Mastra 只认
+ * `memory.thread` / `memory.resource`），走 sendMessage/regenerate 的 per-request body
+ * （DefaultChatTransport 会把它合并进请求体），transport 本身保持无状态。
+ */
+export function threadRequestOptions(threadId: string): {
+  body: { memory: { thread: string; resource: string } }
+} {
+  return { body: threadMemoryBody(threadId) }
 }

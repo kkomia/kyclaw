@@ -1,7 +1,6 @@
 import { Outlet } from 'react-router'
 import { useShellStore } from '@renderer/lib/shell-store'
-import { NewSessionButton } from '@renderer/features/sessions/NewSessionButton'
-import { SessionList } from '@renderer/features/sessions/SessionList'
+import { SessionsController } from '@renderer/features/sessions/SessionsController'
 import { MainColumn } from './MainColumn'
 import { Sidebar } from './Sidebar'
 import { SidebarNav } from './SidebarNav'
@@ -12,7 +11,8 @@ import { WorkPanelEmpty } from './WorkPanelEmpty'
 /**
  * 应用壳（spec §6.2 三栏骨架）：顶栏 42 + 左栏 240（覆盖层可折叠）+ 中列 flex-1 + 右栏 400（可收起）。
  * 布局状态只从这里接 store 的分档，往下都是 props —— 组件自身不直接订阅 store，好单测。
- * 侧栏内容 = 新建会话 + 会话列表 + 底部导航；主列渲染当前路由（布局路由的 <Outlet/>）。
+ * 侧栏内容 = 会话区（新建 + 列表，T9 起由 SessionsController 接真实数据）+ 底部导航；
+ * 主列渲染当前路由（布局路由的 <Outlet/>）。
  */
 export function AppShell(): React.JSX.Element {
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
@@ -30,8 +30,7 @@ export function AppShell(): React.JSX.Element {
       />
       <div className="relative flex min-h-0 flex-1">
         <Sidebar collapsed={sidebarCollapsed}>
-          <NewSessionButton />
-          <SessionList />
+          <SessionsController />
           <SidebarNav />
         </Sidebar>
         <MainColumn>

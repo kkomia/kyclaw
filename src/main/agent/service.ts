@@ -13,14 +13,21 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
+import { createThreadsRouter } from '../../mastra/routes/threads'
+import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import { readSettings, settingsPath } from '../settings'
+import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
+import type { MastraMemory } from '@mastra/core/memory'
 
 const HOST = '127.0.0.1'
+
+/** 线程 API 的挂载前缀（路由本体在 src/mastra/routes/threads.ts） */
+export const THREADS_ROUTE_PREFIX = '/api/threads'
 
 /** 端口尝试上限（显式端口被占时换端口重试的次数） */
 const DEFAULT_PORT_ATTEMPTS = 5
@@ -110,15 +117,27 @@ async function listenOn(
 
 /**
  * 静默收尾：收不掉只记日志（不能盖住调用方真正关心的那个错误）。
- * storage 是句柄的真正持有者 —— 无论 Mastra 收尾成不成功都要关（try/finally，T6 随修）。
+ * storage 是句柄的真正持有者 —— 无论 Mastra 收尾成不成功都要关（try/finally，T6 随修）；
+ * memory 给了就先等它把后台活干完（T9：标题落库之类的写入不能和 storage.close 赛跑）。
  * 导出只为一件事：失败路径没法用真句柄造（shutdown 抛错），单测拿假件打这条顺序。
  */
-export async function teardownQuietly(mastra: Mastra, storage: LibSQLStore): Promise<void> {
+export async function teardownQuietly(
+  mastra: Mastra,
+  storage: LibSQLStore,
+  memory?: Pick<MastraMemory, 'settled'>
+): Promise<void> {
   try {
     await mastra.shutdown()
   } catch (error) {
     console.warn('[kyclaw] agent 服务收尾失败（Mastra）', error)
   } finally {
+    if (memory !== undefined) {
+      try {
+        await memory.settled()
+      } catch (error) {
+        console.warn('[kyclaw] agent 服务收尾失败（memory）', error)
+      }
+    }
     try {
       await storage.close()
     } catch (error) {
@@ -152,7 +171,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const resolveModelFor: ModelResolver =
     options.resolveModel ??
     (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
-  const { mastra, storage } = await createKyclawMastra({
+  const { mastra, storage, memory } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor
   })
@@ -164,7 +183,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     '*',
     cors({
       origin: ALLOWED_ORIGINS,
-      allowMethods: ['POST', 'GET', 'OPTIONS'],
+      // 线程 API 用到了 GET/DELETE/PATCH，chat 是 POST（T9）
+      allowMethods: ['POST', 'GET', 'DELETE', 'PATCH', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'Authorization'],
       maxAge: 600
     })
@@ -179,6 +199,21 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   const mastraServer = new MastraServer({ app, mastra })
   await mastraServer.init()
+
+  // 线程 API 挂同一份服务、走同一道 token 闸门（在闸门之后注册，所以它同样被挡在里面）
+  app.route(
+    THREADS_ROUTE_PREFIX,
+    createThreadsRouter({
+      memory,
+      resolveModel: resolveModelFor,
+      // 删线程前先掐掉在跑的那一轮（agent 的线程级取消），否则"取消 → 半截回复落库"
+      // 会把刚删掉的线程写回来（T9 实测到的复活）
+      abortThreadRun: (threadId) => {
+        const agent = mastra.getAgentById(KYCLAW_AGENT_ID)
+        agent?.abortThreadStream({ threadId, resourceId: LOCAL_USER_RESOURCE_ID })
+      }
+    })
+  )
 
   const attempts = Math.max(1, options.attempts ?? DEFAULT_PORT_ATTEMPTS)
   let server: NodeServer | undefined
@@ -201,7 +236,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   if (!server) {
     // 起不来就不留半个服务：把已经建好的 Mastra/storage 收掉，再带着原因抛出去
-    await teardownQuietly(mastra, storage)
+    await teardownQuietly(mastra, storage, memory)
     throw new Error(`agent 服务启动失败：${attempts} 次都没能监听 ${HOST} 的端口`, {
       cause: lastError
     })
@@ -222,12 +257,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           server.close((error) => (error ? reject(error) : resolve()))
         })
       } finally {
-        try {
-          await mastra.shutdown()
-        } finally {
-          // storage 是句柄的真正持有者：前面任何一步失败都不能跳过它
-          await storage.close()
-        }
+        // Mastra / memory 后台活 / storage 的收尾顺序与失败隔离都在这里（T9 起带 memory）
+        await teardownQuietly(mastra, storage, memory)
       }
     }
   }

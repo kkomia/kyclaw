@@ -1,24 +1,49 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { ChatPage, ChatSession } from '@renderer/features/chat/ChatPage'
 import { ErrorCard } from '@renderer/features/chat/ErrorCard'
+import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { createMockTransport, type MockTransport } from './mock-transport'
+
+/**
+ * threads-api 整体 mock：这些用例关心的是"出错 → 错误卡 → 重试"，不该打网络。
+ * （编辑/重试前的服务端截断行为由 chat-flow.spec 与 threads.spec 各自覆盖）
+ */
+vi.mock('@renderer/lib/threads-api', () => ({
+  fetchThreads: vi.fn(async () => []),
+  fetchThreadMessages: vi.fn(async () => []),
+  renameThread: vi.fn(),
+  deleteThread: vi.fn(),
+  truncateThread: vi.fn(async () => 0),
+  generateThreadTitle: vi.fn(async () => ({ title: '', generated: false }))
+}))
 
 afterEach(() => {
   clearKyclawBridge()
 })
 
+beforeEach(() => {
+  resetThreadChats()
+  resetSessionsStore()
+})
+
 /**
  * Step 5：流报错（Review Focus #2）—— 401 / 断流 / 其它都落错误卡，重试 = 重发上一条。
  */
-function renderSession(control: MockTransport): void {
+async function renderSession(control: MockTransport): Promise<void> {
   render(
     <MemoryRouter>
-      <ChatSession transport={control.transport} />
+      <ChatSession
+        transport={control.transport}
+        threadId="thread-errors"
+        runtime={{ transport: control.transport, loadHistory: async () => [], onTurnEnd: () => {} }}
+      />
     </MemoryRouter>
   )
+  await screen.findByTestId('composer-input')
 }
 
 function type(text: string): void {
@@ -87,7 +112,7 @@ describe('ErrorCard 渲染', () => {
 describe('流报错 → 错误卡 + 重试（端到端）', () => {
   it('请求 401：错误卡带 Key 指引；重试重发上一条，成功后可继续对话', async () => {
     const control = createMockTransport()
-    renderSession(control)
+    await renderSession(control)
     control.failNext(Object.assign(new Error('Unauthorized'), { statusCode: 401 }))
 
     await act(async () => {
@@ -121,7 +146,7 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
 
   it('断流：半截内容留着 + 错误卡；重试整轮重发（不幻影续写）', async () => {
     const control = createMockTransport()
-    renderSession(control)
+    await renderSession(control)
 
     await act(async () => {
       send('问题')
@@ -164,6 +189,18 @@ describe('端点取不到（服务没起来）', () => {
       .mockRejectedValueOnce(new Error('agent 服务未启动'))
       .mockResolvedValue({ baseUrl: 'http://127.0.0.1:9', token: 'tok' })
     window.kyclaw.agent.endpoint = endpoint
+    // 端点背后的"服务"：列表与历史都给空（这个用例只验证端点重试这条路）
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname
+        const payload = path.endsWith('/messages') ? { messages: [] } : { threads: [] }
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      })
+    )
 
     render(
       <MemoryRouter>
@@ -182,5 +219,6 @@ describe('端点取不到（服务没起来）', () => {
     })
     expect(await screen.findByTestId('composer-input')).toBeInTheDocument()
     expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
+    vi.unstubAllGlobals()
   })
 })
