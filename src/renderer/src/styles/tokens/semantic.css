@@ -71,11 +71,18 @@
   --icon-opacity-disabled: 0.26;
   --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
 
-  /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400）。
+  /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
      几何在明暗两套下一致，所以只在这里声明、不进深色块。 */
   --titlebar-height: 42px;
   --sidebar-width: 240px;
   --work-panel-width: 400px;
+  --nav-item-height: 36px; /* 导航项 / 侧栏会话项：实测 35.9 ≈ 36 */
+  --new-session-height: 41px; /* 侧栏「新建会话」块按钮：实测 41.3（宽 224 = 240 − 2×8，走 w-full） */
+
+  /* 内容层（spec §6.2：消息列 max 800）。
+     侧栏是覆盖层（台账 R13，主列不位移、不加 pl 留白），所以贴左缘的内容会被它盖住 ——
+     页面内容列改成"限宽 + 居中"，让开侧栏那条 240 的左缘；1280 视口下 800 列正好从 240 起。 */
+  --content-max-width: 800px;
 
   /* 按钮（§7：主按钮＝墨色 Labels-Primary 实心、禁用＝Fills-F3 底 + Labels-Quaternary 字；
      hover/active 取同族档，深浅两套由原样层解析） */

@@ -7,7 +7,8 @@
  *   2. 渲染端收到的推送 payload —— preload 用同一份 schema 解析，结构不对就不交给上层。
  * 窗口几何（宽高/位置）只落盘在主进程（main/store.ts），不过桥：渲染端用不到，越小越稳。
  */
-import { z } from 'zod'
+import { z } from './zod'
+import { appSettingsPatchSchema, type AppSettings, type AppSettingsPatch } from './settings'
 
 export const IPC_CHANNELS = {
   window: {
@@ -21,12 +22,21 @@ export const IPC_CHANNELS = {
     isMaximized: 'window:is-maximized',
     /** 主进程 → 渲染端：窗口状态变化推送 */
     stateChanged: 'window:state-changed'
+  },
+  settings: {
+    /** 读当前设置（返回 AppSettings） */
+    get: 'settings:get',
+    /** 打补丁改设置（入参 AppSettingsPatch，返回合并后的 AppSettings） */
+    update: 'settings:update'
   }
 } as const
 
 /** 窗口状态推送 payload（目前只有最大化标记） */
 export const windowStateSchema = z.strictObject({ maximized: z.boolean() })
 export type WindowState = z.infer<typeof windowStateSchema>
+
+/** settings:update 的入参：单元素元组（payload 形状在 shared/settings.ts） */
+export const settingsUpdateArgsSchema = z.tuple([appSettingsPatchSchema])
 
 /** 无入参通道的入参 schema：ipcRenderer.invoke 不给参数时 args 为空数组 */
 export const noArgsSchema = z.tuple([])
@@ -69,7 +79,15 @@ export interface KyclawWindowApi {
   onStateChanged(listener: (state: WindowState) => void): () => void
 }
 
+/** preload 暴露给渲染端的设置面（落盘在主进程，渲染端只经 IPC 读写） */
+export interface KyclawSettingsApi {
+  get(): Promise<AppSettings>
+  /** 只给要改的字段，返回合并后的完整设置 */
+  update(patch: AppSettingsPatch): Promise<AppSettings>
+}
+
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
 export interface KyclawApi {
   window: KyclawWindowApi
+  settings: KyclawSettingsApi
 }

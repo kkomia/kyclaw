@@ -4,10 +4,10 @@ import { cn } from './cn'
 /**
  * 字段外观（UI 参考 §4.7 .kimi-select）：40 高、圆角 12、`.5px solid var(--Fills-F1)` 描边。
  * 底色按 §2.14 实测分档（浅 = Bg-Primary 的 #ffffff、深 = Bg-Secondary 的 #1f1f1f，见 semantic.css）。
- * 占位文字用达标四级灰（台账 R6）。
+ * 占位文字用达标四级灰（台账 R6）；禁用态（T5 随修 T3 遗留）文字与占位符一起降到禁用档、光标禁止。
  */
 const FIELD_CLASS =
-  'w-full rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) text-b2 text-ink transition-colors duration-(--motion-fast) ease-main placeholder:text-(--text-quaternary)'
+  'w-full rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) text-b2 text-ink transition-colors duration-(--motion-fast) ease-main placeholder:text-(--text-quaternary) disabled:cursor-not-allowed disabled:text-(--text-disabled) disabled:placeholder:text-(--text-disabled)'
 
 export function Input({ className, ...props }: ComponentProps<'input'>): React.JSX.Element {
   return <input className={cn(FIELD_CLASS, 'h-(--field-height) px-3', className)} {...props} />

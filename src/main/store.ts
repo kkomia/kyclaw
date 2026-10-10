@@ -45,8 +45,14 @@ export function readWindowState(file: string): PersistedWindowState {
   }
 }
 
-/** 写：目录不存在就建（userData 首次创建），同步写——窗口关闭时也要来得及落盘 */
+/** 写：目录不存在就建（userData 首次创建），同步写——窗口关闭时也要来得及落盘。
+    写失败（只读介质、临时目录被清、父路径被占）静默：窗口几何是壳自己的事，丢了不影响使用，
+    而关窗流程不能被一个写错误拦住。用户数据的写失败另说——settings 那边是要抛的（main/settings.ts）。 */
 export function writeWindowState(file: string, state: PersistedWindowState): void {
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  } catch {
+    // 尽力而为，不抛
+  }
 }

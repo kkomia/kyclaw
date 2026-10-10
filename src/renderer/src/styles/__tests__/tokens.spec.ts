@@ -693,3 +693,28 @@ describe('T4 壳布局尺寸（spec §6.2 三栏骨架 / 附录 A）', () => {
     }
   })
 })
+
+describe('T5 导航项与新建会话尺寸（附录 A 实测值）', () => {
+  const t5root = semantic.get(':root') ?? new Map<string, string>()
+
+  it('导航项高 36（实测 35.9）/ 新建会话按钮高 41（实测 41.3）进语义层', () => {
+    expectDecl(t5root, '--nav-item-height', '36px', 'semantic :root')
+    expectDecl(t5root, '--new-session-height', '41px', 'semantic :root')
+  })
+
+  it('这两条也是几何，深色档不重写', () => {
+    const t5dark = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
+    for (const name of ['--nav-item-height', '--new-session-height']) {
+      expect(t5dark.has(name), `深色档不该重写几何 ${name}`).toBe(false)
+    }
+  })
+
+  it('图标尺度复用 §4.8 的 18 档（导航项图标不另起一个尺寸 token）', () => {
+    expectDecl(t5root, '--icon-size-md', '18px', 'semantic :root')
+    expect(t5root.has('--nav-icon-size'), '不该另起 nav 专用图标尺寸').toBe(false)
+  })
+
+  it('内容层限宽 800（spec §6.2 消息列）：侧栏是覆盖层，贴左缘的内容会被盖住', () => {
+    expectDecl(t5root, '--content-max-width', '800px', 'semantic :root')
+  })
+})

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { IPC_CHANNELS, IpcInputError, noArgsSchema, parseIpcArgs, windowStateSchema } from '../ipc'
+import {
+  IPC_CHANNELS,
+  IpcInputError,
+  noArgsSchema,
+  parseIpcArgs,
+  settingsUpdateArgsSchema,
+  windowStateSchema
+} from '../ipc'
+import { DEFAULT_SETTINGS } from '../settings'
 
 describe('IPC 契约：window 通道', () => {
   it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
@@ -43,5 +51,37 @@ describe('IPC 契约：window 通道', () => {
     expect(() => parseIpcArgs(noArgsSchema, [1], IPC_CHANNELS.window.minimize)).toThrow(
       /window:minimize/
     )
+  })
+})
+
+describe('IPC 契约：settings 通道', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.settings).toEqual({ get: 'settings:get', update: 'settings:update' })
+  })
+
+  it('settings:update 只收一个补丁对象（形状与取值都过 settings schema）', () => {
+    expect(parseIpcArgs(settingsUpdateArgsSchema, [{ theme: 'dark' }], 'settings:update')).toEqual([
+      { theme: 'dark' }
+    ])
+    expect(parseIpcArgs(settingsUpdateArgsSchema, [{}], 'settings:update')).toEqual([{}])
+    expect(parseIpcArgs(settingsUpdateArgsSchema, [DEFAULT_SETTINGS], 'settings:update')).toEqual([
+      DEFAULT_SETTINGS
+    ])
+  })
+
+  it('settings:update 拦住非法补丁：错值 / 多键 / 非对象 / 缺参 / 多参', () => {
+    const reject = (...args: unknown[]): void => {
+      expect(() =>
+        parseIpcArgs(settingsUpdateArgsSchema, args, IPC_CHANNELS.settings.update)
+      ).toThrow(IpcInputError)
+    }
+
+    reject({ theme: 'blue' })
+    reject({ fontTier: 'huge' })
+    reject({ theme: 'dark', evil: 1 })
+    reject('dark')
+    reject(null)
+    reject()
+    reject({ theme: 'dark' }, { theme: 'light' })
   })
 })

@@ -67,4 +67,12 @@ describe('窗口状态存储（userData 下的 JSON）', () => {
     expect(DEFAULT_WINDOW_STATE.width).not.toBe(1)
     expect(readWindowState(windowStatePath(dir))).toEqual(DEFAULT_WINDOW_STATE)
   })
+
+  it('写不进去就静默（只读介质/父路径被占）：窗口状态是尽力而为，不拦关窗', () => {
+    // 父路径是个文件 → mkdir 必失败
+    const blocked = join(dir, 'blocked')
+    writeFileSync(blocked, 'x', 'utf8')
+
+    expect(() => writeWindowState(windowStatePath(blocked), DEFAULT_WINDOW_STATE)).not.toThrow()
+  })
 })

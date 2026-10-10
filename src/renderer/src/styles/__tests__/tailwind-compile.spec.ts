@@ -56,6 +56,8 @@ describe('Tailwind 编译护栏', () => {
   const UTILITY_CASES: Array<[string, string[]]> = [
     // [候选类, 产物里必须出现的声明]
     ['h-(--control-height-sm)', ['height: var(--control-height-sm)']],
+    ['h-(--nav-item-height)', ['height: var(--nav-item-height)']],
+    ['h-(--new-session-height)', ['height: var(--new-session-height)']],
     ['min-w-(--control-min-width-md)', ['min-width: var(--control-min-width-md)']],
     ['size-(--icon-size-md)', ['width: var(--icon-size-md)', 'height: var(--icon-size-md)']],
     ['w-(--overlay-width-sm)', ['width: var(--overlay-width-sm)']],
@@ -76,7 +78,12 @@ describe('Tailwind 编译护栏', () => {
       'group-data-disabled:opacity-(--icon-opacity-disabled)',
       ['opacity: var(--icon-opacity-disabled)']
     ],
-    ['group-hover:opacity-(--icon-opacity-hover)', ['opacity: var(--icon-opacity-hover)']]
+    ['group-hover:opacity-(--icon-opacity-hover)', ['opacity: var(--icon-opacity-hover)']],
+    // 禁用态（T5 随修 T3 遗留）：:disabled 叠在 hover/active 上压掉亮底，压不掉就是外观 bug
+    ['disabled:hover:bg-transparent', ['background-color: transparent']],
+    ['disabled:active:bg-transparent', ['background-color: transparent']],
+    ['disabled:text-(--text-disabled)', ['color: var(--text-disabled)']],
+    ['disabled:placeholder:text-(--text-disabled)', ['color: var(--text-disabled)']]
   ]
 
   it.each(UTILITY_CASES)('工具类 %s 生成 token 引用', async (candidate, declarations) => {
@@ -85,6 +92,13 @@ describe('Tailwind 编译护栏', () => {
     for (const declaration of declarations) {
       expect(css, `${candidate} 缺少 ${declaration}`).toContain(declaration)
     }
+  })
+
+  it('禁用变体带 :disabled 伪类（不只是媒体查询里的 hover）', async () => {
+    const css = flatten(await compileCandidates(['disabled:hover:bg-transparent']))
+
+    expect(css).toContain(':disabled')
+    expect(css).toContain(':hover')
   })
 
   it('变量简写要能写进 data-*/group-* 变体（图标按钮的禁用态依赖它）', async () => {

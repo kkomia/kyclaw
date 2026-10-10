@@ -9,6 +9,8 @@ export interface ChipProps extends ComponentProps<'button'> {
  * 快捷 chip（UI 参考 §4.6 实测）：高 36、药丸、1px 描边、无独立底色；
  * 文字取量到的 #505050/#979797 那一档（= --text-secondary）。
  * 横向间隙 12 是行内布局的事，由放它的父容器给（§4.6：chip 行 gap 约 12）。
+ * 禁用态（T5 随修 T3 遗留）：原生的 :hover/:active 在 disabled 上照样命中，必须显式压掉亮底，
+ * 文字降到 Labels-Quaternary 那一档。
  */
 export function Chip({
   icon,
@@ -21,7 +23,7 @@ export function Chip({
     <button
       type={type}
       className={cn(
-        'inline-flex h-(--chip-height) shrink-0 items-center gap-1.5 rounded-pill border border-hairline bg-transparent px-3 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover active:bg-active',
+        'inline-flex h-(--chip-height) shrink-0 items-center gap-1.5 rounded-pill border border-hairline bg-transparent px-3 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover active:bg-active disabled:cursor-not-allowed disabled:text-(--text-disabled) disabled:hover:bg-transparent disabled:active:bg-transparent',
         className
       )}
       {...props}

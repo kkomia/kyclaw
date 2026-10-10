@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { Button } from '../button'
-import { Dialog } from '../dialog'
+import { Dialog, DialogClose } from '../dialog'
 import { tick } from './tick'
 
 describe('Dialog', () => {
@@ -121,5 +121,56 @@ describe('Dialog', () => {
     await tick()
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('面板自己不吃焦点环：Content 带 outline-none（焦点由内部元素接管）', () => {
+    render(
+      <Dialog open trigger={<Button>打开</Button>} title="标题">
+        内容
+      </Dialog>
+    )
+
+    expect(screen.getByRole('dialog')).toHaveClass('outline-none')
+  })
+})
+
+describe('DialogClose（受控用法的关闭钮）', () => {
+  it('是图标按钮：36 高、图标 18、右上角、名字叫"关闭"', () => {
+    render(
+      <Dialog open trigger={<Button>打开</Button>} title="标题">
+        <DialogClose />
+      </Dialog>
+    )
+
+    const close = screen.getByRole('button', { name: '关闭' })
+    expect(close).toHaveClass('size-(--icon-button-size)', 'absolute', 'top-3', 'right-3')
+    expect(close.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
+  })
+
+  it('点它走 onOpenChange(false)：受控用法下不自己管开合状态', async () => {
+    function Harness(): React.JSX.Element {
+      const [open, setOpen] = useState(true)
+      return (
+        <Dialog open={open} onOpenChange={setOpen} trigger={<Button>打开</Button>} title="标题">
+          <DialogClose />
+        </Dialog>
+      )
+    }
+    render(<Harness />)
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    await tick()
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('名字可覆盖（英文界面/不同语义的关闭钮）', () => {
+    render(
+      <Dialog open trigger={<Button>打开</Button>} title="标题">
+        <DialogClose label="Close" />
+      </Dialog>
+    )
+
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
   })
 })

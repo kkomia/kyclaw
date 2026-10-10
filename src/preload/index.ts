@@ -11,8 +11,10 @@ import {
   IPC_CHANNELS,
   windowStateSchema,
   type KyclawApi,
+  type KyclawSettingsApi,
   type KyclawWindowApi
 } from '../shared/ipc'
+import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -40,7 +42,23 @@ const windowApi: KyclawWindowApi = {
   }
 }
 
-export const kyclawApi: KyclawApi = { window: windowApi }
+/** 主进程回的设置：结构不对就当没读到（回默认值），不让半截对象进渲染端。
+    这里留一条 warn：静默回退过一次就够难受了（T5 实测过 zod 在 CSP 下抛 EvalError 的那种静默），
+    下次出问题时至少控制台里有话说。 */
+function parseSettings(payload: unknown): AppSettings {
+  const parsed = appSettingsSchema.safeParse(payload)
+  if (parsed.success) return parsed.data
+  console.warn('[kyclaw] 设置响应结构不合法，回退默认值', payload)
+  return defaultSettings()
+}
+
+const settingsApi: KyclawSettingsApi = {
+  get: async () => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.get)),
+  update: async (patch) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.update, patch))
+}
+
+export const kyclawApi: KyclawApi = { window: windowApi, settings: settingsApi }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。
 if (process.contextIsolated) {

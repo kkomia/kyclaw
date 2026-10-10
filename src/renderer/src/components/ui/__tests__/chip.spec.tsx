@@ -45,4 +45,18 @@ describe('Chip', () => {
     expect(screen.getByRole('button')).toHaveClass('h-8')
     expect(screen.getByRole('button')).not.toHaveClass('h-(--chip-height)')
   })
+
+  it('原生 disabled：抑制 hover/active 亮底，文字降档，光标禁止', () => {
+    render(<Chip disabled>写周报</Chip>)
+
+    const chip = screen.getByRole('button', { name: '写周报' })
+    expect(chip).toBeDisabled()
+    // 原生 :hover / :active 在禁用时照样命中，所以必须显式压掉这两个亮底
+    expect(chip).toHaveClass(
+      'disabled:hover:bg-transparent',
+      'disabled:active:bg-transparent',
+      'disabled:text-(--text-disabled)',
+      'disabled:cursor-not-allowed'
+    )
+  })
 })

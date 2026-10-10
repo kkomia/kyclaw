@@ -2,12 +2,14 @@
  * 主题与字号机制：只写 html 属性，取值全在 CSS token 层。
  *   data-theme="light|dark"    → tokens/kimi-tokens.css 的深色档、Tailwind 的 dark: 变体
  *   data-font-size="small|default|large" → 字号整组换值
- * 默认跟随系统（matchMedia 监听）；偏好持久化不在这里（T5 的设置存储负责）。
+ * 默认跟随系统（matchMedia 监听）；持久化在设置层（shared/settings.ts + lib/settings-store.ts）。
+ *
+ * 取值词表来自 shared/settings 的 schema：落盘校验、IPC 入参、这里的属性写入共用一个来源。
  */
+import type { FontTier, ThemeMode } from '@shared/settings'
 
-export type ThemeMode = 'system' | 'light' | 'dark'
+export type { FontTier, ThemeMode }
 export type ResolvedTheme = 'light' | 'dark'
-export type FontTier = 'small' | 'default' | 'large'
 
 export const DARK_QUERY = '(prefers-color-scheme: dark)'
 

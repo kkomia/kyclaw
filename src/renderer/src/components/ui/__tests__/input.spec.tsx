@@ -47,6 +47,16 @@ describe('Input', () => {
     expect(input).toHaveClass('h-10')
     expect(input).not.toHaveClass('h-(--field-height)')
   })
+
+  it('原生 disabled：文字与占位符都降到禁用档，光标禁止', () => {
+    render(<Input aria-label="会话名" placeholder="起个名字" disabled />)
+
+    expect(screen.getByLabelText('会话名')).toHaveClass(
+      'disabled:text-(--text-disabled)',
+      'disabled:placeholder:text-(--text-disabled)',
+      'disabled:cursor-not-allowed'
+    )
+  })
 })
 
 describe('Textarea', () => {

@@ -4,6 +4,7 @@
  */
 import { app } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
+import { registerSettingsIpc } from './ipc/settings'
 import { registerWindowIpc } from './ipc/window'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
@@ -26,6 +27,7 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     registerWindowIpc()
+    registerSettingsIpc(app.getPath('userData'))
     showMainWindow()
     createTray()
 

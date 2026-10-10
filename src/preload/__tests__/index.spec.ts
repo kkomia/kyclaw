@@ -123,3 +123,55 @@ describe('preload：window.kyclaw 白名单', () => {
     expect(mocks.removeListener).toHaveBeenCalledWith('window:state-changed', pushedListener())
   })
 })
+
+describe('preload：window.kyclaw.settings', () => {
+  it('暴露 settings 一族（get / update 两个方法）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.settings).sort()).toEqual(['get', 'update'])
+  })
+
+  it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    const persisted = { theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }
+    mocks.invoke.mockResolvedValueOnce(persisted)
+
+    await expect(kyclawApi.settings.get()).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:get')
+  })
+
+  it('get 的返回值结构不对（跨边界脏数据）→ 默认值，不把脏数据交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    for (const bad of [{ theme: 'blue' }, { theme: 'dark' }, 'dark', null]) {
+      mocks.invoke.mockResolvedValueOnce(bad)
+      await expect(kyclawApi.settings.get()).resolves.toEqual({
+        theme: 'system',
+        fontTier: 'default',
+        providers: [],
+        workspaces: []
+      })
+    }
+  })
+
+  it('update 把补丁原样发给 settings:update，回吐落盘后的完整设置', async () => {
+    const { kyclawApi } = await loadPreload()
+    const updated = { theme: 'light', fontTier: 'default', providers: [], workspaces: [] }
+    mocks.invoke.mockResolvedValueOnce(updated)
+
+    await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual(updated)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:update', { theme: 'light' })
+  })
+
+  it('update 的返回值结构不对 → 默认值（渲染端不拿到半截对象）', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ theme: 'light' })
+
+    await expect(kyclawApi.settings.update({ theme: 'light' })).resolves.toEqual({
+      theme: 'system',
+      fontTier: 'default',
+      providers: [],
+      workspaces: []
+    })
+  })
+})
