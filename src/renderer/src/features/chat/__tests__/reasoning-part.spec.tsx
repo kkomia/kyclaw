@@ -12,26 +12,38 @@ import { TextPart } from '@renderer/features/chat/parts/TextPart'
  * 样式侧契约（2px/呼吸/reduced-motion）在 styles/__tests__/markdown.spec.ts。
  */
 describe('思考块（ReasoningPart）', () => {
-  it('流式中自动展开；点一下折叠；流结束自动收起', () => {
+  it('流式中自动展开；点一下折叠（内容留在 DOM，grid-rows 折叠不硬切）；流结束保持用户的选择', () => {
     const { rerender } = render(<ReasoningPart text="先看文件结构……" streaming />)
 
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看文件结构……')
 
     fireEvent.click(screen.getByTestId('reasoning-toggle'))
-    expect(screen.queryByTestId('reasoning-text')).not.toBeInTheDocument()
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+    // 开过一次后内容常驻 DOM（收起 = 容器级 0fr 过渡，不做条件渲染）
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
+    expect(screen.getByTestId('reasoning-text')).toBeInTheDocument()
 
     rerender(<ReasoningPart text="先看文件结构……" streaming={false} />)
-    expect(screen.queryByTestId('reasoning-text')).not.toBeInTheDocument()
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('非流式默认折叠，点开后能看到内容', () => {
+  it('非流式默认折叠（没开过就不上 DOM），点开后能看到内容', () => {
     render(<ReasoningPart text="推理内容" />)
 
     expect(screen.queryByTestId('reasoning-text')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('reasoning-toggle'))
     expect(screen.getByTestId('reasoning-text')).toHaveTextContent('推理内容')
+  })
+
+  it('流结束自动收起（用户没点过）：内容仍在 DOM、data-open 转 false', () => {
+    const { rerender } = render(<ReasoningPart text="想完了" streaming />)
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'true')
+
+    rerender(<ReasoningPart text="想完了" streaming={false} />)
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
+    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('想完了')
   })
 })
 

@@ -1,26 +1,35 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { UIMessage } from 'ai'
 import { Message } from '@renderer/features/chat/Message'
 import { ToolCard } from '@renderer/features/chat/parts/ToolCard'
+import { RESULT_PREVIEW_CHARS } from '@renderer/features/chat/parts/tool-part'
 
 /**
- * 工具卡（T7 起静态状态渲染；T13 补齐状态机的逐档渲染）。
- * 状态取自 AI SDK 的 tool part 状态机（spec §7.1）。
+ * 工具行（round 6 起是"行 + 折叠体"形态，对照《对话UI-工具链与显示口径 v0.1》§1.4-§1.6）：
+ * 状态取自 AI SDK 的 tool part 状态机（spec §7.1）；行默认折着（单步没有自动展开档），
+ * 展开体 = 入参 + 结果（结果恒 600 字截断）；收起是 grid-rows 折叠、不是条件渲染。
  */
-describe('ToolCard 静态状态', () => {
-  it('input-streaming：参数还在流进来', () => {
-    render(<ToolCard part={{ toolName: 'read', state: 'input-streaming' }} />)
+describe('ToolCard 行与折叠体', () => {
+  it('input-streaming：参数还在流进来（没有可展开的东西，行不是按钮）', () => {
+    render(<ToolCard part={{ toolName: 'read', state: 'input-streaming' }} running />)
 
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'input-streaming')
     expect(screen.getByTestId('tool-card')).toHaveTextContent('read')
     expect(screen.getByTestId('tool-state')).toHaveTextContent('准备参数')
+    expect(screen.queryByTestId('tool-row')).not.toBeInTheDocument()
   })
 
-  it('input-available：参数齐了、正在调用', () => {
-    render(<ToolCard part={{ toolName: 'write', state: 'input-available' }} />)
-
+  it('input-available：流式中显示"调用中"（流光），轮次结束后显示"已调用"（没回执不装进行中）', () => {
+    const { unmount } = render(
+      <ToolCard part={{ toolName: 'write', state: 'input-available' }} running />
+    )
     expect(screen.getByTestId('tool-state')).toHaveTextContent('调用中')
+    expect(screen.getByTestId('tool-state').className).toContain('trace-live')
+    unmount()
+
+    render(<ToolCard part={{ toolName: 'write', state: 'input-available' }} />)
+    expect(screen.getByTestId('tool-state')).toHaveTextContent('已调用')
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'pending')
   })
 
@@ -37,7 +46,7 @@ describe('ToolCard 静态状态', () => {
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'waiting')
   })
 
-  it('output-available：展示入参与结果', () => {
+  it('output-available：默认折着；展开看到入参/行详情与结果；再收起内容仍在 DOM（grid-rows 折叠）', () => {
     render(
       <ToolCard
         part={{
@@ -51,11 +60,25 @@ describe('ToolCard 静态状态', () => {
 
     expect(screen.getByTestId('tool-state')).toHaveTextContent('已完成')
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'pending')
+    // 行详情（入参里的 path）直接印在行上
+    expect(screen.getByTestId('tool-detail')).toHaveTextContent('a.txt')
+    // 单步默认折着：没开过就不上 DOM
+    expect(screen.queryByTestId('tool-input')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-output')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('tool-row'))
+    expect(screen.getByTestId('tool-row')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('tool-input')).toHaveTextContent('a.txt')
     expect(screen.getByTestId('tool-output')).toHaveTextContent('文件内容')
+
+    // 收起：走容器级折叠（0fr），内容留在 DOM（不做条件渲染硬切）
+    fireEvent.click(screen.getByTestId('tool-row'))
+    expect(screen.getByTestId('tool-row')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('tool-output')).toBeInTheDocument()
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
   })
 
-  it('output-error：展示错误文本（危险语气）', () => {
+  it('output-error：展开后展示错误文本（危险语气）', () => {
     render(
       <ToolCard
         part={{ toolName: 'write', state: 'output-error', errorText: '工作区外路径被拒绝' }}
@@ -64,6 +87,7 @@ describe('ToolCard 静态状态', () => {
 
     expect(screen.getByTestId('tool-state')).toHaveTextContent('出错')
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'error')
+    fireEvent.click(screen.getByTestId('tool-row'))
     expect(screen.getByTestId('tool-output')).toHaveTextContent('工作区外路径被拒绝')
   })
 
@@ -77,6 +101,17 @@ describe('ToolCard 静态状态', () => {
     expect(screen.queryByTestId('tool-output')).not.toBeInTheDocument()
   })
 
+  it('结果恒切 600 字：没有「加载全部」按钮、不提示截断（文档 §1.6）', () => {
+    const long = 'x'.repeat(1200)
+    render(<ToolCard part={{ toolName: 'read', state: 'output-available', output: long }} />)
+    fireEvent.click(screen.getByTestId('tool-row'))
+
+    expect(screen.getByTestId('tool-output').textContent).toHaveLength(RESULT_PREVIEW_CHARS)
+    // 卡里没有第二个按钮（没有「加载全部」那种出口），也没有任何"加载"字样
+    expect(screen.getByTestId('tool-card').querySelectorAll('button')).toHaveLength(1)
+    expect(within(screen.getByTestId('tool-card')).queryByText(/加载/)).not.toBeInTheDocument()
+  })
+
   it('未知状态原样显示、按中性语气渲染（不猜）', () => {
     render(<ToolCard part={{ toolName: 'mcp__x__y', state: 'some-future-state' }} />)
 
@@ -84,7 +119,7 @@ describe('ToolCard 静态状态', () => {
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'pending')
   })
 
-  it('审批类状态只做静态呈现：卡内没有按钮（交互在 ApprovalCard）', () => {
+  it('审批类状态只做静态呈现：没有入参就没有可交互的行（交互在 ApprovalCard）', () => {
     render(<ToolCard part={{ toolName: 'write', state: 'approval-requested' }} />)
 
     expect(screen.getByTestId('tool-state')).toHaveTextContent('等待审批')
@@ -92,8 +127,8 @@ describe('ToolCard 静态状态', () => {
   })
 })
 
-describe('助手消息里的工具 part', () => {
-  it('tool-* part 渲染成工具卡，文本 part 照旧', () => {
+describe('助手消息里的工具 part（过程块包装）', () => {
+  it('tool-* part 渲染成工具行；这一轮不是流式 → 过程块默认收起，点开后才可见', () => {
     const message = {
       id: 'a1',
       role: 'assistant',
@@ -112,12 +147,17 @@ describe('助手消息里的工具 part', () => {
     render(<Message message={message} />)
 
     expect(screen.getByTestId('message-text')).toHaveTextContent('先读文件：')
+    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('使用 1 个工具')
+    // 跑完自动收起：行还没上 DOM
+    expect(screen.queryByTestId('tool-card')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('trace-toggle'))
     const card = screen.getByTestId('tool-card')
     expect(card).toHaveAttribute('data-tool', 'read')
     expect(card).toHaveTextContent('已完成')
   })
 
-  it('approval-requested 的 part：接了决策回调就渲染审批卡，决策从 part 里读', () => {
+  it('approval-requested 的 part：接了决策回调就强制展开、渲染审批卡（决策从 part 里读）', () => {
     const message = {
       id: 'a2',
       role: 'assistant',
@@ -141,6 +181,12 @@ describe('助手消息里的工具 part', () => {
       />
     )
 
+    // 待审批步骤强制展开（不用先点块头），头部不画箭头
+    const block = screen.getByTestId('trace-block')
+    expect(block).toHaveAttribute('data-open', 'true')
+    expect(screen.getByTestId('trace-toggle')).toHaveAttribute('data-forced', 'approval')
+    expect(screen.getByTestId('trace-toggle').querySelector('svg')).toBeNull()
+
     expect(screen.getByTestId('approval-card')).toHaveAttribute('data-tool', 'write')
     expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
 
@@ -151,7 +197,7 @@ describe('助手消息里的工具 part', () => {
     )
   })
 
-  it('没接决策回调：审批中也退回静态工具卡（不给点了没用的按钮）', () => {
+  it('没接决策回调：审批中退回静态工具行（不给点了没用的按钮）', () => {
     const message = {
       id: 'a3',
       role: 'assistant',
@@ -168,8 +214,9 @@ describe('助手消息里的工具 part', () => {
 
     render(<Message message={message} />)
 
+    fireEvent.click(screen.getByTestId('trace-toggle'))
     expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('approval-allow-once')).not.toBeInTheDocument()
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

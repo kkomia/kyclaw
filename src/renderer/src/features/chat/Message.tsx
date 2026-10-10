@@ -2,16 +2,18 @@ import { useState } from 'react'
 import type { UIMessage } from 'ai'
 import { Button } from '@renderer/components/ui/button'
 import type { Workspace } from '@shared/settings'
-import { ApprovalCard, type ApprovalDecision } from './ApprovalCard'
-import { approvalRequestOf, type ApprovalRequest } from './approval'
+import type { ApprovalDecision } from './ApprovalCard'
+import type { ApprovalRequest } from './approval'
 import { ReasoningPart } from './parts/ReasoningPart'
 import { TextPart } from './parts/TextPart'
-import { ToolCard, type ToolCardPart } from './parts/ToolCard'
+import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
+import { isToolPart } from './parts/tool-part'
 
 /**
  * 一条消息（用户 / 助手两种形态）。
  * 用户消息：右侧气泡 + 悬停出现的「编辑」（编辑 = 截断重发，见 ChatPage 的 editResend）；
- * 助手消息：左对齐的 part 流（文本 / 思考 / 工具卡 / 审批卡）。
+ * 助手消息：左对齐的 part 流 —— 正文文本单出，**连续的过程 part（思考 / 工具调用）并成
+ * 一个过程块**（round 6：TraceBlock，正文把块切开、块内保持原顺序）。
  */
 export interface MessageProps {
   message: UIMessage
@@ -22,10 +24,13 @@ export interface MessageProps {
   workspaces?: readonly Workspace[]
   /**
    * 审批决策回调（工具 part 处于 approval-requested 时出现审批卡）。
-   * 没有这个回调时不渲染审批卡、退回静态工具卡 —— 没接线的位置不该给"点了没用"的按钮。
+   * 没有这个回调时不渲染审批卡、退回静态工具行 —— 没接线的位置不该给"点了没用"的按钮。
    */
   onApprovalDecision?: (request: ApprovalRequest, decision: ApprovalDecision) => void
 }
+
+type MessagePart = UIMessage['parts'][number]
+type TextPartType = Extract<MessagePart, { type: 'text' }>
 
 /** 用户消息里的纯文本（气泡里不渲染 markdown：用户输入按原样显示） */
 function userText(message: UIMessage): string {
@@ -44,39 +49,28 @@ function lastRenderableIndex(parts: UIMessage['parts']): number {
   return last
 }
 
-type MessagePart = UIMessage['parts'][number]
+/** 助手消息的渲染块：文本一节，连续的过程 part 并成一个过程块 */
+type RenderChunk =
+  | { kind: 'text'; part: TextPartType; index: number }
+  | { kind: 'process'; entries: TraceBlockEntry[] }
 
-/** 静态工具 part（tool-<name>）与动态工具 part（dynamic-tool）都算工具调用 */
-function isToolPart(part: MessagePart): boolean {
-  return part.type === 'dynamic-tool' || part.type.startsWith('tool-')
-}
-
-/** 把 AI SDK 的 tool part 收成 ToolCard 认的形状（toolName / state / input / output / errorText） */
-function toToolCardPart(part: MessagePart): ToolCardPart | null {
-  if (part.type === 'dynamic-tool') {
-    return {
-      toolName: part.toolName,
-      state: part.state,
-      input: part.input,
-      output: 'output' in part ? part.output : undefined,
-      errorText: 'errorText' in part ? part.errorText : undefined
+function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[] {
+  const lastIndex = lastRenderableIndex(parts)
+  const chunks: RenderChunk[] = []
+  parts.forEach((part, index) => {
+    if (part.type === 'text') {
+      chunks.push({ kind: 'text', part, index })
+      return
     }
-  }
-  if (!part.type.startsWith('tool-')) return null
-  const tool = part as {
-    type: string
-    state: string
-    input?: unknown
-    output?: unknown
-    errorText?: string
-  }
-  return {
-    toolName: tool.type.slice('tool-'.length),
-    state: tool.state,
-    input: tool.input,
-    output: tool.output,
-    errorText: tool.errorText
-  }
+    if (part.type === 'reasoning' || isToolPart(part)) {
+      const entry: TraceBlockEntry = { part, streaming: streaming && index === lastIndex }
+      const previous = chunks[chunks.length - 1]
+      if (previous?.kind === 'process') previous.entries.push(entry)
+      else chunks.push({ kind: 'process', entries: [entry] })
+    }
+    // step-start / file / source 等不渲染
+  })
+  return chunks
 }
 
 export function Message({
@@ -159,6 +153,9 @@ export function Message({
     )
   }
 
+  const chunks = chunkParts(message.parts, streaming)
+  const lastIndex = lastRenderableIndex(message.parts)
+
   return (
     <article
       data-testid={`message-${message.id}`}
@@ -166,38 +163,38 @@ export function Message({
       data-streaming={streaming ? 'true' : undefined}
       className="animate-message-in flex flex-col gap-2"
     >
-      {message.parts.map((part, index) => {
-        // 光标（细竖线）只挂在最后一个可渲染的 part 上：末尾可能是不渲染的 file / step-start
-        const isStreamingTail = streaming && index === lastRenderableIndex(message.parts)
-        if (part.type === 'text') {
-          return <TextPart key={`text-${index}`} text={part.text} streaming={isStreamingTail} />
-        }
-        if (part.type === 'reasoning') {
+      {chunks.map((chunk, chunkIndex) => {
+        if (chunk.kind === 'text') {
           return (
-            <ReasoningPart
-              key={`reasoning-${index}`}
-              text={part.text}
-              streaming={isStreamingTail}
+            <TextPart
+              key={`text-${chunk.index}`}
+              text={chunk.part.text}
+              streaming={streaming && chunk.index === lastIndex}
             />
           )
         }
-        // 等审批的调用由审批卡接管（带 diff 与四决策）；没接决策回调时退回静态工具卡
-        const approval = approvalRequestOf(part)
-        if (approval !== null && onApprovalDecision !== undefined) {
-          return (
-            <ApprovalCard
-              key={`approval-${index}`}
-              request={approval}
-              workspaces={workspaces ?? []}
-              onDecide={(decision) => onApprovalDecision(approval, decision)}
-            />
+        const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
+        if (toolCount === 0) {
+          // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块
+          return chunk.entries.map((entry, index) =>
+            entry.part.type === 'reasoning' ? (
+              <ReasoningPart
+                key={`reasoning-${index}`}
+                text={entry.part.text}
+                streaming={entry.streaming}
+              />
+            ) : null
           )
         }
-        const tool = toToolCardPart(part)
-        if (tool) {
-          return <ToolCard key={`tool-${index}`} part={tool} />
-        }
-        return null
+        return (
+          <TraceBlock
+            key={`process-${chunkIndex}`}
+            entries={chunk.entries}
+            running={streaming}
+            workspaces={workspaces}
+            onApprovalDecision={onApprovalDecision}
+          />
+        )
       })}
     </article>
   )

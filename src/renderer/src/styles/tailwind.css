@@ -369,6 +369,92 @@
   }
 }
 
+/* ===== 过程块：思考 / 工具链的折叠容器（round 6）=====
+   对照《对话UI-工具链与显示口径 v0.1》§4.1/§1.7：
+   高度走容器级 grid-template-rows 0fr ↔ 1fr **双向过渡**（禁条件渲染硬切，雷点 3/5），
+   内容另走 blur + opacity + translateY；时长/缓动全部走 token：收起走主档 --motion-main +
+   --clp-ease-out、展开走 --duration-shift（.38s，大块位移档）+ --clp-ease-close —— 与文档的
+   0.25s/0.38s 同一套缓动命名（文档的 --ch-ease-out/close 即生产里的 --clp-ease-out/close）。
+   内容"开过一次"后常驻 DOM（组件侧 everOpened，见 parts/TraceFold.tsx）。 */
+@layer components {
+  .trace-fold {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--motion-main) var(--clp-ease-out);
+  }
+
+  .trace-fold[data-open='true'] {
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--duration-shift) var(--clp-ease-close);
+  }
+
+  .trace-fold-in {
+    overflow: hidden;
+    min-height: 0;
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(-6px);
+    visibility: hidden;
+    transition:
+      opacity var(--motion-fast) ease,
+      filter var(--motion-fast) ease,
+      transform var(--motion-main) var(--clp-ease-out),
+      visibility 0s linear var(--motion-main);
+  }
+
+  .trace-fold[data-open='true'] > .trace-fold-in {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+    visibility: visible;
+    transition:
+      opacity var(--duration-base) ease var(--motion-main),
+      filter var(--duration-base) ease var(--motion-main),
+      transform var(--duration-shift) var(--clp-ease-close),
+      visibility 0s;
+  }
+
+  /* 进行中的行/块头：流光字（文档 .ch-live；"不要蓝色循环圈"的替代表达）。
+     reduced-motion 下由本域第二层还原成普通灰字（见下）。 */
+  .trace-live {
+    background-image: linear-gradient(
+      90deg,
+      var(--text-secondary) 25%,
+      var(--text-quaternary) 50%,
+      var(--text-secondary) 75%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: trace-shimmer var(--duration-loop-slow) linear infinite;
+  }
+}
+
+@keyframes trace-shimmer {
+  from {
+    background-position: 100% center;
+  }
+
+  to {
+    background-position: -100% center;
+  }
+}
+
+/* 第二层 reduced-motion（第一层 = 文件末尾的全局兜底；第三层 = TSX 的 motion-reduce: 前缀）：
+   本域折叠与流光整档停掉 —— 状态照样变，只是看不出过程。 */
+@media (prefers-reduced-motion: reduce) {
+  .trace-fold,
+  .trace-fold-in {
+    transition: none !important;
+  }
+
+  .trace-live {
+    animation: none !important;
+    background: none;
+    color: var(--text-tertiary);
+  }
+}
+
 /* 尊重 prefers-reduced-motion（我们自定的一条，UI 参考没有）。 */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -22,16 +22,21 @@ export interface MessageListProps {
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
 const STICK_THRESHOLD = 40
 
-/** 末尾内容指纹：条数 + 最后一条的文本量（流式每来一段就会变） */
+/** 末尾内容指纹：条数 + part 数 + 可见内容量 —— 文本增量、工具行出现/状态转档
+ *  （调用中 → 已完成）都会让它变，贴底的人跟着新内容走。 */
 function tailSignature(messages: UIMessage[]): string {
   const last = messages[messages.length - 1]
-  const size = last
-    ? last.parts.reduce((total, part) => {
-        const text = (part as { text?: unknown }).text
-        return total + (typeof text === 'string' ? text.length : 0)
-      }, 0)
-    : 0
-  return `${messages.length}:${size}`
+  if (last === undefined) return '0:0:0'
+  let size = 0
+  for (const part of last.parts) {
+    const text = (part as { text?: unknown }).text
+    if (typeof text === 'string') size += text.length
+    const output = (part as { output?: unknown }).output
+    if (typeof output === 'string') size += output.length
+    const state = (part as { state?: unknown }).state
+    if (typeof state === 'string') size += state.length
+  }
+  return `${messages.length}:${last.parts.length}:${size}`
 }
 
 export function MessageList({
