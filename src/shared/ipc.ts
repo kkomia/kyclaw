@@ -28,12 +28,26 @@ export const IPC_CHANNELS = {
     get: 'settings:get',
     /** 打补丁改设置（入参 AppSettingsPatch，返回合并后的 AppSettings） */
     update: 'settings:update'
+  },
+  agent: {
+    /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
+    endpoint: 'agent:endpoint'
   }
 } as const
 
 /** 窗口状态推送 payload（目前只有最大化标记） */
 export const windowStateSchema = z.strictObject({ maximized: z.boolean() })
 export type WindowState = z.infer<typeof windowStateSchema>
+
+/**
+ * 本地 agent 服务的端点：渲染端拿它直连主进程内嵌的 chat 服务。
+ * token 是每次启动新生成的 Bearer 串——它只经这条 IPC 交给本应用的渲染端，不进设置、不落盘。
+ */
+export const agentEndpointSchema = z.strictObject({
+  baseUrl: z.string(),
+  token: z.string()
+})
+export type AgentEndpoint = z.infer<typeof agentEndpointSchema>
 
 /** settings:update 的入参：单元素元组（payload 形状在 shared/settings.ts） */
 export const settingsUpdateArgsSchema = z.tuple([appSettingsPatchSchema])
@@ -86,8 +100,14 @@ export interface KyclawSettingsApi {
   update(patch: AppSettingsPatch): Promise<AppSettings>
 }
 
+/** preload 暴露给渲染端的 agent 服务面（服务未起时 endpoint() 会 reject） */
+export interface KyclawAgentApi {
+  endpoint(): Promise<AgentEndpoint>
+}
+
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
 export interface KyclawApi {
   window: KyclawWindowApi
   settings: KyclawSettingsApi
+  agent: KyclawAgentApi
 }

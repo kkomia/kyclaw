@@ -8,8 +8,10 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 import {
+  agentEndpointSchema,
   IPC_CHANNELS,
   windowStateSchema,
+  type KyclawAgentApi,
   type KyclawApi,
   type KyclawSettingsApi,
   type KyclawWindowApi
@@ -58,7 +60,18 @@ const settingsApi: KyclawSettingsApi = {
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.update, patch))
 }
 
-export const kyclawApi: KyclawApi = { window: windowApi, settings: settingsApi }
+/** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */
+const agentApi: KyclawAgentApi = {
+  endpoint: async () => {
+    const parsed = agentEndpointSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.agent.endpoint)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] agent 端点响应结构不合法')
+    return parsed.data
+  }
+}
+
+export const kyclawApi: KyclawApi = { window: windowApi, settings: settingsApi, agent: agentApi }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。
 if (process.contextIsolated) {

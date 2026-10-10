@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {
+  agentEndpointSchema,
   IPC_CHANNELS,
   IpcInputError,
   noArgsSchema,
@@ -83,5 +84,20 @@ describe('IPC 契约：settings 通道', () => {
     reject(null)
     reject()
     reject({ theme: 'dark' }, { theme: 'light' })
+  })
+})
+
+describe('IPC 契约：agent 通道', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.agent).toEqual({ endpoint: 'agent:endpoint' })
+  })
+
+  it('端点 payload 只收 { baseUrl, token } 两个字符串，缺键/错型/多键都不合法', () => {
+    expect(
+      agentEndpointSchema.safeParse({ baseUrl: 'http://127.0.0.1:43210', token: 'abc' }).success
+    ).toBe(true)
+    expect(agentEndpointSchema.safeParse({ baseUrl: 'http://127.0.0.1:43210' }).success).toBe(false)
+    expect(agentEndpointSchema.safeParse({ baseUrl: 1, token: 'abc' }).success).toBe(false)
+    expect(agentEndpointSchema.safeParse({ baseUrl: 'x', token: 'y', port: 1 }).success).toBe(false)
   })
 })

@@ -28,8 +28,17 @@
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.78",
+    "@ai-sdk/openai-compatible": "3.0.67",
     "@electron-toolkit/utils": "4.0.0",
-    "electron-updater": "6.8.9"
+    "@hono/node-server": "2.1.4",
+    "@mastra/ai-sdk": "1.10.7",
+    "@mastra/core": "1.75.0",
+    "@mastra/hono": "1.7.17",
+    "@mastra/libsql": "1.25.1",
+    "ai": "7.0.137",
+    "electron-updater": "6.8.9",
+    "hono": "4.13.13"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.1",

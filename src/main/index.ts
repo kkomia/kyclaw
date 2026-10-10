@@ -1,13 +1,16 @@
 /**
- * 应用入口：单实例锁 + 窗口 + 托盘 + 窗口 IPC。
+ * 应用入口：单实例锁 + 窗口 + 托盘 + 窗口 IPC + 内嵌 agent 服务。
  * 后台服务、设置等后续任务各自挂进来（T5 起），这里只做应用生命周期。
  */
 import { app } from 'electron'
-import { electronApp, optimizer } from '@electron-toolkit/utils'
+import { electronApp, is, optimizer } from '@electron-toolkit/utils'
+import { startAgentServer } from './agent/service'
+import { registerAgentIpc } from './ipc/agent'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerWindowIpc } from './ipc/window'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
+import type { AgentEndpoint } from '../shared/ipc'
 
 // 单实例：后起的实例不建窗口，直接把已运行的那个拉到前台（第二个实例自己退出）
 if (!app.requestSingleInstanceLock()) {
@@ -16,6 +19,9 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     showMainWindow()
   })
+
+  /** 内嵌服务当前对外暴露的端点；服务没起来（或起失败）保持 null，IPC 侧会抛错 */
+  let agentEndpoint: AgentEndpoint | null = null
 
   app.whenReady().then(() => {
     // Windows 任务栏归组用
@@ -28,8 +34,27 @@ if (!app.requestSingleInstanceLock()) {
 
     registerWindowIpc()
     registerSettingsIpc(app.getPath('userData'))
+    registerAgentIpc(() => agentEndpoint)
     showMainWindow()
     createTray()
+
+    // 服务启动不挡窗口：先让壳起来，端点好了再挂上（渲染端要端点时会等它）
+    startAgentServer({ dataDir: app.getPath('userData') })
+      .then((handle) => {
+        agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
+        console.log(`[kyclaw] agent 服务已启动：${handle.baseUrl}`)
+        if (is.dev) {
+          console.log(`[kyclaw] agent token（仅开发期打印，便于 curl 本地联调）：${handle.token}`)
+        }
+        app.on('will-quit', () => {
+          handle.stop().catch((error) => {
+            console.error('[kyclaw] agent 服务关闭失败', error)
+          })
+        })
+      })
+      .catch((error) => {
+        console.error('[kyclaw] agent 服务启动失败', error)
+      })
 
     app.on('activate', () => {
       showMainWindow()

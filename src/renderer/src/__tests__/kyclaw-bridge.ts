@@ -1,5 +1,5 @@
 import { vi, type Mock } from 'vitest'
-import type { KyclawApi, KyclawWindowApi } from '@shared/ipc'
+import type { KyclawAgentApi, KyclawApi, KyclawWindowApi } from '@shared/ipc'
 import { defaultSettings, type AppSettings, type AppSettingsPatch } from '@shared/settings'
 
 /**
@@ -29,10 +29,17 @@ export function windowApiStub(): KyclawWindowApi {
   }
 }
 
+/** agent 面：默认回一个"不会真去连"的端点（T7 的聊天测试自己替换） */
+export function agentApiStub(): KyclawAgentApi {
+  return {
+    endpoint: async () => ({ baseUrl: 'http://127.0.0.1:1', token: 'stub-token' })
+  }
+}
+
 /** 装桥并返回 settings 面的两个 spy（本任务关心的就是它） */
 export function installKyclawBridge(initial: AppSettings = defaultSettings()): SettingsApiStub {
   const settings = settingsApiStub(initial)
-  const api: KyclawApi = { window: windowApiStub(), settings }
+  const api: KyclawApi = { window: windowApiStub(), settings, agent: agentApiStub() }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
   return settings
