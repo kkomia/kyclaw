@@ -3,8 +3,8 @@
  *
  * 落盘在主进程的 userData/settings.json（main/settings.ts），与窗口状态的 window-state.json 分开——
  * 窗口几何是"壳自己的事"，设置是"用户的事"，坏一个不该带走另一个。
- * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces 仍是**占位字段**，
- * T10（工作区）落地时替换元素 schema，不再加字段。
+ * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces（T10）就地定义在下面，
+ * 元素的取值只有 path + mode 两个字段。
  */
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
@@ -18,20 +18,40 @@ export const themeModeSchema = z.enum(['system', 'light', 'dark'])
 /** 字号用户档：整组换值，不做乘法缩放（spec §6.3） */
 export const fontTierSchema = z.enum(['small', 'default', 'large'])
 
+/**
+ * 授权工作区的访问模式（spec §5.2）：ask = 写类默认询问；full = 这个工作区放行（Full access）。
+ * 移动/删除（dangerous）不受 full 影响，永远默认问。
+ */
+export const workspaceModeSchema = z.enum(['ask', 'full'])
+
+/**
+ * 一条授权工作区。path 由主进程经**原生选择器**写入并校验（存在、是目录、非 UNC），见 main/workspace.ts；
+ * 渲染端只能在 workspace:* 通道上增删与切模式 —— 补丁 schema 里没有这个字段，防止绕过校验直接写授权列表。
+ */
+export const workspaceSchema = z.strictObject({
+  path: z.string().min(1),
+  mode: workspaceModeSchema
+})
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
   /** T8 的 provider 列表（模型与密钥页；密钥不在里面，见 main/secrets.ts） */
   providers: z.array(providerConfigSchema),
-  /** 占位：T10 的授权工作区列表（本任务不写） */
-  workspaces: z.array(z.unknown())
+  /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
+  workspaces: z.array(workspaceSchema)
 })
 
-/** settings:update 的入参形状：只给要改的字段（缺省字段保持原值） */
-export const appSettingsPatchSchema = appSettingsSchema.partial()
+/**
+ * settings:update 的入参形状：只给要改的字段（缺省字段保持原值）。
+ * **不含 workspaces**：授权目录的写入必须在主进程过路径校验，不能从渲染端直接改。
+ */
+export const appSettingsPatchSchema = appSettingsSchema.partial().omit({ workspaces: true })
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>
+export type WorkspaceMode = z.infer<typeof workspaceModeSchema>
+export type Workspace = z.infer<typeof workspaceSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 

@@ -12,7 +12,9 @@ import {
   providerKeyStatesSchema,
   setProviderKeyResultSchema,
   settingsUpdateArgsSchema,
-  windowStateSchema
+  windowStateSchema,
+  workspaceAddArgsSchema,
+  workspaceRemoveArgsSchema
 } from '../ipc'
 import { DEFAULT_SETTINGS } from '../settings'
 
@@ -77,12 +79,12 @@ describe('IPC 契约：settings 通道', () => {
       { theme: 'dark' }
     ])
     expect(parseIpcArgs(settingsUpdateArgsSchema, [{}], 'settings:update')).toEqual([{}])
-    expect(parseIpcArgs(settingsUpdateArgsSchema, [DEFAULT_SETTINGS], 'settings:update')).toEqual([
-      DEFAULT_SETTINGS
-    ])
+    expect(
+      parseIpcArgs(settingsUpdateArgsSchema, [{ theme: 'dark', providers: [] }], 'settings:update')
+    ).toEqual([{ theme: 'dark', providers: [] }])
   })
 
-  it('settings:update 拦住非法补丁：错值 / 多键 / 非对象 / 缺参 / 多参', () => {
+  it('settings:update 拦住非法补丁：错值 / 多键 / 非对象 / 缺参 / 多参 / 夹带 workspaces', () => {
     const reject = (...args: unknown[]): void => {
       expect(() =>
         parseIpcArgs(settingsUpdateArgsSchema, args, IPC_CHANNELS.settings.update)
@@ -96,6 +98,9 @@ describe('IPC 契约：settings 通道', () => {
     reject(null)
     reject()
     reject({ theme: 'dark' }, { theme: 'light' })
+    // 授权工作区不走设置补丁（路径要在主进程过校验），夹带进来就是非法补丁
+    reject({ workspaces: [] })
+    reject({ ...DEFAULT_SETTINGS })
   })
 })
 
@@ -175,6 +180,56 @@ describe('IPC 契约：settings 密钥/测试连接通道', () => {
       connectionTestResultSchema.safeParse({ ok: true, latencyMs: 1, message: 'x' }).success
     ).toBe(false)
     expect(connectionTestResultSchema.safeParse({ ok: 'yes', latencyMs: 1 }).success).toBe(false)
+  })
+})
+
+describe('IPC 契约：workspace 通道', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.workspace).toEqual({
+      pick: 'workspace:pick',
+      add: 'workspace:add',
+      remove: 'workspace:remove'
+    })
+  })
+
+  it('workspace:add 只收 [path, mode]：path 非空、mode 只收 ask / full', () => {
+    expect(parseIpcArgs(workspaceAddArgsSchema, ['D:\\ws', 'ask'], 'workspace:add')).toEqual([
+      'D:\\ws',
+      'ask'
+    ])
+    expect(parseIpcArgs(workspaceAddArgsSchema, ['D:\\ws', 'full'], 'workspace:add')).toEqual([
+      'D:\\ws',
+      'full'
+    ])
+
+    for (const bad of [
+      [],
+      ['D:\\ws'],
+      [''],
+      ['D:\\ws', 'always'],
+      ['D:\\ws', 'ask', 'extra'],
+      [1, 'ask'],
+      ['D:\\ws', 1]
+    ]) {
+      expect(
+        parseIpcArgs.bind(null, workspaceAddArgsSchema, bad as unknown[], 'workspace:add'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('workspace:remove 只收一个非空路径；workspace:pick 不收任何入参', () => {
+    expect(parseIpcArgs(workspaceRemoveArgsSchema, ['D:\\ws'], 'workspace:remove')).toEqual([
+      'D:\\ws'
+    ])
+    for (const bad of [[], [''], ['D:\\ws', 'x'], [1]]) {
+      expect(
+        parseIpcArgs.bind(null, workspaceRemoveArgsSchema, bad as unknown[], 'workspace:remove'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+    expect(parseIpcArgs(noArgsSchema, [], 'workspace:pick')).toEqual([])
+    expect(() => parseIpcArgs(noArgsSchema, ['D:\\ws'], 'workspace:pick')).toThrow(IpcInputError)
   })
 })
 

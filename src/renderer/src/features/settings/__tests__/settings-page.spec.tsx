@@ -67,7 +67,6 @@ describe('设置页骨架（栏目页）', () => {
   it('还没做的栏目：一句状态就够（不写实现细节）', () => {
     for (const [section, testId] of [
       ['tools', 'settings-group-tools'],
-      ['workspaces', 'settings-group-workspaces'],
       ['memory', 'settings-group-memory'],
       ['usage', 'settings-group-usage']
     ]) {
@@ -79,6 +78,13 @@ describe('设置页骨架（栏目页）', () => {
       expect(screen.getByTestId(testId), testId).toHaveTextContent('还没做')
       view.unmount()
     }
+  })
+
+  it('「工作区」栏：工作区组件在这一栏里（不是占位）', () => {
+    renderPage('/settings/workspaces')
+
+    expect(screen.getByTestId('settings-group-workspaces')).toHaveTextContent('添加文件夹')
+    expect(screen.getByTestId('settings-group-workspaces')).not.toHaveTextContent('还没做')
   })
 })
 

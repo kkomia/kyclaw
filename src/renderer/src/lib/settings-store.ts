@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import { defaultSettings, type AppSettings, type AppSettingsPatch } from '@shared/settings'
+import {
+  defaultSettings,
+  type AppSettings,
+  type AppSettingsPatch,
+  type WorkspaceMode
+} from '@shared/settings'
+import type { KyclawWorkspaceApi } from '@shared/ipc'
 import type { ProviderConfig } from '@shared/providers'
 import { setFontTier, setTheme } from './theme'
 
@@ -12,10 +18,19 @@ import { setFontTier, setTheme } from './theme'
  *
  * provider 的保存（saveProviders / removeProvider）与外观不同：**不发乐观态、失败会抛**——
  * 模型/密钥配错了是要让用户看见的，UI 也不该显示一条其实没落盘的 provider。
+ * 工作区（pickWorkspace / addWorkspace / removeWorkspace）同理：路径合法性判在主进程，
+ * 失败（选了 UNC / 目录没了）必须把原因交回给设置页行内显示，这里的副本一律以落盘回吐为准。
  */
 function applyAppearance(settings: AppSettings): void {
   setTheme(settings.theme)
   setFontTier(settings.fontTier)
+}
+
+/** 工作区通道（缺失=浏览器/单测环境）：所有工作区动作共用这一个入口与同一句交代 */
+function workspaceApi(): KyclawWorkspaceApi {
+  const api = window.kyclaw?.workspace
+  if (!api) throw new Error('工作区通道不可用（window.kyclaw 缺失），改动没有保存')
+  return api
 }
 
 export interface SettingsState {
@@ -28,6 +43,12 @@ export interface SettingsState {
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
+  /** 打开原生选择器添加一个工作区（取消 = 什么都没发生） */
+  pickWorkspace: () => Promise<void>
+  /** 添加工作区 / 切换它的访问模式（主进程 upsert：没有就新增，有就切模式） */
+  addWorkspace: (path: string, mode: WorkspaceMode) => Promise<void>
+  /** 移除一个工作区（不在列表里是空操作） */
+  removeWorkspace: (path: string) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
@@ -74,5 +95,17 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const api = window.kyclaw?.settings
     if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），provider 没有删除')
     set({ settings: await api.removeProvider(id) })
+  },
+
+  pickWorkspace: async () => {
+    set({ settings: await workspaceApi().pick() })
+  },
+
+  addWorkspace: async (path, mode) => {
+    set({ settings: await workspaceApi().add(path, mode) })
+  },
+
+  removeWorkspace: async (path) => {
+    set({ settings: await workspaceApi().remove(path) })
   }
 }))

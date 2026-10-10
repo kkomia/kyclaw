@@ -252,3 +252,59 @@ describe('preload：window.kyclaw.settings', () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith('settings:remove-provider', 'deepseek')
   })
 })
+
+describe('preload：window.kyclaw.workspace', () => {
+  /** 落盘后的设置（含一条工作区），用作 workspace 面回包的样本 */
+  const persisted = {
+    theme: 'system',
+    fontTier: 'default',
+    providers: [],
+    workspaces: [{ path: 'D:\\项目', mode: 'ask' }]
+  }
+
+  it('暴露 workspace 一族（pick / add / remove）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.workspace).sort()).toEqual(['add', 'pick', 'remove'])
+  })
+
+  it('pick 打 workspace:pick（不带入参），回包按同一份 settings schema 解析', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(persisted)
+
+    await expect(kyclawApi.workspace.pick()).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:pick')
+  })
+
+  it('add 把 [path, mode] 原样发给 workspace:add', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(persisted)
+
+    await expect(kyclawApi.workspace.add('D:\\项目', 'full')).resolves.toEqual(persisted)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:add', 'D:\\项目', 'full')
+  })
+
+  it('remove 把 path 发给 workspace:remove', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ...persisted, workspaces: [] })
+
+    await expect(kyclawApi.workspace.remove('D:\\项目')).resolves.toMatchObject({ workspaces: [] })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:remove', 'D:\\项目')
+  })
+
+  it('回包结构不对（跨边界脏数据）→ 默认值：多一个字段的工作区也不许进渲染端', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      ...persisted,
+      workspaces: [{ path: 'D:\\项目', mode: 'ask', extra: 1 }]
+    })
+
+    await expect(kyclawApi.workspace.pick()).resolves.toEqual({
+      theme: 'system',
+      fontTier: 'default',
+      providers: [],
+      workspaces: []
+    })
+  })
+})

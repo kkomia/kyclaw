@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { agentApiStub, settingsApiStub } from '@renderer/__tests__/kyclaw-bridge'
+import { agentApiStub, settingsApiStub, workspaceApiStub } from '@renderer/__tests__/kyclaw-bridge'
 import type { KyclawWindowApi } from '@shared/ipc'
 import { TitleBar, type TitleBarProps } from '../TitleBar'
 
@@ -15,7 +15,12 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     ...overrides
   }
   // T5 起 KyclawApi 多了 settings 面、T6 起多了 agent 面：本文件只测窗口面，其余给桩即可
-  window.kyclaw = { window: api, settings: settingsApiStub(), agent: agentApiStub() }
+  window.kyclaw = {
+    window: api,
+    settings: settingsApiStub(),
+    workspace: workspaceApiStub(),
+    agent: agentApiStub()
+  }
   return api
 }
 

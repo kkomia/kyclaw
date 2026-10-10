@@ -8,6 +8,7 @@ import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerWindowIpc } from './ipc/window'
+import { registerWorkspaceIpc } from './ipc/workspace'
 import { getProviderKey, secretsPath } from './secrets'
 import { readSettings, settingsPath } from './settings'
 import { createTray } from './tray'
@@ -44,6 +45,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerWindowIpc()
     registerSettingsIpc(userDataDir)
+    registerWorkspaceIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
     showMainWindow()
     createTray()

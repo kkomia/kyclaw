@@ -11,8 +11,7 @@ import {
   appSettingsSchema,
   defaultSettings,
   SETTINGS_FILE,
-  type AppSettings,
-  type AppSettingsPatch
+  type AppSettings
 } from '../shared/settings'
 
 export function settingsPath(userDataDir: string): string {
@@ -39,8 +38,11 @@ export function writeSettings(file: string, settings: AppSettings): void {
  * 打补丁：读当前 → 合并 → 全量校验 → 落盘 → 回吐合并后的完整设置。
  * IPC 闸门已经把补丁拦过一道，这里再 parse 一遍是因为"合并结果"才是真正落盘的东西
  * （跨字段约束将来若加进来，只有这里看得见全貌）。校验不过就不落盘，避免半截状态。
+ *
+ * 补丁类型故意比 `AppSettingsPatch` 宽：渲染端经 settings:update 只能改 AppSettingsPatch 里的字段，
+ * 而**主进程内部**改工作区（workspace:* 通道，已经过路径校验）也走这里 —— 这是渲染端拿不到的写权限。
  */
-export function updateSettings(file: string, patch: AppSettingsPatch): AppSettings {
+export function updateSettings(file: string, patch: Partial<AppSettings>): AppSettings {
   const next = appSettingsSchema.parse({ ...readSettings(file), ...patch })
   writeSettings(file, next)
   return next

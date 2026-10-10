@@ -58,7 +58,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
   it('读出来的默认值是新的（含新数组），调用方改了不污染模块级默认', () => {
     const first = readSettings(settingsPath(dir))
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
-    first.workspaces.push({ path: 'D:/leaked' })
+    first.workspaces.push({ path: 'D:/leaked', mode: 'ask' })
 
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])

@@ -9,7 +9,13 @@
  */
 import { z } from './zod'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
-import { appSettingsPatchSchema, type AppSettings, type AppSettingsPatch } from './settings'
+import {
+  appSettingsPatchSchema,
+  workspaceModeSchema,
+  type AppSettings,
+  type AppSettingsPatch,
+  type WorkspaceMode
+} from './settings'
 
 export const IPC_CHANNELS = {
   window: {
@@ -37,6 +43,14 @@ export const IPC_CHANNELS = {
     testProvider: 'settings:test-provider',
     /** 删除一条 provider 配置（连同它的密钥；入参 [id]，返回合并后的 AppSettings） */
     removeProvider: 'settings:remove-provider'
+  },
+  workspace: {
+    /** 打开原生选择器添加一个授权目录（无入参，取消=不改动；返回合并后的 AppSettings） */
+    pick: 'workspace:pick',
+    /** 添加工作区 / 切换它的访问模式（入参 [path, mode]，返回合并后的 AppSettings） */
+    add: 'workspace:add',
+    /** 移除一个工作区（入参 [path]，返回合并后的 AppSettings） */
+    remove: 'workspace:remove'
   },
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
@@ -66,6 +80,12 @@ export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(
 
 /** settings:test-provider / settings:remove-provider 的入参：[id] */
 export const providerIdArgsSchema = z.tuple([z.string().min(1)])
+
+/** workspace:add 的入参：[path, mode]（path 是不是真目录由主进程校验，这里只保证形状） */
+export const workspaceAddArgsSchema = z.tuple([z.string().min(1), workspaceModeSchema])
+
+/** workspace:remove 的入参：[path] */
+export const workspaceRemoveArgsSchema = z.tuple([z.string().min(1)])
 
 /** 写密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
 export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(true) })
@@ -145,9 +165,24 @@ export interface KyclawAgentApi {
   endpoint(): Promise<AgentEndpoint>
 }
 
+/**
+ * preload 暴露给渲染端的工作区面：授权目录的增删与访问模式。
+ * 为什么单独一族（不并进 settings:update）：工作区路径必须在主进程校验
+ * （存在、是目录、非 UNC），补丁 schema 里没有 workspaces 这个字段。
+ */
+export interface KyclawWorkspaceApi {
+  /** 打开原生选择器添加一个工作区（取消 = 不改动），返回合并后的完整设置 */
+  pick(): Promise<AppSettings>
+  /** 添加工作区 / 切模式：没有就新增、已在列表里就切到 mode */
+  add(path: string, mode: WorkspaceMode): Promise<AppSettings>
+  /** 移除一个工作区（不在列表里是空操作） */
+  remove(path: string): Promise<AppSettings>
+}
+
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
 export interface KyclawApi {
   window: KyclawWindowApi
   settings: KyclawSettingsApi
+  workspace: KyclawWorkspaceApi
   agent: KyclawAgentApi
 }

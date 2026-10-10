@@ -17,7 +17,8 @@ import {
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawSettingsApi,
-  type KyclawWindowApi
+  type KyclawWindowApi,
+  type KyclawWorkspaceApi
 } from '../shared/ipc'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 
@@ -87,6 +88,19 @@ const settingsApi: KyclawSettingsApi = {
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.removeProvider, id))
 }
 
+/**
+ * 工作区面：授权目录的增删与访问模式。回包与设置同一份 schema（就是落盘后的完整设置），
+ * 结构不对就当没读到（回默认值）——不给渲染端半截对象。
+ * 路径合法性不由这里管：主进程会在写授权列表之前校验（存在、是目录、非 UNC）。
+ */
+const workspaceApi: KyclawWorkspaceApi = {
+  pick: async () => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.pick)),
+  add: async (path, mode) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.add, path, mode)),
+  remove: async (path) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.remove, path))
+}
+
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */
 const agentApi: KyclawAgentApi = {
   endpoint: async () => {
@@ -98,7 +112,12 @@ const agentApi: KyclawAgentApi = {
   }
 }
 
-export const kyclawApi: KyclawApi = { window: windowApi, settings: settingsApi, agent: agentApi }
+export const kyclawApi: KyclawApi = {
+  window: windowApi,
+  settings: settingsApi,
+  workspace: workspaceApi,
+  agent: agentApi
+}
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。
 if (process.contextIsolated) {

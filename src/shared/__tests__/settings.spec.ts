@@ -89,6 +89,38 @@ describe('AppSettings schema', () => {
   })
 })
 
+describe('工作区 schema（T10：授权目录 = path + mode）', () => {
+  it('元素必须是 {path, mode}，mode 只收 ask / full', () => {
+    for (const mode of ['ask', 'full'] as const) {
+      const workspaces = [{ path: 'D:\\项目\\demo', mode }]
+      expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, workspaces }).success, mode).toBe(
+        true
+      )
+    }
+
+    for (const bad of [
+      [{ path: 'D:\\ws' }], // 缺 mode
+      [{ mode: 'ask' }], // 缺 path
+      [{ path: '', mode: 'ask' }], // 空路径
+      [{ path: 'D:\\ws', mode: 'always' }], // 非法模式
+      [{ path: 'D:\\ws', mode: 'ask', extra: 1 }] // 多键
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, workspaces: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+  })
+
+  it('补丁 schema 里没有 workspaces：授权目录只能走 workspace:* 通道改（路径要在主进程过原生选择器与校验）', () => {
+    expect(appSettingsPatchSchema.safeParse({ workspaces: [] }).success).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({ workspaces: [{ path: 'D:\\ws', mode: 'full' }] }).success
+    ).toBe(false)
+    expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
+  })
+})
+
 describe('AppSettings 补丁 schema（settings:update 的入参）', () => {
   it('只给要改的字段就是合法补丁（空补丁也合法，等于不改）', () => {
     expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })

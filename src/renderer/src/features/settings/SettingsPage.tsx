@@ -5,6 +5,7 @@ import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { ModelSettings } from './ModelSettings'
+import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
 
 /**
@@ -29,7 +30,6 @@ const FONT_LABELS: Record<FontTier, string> = {
 
 /** 还没接内容的栏目：一句状态就够（不写实现细节，也不靠小字解释设计） */
 const PENDING_SECTIONS: Record<string, string> = {
-  workspaces: '工作区与授权还没做',
   tools: '工具与 MCP 开关还没做',
   memory: '记忆的查看与编辑还没做',
   usage: '用量统计还没做'
@@ -130,6 +130,11 @@ export function SettingsPage(): React.JSX.Element {
         {meta.id === 'model' ? (
           <SettingsGroup title="模型" testId="settings-group-model">
             <ModelSettings />
+          </SettingsGroup>
+        ) : null}
+        {meta.id === 'workspaces' ? (
+          <SettingsGroup title="工作区" testId="settings-group-workspaces">
+            <WorkspaceSettings />
           </SettingsGroup>
         ) : null}
         {PENDING_SECTIONS[meta.id] === undefined ? null : (

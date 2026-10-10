@@ -144,3 +144,52 @@ describe('settings store · provider（模型设置页用）', () => {
     expect(store().settings.providers).toEqual([])
   })
 })
+
+describe('settings store · workspace（设置页工作区组用）', () => {
+  const PROJECT = 'D:\\项目\\demo'
+
+  it('pickWorkspace：走 workspace:pick，以主进程回吐的设置为准', async () => {
+    const bridge = installKyclawBridge()
+
+    await store().pickWorkspace()
+
+    expect(bridge.workspace.pick).toHaveBeenCalledTimes(1)
+    expect(store().settings.workspaces.length).toBeGreaterThan(0)
+  })
+
+  it('addWorkspace / removeWorkspace：原样带参，回吐后 store 跟着走', async () => {
+    const bridge = installKyclawBridge({
+      ...DEFAULT_SETTINGS,
+      workspaces: [{ path: PROJECT, mode: 'ask' }]
+    })
+
+    await store().addWorkspace(PROJECT, 'full')
+    expect(bridge.workspace.add).toHaveBeenCalledWith(PROJECT, 'full')
+    expect(store().settings.workspaces).toEqual([{ path: PROJECT, mode: 'full' }])
+
+    await store().removeWorkspace(PROJECT)
+    expect(bridge.workspace.remove).toHaveBeenCalledWith(PROJECT)
+    expect(store().settings.workspaces).toEqual([])
+  })
+
+  it('失败抛给调用方（不乐观改 UI）：store 里那份保持原样', async () => {
+    const bridge = installKyclawBridge({
+      ...DEFAULT_SETTINGS,
+      workspaces: [{ path: PROJECT, mode: 'ask' }]
+    })
+    await store().load()
+    bridge.workspace.add.mockRejectedValueOnce(new Error('不是文件夹'))
+
+    await expect(store().addWorkspace('D:\\没有', 'full')).rejects.toThrow('不是文件夹')
+
+    expect(store().settings.workspaces).toEqual([{ path: PROJECT, mode: 'ask' }])
+  })
+
+  it('没有 preload 桥（浏览器 / 单测环境）：三个动作都抛"工作区通道不可用"', async () => {
+    clearKyclawBridge()
+
+    await expect(store().pickWorkspace()).rejects.toThrow(/工作区通道不可用/)
+    await expect(store().addWorkspace(PROJECT, 'ask')).rejects.toThrow(/工作区通道不可用/)
+    await expect(store().removeWorkspace(PROJECT)).rejects.toThrow(/工作区通道不可用/)
+  })
+})
