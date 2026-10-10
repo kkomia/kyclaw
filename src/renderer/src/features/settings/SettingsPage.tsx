@@ -4,6 +4,7 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
+import { McpSettings } from './McpSettings'
 import { ModelSettings } from './ModelSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
@@ -29,7 +30,7 @@ const FONT_LABELS: Record<FontTier, string> = {
 }
 
 /** 还没接内容的栏目：给一句中性空态（雷点 2：不写"还没做"这类研发口吻，也不解释排期） */
-const EMPTY_SECTIONS = new Set(['tools', 'memory', 'usage'])
+const EMPTY_SECTIONS = new Set(['memory', 'usage'])
 
 /** 栏目卡片组：组用底色分层（不描边），组内控件自己带一条 hairline —— 避免近距多层框线 */
 function SettingsGroup({
@@ -131,6 +132,11 @@ export function SettingsPage(): React.JSX.Element {
         {meta.id === 'workspaces' ? (
           <SettingsGroup title="工作区" testId="settings-group-workspaces">
             <WorkspaceSettings />
+          </SettingsGroup>
+        ) : null}
+        {meta.id === 'tools' ? (
+          <SettingsGroup title="工具与 MCP" testId="settings-group-tools">
+            <McpSettings />
           </SettingsGroup>
         ) : null}
         {EMPTY_SECTIONS.has(meta.id) ? (

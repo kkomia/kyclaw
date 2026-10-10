@@ -16,11 +16,13 @@
  * 本模块只对"类型"做静态 import（编译期擦除）。
  */
 import { join } from 'node:path'
+import type { Tool } from '@mastra/core/tools'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
-import type { PermissionRule, Workspace } from '../shared/settings'
+import type { McpServerConfig, PermissionRule, Workspace } from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
+import type { McpToolGate } from './mcp'
 
 /** libsql 库文件名（落在 dataDir 下） */
 export const AGENT_DB_FILE = 'kyclaw.db'
@@ -59,6 +61,10 @@ export async function createKyclawMastra(options: {
   workspaces?: () => readonly Workspace[]
   /** "永久允许"规则（T13：审批记忆落盘的那份设置）；缺省 = 没有规则 */
   permissionRules?: () => readonly PermissionRule[]
+  /** MCP server 设置（T12：分级用"只读"标记、agent 现读）；缺省 = 没有 MCP */
+  mcpServers?: () => readonly McpServerConfig[]
+  /** MCP 工具来源（T12：lifecycle.tools）；缺省 = 没有 MCP 工具 */
+  mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass } = await import('@mastra/libsql')
@@ -73,7 +79,9 @@ export async function createKyclawMastra(options: {
     agents: {
       [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel, memory, {
         workspaces: options.workspaces,
-        permissionRules: options.permissionRules
+        permissionRules: options.permissionRules,
+        mcpServers: options.mcpServers,
+        mcpTools: options.mcpTools
       })
     },
     storage,

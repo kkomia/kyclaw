@@ -145,7 +145,8 @@ describe('preload：window.kyclaw.settings', () => {
       fontTier: 'large',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     }
     mocks.invoke.mockResolvedValueOnce(persisted)
 
@@ -163,7 +164,8 @@ describe('preload：window.kyclaw.settings', () => {
         fontTier: 'default',
         providers: [],
         workspaces: [],
-        permissions: { rules: [] }
+        permissions: { rules: [] },
+        mcpServers: []
       })
     }
   })
@@ -175,7 +177,8 @@ describe('preload：window.kyclaw.settings', () => {
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     }
     mocks.invoke.mockResolvedValueOnce(updated)
 
@@ -192,7 +195,8 @@ describe('preload：window.kyclaw.settings', () => {
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
   })
 
@@ -255,7 +259,8 @@ describe('preload：window.kyclaw.settings', () => {
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
 
     await expect(kyclawApi.settings.removeProvider('deepseek')).resolves.toEqual({
@@ -263,7 +268,8 @@ describe('preload：window.kyclaw.settings', () => {
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
     expect(mocks.invoke).toHaveBeenLastCalledWith('settings:remove-provider', 'deepseek')
   })
@@ -276,7 +282,8 @@ describe('preload：window.kyclaw.workspace', () => {
     fontTier: 'default',
     providers: [],
     workspaces: [{ path: 'D:\\项目', mode: 'ask' }],
-    permissions: { rules: [] }
+    permissions: { rules: [] },
+    mcpServers: []
   }
 
   it('暴露 workspace 一族（pick / add / setMode / remove）', async () => {
@@ -330,7 +337,8 @@ describe('preload：window.kyclaw.workspace', () => {
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
   })
 })

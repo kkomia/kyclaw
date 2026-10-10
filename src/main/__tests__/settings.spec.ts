@@ -23,7 +23,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large' as const,
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     }
 
     writeSettings(file, settings)
@@ -67,7 +68,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions 字段）读出空规则表：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers）读出空表：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -80,7 +81,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
   })
 

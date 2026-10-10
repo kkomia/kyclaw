@@ -37,6 +37,7 @@
     "@mastra/core": "1.75.0",
     "@mastra/hono": "1.7.17",
     "@mastra/libsql": "1.25.1",
+    "@mastra/mcp": "2.2.0",
     "@mastra/memory": "1.36.0",
     "ai": "7.0.137",
     "electron-updater": "6.8.9",

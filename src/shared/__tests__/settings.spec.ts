@@ -9,16 +9,17 @@ import {
 
 /**
  * 设置 schema（shared/settings.ts）：主进程落盘、IPC 入参、渲染端消费共用这一份。
- * 这里盯两件事：默认值就是文档写的那四个字段；非法取值一个都不放过。
+ * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers 与 workspaces 为空数组 / 权限规则为空', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、mcpServers 为空数组 / 权限规则为空', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
       providers: [],
       workspaces: [],
-      permissions: { rules: [] }
+      permissions: { rules: [] },
+      mcpServers: []
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
   })

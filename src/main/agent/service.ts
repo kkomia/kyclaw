@@ -13,13 +13,15 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
+import { createMcpRouter } from '../../mastra/routes/mcp'
 import { createThreadsRouter } from '../../mastra/routes/threads'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
-import { readSettings, settingsPath } from '../settings'
+import { readSettings, settingsPath, updateSettings } from '../settings'
+import { McpLifecycle } from '../mcp/lifecycle'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
-import type { AppSettings, PermissionRule, Workspace } from '../../shared/settings'
+import type { AppSettings, McpServerConfig, PermissionRule, Workspace } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
@@ -29,6 +31,9 @@ const HOST = '127.0.0.1'
 
 /** 线程 API 的挂载前缀（路由本体在 src/mastra/routes/threads.ts） */
 export const THREADS_ROUTE_PREFIX = '/api/threads'
+
+/** MCP 管理 API 的挂载前缀（路由本体在 src/mastra/routes/mcp.ts） */
+export const MCP_ROUTE_PREFIX = '/api/mcp'
 
 /** 端口尝试上限（显式端口被占时换端口重试的次数） */
 const DEFAULT_PORT_ATTEMPTS = 5
@@ -62,6 +67,11 @@ export interface AgentServerOptions {
    * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
    */
   permissionRules?: () => readonly PermissionRule[]
+  /**
+   * MCP server 设置（T12）：现读的取值函数（设置页的 /api/mcp/servers 写的就是这份）。
+   * 缺省 = 从 dataDir/settings.json 的 mcpServers 读。
+   */
+  mcpServers?: () => readonly McpServerConfig[]
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -187,11 +197,16 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const settingsFor = (): AppSettings => readSettings(settingsPath(options.dataDir))
   const workspacesFor = options.workspaces ?? (() => settingsFor().workspaces)
   const permissionRulesFor = options.permissionRules ?? (() => settingsFor().permissions.rules)
+  const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
+  // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
+  const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
   const { mastra, storage, memory } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
     workspaces: workspacesFor,
-    permissionRules: permissionRulesFor
+    permissionRules: permissionRulesFor,
+    mcpServers: mcpServersFor,
+    mcpTools: (gate) => mcpLifecycle.tools(gate)
   })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
@@ -201,8 +216,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     '*',
     cors({
       origin: ALLOWED_ORIGINS,
-      // 线程 API 用到了 GET/DELETE/PATCH，chat 是 POST（T9）
-      allowMethods: ['POST', 'GET', 'DELETE', 'PATCH', 'OPTIONS'],
+      // 线程 API 用到了 GET/DELETE/PATCH，chat 是 POST，MCP 管理 API 是 GET/PUT/POST（T12）
+      allowMethods: ['POST', 'GET', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'Authorization'],
       maxAge: 600
     })
@@ -233,6 +248,20 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     })
   )
 
+  // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）；
+  // 写完立即让 lifecycle 对齐连接（启停/删除当场生效，子进程随之下线/上线）
+  app.route(
+    MCP_ROUTE_PREFIX,
+    createMcpRouter({
+      readServers: mcpServersFor,
+      saveServers: (servers) =>
+        updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers,
+      onServersChanged: () => {
+        void mcpLifecycle.refresh()
+      }
+    })
+  )
+
   const attempts = Math.max(1, options.attempts ?? DEFAULT_PORT_ATTEMPTS)
   let server: NodeServer | undefined
   let port = 0
@@ -253,7 +282,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   }
 
   if (!server) {
-    // 起不来就不留半个服务：把已经建好的 Mastra/storage 收掉，再带着原因抛出去
+    // 起不来就不留半个服务：把已经建好的 Mastra/storage/连接收掉，再带着原因抛出去
+    await mcpLifecycle.stop()
     await teardownQuietly(mastra, storage, memory)
     throw new Error(`agent 服务启动失败：${attempts} 次都没能监听 ${HOST} 的端口`, {
       cause: lastError
@@ -275,7 +305,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           server.close((error) => (error ? reject(error) : resolve()))
         })
       } finally {
-        // Mastra / memory 后台活 / storage 的收尾顺序与失败隔离都在这里（T9 起带 memory）
+        // MCP 子进程随连接断开而下线（应用退出前收干净）；再收 Mastra / memory / storage
+        await mcpLifecycle.stop()
         await teardownQuietly(mastra, storage, memory)
       }
     }

@@ -66,7 +66,6 @@ describe('设置页骨架（栏目页）', () => {
 
   it('空栏目：一句中性空态（不带"还没做"这类研发口吻）', () => {
     for (const [section, testId] of [
-      ['tools', 'settings-group-tools'],
       ['memory', 'settings-group-memory'],
       ['usage', 'settings-group-usage']
     ]) {
@@ -88,6 +87,13 @@ describe('设置页骨架（栏目页）', () => {
     expect(screen.getByTestId('settings-group-workspaces')).not.toHaveTextContent(
       '暂无可调整的设置'
     )
+  })
+
+  it('「工具与 MCP」栏：MCP 组组件在这一栏里（不是占位）', () => {
+    renderPage('/settings/tools')
+
+    expect(screen.getByTestId('settings-group-tools')).toHaveTextContent('添加 MCP 服务')
+    expect(screen.getByTestId('settings-group-tools')).not.toHaveTextContent('暂无可调整的设置')
   })
 })
 

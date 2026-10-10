@@ -19,15 +19,18 @@ export function settingsPath(userDataDir: string): string {
 }
 
 /**
- * 读盘兼容（T13）：这一版之前的 settings.json 没有 permissions 字段。
- * 直接进 strict schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空表再解析。
- * 只补这一个字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
+ * 读盘兼容：这一版之前的 settings.json 缺后来追加的字段——
+ * T13 的 permissions、T12 的 mcpServers。缺了就直接进 strict schema 会把整份设置当坏文件
+ * （主题/provider/工作区全丢），所以先补空值再解析。
+ * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  */
 function migrateStoredSettings(raw: unknown): unknown {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
   const record = raw as Record<string, unknown>
-  if (record.permissions !== undefined) return raw
-  return { ...record, permissions: { rules: [] } }
+  const next = { ...record }
+  if (next.permissions === undefined) next.permissions = { rules: [] }
+  if (next.mcpServers === undefined) next.mcpServers = []
+  return next
 }
 
 /** 读：拿不到一份完整合法的设置就回默认值（新对象，调用方随便改） */

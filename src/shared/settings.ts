@@ -4,7 +4,9 @@
  * 落盘在主进程的 userData/settings.json（main/settings.ts），与窗口状态的 window-state.json 分开——
  * 窗口几何是"壳自己的事"，设置是"用户的事"，坏一个不该带走另一个。
  * providers（T8）已落地：元素 schema 在 shared/providers.ts；workspaces（T10）就地定义在下面，
- * 元素的取值只有 path + mode 两个字段；permissions.rules（T13）是审批记忆的"永久允许"。
+ * 元素的取值只有 path + mode 两个字段；permissions.rules（T13）是审批记忆的"永久允许"；
+ * mcpServers（T12）的取值在下面（元素形状 + 缺省），业务校验与路由在 shared/mcp.ts 与
+ * mastra/routes/mcp.ts。追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
  */
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
@@ -48,6 +50,34 @@ export const permissionsSchema = z.strictObject({
   rules: z.array(permissionRuleSchema)
 })
 
+/**
+ * MCP server 的传输（T12）：stdio 起子进程走 stdio 上的 JSON-RPC；http 连 Streamable HTTP 端点。
+ */
+export const mcpTransportSchema = z.enum(['stdio', 'http'])
+
+/**
+ * 一条 MCP server 配置（T12）。取值刻意放宽到"任何字符串都能存"：停用中的服务允许存半截草稿
+ * （命令还没填、地址还没写），**启用**的服务必须完整 —— 那条业务校验在 shared/mcp.ts 的
+ * mcpServerProblems（渲染端行内提示 + 路由落盘前拦同一份），schema 只管形状。
+ * `readOnlyTools` 是用户对单个工具勾的"只读"标记：勾了才不弹审批，没勾一律按写类询问。
+ */
+export const mcpServerSchema = z.strictObject({
+  /** 稳定标识：进工具名 `mcp__<id>__<tool>`（合法形状见 shared/mcp.ts） */
+  id: z.string(),
+  /** 界面显示名 */
+  name: z.string(),
+  transport: mcpTransportSchema,
+  /** stdio：启动命令与参数 */
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  /** http：Streamable HTTP 端点地址 */
+  url: z.string().optional(),
+  /** 启用中的 server 会随 agent 使用建立连接；停用即断开 */
+  enabled: z.boolean(),
+  /** 被标记为只读的工具名（server 自己的工具名，不带 mcp__ 前缀） */
+  readOnlyTools: z.array(z.string())
+})
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
@@ -56,14 +86,20 @@ export const appSettingsSchema = z.strictObject({
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
   workspaces: z.array(workspaceSchema),
   /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
-  permissions: permissionsSchema
+  permissions: permissionsSchema,
+  /** T12 的 MCP server 列表（增删改走 PUT /api/mcp/servers，见 mastra/routes/mcp.ts） */
+  mcpServers: z.array(mcpServerSchema)
 })
 
 /**
  * settings:update 的入参形状：只给要改的字段（缺省字段保持原值）。
  * **不含 workspaces**：授权目录的写入必须在主进程过路径校验，不能从渲染端直接改。
+ * **不含 mcpServers**：MCP 配置的写入只有 PUT /api/mcp/servers 一条路（同一条带上
+ * "启用必须配置完整"的校验），不另开一条不过校验的口子。
  */
-export const appSettingsPatchSchema = appSettingsSchema.partial().omit({ workspaces: true })
+export const appSettingsPatchSchema = appSettingsSchema
+  .partial()
+  .omit({ workspaces: true, mcpServers: true })
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>
@@ -71,6 +107,8 @@ export type WorkspaceMode = z.infer<typeof workspaceModeSchema>
 export type Workspace = z.infer<typeof workspaceSchema>
 export type PermissionRule = z.infer<typeof permissionRuleSchema>
 export type Permissions = z.infer<typeof permissionsSchema>
+export type McpTransport = z.infer<typeof mcpTransportSchema>
+export type McpServerConfig = z.infer<typeof mcpServerSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 
@@ -79,10 +117,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontTier: 'default',
   providers: [],
   workspaces: [],
-  permissions: { rules: [] }
+  permissions: { rules: [] },
+  mcpServers: []
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
 export function defaultSettings(): AppSettings {
-  return { ...DEFAULT_SETTINGS, providers: [], workspaces: [], permissions: { rules: [] } }
+  return {
+    ...DEFAULT_SETTINGS,
+    providers: [],
+    workspaces: [],
+    permissions: { rules: [] },
+    mcpServers: []
+  }
 }

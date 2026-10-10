@@ -6,6 +6,11 @@
  * 工作区列表与"永久允许"规则（T13）都用**取值函数**传（现读设置）：用户中途加工作区、
  * 批准一条永久规则，下一轮工具就能用，不必重启服务。
  *
+ * MCP 外部工具（T12）：`tools` 用 Mastra 支持的**函数形态**（每轮现取），把
+ * `mcpTools(gate)` 给的 `mcp__<server>__<tool>` 并进同一张工具表。审批走同一个 gate
+ * （guard.needsApproval）：MCP 工具未标只读一律按写类询问；分级由 createMcpClassify 叠加
+ * 设置里的"只读"标记（见 mastra/mcp.ts）。
+ *
  * 模型走 Mastra 的 **DynamicArgument**（函数形式）：每次对话重新解析（读 settings + secrets），
  * 所以用户配好 provider/密钥后**不用重启**，下一轮就是真模型；配置半截时解析抛错，
  * 这一轮以错误卡收场——不静默回落 mock（T8 裁决）。
@@ -16,15 +21,16 @@
  * Agent 类是 ESM-only（@mastra/core），所以工厂是异步的：运行时靠动态 import() 拿。
  */
 import type { Agent } from '@mastra/core/agent'
+import type { Tool } from '@mastra/core/tools'
 import type { MastraMemory } from '@mastra/core/memory'
-import type { PermissionRule, Workspace } from '../../shared/settings'
-import { classifyToolCall } from '../../main/permission/classify'
-import { createToolContext } from '../tools/guard'
+import type { PermissionRule, McpServerConfig, Workspace } from '../../shared/settings'
+import { createToolContext, needsApproval } from '../tools/guard'
 import { createEditTool } from '../tools/edit'
 import { createGlobTool } from '../tools/glob'
 import { createGrepTool } from '../tools/grep'
 import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
+import { createMcpClassify, type McpToolGate } from '../mcp'
 import type { KyclawModel } from '../model'
 
 /** agent id：chat 路由 /chat/kyclaw-agent 与 IPC 契约里都用它 */
@@ -33,12 +39,19 @@ export const KYCLAW_AGENT_ID = 'kyclaw-agent'
 /** 每轮对话取一次模型（实现方自己决定读谁、怎么缓存） */
 export type ModelResolver = () => Promise<KyclawModel>
 
-/** 工具集需要的运行时信息（工作区现读；T12 的 MCP 工具会并进同一份装配） */
+/** 工具集需要的运行时信息（工作区/MCP 都现读；T12 的 MCP 工具并进同一份装配） */
 export interface KyclawAgentTools {
   /** 授权工作区（缺省 = 没有工作区：文件工具会明确报"先去设置里添加"） */
   workspaces?: () => readonly Workspace[]
   /** "永久允许"规则（缺省 = 没有规则：写类除 full 工作区外一律问） */
   permissionRules?: () => readonly PermissionRule[]
+  /** MCP server 设置（缺省 = 没有：分级只看名字证据；只读标记来自这里） */
+  mcpServers?: () => readonly McpServerConfig[]
+  /**
+   * 每轮现取的 MCP 工具（缺省 = 没有 MCP 工具）：由 lifecycle 提供，
+   * 传进去的 gate 就是 guard.needsApproval 本身——内置与外部工具一条审批路径。
+   */
+  mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
 }
 
 /** kyclaw 的身份与行为底线 */
@@ -55,9 +68,11 @@ export async function createKyclawAgent(
 ): Promise<Agent> {
   const { Agent: AgentClass } = await import('@mastra/core/agent')
 
+  const serversFor = toolOptions?.mcpServers ?? (() => [])
   const ctx = createToolContext({
     roots: toolOptions?.workspaces ?? (() => []),
-    classify: classifyToolCall,
+    // MCP 名走"只读标记"那一层（未标按写类询问）；其余名字与 T11 同一口径
+    classify: createMcpClassify(serversFor),
     permissionRules: toolOptions?.permissionRules
   })
   const tools = {
@@ -68,12 +83,20 @@ export async function createKyclawAgent(
     grep: await createGrepTool(ctx)
   }
 
+  // 内置与 MCP 共用同一个 gate：requireApproval 的判定是同一份 needsApproval
+  const gate: McpToolGate = (tool, input) => needsApproval(ctx, tool, input)
+  const mcpToolsFor = toolOptions?.mcpTools
+
   return new AgentClass({
     id: KYCLAW_AGENT_ID,
     name: KYCLAW_AGENT_ID,
     instructions: KYCLAW_INSTRUCTIONS,
     model: () => resolveModel(),
-    tools,
+    // 函数形态：每轮现取（MCP 设置改了、server 掉线重连，下一轮就反映出来）
+    tools: async () => ({
+      ...tools,
+      ...((await mcpToolsFor?.(gate)) ?? {})
+    }),
     ...(memory === undefined ? {} : { memory })
   })
 }
