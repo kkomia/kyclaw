@@ -238,6 +238,21 @@ describe('workspace:set-mode（切模式：只认已授权路径）', () => {
       workspaces: [{ path: realProject, mode: 'ask' }]
     })
   })
+
+  it.skipIf(process.platform !== 'win32')(
+    '传另一种写法的路径（大小写不同）也能切；授权表里存的还是原样写法',
+    () => {
+      handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+
+      const next = handlerOf(IPC_CHANNELS.workspace.setMode)(EVENT, project.toUpperCase(), 'full')
+
+      expect(next).toEqual({
+        ...DEFAULT_SETTINGS,
+        workspaces: [{ path: realProject, mode: 'full' }]
+      })
+      expect(workspaces()).toEqual([{ path: realProject, mode: 'full' }])
+    }
+  )
 })
 
 describe('workspace:remove', () => {

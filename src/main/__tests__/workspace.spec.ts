@@ -111,11 +111,14 @@ describe('addWorkspace（workspace:add：新增一律 ask，已有保持原模�
     ])
   })
 
-  it.skipIf(!isWindows)('Windows 上大小写 / 分隔符不同的同一路径算同一条（模式仍保持）', () => {
-    const list: Workspace[] = [{ path: 'D:\\ws', mode: 'full' }]
+  it.skipIf(!isWindows)(
+    'Windows 上大小写 / 分隔符不同的同一路径算同一条：模式与**原写法**都保持（重选不改写授权表）',
+    () => {
+      const list: Workspace[] = [{ path: 'D:\\ws', mode: 'full' }]
 
-    expect(addWorkspace(list, 'd:/WS')).toEqual([{ path: 'd:/WS', mode: 'full' }])
-  })
+      expect(addWorkspace(list, 'd:/WS')).toEqual([{ path: 'D:\\ws', mode: 'full' }])
+    }
+  )
 
   it('不改传入的列表（调用方手里的那份保持原样）', () => {
     const list: Workspace[] = [{ path: 'D:\\ws', mode: 'ask' }]
@@ -145,10 +148,18 @@ describe('setWorkspaceMode（workspace:set-mode：只认已授权路径）', () 
     expect(setWorkspaceMode([], 'D:\\ws', 'full')).toBeNull()
   })
 
-  it.skipIf(!isWindows)('写法归一后命中同一条，并写回新写法', () => {
+  it.skipIf(!isWindows)('写法归一后命中同一条；**落盘保留列表里的原 path**，只改 mode', () => {
     const list: Workspace[] = [{ path: 'D:\\ws', mode: 'ask' }]
 
-    expect(setWorkspaceMode(list, 'd:/WS', 'full')).toEqual([{ path: 'd:/WS', mode: 'full' }])
+    expect(setWorkspaceMode(list, 'd:/WS', 'full')).toEqual([{ path: 'D:\\ws', mode: 'full' }])
+  })
+
+  it('调用方给的字符串不被采纳：切模式不会改写授权表里的路径写法', () => {
+    const list: Workspace[] = [{ path: 'D:\\项目\\demo', mode: 'ask' }]
+
+    expect(setWorkspaceMode(list, 'D:/项目/demo/', 'full')).toEqual([
+      { path: 'D:\\项目\\demo', mode: 'full' }
+    ])
   })
 })
 

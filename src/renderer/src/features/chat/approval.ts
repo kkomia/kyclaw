@@ -7,7 +7,7 @@
  *   2. `resolveApprovalWorkspace`：按渲染端那份设置判这次调用落在哪个工作区 —— 只用于
  *      审批记忆的粒度（工具 + 工作区）与"永久允许"写哪条规则，**不是安全边界**（边界在
  *      服务端 guard：路径只认引擎归一后的 abs）；
- *   3. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = 工具 + 工作区。
+ *   3. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = **对话（thread）+ 工具 + 工作区**。
  *
  * 工作区判定与工具名归一都走 shared/permissions 的同一把尺，和服务端的规则匹配保持一致。
  */
@@ -131,25 +131,27 @@ function isRelativePath(path: string): boolean {
 }
 
 /**
- * 会话记忆（"本会话允许"）：粒度 = 工具 + 工作区。
+ * 会话记忆（"本会话允许"）：粒度 = **对话（thread）+ 工具 + 工作区**。
+ * "会话"取 UI 里那个词义（侧栏的会话 = 一个聊天线程，threadId）：用户在某个对话里说
+ * "本会话允许"，就只对那个对话里的同类调用不再打扰；换个对话照旧问。
  * 只活在当前渲染进程里（重启应用即清空），不落盘、不过桥 —— 这是"这次先放过它"的语义。
  * 工作区必须明确（审批卡只在判得出工作区时才给这两个记忆入口）：判不出工作区的放行范围
  * 说不清，那种调用只给"允许一次 / 拒绝"。
  */
 const sessionAllowed = new Set<string>()
 
-function sessionKey(tool: string, workspace: string): string {
-  return `${normalizeToolName(tool)}\u0000${normalizeWorkspacePath(workspace)}`
+function sessionKey(threadId: string, tool: string, workspace: string): string {
+  return `${threadId}\u0000${normalizeToolName(tool)}\u0000${normalizeWorkspacePath(workspace)}`
 }
 
 /** 记下"本会话允许"（用户在审批卡上点的那一下） */
-export function allowForSession(tool: string, workspace: string): void {
-  sessionAllowed.add(sessionKey(tool, workspace))
+export function allowForSession(threadId: string, tool: string, workspace: string): void {
+  sessionAllowed.add(sessionKey(threadId, tool, workspace))
 }
 
-/** 本次会话里这个工具在这个工作区是否已被放行（命中就自动批准，不再打扰用户） */
-export function isAllowedForSession(tool: string, workspace: string): boolean {
-  return sessionAllowed.has(sessionKey(tool, workspace))
+/** 这个对话里、这个工具在这个工作区是否已被放行（命中就自动批准，不再打扰用户） */
+export function isAllowedForSession(threadId: string, tool: string, workspace: string): boolean {
+  return sessionAllowed.has(sessionKey(threadId, tool, workspace))
 }
 
 /** 测试用：清空会话记忆（模块级状态不随 render 重置） */

@@ -45,15 +45,20 @@ const APPROVAL_A = {
 interface Session {
   control: MockTransport
   onTurnEnd: ReturnType<typeof vi.fn>
+  unmount: () => void
 }
 
-async function renderSession(control: MockTransport, injectRuntime = true): Promise<Session> {
+async function renderSession(
+  control: MockTransport,
+  injectRuntime = true,
+  threadId = THREAD_ID
+): Promise<Session> {
   const onTurnEnd = vi.fn()
-  render(
+  const view = render(
     <MemoryRouter>
       <ChatSession
         transport={control.transport}
-        threadId={THREAD_ID}
+        threadId={threadId}
         {...(injectRuntime
           ? { runtime: { transport: control.transport, loadHistory: async () => [], onTurnEnd } }
           : {})}
@@ -61,7 +66,7 @@ async function renderSession(control: MockTransport, injectRuntime = true): Prom
     </MemoryRouter>
   )
   await screen.findByTestId('composer-input')
-  return { control, onTurnEnd }
+  return { control, onTurnEnd, unmount: view.unmount }
 }
 
 async function send(text: string): Promise<void> {
@@ -301,6 +306,159 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     // 续跑收尾 → 排队的消息补发
     await waitFor(() => expect(control.requests).toHaveLength(3))
     expect(userTexts(control, 2)).toEqual(['写个文件', '再等等'])
+  })
+
+  it('等审批期间发送：进队列、不直发（直发会让决策失去自动续跑）；决策+续跑收尾后才发', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    // 挂起轮已结束（status=ready），但发送仍按"忙"处理：进队列，不产生第二次请求
+    await send('顺便再写一个')
+    expect(control.requests).toHaveLength(1)
+    expect(screen.getByTestId('composer-queue')).toHaveTextContent('已排队 1 条')
+
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    // 续跑还没收尾：队列依旧不补发
+    expect(control.requests).toHaveLength(2)
+
+    act(() => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.push('写好了。')
+      control.finish()
+    })
+
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    expect(userTexts(control, 2)).toEqual(['写个文件', '顺便再写一个'])
+  })
+
+  it('等审批期间没有编辑入口；续跑收尾后编辑入口回来（不是永远关着）', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    // 待批：不给编辑（编辑重发会截断掉那条挂起消息，服务端 run 快照还在）
+    expect(screen.queryByTestId('message-edit')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    act(() => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.push('写好了。')
+      control.finish()
+    })
+
+    // 一轮真正结束（ready 且无待批）→ 编辑入口按原语义回来
+    await waitFor(() => expect(screen.getByTestId('message-edit')).toBeInTheDocument())
+  })
+
+  it('永久允许：先登记本会话记忆 —— 同对话里紧随的第二次写不再弹卡', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    fireEvent.click(screen.getByTestId('approval-allow-forever'))
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        permissions: { rules: [{ tool: 'write', workspace: WORKSPACE, mode: 'allow' }] }
+      })
+    )
+
+    // 续跑里再来一次同工具 + 同工作区的审批 → 直接放行（不依赖落盘成功）
+    act(() => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.requestApproval({
+        toolCallId: 'call-b',
+        toolName: 'write',
+        input: { path: 'b.txt', content: 'x' },
+        approvalId: 'run-1::call-b'
+      })
+      control.finish()
+    })
+
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    expect(approvalIn(control, 2, 'call-b')).toMatchObject({ approved: true })
+    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+  })
+
+  it('永久允许落盘失败：露一行"没保存"，本对话里仍然继续放行；原始 Error 落控制台', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+    const failure = new Error('磁盘满了')
+    bridge.update.mockRejectedValueOnce(failure)
+
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    fireEvent.click(screen.getByTestId('approval-allow-forever'))
+
+    expect(await screen.findByTestId('approval-permanent-error')).toHaveTextContent('没能保存')
+    expect(console.error).toHaveBeenCalledWith('[kyclaw] 「永久允许」没能写进设置', failure)
+
+    // 落盘失败了，但"先登记"的会话记忆还在：同对话里第二次写照旧不弹卡
+    act(() => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.requestApproval({
+        toolCallId: 'call-b',
+        toolName: 'write',
+        input: { path: 'b.txt', content: 'x' },
+        approvalId: 'run-1::call-b'
+      })
+      control.finish()
+    })
+
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+  })
+
+  it('本会话允许只覆盖当前对话：换个会话（threadId 不同）照旧弹卡', async () => {
+    const first = createMockTransport()
+    const firstSession = await renderSession(first)
+
+    await send('写个文件')
+    act(() => {
+      first.requestApproval(APPROVAL_A)
+      first.finish()
+    })
+    await screen.findByTestId('approval-card')
+    fireEvent.click(screen.getByTestId('approval-allow-session'))
+    await waitFor(() => expect(first.requests).toHaveLength(2))
+    firstSession.unmount()
+
+    const second = createMockTransport()
+    await renderSession(second, true, 'thread-other')
+    await send('再写一个')
+    act(() => {
+      second.requestApproval({ ...APPROVAL_A, approvalId: 'run-2::call-a' })
+      second.finish()
+    })
+
+    expect(await screen.findByTestId('approval-card')).toBeInTheDocument()
+    // 没有自动放行：请求数还是 1（自动放行会立刻续跑出第二次请求）
+    expect(second.requests).toHaveLength(1)
   })
 })
 

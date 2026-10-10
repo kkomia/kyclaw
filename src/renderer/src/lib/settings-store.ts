@@ -6,6 +6,7 @@ import {
   type WorkspaceMode
 } from '@shared/settings'
 import type { KyclawWorkspaceApi } from '@shared/ipc'
+import { withAllowedRule } from '@shared/permissions'
 import type { ProviderConfig } from '@shared/providers'
 import { setFontTier, setTheme } from './theme'
 
@@ -21,6 +22,8 @@ import { setFontTier, setTheme } from './theme'
  * 工作区（pickWorkspace / addWorkspace / setWorkspaceMode / removeWorkspace）同理：路径合法性判在主进程，
  * 失败（选了 UNC / 目录没了 / 切一个不在列表里的路径）必须把原因交回给设置页行内显示，
  * 这里的副本一律以落盘回吐为准。
+ * 审批卡"永久允许"落下的规则（allowToolForever）也归这一族：写没写进去要让用户看见
+ * （调用方把失败露到界面上），不能静默当成"已经永远允许了"。
  */
 function applyAppearance(settings: AppSettings): void {
   setTheme(settings.theme)
@@ -34,6 +37,13 @@ function workspaceApi(): KyclawWorkspaceApi {
   return api
 }
 
+/** 设置通道（缺失=浏览器/单测环境）：写设置的动作共用这一个入口与同一句交代 */
+function settingsApi(): NonNullable<Window['kyclaw']>['settings'] {
+  const api = window.kyclaw?.settings
+  if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），改动没有保存')
+  return api
+}
+
 export interface SettingsState {
   settings: AppSettings
   /** 首次读盘完成没有（读完前 UI 显示默认值） */
@@ -44,6 +54,8 @@ export interface SettingsState {
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
+  /** 审批卡"永久允许"：追加一条规则并落盘；以落盘结果为准，失败抛给调用方 */
+  allowToolForever: (tool: string, workspace: string) => Promise<void>
   /** 打开原生选择器添加一个工作区（取消 = 什么都没发生） */
   pickWorkspace: () => Promise<void>
   /** 添加工作区（一律以 ask 落盘；已在列表里是幂等空操作） */
@@ -98,6 +110,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const api = window.kyclaw?.settings
     if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），provider 没有删除')
     set({ settings: await api.removeProvider(id) })
+  },
+
+  allowToolForever: async (tool, workspace) => {
+    const rules = withAllowedRule(get().settings.permissions.rules, tool, workspace)
+    set({ settings: await settingsApi().update({ permissions: { rules } }) })
   },
 
   pickWorkspace: async () => {

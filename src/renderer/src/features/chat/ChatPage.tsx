@@ -6,7 +6,6 @@ import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
 import { truncateThread } from '@renderer/lib/threads-api'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { withAllowedRule } from '@shared/permissions'
 import {
   allowForSession,
   isAllowedForSession,
@@ -226,11 +225,16 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     })
   const busy = status === 'submitted' || status === 'streaming'
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
+  /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
+  const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
+  /** "永久允许"没写进设置（只在本次对话生效）：露一行给用户，不静默当成永久生效 */
+  const [permissionError, setPermissionError] = useState<string | null>(null)
 
   /**
    * 审批决策（T13）：
-   *   - 本会话允许 → 记进模块级内存（同工具 + 同工作区），这次之后不再打扰；
-   *   - 永久允许 → 追加一条规则进 settings.permissions.rules（服务端下一轮就不再问）；
+   *   - 本会话允许 → 记进模块级内存（同对话 + 同工具 + 同工作区），这个对话里之后不再打扰；
+   *   - 永久允许 → **先登记本会话记忆**（同轮内紧随的第二次写不再弹卡），再落一条规则进
+   *     settings.permissions.rules（服务端下一轮就不再问）；落盘失败要露出来（见 permissionError）；
    *   - 决策本身经 addToolApprovalResponse 回灌；`sendAutomaticallyWhen`（thread-chats 里挂的
    *     AI SDK 判定）会在所有审批都有回应后自动把消息发回服务端执行。
    * 两个记忆入口都要求工作区明确（审批卡在判不出工作区时不显示它们，这里再守一道）。
@@ -238,14 +242,20 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
   const decideApproval = useCallback(
     (request: ApprovalRequest, decision: ApprovalDecision) => {
       const workspace = resolveApprovalWorkspace(request.input, workspaces)
-      if (workspace !== null && decision === 'session') {
-        allowForSession(request.toolName, workspace)
+      if (workspace !== null && (decision === 'session' || decision === 'forever')) {
+        allowForSession(threadId, request.toolName, workspace)
       }
       if (workspace !== null && decision === 'forever') {
-        const rules = useSettingsStore.getState().settings.permissions.rules
-        void useSettingsStore
+        useSettingsStore
           .getState()
-          .update({ permissions: { rules: withAllowedRule(rules, request.toolName, workspace) } })
+          .allowToolForever(request.toolName, workspace)
+          .then(
+            () => setPermissionError(null),
+            (cause: unknown) => {
+              console.error('[kyclaw] 「永久允许」没能写进设置', cause)
+              setPermissionError('「永久允许」没能保存：这次先记在当前对话里，重启后要重新确认')
+            }
+          )
       }
       void addToolApprovalResponse({
         id: request.approvalId,
@@ -253,18 +263,18 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         ...(decision === 'deny' ? { reason: '用户拒绝了这次操作' } : {})
       })
     },
-    [addToolApprovalResponse, workspaces]
+    [addToolApprovalResponse, workspaces, threadId]
   )
 
   /** 会话记忆命中的待批调用直接放行（"本会话允许"之后不再弹卡） */
   useEffect(() => {
     for (const request of pendingApprovals(messages[messages.length - 1])) {
       const workspace = resolveApprovalWorkspace(request.input, workspaces)
-      if (workspace !== null && isAllowedForSession(request.toolName, workspace)) {
+      if (workspace !== null && isAllowedForSession(threadId, request.toolName, workspace)) {
         void addToolApprovalResponse({ id: request.approvalId, approved: true })
       }
     }
-  }, [messages, addToolApprovalResponse, workspaces])
+  }, [messages, addToolApprovalResponse, workspaces, threadId])
 
   const flushNext = useCallback(() => {
     const [next, ...rest] = pending.current
@@ -281,7 +291,6 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
    * 出错收尾状态是 'error'（不是 ready），不自动补发——等用户决定重试还是改主意。
    * 还停在等审批（挂起轮）也不补发：用户还没做决策，替他往前跑只会把审批流搅乱。
    */
-  const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
   const previousStatus = useRef(status)
   useEffect(() => {
     const wasBusy = previousStatus.current === 'submitted' || previousStatus.current === 'streaming'
@@ -289,16 +298,22 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     if (wasBusy && status === 'ready' && !waitingApproval) flushNext()
   }, [status, flushNext, waitingApproval])
 
+  /**
+   * 发送：等审批期间与"流式中"同一口径 —— **不发**，进队列。
+   * 为什么不是直发：审批挂起时直发会让 `sendAutomaticallyWhen` 的判定失效（它只看最后一条
+   * 助手消息），决策回灌后再也不会自动续跑，卡片永远停在"审批已回应"；排队则等这一轮
+   * （决策 → resume → 收尾）真正结束再发，语义与"流式中发送"完全一致。
+   */
   const submit = useCallback(
     (text: string) => {
-      if (busy) {
+      if (busy || waitingApproval) {
         pending.current = [...pending.current, text]
         setQueuedCount(pending.current.length)
         return
       }
       void sendMessage({ text }, threadRequestOptions(threadId))
     },
-    [busy, sendMessage, threadId]
+    [busy, waitingApproval, sendMessage, threadId]
   )
 
   /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致） */
@@ -353,8 +368,9 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
       <MessageList
         messages={messages}
         status={status}
-        // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发
-        onEdit={busy ? undefined : editResend}
+        // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
+        // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）
+        onEdit={busy || waitingApproval ? undefined : editResend}
         workspaces={workspaces}
         onApprovalDecision={decideApproval}
       />
@@ -368,6 +384,11 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
           <ErrorCard error={syncError} onRetry={retryPendingSync} />
         </div>
       ) : null}
+      {permissionError === null ? null : (
+        <p data-testid="approval-permanent-error" className="px-4 pt-2 text-c1 text-danger">
+          {permissionError}
+        </p>
+      )}
       <div className="shrink-0 px-4 pt-4 pb-6">
         <Composer
           busy={busy}

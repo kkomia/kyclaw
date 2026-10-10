@@ -198,3 +198,50 @@ describe('settings store · workspace（设置页工作区组用）', () => {
     await expect(store().removeWorkspace(PROJECT)).rejects.toThrow(/工作区通道不可用/)
   })
 })
+
+describe('settings store · allowToolForever（审批卡"永久允许"）', () => {
+  const PROJECT = 'D:\\项目\\demo'
+
+  it('追加一条规则并落盘（工具 + 工作区），store 跟着落盘结果走', async () => {
+    const bridge = installKyclawBridge(defaultSettings())
+
+    await store().allowToolForever('write', PROJECT)
+
+    expect(bridge.update).toHaveBeenCalledWith({
+      permissions: { rules: [{ tool: 'write', workspace: PROJECT, mode: 'allow' }] }
+    })
+    expect(store().settings.permissions.rules).toEqual([
+      { tool: 'write', workspace: PROJECT, mode: 'allow' }
+    ])
+  })
+
+  it('已有同工具 + 同工作区的规则不重复加（写法归一后也算同一条）', async () => {
+    const bridge = installKyclawBridge({
+      ...defaultSettings(),
+      permissions: { rules: [{ tool: 'write', workspace: 'd:/项目/demo', mode: 'allow' }] }
+    })
+    await store().load()
+
+    await store().allowToolForever('write', PROJECT)
+
+    expect(store().settings.permissions.rules).toHaveLength(1)
+    expect(bridge.update).toHaveBeenCalledWith({
+      permissions: { rules: [{ tool: 'write', workspace: 'd:/项目/demo', mode: 'allow' }] }
+    })
+  })
+
+  it('落盘失败抛给调用方（审批卡据此把"没保存"露出来），store 不假装写成功', async () => {
+    const bridge = installKyclawBridge(defaultSettings())
+    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
+
+    await expect(store().allowToolForever('write', PROJECT)).rejects.toThrow('磁盘满了')
+
+    expect(store().settings.permissions.rules).toEqual([])
+  })
+
+  it('没有 preload 桥：抛"设置通道不可用"', async () => {
+    clearKyclawBridge()
+
+    await expect(store().allowToolForever('write', PROJECT)).rejects.toThrow(/设置通道不可用/)
+  })
+})

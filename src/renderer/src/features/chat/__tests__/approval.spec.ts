@@ -157,25 +157,26 @@ describe('resolveApprovalWorkspace（只用于审批记忆粒度，不是安全�
   })
 })
 
-describe('会话记忆（"本会话允许"）：粒度 = 工具 + 工作区', () => {
-  it('记下 write + wsA：write + wsB 与 edit + wsA 都不放行', () => {
-    allowForSession('write', WS_A.path)
+describe('会话记忆（"本会话允许"）：粒度 = 对话（thread）+ 工具 + 工作区', () => {
+  it('记下 thread-1 的 write + wsA：别的对话、别的工作区、别的工具都不放行', () => {
+    allowForSession('thread-1', 'write', WS_A.path)
 
-    expect(isAllowedForSession('write', WS_A.path)).toBe(true)
-    expect(isAllowedForSession('write', WS_B.path)).toBe(false)
-    expect(isAllowedForSession('edit', WS_A.path)).toBe(false)
+    expect(isAllowedForSession('thread-1', 'write', WS_A.path)).toBe(true)
+    expect(isAllowedForSession('thread-2', 'write', WS_A.path)).toBe(false)
+    expect(isAllowedForSession('thread-1', 'write', WS_B.path)).toBe(false)
+    expect(isAllowedForSession('thread-1', 'edit', WS_A.path)).toBe(false)
   })
 
   it('写法归一后命中（大小写 / 分隔符 / MCP 前缀）', () => {
-    allowForSession('write', 'D:\\项目\\demo')
+    allowForSession('thread-1', 'write', 'D:\\项目\\demo')
 
-    expect(isAllowedForSession('mcp__fs__write', 'd:/项目/demo')).toBe(true)
+    expect(isAllowedForSession('thread-1', 'mcp__fs__write', 'd:/项目/demo')).toBe(true)
   })
 
   it('MCP 名按最后一段归一（与 classify 的工具身份同一口径；T12 接入时再重审）', () => {
-    allowForSession('mcp__fs__write', WS_A.path)
+    allowForSession('thread-1', 'mcp__fs__write', WS_A.path)
 
-    expect(isAllowedForSession('write', WS_A.path)).toBe(true)
-    expect(isAllowedForSession('mcp__other__write', WS_A.path)).toBe(true)
+    expect(isAllowedForSession('thread-1', 'write', WS_A.path)).toBe(true)
+    expect(isAllowedForSession('thread-1', 'mcp__other__write', WS_A.path)).toBe(true)
   })
 })
