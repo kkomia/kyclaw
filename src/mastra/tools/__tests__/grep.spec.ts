@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
- * grep 工具：正则命中 / CJK / 二进制跳过 / ≤100 条截断 / glob 过滤 / .git 跳过 / 失败路径。
+ * grep 工具：正则命中 / CJK / 二进制与 junction 跳过 / ≤100 条截断与码点截断 / glob 过滤 / .git 跳过 / 失败路径。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GREP_MAX_HITS, GREP_MAX_LINE_CHARS, createGrepTool } from '../grep'
@@ -117,6 +117,42 @@ describe('grep：跳过与截断契约', () => {
     expect(content).toHaveLength(GREP_MAX_LINE_CHARS + 1)
     expect(content.endsWith('…')).toBe(true)
   })
+
+  it('单行截断按码点切：400 处正好落在代理对中间时不切开 emoji（T11⑥）', async () => {
+    const tool = await createGrepTool(bed.ctx)
+    // 头 7 个码元是 'needle '，再补 392 个 'x'：第 400 个码元恰是 😀（代理对）的前半——
+    // 旧的 slice(0, 400)（按 UTF-16 码元）会把它切成半个字符，渲染端拿到孤立代理项
+    const emoji = '😀'
+    const line = `needle ${'x'.repeat(GREP_MAX_LINE_CHARS - 'needle '.length - 1)}${emoji}尾巴`
+    writeFileSync(join(bed.root, 'pair.txt'), `${line}\n`)
+
+    const out = String(await callTool(tool, { pattern: 'needle' }))
+    const [hit] = hitLines(out)
+    const content = hit.slice(hit.indexOf(': ') + 2)
+
+    // 没有孤立代理项（半截 emoji）
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(content)
+    ).toBe(false)
+    // 截断点落在整只 emoji 之后：末位是它 + 省略号；仍是 400 个码点 + 省略号
+    expect(content.endsWith(`${emoji}…`)).toBe(true)
+    expect(Array.from(content)).toHaveLength(GREP_MAX_LINE_CHARS + 1)
+  })
+
+  it.skipIf(process.platform !== 'win32')(
+    'junction（目录链接）不进搜索范围：链接指到工作区外，外面的内容搜不到（T11③）',
+    async () => {
+      const tool = await createGrepTool(bed.ctx)
+      writeFileSync(join(bed.outside, 'secret.txt'), 'needle\n')
+      symlinkSync(bed.outside, join(bed.root, 'link'), 'junction')
+      writeFileSync(join(bed.root, 'inside.txt'), 'needle\n')
+
+      const hits = hitLines(await callTool(tool, { pattern: 'needle' }))
+      expect(hits).toHaveLength(1)
+      expect(hits[0]).toContain('inside.txt')
+      expect(hits[0]).not.toContain('secret.txt')
+    }
+  )
 
   it('没有命中：一句人话（不是空响应）', async () => {
     const tool = await createGrepTool(bed.ctx)

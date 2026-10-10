@@ -320,9 +320,13 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     [busy, waitingApproval, sendMessage, threadId]
   )
 
-  /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致） */
+  /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致）。
+   *  T13 N1：与编辑入口同一道闸门——流式中/等审批期间不动作（截断会把挂起消息删掉，而服务端
+   *  run 快照还在，决策会对着空气回灌；流式中则是对当前这条流并发。闸门只在旧重试卡这条
+   *  窄路径上会被擦边：编辑入口本身在挂起期间是关的）。 */
   const editResend = useCallback(
     (messageId: string, text: string) => {
+      if (busy || waitingApproval) return
       setPendingSync(null)
       truncateThread(threadId, messageId).then(
         () => {
@@ -333,11 +337,13 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         }
       )
     },
-    [sendMessage, threadId]
+    [busy, waitingApproval, sendMessage, threadId]
   )
 
-  /** 重试 = 整轮重生成：先删掉最后一条助手回复，再 regenerate（防止新旧回复在存储里合并） */
+  /** 重试 = 整轮重生成：先删掉最后一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
+   *  T13 N1：同 editResend——等审批/流式中不重试（错误卡的旧重试按钮不能绕开闸门）。 */
   const retry = useCallback(() => {
+    if (busy || waitingApproval) return
     const last = messages[messages.length - 1]
     if (last === undefined) return
     setPendingSync(null)
@@ -351,7 +357,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         setPendingSync({ kind: 'retry', messageId: last.id })
       }
     )
-  }, [messages, regenerate, threadId])
+  }, [busy, waitingApproval, messages, regenerate, threadId])
 
   /** 截断失败的重试：把刚才没做完的动作原样再做一遍 */
   const retryPendingSync = useCallback(() => {

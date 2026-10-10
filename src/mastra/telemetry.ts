@@ -2,7 +2,7 @@
  * 追踪开关（T17）：Langfuse exporter 接线，**默认关**。
  *
  * 姿态（与 R18 的"遥测禁"不冲突）：Mastra 自己的 PostHog 打点仍然关着（main/index.ts 启动即设
- * MASTRA_TELEMETRY_DISABLED，见 __tests__/telemetry-env.spec.ts）；这里是**用户显式开启**的可观测：
+ * MASTRA_TELEMETRY_DISABLED，见 main/__tests__/telemetry-env.spec.ts）；这里是**用户显式开启**的可观测：
  * 服务地址 + 公私钥三项配齐才导出，缺一项就当没配（不发请求、不报错）——什么都不配时内容不出机器。
  *
  * 本模块只管两件事：判定"配齐了没" + 建 observability 入口（不碰 electron、不碰文件）；

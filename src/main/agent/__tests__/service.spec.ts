@@ -259,7 +259,7 @@ describe('startAgentServer', () => {
     expect(secondBody).not.toContain('第一轮')
   }, 60_000)
 
-  it('配了 provider 却读不到密钥 → 对话报错（500），不回 mock 文案与假成功（T8 裁决）', async () => {
+  it('配了 provider 却读不到密钥 → 对话报错（400 + 中文人话），不回 mock 文案与假成功（T8 裁决 + C-1）', async () => {
     // 缺省 resolver 没有密钥来源：settings 里有 provider 时必然"配置不完整"
     const withProvider = mkdtempSync(join(tmpdir(), 'kyclaw-agent-configured-'))
     writeSettings(settingsPath(withProvider), {
@@ -283,9 +283,16 @@ describe('startAgentServer', () => {
       })
       const body = await response.text()
 
-      expect(response.status).toBe(500)
+      expect(response.status).toBe(400)
+      // C-1：错误卡原样渲染响应体（ai@7 把 body 设为 error.message），所以响应必须是人话——
+      // 缺什么、去哪里补都写在响应里；后端原文/JSON blob 不许上卡（设计雷点 2.2）
+      expect(body).toContain('配置不完整')
+      expect(body).toContain('缺 API 密钥')
+      expect(body).toContain('设置')
+      expect(body).not.toContain('Internal Server Error')
+      expect(body).not.toContain('{')
       expect(body).not.toContain(MOCK_REPLY_CHUNKS[0])
-      // 具体原因在主进程日志里（UI 侧看到的是错误卡；设置页显示同一句话）
+      // 真实错误仍留在主进程日志（提供自定义 onError 后库不再自己记，验证没被吞）
       expect(errorLog.mock.calls.some((call) => JSON.stringify(call).includes('配置不完整'))).toBe(
         true
       )
@@ -296,6 +303,31 @@ describe('startAgentServer', () => {
       } catch {
         console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）')
       }
+    }
+  }, 60_000)
+
+  it('未知错误 → 仍 500，但响应体也是中文通用文案（不是原文/JSON blob）；真实错误进日志（C-1）', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const server = await start({
+        resolveModel: async () => {
+          throw new Error('boom: internal detail')
+        }
+      })
+
+      const response = await chat(server.baseUrl, {
+        headers: { authorization: `Bearer ${server.token}` }
+      })
+      const body = await response.text()
+
+      expect(response.status).toBe(500)
+      expect(body).not.toContain('boom')
+      expect(body).not.toContain('Internal Server Error')
+      expect(body).not.toContain('{')
+      expect(body).toMatch(/[\u4e00-\u9fff]/)
+      expect(errorLog.mock.calls.some((call) => JSON.stringify(call).includes('boom'))).toBe(true)
+    } finally {
+      errorLog.mockRestore()
     }
   }, 60_000)
 })

@@ -103,18 +103,16 @@ export class ToolState {
   }
 }
 
-/** 授权工作区来源：数组，或"按会话现取"的取值函数（T18：会话的项目/默认工作区中途变，下一轮就跟着变） */
-export type WorkspaceRoots =
-  readonly Workspace[] | ((session: string | undefined) => readonly Workspace[])
-
 /**
- * **审批口径**：`session === undefined` 时取值函数要给的那份 —— 实现方（agents/kyclaw.ts）
- * 给的是**整份授权列表**（超集）。为什么审批不按会话收窄：Mastra 的 `requireApproval` 回调
- * 只拿得到 `(input, { requestContext, workspace })`，**没有线程 id**，判不了"这个会话的项目是哪个"。
- * 取超集只可能多问，不会漏问 —— 而真正能落盘的写必须经执行层的会话根（子集）解析，
+ * 授权工作区来源：数组，或"按会话现取"的取值函数（T18：会话的项目/默认工作区中途变，下一轮就跟着变）。
+ * 取值函数收到 `session === undefined` 时给的是**审批口径**——实现方（agents/kyclaw.ts）给的是
+ * **整份授权列表**（超集）。为什么审批不按会话收窄：Mastra 的 `requireApproval` 回调只拿得到
+ * `(input, { requestContext, workspace })`，**没有线程 id**，判不了"这个会话的项目是哪个"。
+ * 取超集只可能多问，不会漏问——真正能落盘的写必须经执行层的会话根（子集）解析，
  * 所以不存在"审批放行、执行越界"的组合（方向判据见 needsApproval 头注）。
  */
-export type ApprovalRoots = (session: undefined) => readonly Workspace[]
+export type WorkspaceRoots =
+  readonly Workspace[] | ((session: string | undefined) => readonly Workspace[])
 
 /** "永久允许"规则来源（T13）：批准过"永久允许"的 (工具, 工作区) 落在这里；现读设置 */
 export type PermissionRuleSource = () => readonly PermissionRule[]

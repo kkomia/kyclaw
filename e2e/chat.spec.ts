@@ -44,17 +44,22 @@ test('停止：流式中给的是停止钮；点停 → 回到发送钮，文本
 
     const stop = page.getByTestId('composer-stop')
     await expect(stop).toBeVisible()
+
+    // 先等首段真的上屏再停：首段到之前点停等于什么都没验证（旧版断言会在这里空转）
+    const reply = page.getByTestId('message-text')
+    await expect(reply).toContainText(MOCK_REPLY_CHUNKS[0], { timeout: 20_000 })
     await stop.click()
 
     // 停止后立刻回到"发送"态
     await expect(page.getByTestId('composer-send')).toBeVisible()
 
-    // 停在哪儿就是哪儿：等 1.2s（够再走完两段 250ms 的增量）文本不许再长
-    const reply = page.getByTestId('message-text')
-    const settled = (await reply.count()) > 0 ? await reply.innerText() : ''
+    // 停在哪儿就是哪儿：等 1.2s（够再走完两段 250ms 的增量）文本不许再长；
+    // 两次都必须取到非空值（"双空相等"不算通过）
+    const settled = await reply.innerText()
+    expect(settled.length).toBeGreaterThan(0)
     await page.waitForTimeout(1200)
-    const later = (await reply.count()) > 0 ? await reply.innerText() : ''
-
+    const later = await reply.innerText()
+    expect(later.length).toBeGreaterThan(0)
     expect(later).toBe(settled)
     // 收到的是全文的"前缀"：没有半截乱码、没有拼接出来的怪东西
     expect(REPLY_FULL.startsWith(later)).toBe(true)

@@ -44,6 +44,10 @@ pnpm package
 ```bash
 # 类型 + lint + 格式 + 单测 + 构建
 pnpm check
+
+# E2E 冒烟（Playwright 驱动真 Electron 实例：启动/流式/停止/审批/走查取证）
+# 每例独立 userData、KYCLAW_FORCE_MOCK=1 离线跑，不需要 playwright install
+pnpm test:e2e
 ```
 
 ## 更新与追踪（试点）
@@ -58,8 +62,8 @@ pnpm check
   （`https://cloud.langfuse.com`）或自托管实例。
 
 ```bash
-# 本机模拟更新源的起法（冒烟用，见 .superpowers/sdd/*/smoke-t17/）
-node make-feed.mjs update-feed 1.0.1   # 造 latest.yml + 假安装包
-node serve-feed.mjs update-feed 8555   # 静态伺服
+# 本机模拟更新源的起法（冒烟脚本已随库入库：scripts/make-feed.mjs / scripts/serve-feed.mjs）
+node scripts/make-feed.mjs update-feed 1.0.1   # 造 latest.yml + 假安装包（sha512 真算）
+node scripts/serve-feed.mjs update-feed 8555   # 静态伺服
 KYCLAW_UPDATE_URL=http://127.0.0.1:8555/ pnpm dev
 ```

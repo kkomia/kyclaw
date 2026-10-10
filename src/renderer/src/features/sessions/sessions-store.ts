@@ -55,7 +55,6 @@ export interface SessionsState {
   rename: (threadId: string, title: string) => Promise<void>
   /** 一轮结束（isError/isAbort 由调用方先过滤）：标题 + 刷新 + 完成通知 */
   handleTurnEnd: (threadId: string) => Promise<void>
-  clearNotice: (threadId: string) => void
 }
 
 function messageOf(error: unknown): string {
@@ -194,10 +193,6 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       console.error('[kyclaw] 生成会话标题失败', error)
     }
     void get().refresh()
-  },
-
-  clearNotice: (threadId) => {
-    set((state) => ({ notices: withoutKey(state.notices, threadId) }))
   }
 }))
 

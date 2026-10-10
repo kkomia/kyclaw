@@ -10,7 +10,8 @@ import { closeApp, launchApp, sendMessage, waitForChat, type LaunchedApp } from 
  * 每颗用例起一个隔离实例（userData 是临时目录），把状态摆到位 → 截图 + 量数值 → 落盘：
  *   - 截图：`.superpowers/.../smoke-t16/walkthrough/*.png`
  *   - 数值：同目录 `metrics-*.json`（读的是 computed style 与 getBoundingClientRect 的 CSS px）
- * 数值断言只钉"设计口径"级别的硬值（圆角 20、画布缝 6、输入卡 ≤768、导览轨让开滚动条…），
+ * 本文件是取证件：几何硬值（圆角/缝/限宽/居中不变量）由样式契约 spec 钉住，这里不重复；
+ * 只保留少量人工目视替代不了的断言（如 D 例的错误卡文案必须是人话）。
  * 观感结论写进 `docs/reviews/ui-walkthrough.md`（人工看截图 + 这些数值）。
  */
 const OUT = resolve(__dirname, '..', '.superpowers/sdd/2026-10-10-kyclaw-mvp/smoke-t16/walkthrough')
@@ -523,7 +524,10 @@ test('走查D · 换机解密失败抽查（密文解不开 → 需要重新录�
     await page.getByTestId('nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
     await expect(page.getByTestId('provider-deepseek')).toBeVisible()
-    metrics.keyStatus = await page.getByTestId('provider-deepseek-key-status').innerText()
+    // 密钥状态是异步读出来的：先等它从"读取中…"落定再取值（T16②：抓早会把加载态当结论）
+    const keyStatus = page.getByTestId('provider-deepseek-key-status')
+    await expect(keyStatus).toHaveText('需要重新录入', { timeout: 15_000 })
+    metrics.keyStatus = await keyStatus.innerText()
     metrics.reentryText = await page.getByTestId('provider-deepseek-reentry').innerText()
     await shot(page, 'D1-解密失败-需要重新录入')
 
@@ -544,6 +548,11 @@ test('走查D · 换机解密失败抽查（密文解不开 → 需要重新录�
     const errorCard = page.getByTestId('error-card')
     await expect(errorCard).toBeVisible({ timeout: 30_000 })
     metrics.errorCardText = await errorCard.innerText()
+    // C-1（雷点 2.2）：错误卡是人话——不是后端原文/JSON blob，且有可执行指引（去设置里补齐）
+    expect(metrics.errorCardText).not.toContain('Internal Server Error')
+    expect(metrics.errorCardText).not.toContain('{')
+    expect(metrics.errorCardText).toContain('密钥')
+    expect(metrics.errorCardText).toContain('设置')
     await shot(page, 'D2-解密失败-聊天错误卡')
 
     console.log('[走查D] metrics →', dump('D-解密失败', metrics))

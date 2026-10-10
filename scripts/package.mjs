@@ -5,16 +5,21 @@
  * 为什么单起一个脚本而不是一行 npm script：
  *   1. `--publish never` 要写死——本次不接更新通道（T17），而 electron-builder 在 CI 环境里
  *      默认会试着发布；
- *   2. 出包后自检两个"构建成功但装完会发现"的坑：安装包在不在、asarUnpack 有没有真的把
- *      libsql 的原生绑定（@libsql/win32-x64-msvc/index.node）与 ?asset 资源解到 app.asar.unpacked。
+ *   2. 打包前**预清上一次的打包输出**（只清 electron-builder 自己写的那些条目，dist/ 里别的
+ *      内容一律不碰），打包后自检两个"构建成功但装完会发现"的坑：**本版本**（绑 package.json
+ *      的 name/version）的安装包在不在、asarUnpack 有没有真的把 libsql 的原生绑定
+ *      （@libsql/win32-x64-msvc/index.node）与 ?asset 资源解到 app.asar.unpacked（T15①）。
  *
  * 环境照传：pnpm 会把 .npmrc 的镜像写成 npm_config_electron_mirror /
  * npm_config_electron_builder_binaries_mirror，Electron 与 NSIS 的下载靠它走 npmmirror。
+ *
+ * 纯函数（expectedInstallerName / staleOutputs / cleanStaleOutputs / projectManifest）导出供最小验证：
+ * 直接执行才跑打包流程，被 `import()` 时只拿函数（见终审 fix wave 报告的验证记录）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DIST_DIR = join(ROOT, 'dist')
@@ -56,25 +61,101 @@ function listFiles(dir, prefix = '') {
   return entries
 }
 
-run('electron-vite', ['build'])
-run('electron-builder', ['--win', '--publish', 'never'])
-
-const installers = existsSync(DIST_DIR)
-  ? readdirSync(DIST_DIR).filter((name) => name.endsWith('-setup.exe'))
-  : []
-if (installers.length === 0) fail('dist/ 下没有 NSIS 安装包（*-setup.exe）')
-
-if (!existsSync(UNPACKED_DIR)) fail(`没有解包目录：${UNPACKED_DIR}（asarUnpack 没生效）`)
-const unpacked = listFiles(UNPACKED_DIR)
-const libsqlBindings = unpacked.filter((path) => path.endsWith('.node') && path.includes('@libsql'))
-if (libsqlBindings.length === 0) {
-  fail('app.asar.unpacked 里没有 @libsql 的 .node——装了也起不了库（asarUnpack 规则被改坏了？）')
+/** package.json 的 name/version（自检的锚；缺一个就抛，别用错的锚过检） */
+export function projectManifest(root = ROOT) {
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  } catch (error) {
+    throw new Error(`读不到 package.json：${error instanceof Error ? error.message : error}`)
+  }
+  if (
+    typeof manifest.name !== 'string' ||
+    manifest.name === '' ||
+    typeof manifest.version !== 'string' ||
+    manifest.version === ''
+  ) {
+    throw new Error('package.json 缺 name/version，出包自检没有版本锚')
+  }
+  return { name: manifest.name, version: manifest.version }
 }
 
-console.log('[package] 产物：')
-for (const name of installers) {
-  console.log(
-    `  dist/${name}  ${(statSync(join(DIST_DIR, name)).size / 1024 / 1024).toFixed(1)} MB`
+/** 本版本的安装包名——与 electron-builder.yml 的 nsis.artifactName（${name}-${version}-setup.${ext}）同口径 */
+export function expectedInstallerName({ name, version }) {
+  return `${name}-${version}-setup.exe`
+}
+
+/**
+ * 上一次打包的输出清单（T15① 预清的对象）：只认 electron-builder 自己写的条目——
+ * 安装包 / blockmap / win-unpacked 解包目录 / builder-*.yml 构建档。dist/ 里别的内容不碰。
+ */
+export function staleOutputs(distDir = DIST_DIR) {
+  if (!existsSync(distDir)) return []
+  return readdirSync(distDir).filter(
+    (name) =>
+      /^kyclaw-.*-setup\.exe(\.blockmap)?$/.test(name) ||
+      name === 'win-unpacked' ||
+      /^builder-.*\.ya?ml$/.test(name)
   )
 }
-console.log(`[package] 解包的原生绑定：${libsqlBindings.join('、')}`)
+
+/** 预清上一次的打包输出；返回清掉的条目（陈旧包不能顶替本版本过检） */
+export function cleanStaleOutputs(distDir = DIST_DIR) {
+  const removed = []
+  for (const name of staleOutputs(distDir)) {
+    rmSync(join(distDir, name), { recursive: true, force: true })
+    removed.push(name)
+  }
+  return removed
+}
+
+function main() {
+  try {
+    const cleared = cleanStaleOutputs()
+    if (cleared.length > 0) {
+      console.log(`[package] 预清上一次的打包输出：${cleared.join('、')}`)
+    }
+
+    run('electron-vite', ['build'])
+    run('electron-builder', ['--win', '--publish', 'never'])
+
+    const expected = expectedInstallerName(projectManifest())
+    if (!existsSync(join(DIST_DIR, expected))) {
+      const found = existsSync(DIST_DIR)
+        ? readdirSync(DIST_DIR).filter((name) => name.endsWith('-setup.exe'))
+        : []
+      fail(
+        `dist/ 下没有本版本的安装包 ${expected}（版本不符或构建失败？` +
+          `${found.length === 0 ? '' : `只看到：${found.join('、')}`}）`
+      )
+    }
+    const installers = readdirSync(DIST_DIR).filter((name) => /^kyclaw-.*-setup\.exe$/.test(name))
+    if (installers.length !== 1) {
+      fail(`dist/ 下有多份安装包（${installers.join('、')}）——预清没生效？`)
+    }
+
+    if (!existsSync(UNPACKED_DIR)) fail(`没有解包目录：${UNPACKED_DIR}（asarUnpack 没生效）`)
+    const unpacked = listFiles(UNPACKED_DIR)
+    const libsqlBindings = unpacked.filter(
+      (path) => path.endsWith('.node') && path.includes('@libsql')
+    )
+    if (libsqlBindings.length === 0) {
+      fail('app.asar.unpacked 里没有 @libsql 的 .node——装了也起不了库（asarUnpack 规则被改坏了？）')
+    }
+
+    console.log('[package] 产物：')
+    for (const name of installers) {
+      console.log(
+        `  dist/${name}  ${(statSync(join(DIST_DIR, name)).size / 1024 / 1024).toFixed(1)} MB`
+      )
+    }
+    console.log(`[package] 解包的原生绑定：${libsqlBindings.join('、')}`)
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+  }
+}
+
+// 直接执行（node scripts/package.mjs）才跑打包；被 import() 时只取纯函数（最小验证用）
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+}

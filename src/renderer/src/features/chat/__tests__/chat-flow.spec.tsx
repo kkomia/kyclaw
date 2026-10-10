@@ -389,4 +389,32 @@ describe('出错与重试', () => {
       })
     })
   })
+
+  it('停止收尾：onTurnEnd(threadId, isAbort=true)——用户主动停止不是完成轮（T9⑤）', async () => {
+    const control = createMockTransport()
+    const runtime = makeRuntime(control)
+    await renderSession(control, runtime.runtime, 'thread-stop')
+
+    await act(async () => {
+      send('问题')
+    })
+    await act(async () => {
+      control.push('半句回答')
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('composer-stop'))
+    })
+
+    // 停止走的是 abort：onFinish 以 isAbort=true 触发，调用方据此不生成标题、不发完成通知
+    await waitFor(() => {
+      expect(runtime.onTurnEnd).toHaveBeenCalledWith('thread-stop', {
+        isError: false,
+        isAbort: true,
+        awaitingApproval: false
+      })
+    })
+    // 已生成的内容留着，状态回到可发送
+    expect(screen.getByTestId('message-list')).toHaveTextContent('半句回答')
+    expect(screen.getByTestId('composer-send')).toBeInTheDocument()
+  })
 })

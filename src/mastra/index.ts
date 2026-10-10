@@ -32,6 +32,7 @@ import type { Project } from '../shared/projects'
 import type { McpServerConfig, PermissionRule, Workspace } from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import type { McpToolGate } from './mcp'
+import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
 import { createUsageRecorder, createUsageStore, usageSqlClient, type UsageStore } from './usage'
@@ -86,6 +87,28 @@ export interface KyclawMastra {
 /** libsql 的 file: URL 只认正斜杠（Windows 的反斜杠会被当转义字符） */
 function libsqlUrl(dataDir: string): string {
   return `file:${join(dataDir, AGENT_DB_FILE).replace(/\\/g, '/')}`
+}
+
+/**
+ * C-1：聊天错误的人话映射（冲设计雷点 2.2 的修正）。
+ *
+ * 错误卡渲染的是**响应体原文**（ai@7 的 createUIApiCallError 把 response body 设为
+ * error.message），所以 onError 的响应体必须是人话——后端原文/JSON blob 不能上卡：
+ *   - `ProviderConfigError`（半截配置 / 密钥缺失，用户自己能修）→ 400 + 缺什么、去哪里补；
+ *   - 其余未知错误 → 500 + 通用中文文案（真实原因只进服务端日志，不给用户看）。
+ */
+function userFacingError(error: Error): { status: 400 | 500; message: string } {
+  if (error instanceof ProviderConfigError) {
+    const missing = error.problems.map((problem) => problem.replace(/^配置不完整：/, '')).join('、')
+    return {
+      status: 400,
+      message:
+        missing === ''
+          ? '模型配置还不完整，请到「设置 → 模型」里补齐后再试。'
+          : `模型配置不完整：${missing}，请到「设置 → 模型」里补齐后再试。`
+    }
+  }
+  return { status: 500, message: '服务出错了，请重试；若一直这样，重启应用再试一次。' }
 }
 
 export async function createKyclawMastra(options: {
@@ -159,7 +182,17 @@ export async function createKyclawMastra(options: {
           // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）
           defaultOptions: { onFinish: createUsageRecorder({ store: usage }) }
         })
-      ]
+      ],
+      // C-1：chatRoute 的 handler 在流开始前抛错（如模型解析失败）时会走到这里
+      // （@mastra/server 的 buildCustomRouteHandler.onError）。提供自定义 onError 后库不再
+      // 自己记日志，所以真实错误在这里落（message 进字符串，排障复制即可）；响应体一律给人话
+      // （错误卡原样渲染响应体，见上注）。
+      onError: (error, c) => {
+        const { status, message } = userFacingError(error)
+        const detail = error instanceof Error ? error.message : String(error)
+        console.error(`[kyclaw] 对话请求失败（已回 ${status} 的人话文案）：${detail}`, error)
+        return c.text(message, status)
+      }
     }
   })
 

@@ -2,7 +2,7 @@
  * grep 工具：在工作区内按正则搜文本（JavaScript 正则；不依赖外部 ripgrep，无 shell）。
  *
  * 契约与取舍（每一条都有用例）：
- *   - 行输出 `绝对路径:行号: 行内容`；行内容截到 400 字符（防超长行把结果撑爆）；
+ *   - 行输出 `绝对路径:行号: 行内容`；行内容截到 400 个码点（防超长行把结果撑爆；代理对不切开）；
  *   - 二进制跳过：文件内容带 NUL 的直接跳过（readFile 最多读 1MB，大文件不进内存）；
  *   - .git 目录跳过（VCS 内部，永远不是搜索目标）；符号链接/ junction 一律不跟（防链接逃逸）；
  *   - 截断契约：命中 ≤100 条；目录扫描 ≤2000 个文件，超了附提示说明可能不完整；
@@ -19,7 +19,7 @@ export const GREP_MAX_HITS = 100
 export const GREP_MAX_SCAN_FILES = 2000
 /** 单个文件最多读这么多（超出部分不搜；文本文件远超 1MB 的很少） */
 export const GREP_MAX_FILE_BYTES = 1024 * 1024
-/** 单行展示上限 */
+/** 单行展示上限（码点数） */
 export const GREP_MAX_LINE_CHARS = 400
 /** 跳过的目录（VCS 内部） */
 const SKIPPED_DIRS = new Set(['.git'])
@@ -131,5 +131,10 @@ function matchesFilter(relativePath: string, filter: string): boolean {
 }
 
 function truncate(line: string): string {
-  return line.length > GREP_MAX_LINE_CHARS ? `${line.slice(0, GREP_MAX_LINE_CHARS)}…` : line
+  // 按**码点**切（Array.from）：UTF-16 的 slice 会在 400 处切开代理对，把半个 emoji
+  // 交给模型与渲染端（与 T16 的 previewOutput 同口径，T11⑥）
+  const chars = Array.from(line)
+  return chars.length > GREP_MAX_LINE_CHARS
+    ? `${chars.slice(0, GREP_MAX_LINE_CHARS).join('')}…`
+    : line
 }

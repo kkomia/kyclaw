@@ -12,6 +12,7 @@ import {
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { truncateThread } from '@renderer/lib/threads-api'
 import { defaultSettings } from '@shared/settings'
 import { createMockTransport, type MockTransport } from './mock-transport'
 
@@ -102,6 +103,7 @@ let bridge: KyclawBridgeStubs
 beforeEach(() => {
   resetThreadChats()
   resetSessionApprovals()
+  vi.mocked(truncateThread).mockClear()
   useSessionsStore.setState({
     threads: [],
     activeId: null,
@@ -537,5 +539,95 @@ describe('挂起轮 ≠ 完成轮（默认 runtime 的完成语义）', () => {
 
     await waitFor(() => expect(handleTurnEnd).toHaveBeenCalledTimes(1))
     expect(handleTurnEnd).toHaveBeenCalledWith(THREAD_ID)
+  })
+})
+
+describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重试卡不能绕过闸门）', () => {
+  it('「编辑重发」留下的旧重试卡：等审批期间点它不动作；决策续跑收尾后恢复原语义', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    // 第一轮：编辑重发时服务端截断失败 → syncError 卡（重试 = 重做 editResend）
+    await send('原始问题')
+    await act(async () => {
+      control.push('答')
+      control.finish()
+    })
+    vi.mocked(truncateThread).mockRejectedValueOnce(new Error('线程服务返回 500'))
+    fireEvent.click(screen.getByTestId('message-edit'))
+    fireEvent.change(screen.getByTestId('message-edit-input'), {
+      target: { value: '改过的问题' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('message-edit-save'))
+    })
+    await screen.findByText(/没能在服务端同步/)
+    expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
+
+    // 接着开一轮、挂在等审批上（旧卡片还在）
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    // 点旧卡的重试：待批期间必须不动作——不截断、不发请求
+    // （直发会让决策失去自动续跑；编辑会截断掉挂起消息而服务端 run 快照还在）
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('error-retry'))
+    })
+    expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
+    expect(control.requests).toHaveLength(2)
+
+    // 决策 + 续跑收尾后闸门放开：重试恢复原语义（重新截断并重发）
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    await act(async () => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.push('写好了。')
+      control.finish()
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('error-retry'))
+    })
+    await waitFor(() => expect(control.requests).toHaveLength(4))
+    expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(2)
+  })
+
+  it('「重新生成」留下的旧重试卡：等审批期间点它也不动作（两条路径同闸门）', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    // 一轮回答到一半流断了：错误卡（重试 = 先截断再 regenerate）
+    await send('问题')
+    act(() => {
+      control.push('半个回答')
+      control.disconnect()
+    })
+    await screen.findByTestId('error-card')
+
+    // 截断失败 → 换成 syncError 卡（kind=retry）；点的是后渲染的那张（syncError）
+    vi.mocked(truncateThread).mockRejectedValueOnce(new Error('线程服务返回 500'))
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('error-retry').at(-1) as HTMLElement)
+    })
+    await screen.findByText(/没能在服务端同步/)
+    expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
+
+    // 再来一轮、挂在等审批（流错误卡被新请求清掉，只剩 syncError 卡）
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+    expect(screen.getAllByTestId('error-retry')).toHaveLength(1)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('error-retry'))
+    })
+    expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
+    expect(control.requests).toHaveLength(2)
   })
 })
