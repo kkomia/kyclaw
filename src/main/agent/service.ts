@@ -19,6 +19,7 @@ import { resolveModel, type KyclawModel } from '../../mastra/model'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import { readSettings, settingsPath } from '../settings'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
+import type { Workspace } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
@@ -51,6 +52,11 @@ export interface AgentServerOptions {
    * 于是用户配好 provider/密钥后不用重启，下一轮就是真模型）。
    */
   resolveModel?: ModelResolver
+  /**
+   * 授权工作区（文件工具的权限边界）：**现读**的取值函数，用户中途加工作区/切模式下一轮就生效。
+   * 缺省 = 从 dataDir/settings.json 的 workspaces 读（与设置页写入的是同一份）。
+   */
+  workspaces?: () => readonly Workspace[]
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -171,9 +177,13 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const resolveModelFor: ModelResolver =
     options.resolveModel ??
     (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
+  // 工具权限边界走同一份 settings.json（设置页的 workspace:* 通道写的也是它）
+  const workspacesFor =
+    options.workspaces ?? (() => readSettings(settingsPath(options.dataDir)).workspaces)
   const { mastra, storage, memory } = await createKyclawMastra({
     dataDir: options.dataDir,
-    resolveModel: resolveModelFor
+    resolveModel: resolveModelFor,
+    workspaces: workspacesFor
   })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
