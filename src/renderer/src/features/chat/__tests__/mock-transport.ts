@@ -32,6 +32,11 @@ export interface MockTransport {
     approvalId: string
   }) => void
   /**
+   * 推一次"没有审批的普通工具调用"（T13×T14：Mastra 记忆工具那类 part——服务端把结果
+   * 吞进内部，UI 消息里永远停在 `input-available`）。
+   */
+  toolInput: (toolCallId: string, toolName: string, input: unknown) => void
+  /**
    * 推一次"工具执行完成"（T13 的审批续跑里，服务端执行完会回 tool-output-available）。
    * 与 requestApproval 配对：缺了它，part 会一直停在 approval-responded，
    * AI SDK 的 lastAssistantMessageIsCompleteWithApprovalResponses 会再触发一次自动续跑。
@@ -116,6 +121,11 @@ export function createMockTransport(): MockTransport {
       controller.enqueue({ type: 'tool-input-start', toolCallId, toolName })
       controller.enqueue({ type: 'tool-input-available', toolCallId, toolName, input })
       controller.enqueue({ type: 'tool-approval-request', approvalId, toolCallId })
+    },
+    toolInput(toolCallId, toolName, input) {
+      if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      controller.enqueue({ type: 'tool-input-start', toolCallId, toolName })
+      controller.enqueue({ type: 'tool-input-available', toolCallId, toolName, input })
     },
     toolOutput(toolCallId, output) {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')

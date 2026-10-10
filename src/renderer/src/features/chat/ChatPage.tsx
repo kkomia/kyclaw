@@ -236,7 +236,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
    *   - 永久允许 → **先登记本会话记忆**（同轮内紧随的第二次写不再弹卡），再落一条规则进
    *     settings.permissions.rules（服务端下一轮就不再问）；落盘失败要露出来（见 permissionError）；
    *   - 决策本身经 addToolApprovalResponse 回灌；`sendAutomaticallyWhen`（thread-chats 里挂的
-   *     AI SDK 判定）会在所有审批都有回应后自动把消息发回服务端执行。
+   *     `canResumeAfterApproval`，approval.ts）会在所有审批都有回应后自动把消息发回服务端执行。
    * 两个记忆入口都要求工作区明确（审批卡在判不出工作区时不显示它们，这里再守一道）。
    */
   const decideApproval = useCallback(
@@ -260,7 +260,11 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
       void addToolApprovalResponse({
         id: request.approvalId,
         approved: decision !== 'deny',
-        ...(decision === 'deny' ? { reason: '用户拒绝了这次操作' } : {})
+        ...(decision === 'deny' ? { reason: '用户拒绝了这次操作' } : {}),
+        // `options` 是给"决策触发的自动续跑请求"用的（AI SDK 的类型注释点名了这个用途）：
+        // 续跑请求与普通发送走同一条路，线程上下文（memory.thread/resource）得同样带上，
+        // 否则续跑那一轮服务端拿不到会话。
+        options: threadRequestOptions(threadId)
       })
     },
     [addToolApprovalResponse, workspaces, threadId]

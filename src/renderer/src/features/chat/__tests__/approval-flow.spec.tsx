@@ -174,6 +174,53 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     expect(control.requests).toHaveLength(2)
   })
 
+  it('同一步里既有记忆工具（UI 里停在 input-available）又有待审批写：决策后照常自动续跑', async () => {
+    const control = createMockTransport()
+    const session = await renderSession(control)
+
+    await send('记一下我的偏好，然后写文件')
+    act(() => {
+      // Mastra 记忆工具：服务端把结果吞进记忆，UI 消息里永远停在 input-available（T18 复核②）
+      control.toolInput('call-wm', 'updateWorkingMemory', { memory: '# 用户信息\n- 偏好：中文' })
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+
+    await screen.findByTestId('approval-card')
+    await waitFor(() =>
+      expect(session.onTurnEnd).toHaveBeenCalledWith(THREAD_ID, {
+        isError: false,
+        isAbort: false,
+        awaitingApproval: true
+      })
+    )
+
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+
+    // 修复点：AI SDK 内置判定会因那条 input-available 的记忆 part 恒 false —— 这里必须真的续跑
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(control.requests[1].trigger).toBe('submit-message')
+    expect(approvalIn(control, 1, 'call-a')).toMatchObject({ approved: true })
+    // 续跑请求与普通发送同一口径：线程上下文照带（决策的 options 透传）
+    expect(control.requests[1].body).toEqual({
+      memory: { thread: THREAD_ID, resource: 'local-user' }
+    })
+
+    act(() => {
+      control.toolOutput('call-a', '已写入 D:\\项目\\demo\\a.txt（12 字节）')
+      control.push('记好了，文件也写完了。')
+      control.finish()
+    })
+    await waitFor(() =>
+      expect(session.onTurnEnd).toHaveBeenLastCalledWith(THREAD_ID, {
+        isError: false,
+        isAbort: false,
+        awaitingApproval: false
+      })
+    )
+    expect(control.requests).toHaveLength(2)
+  })
+
   it('拒绝：回灌 approved:false 带原因，恢复成静态工具卡', async () => {
     const control = createMockTransport()
     await renderSession(control)

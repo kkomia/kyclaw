@@ -4,6 +4,7 @@ import {
   allowForSession,
   approvalPath,
   approvalRequestOf,
+  canResumeAfterApproval,
   hasPendingApproval,
   isAllowedForSession,
   pendingApprovals,
@@ -179,5 +180,156 @@ describe('会话记忆（"本会话允许"）：粒度 = 对话（thread）+ 工
     expect(isAllowedForSession('thread-1', 'mcp__fs__write', WS_A.path)).toBe(true)
     expect(isAllowedForSession('thread-1', 'write', WS_A.path)).toBe(false)
     expect(isAllowedForSession('thread-1', 'mcp__other__write', WS_A.path)).toBe(false)
+  })
+})
+
+describe('canResumeAfterApproval（审批续跑就绪判定，T13×T14）', () => {
+  const assistant = (parts: unknown[]): ReadonlyArray<{ role?: unknown; parts?: unknown }> => [
+    { role: 'assistant', parts }
+  ]
+
+  const responded = (toolCallId: string): Record<string, unknown> => ({
+    type: 'tool-write',
+    toolCallId,
+    state: 'approval-responded',
+    input: {},
+    approval: { id: `run::${toolCallId}`, approved: true }
+  })
+
+  it('单条 approval-responded → true（与 AI SDK 内置判定同语义）', () => {
+    expect(canResumeAfterApproval(assistant([responded('c1')]))).toBe(true)
+  })
+
+  it('还停在 approval-requested / 普通工具没收束 → false（不替用户往前跑）', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          {
+            type: 'tool-write',
+            toolCallId: 'c1',
+            state: 'approval-requested',
+            input: {},
+            approval: { id: 'run::c1' }
+          }
+        ])
+      )
+    ).toBe(false)
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          responded('c1'),
+          { type: 'tool-read', toolCallId: 'r1', state: 'input-available' }
+        ])
+      )
+    ).toBe(false)
+  })
+
+  it('T13×T14 修复：同一步里带 input-available 的记忆工具 part 也会续跑', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          {
+            type: 'tool-updateWorkingMemory',
+            toolCallId: 'wm1',
+            state: 'input-available',
+            input: { memory: '# 用户信息' }
+          },
+          responded('c1')
+        ])
+      )
+    ).toBe(true)
+  })
+
+  it('providerExecuted 的 part 同样被滤掉（结果不进 UI 消息）', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          {
+            type: 'tool-web_search',
+            toolCallId: 's1',
+            state: 'input-available',
+            providerExecuted: true
+          },
+          responded('c1')
+        ])
+      )
+    ).toBe(true)
+  })
+
+  it('没有任何可等待的调用 / 没有 approval-responded / 末条不是助手消息 → false', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          {
+            type: 'tool-updateWorkingMemory',
+            toolCallId: 'wm1',
+            state: 'input-available',
+            input: {}
+          }
+        ])
+      )
+    ).toBe(false)
+    expect(canResumeAfterApproval(assistant([{ type: 'text', text: '好' }]))).toBe(false)
+    expect(
+      canResumeAfterApproval([
+        { role: 'assistant', parts: [responded('c1')] },
+        { role: 'user', parts: [{ type: 'text', text: '补充' }] }
+      ])
+    ).toBe(false)
+    expect(canResumeAfterApproval([])).toBe(false)
+  })
+
+  it('只看最后一个 step-start 之后的最后一步（更早的回应不算数）', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          responded('c1'),
+          { type: 'step-start' },
+          { type: 'tool-read', toolCallId: 'r1', state: 'input-available' }
+        ])
+      )
+    ).toBe(false)
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          { type: 'step-start' },
+          { type: 'tool-read', toolCallId: 'r0', state: 'output-available', output: 'x' },
+          responded('c1')
+        ])
+      )
+    ).toBe(true)
+  })
+
+  it('preliminary 的 output 不算收束（照抄内置判定）', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          responded('c1'),
+          {
+            type: 'tool-read',
+            toolCallId: 'r1',
+            state: 'output-available',
+            preliminary: true,
+            output: {}
+          }
+        ])
+      )
+    ).toBe(false)
+  })
+
+  it('dynamic-tool 形态也认；被拒绝（output-denied）算收束', () => {
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          {
+            type: 'dynamic-tool',
+            toolName: 'mcp__fs__write',
+            toolCallId: 'm1',
+            state: 'output-denied'
+          },
+          responded('c1')
+        ])
+      )
+    ).toBe(true)
   })
 })

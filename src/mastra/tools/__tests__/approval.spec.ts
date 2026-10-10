@@ -21,6 +21,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { startAgentServer, type AgentServerHandle } from '../../../main/agent/service'
 import { KYCLAW_AGENT_ID } from '../../agents/kyclaw'
 import { threadMemoryBody } from '../../../shared/threads'
+import type { Project } from '../../../shared/projects'
 import type { Workspace } from '../../../shared/settings'
 
 const USAGE = {
@@ -45,14 +46,21 @@ function textScript(text: string): StreamPart[] {
 }
 
 function toolCallScript(toolCallId: string, toolName: string, input: unknown): StreamPart[] {
-  const json = JSON.stringify(input)
   return [
     { type: 'stream-start', warnings: [] },
+    ...toolCallChunks(toolCallId, toolName, input),
+    { type: 'finish', finishReason: FINISH_TOOLS, usage: USAGE }
+  ]
+}
+
+/** 一次工具调用的 chunk 段（不含 stream-start / finish，供"同一步多个调用"拼装） */
+function toolCallChunks(toolCallId: string, toolName: string, input: unknown): StreamPart[] {
+  const json = JSON.stringify(input)
+  return [
     { type: 'tool-input-start', id: toolCallId, toolName },
     { type: 'tool-input-delta', id: toolCallId, delta: json },
     { type: 'tool-input-end', id: toolCallId },
-    { type: 'tool-call', toolCallId, toolName, input: json },
-    { type: 'finish', finishReason: FINISH_TOOLS, usage: USAGE }
+    { type: 'tool-call', toolCallId, toolName, input: json }
   ]
 }
 
@@ -69,6 +77,8 @@ function sseParts(body: string): Array<Record<string, unknown>> {
 let dir: string
 let workspace: string
 let workspaces: Workspace[]
+/** T18：项目清单（测试里可变；映射写入走真路由 /api/projects/mappings） */
+const projects: Project[] = []
 let server: AgentServerHandle
 const scripts: Array<() => StreamPart[]> = []
 
@@ -140,7 +150,8 @@ beforeAll(async () => {
   server = await startAgentServer({
     dataDir: dir,
     model,
-    workspaces: () => workspaces
+    workspaces: () => workspaces,
+    projects: () => projects
   })
 }, 60_000)
 
@@ -262,5 +273,86 @@ describe('审批接线：不该弹的都不弹', () => {
     expect(error).toBeDefined()
     expect(String(error?.errorText)).toContain('授权工作区')
     expect(existsSync(outside)).toBe(false)
+  }, 30_000)
+})
+
+describe('项目会话续跑（T18 复核 minor②）：项目里写 → 审批决策 → 文件落项目目录', () => {
+  it('同一步 [记忆工具 + 待审批写]：批准回灌后续跑、notes.md 落在项目目录（不是数据目录）', async () => {
+    const projectPath = realpathSync.native(mkdtempSync(join(dir, 'project-')))
+    projects.push({
+      id: 'p-notes',
+      name: 'notes 项目',
+      path: projectPath,
+      createdAt: '2026-10-11T00:00:00.000Z'
+    })
+    workspaces.push({ path: projectPath, mode: 'ask' })
+    try {
+      // 会话 → 项目映射：走渲染端新建会话时写的那条真路由
+      const mapping = await fetch(`${server.baseUrl}/api/projects/mappings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${server.token}` },
+        body: JSON.stringify({ threadId: 'thread-project', projectId: 'p-notes' })
+      })
+      expect(mapping.status).toBe(200)
+
+      scripts.length = 0
+      // 同一步两个调用：Mastra 记忆工具（服务端执行、UI 里停在 input-available）+ 待审批的项目写
+      scripts.push(() => [
+        { type: 'stream-start', warnings: [] },
+        ...toolCallChunks('call-wm', 'updateWorkingMemory', { memory: '# 用户信息\n- 偏好：简短' }),
+        ...toolCallChunks('call-w', 'write', { path: 'notes.md', content: '项目里的笔记' }),
+        { type: 'finish', finishReason: FINISH_TOOLS, usage: USAGE }
+      ])
+      scripts.push(() => textScript('好，处理完了。'))
+
+      const user = {
+        id: 'u-p',
+        role: 'user',
+        parts: [{ type: 'text', text: '记住我的偏好，然后在项目里写个 notes.md' }]
+      }
+      const first = sseParts(await chat([user], 'thread-project'))
+      const approval = first.find((part) => part.type === 'tool-approval-request')
+      expect(approval?.toolCallId).toBe('call-w')
+      // 决策前不落盘
+      expect(existsSync(join(projectPath, 'notes.md'))).toBe(false)
+
+      // 决策后渲染端（useChat）回灌的那条助手消息：记忆 part 原样（永远停在 input-available）
+      // + 写 part approval-responded —— 与 approval-flow.spec 里 mock transport 复现的形状一致。
+      const messageId = first.find((part) => part.type === 'start')?.messageId
+      const assistant = {
+        id: messageId,
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-updateWorkingMemory',
+            toolCallId: 'call-wm',
+            state: 'input-available',
+            input: { memory: '# 用户信息\n- 偏好：简短' }
+          },
+          {
+            type: 'tool-write',
+            toolCallId: 'call-w',
+            state: 'approval-responded',
+            input: { path: 'notes.md', content: '项目里的笔记' },
+            approval: { id: approval?.approvalId, approved: true }
+          }
+        ]
+      }
+      const second = sseParts(await chat([user, assistant], 'thread-project'))
+
+      // 续跑：写工具执行、文件落**项目目录**（会话根用的是项目路径；没映射会落到别处）
+      expect(
+        second.some((part) => part.type === 'tool-output-available' && part.toolCallId === 'call-w')
+      ).toBe(true)
+      expect(readFileSync(join(projectPath, 'notes.md'), 'utf8')).toBe('项目里的笔记')
+      expect(existsSync(join(dir, 'notes.md'))).toBe(false)
+      expect(second.filter((part) => part.type === 'text-delta').map((part) => part.delta)).toEqual(
+        ['好，处理完了。']
+      )
+    } finally {
+      const index = workspaces.findIndex((candidate) => candidate.path === projectPath)
+      if (index !== -1) workspaces.splice(index, 1)
+      projects.length = 0
+    }
   }, 30_000)
 })

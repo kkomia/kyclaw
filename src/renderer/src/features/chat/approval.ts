@@ -98,6 +98,79 @@ export function hasPendingApproval(message: { parts?: unknown } | undefined): bo
 }
 
 /**
+ * 审批续跑的就绪判定（替代 AI SDK 的 `lastAssistantMessageIsCompleteWithApprovalResponses`）。
+ *
+ * 规则与 AI SDK 内置那份逐字对齐：只看**最后一条助手消息**、只从最后一个 `step-start` 切**最后一步**、
+ * 要求这一步里**至少一条 approval-responded**、且每个工具 part 都已收束（output-available 非
+ * preliminary / output-error / output-denied / approval-responded）。
+ *
+ * 与内置判定的唯一差别：**先滤掉两类"永远不会在 UI 消息里收束"的 part**——
+ *   1. `providerExecuted`：提供方执行的工具，结果不进 UI 消息，客户端本来就不该等它；
+ *   2. Mastra 记忆工具（`updateWorkingMemory`）：服务端执行完把结果吞进记忆，UI part 永远
+ *      停在 `input-available`。同一步里模型既写记忆又发待审批写工具时，内置判定会因此恒 false，
+ *      用户做完决策不会自动续跑（T18 复核 concern② 实测）。
+ * 滤完没有任何可等待的调用 → false：没有"该续跑的审批"，不替用户往前跑。
+ */
+const MEMORY_TOOL_NAMES = new Set(['updateWorkingMemory'])
+
+interface ResumePartLike {
+  type?: unknown
+  state?: unknown
+  toolName?: unknown
+  providerExecuted?: unknown
+  preliminary?: unknown
+}
+
+function isToolCallPart(part: { type?: unknown }): boolean {
+  if (part.type === 'dynamic-tool') return true
+  return typeof part.type === 'string' && part.type.startsWith('tool-')
+}
+
+function toolNameOfPart(part: ResumePartLike): string | null {
+  if (typeof part.toolName === 'string' && part.toolName !== '') return part.toolName
+  if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
+    return part.type.slice('tool-'.length)
+  }
+  return null
+}
+
+export function canResumeAfterApproval(
+  messages: ReadonlyArray<{ role?: unknown; parts?: unknown }>
+): boolean {
+  const message = messages[messages.length - 1]
+  if (message === undefined || message.role !== 'assistant') return false
+  const parts: ResumePartLike[] = Array.isArray(message.parts)
+    ? (message.parts as ResumePartLike[])
+    : []
+
+  let lastStepStartIndex = -1
+  parts.forEach((part, index) => {
+    if (part.type === 'step-start') lastStepStartIndex = index
+  })
+
+  const toolParts = parts
+    .slice(lastStepStartIndex + 1)
+    .filter(isToolCallPart)
+    .filter((part) => part.providerExecuted !== true)
+    .filter((part) => {
+      const name = toolNameOfPart(part)
+      return name === null || !MEMORY_TOOL_NAMES.has(name)
+    })
+  if (toolParts.length === 0) return false
+
+  const hasResponded = toolParts.some((part) => part.state === 'approval-responded')
+  if (!hasResponded) return false
+
+  return toolParts.every(
+    (part) =>
+      (part.state === 'output-available' && part.preliminary !== true) ||
+      part.state === 'output-error' ||
+      part.state === 'output-denied' ||
+      part.state === 'approval-responded'
+  )
+}
+
+/**
  * 这次调用落在哪个工作区（渲染端口径，用于审批记忆粒度）：
  *   - 绝对路径（含盘符 / 根路径 / UNC）：按前缀找那个包含它的工作区；找不到回 null；
  *   - 相对路径：**第一个工作区** —— 与服务的 resolveTarget 同一顺序（相对路径在任何
