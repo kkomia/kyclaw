@@ -161,3 +161,85 @@ describe('Menu', () => {
     expect(screen.getByRole('menu')).toBeInTheDocument()
   })
 })
+
+describe('Menu · 子菜单（round 7）', () => {
+  const submenu: MenuEntry[] = [
+    { id: 'file', label: '添加文件', testId: 'menu-add-file' },
+    { id: 'sep', type: 'separator' },
+    {
+      id: 'skills',
+      type: 'submenu',
+      label: '引用技能',
+      testId: 'menu-ref-skills',
+      items: [
+        { id: 'read', label: '读取文件', testId: 'menu-ref-read' },
+        { id: 'write', label: '写入文件', testId: 'menu-ref-write' }
+      ]
+    }
+  ]
+
+  function renderSubmenu(onSelect = vi.fn()): { onSelect: typeof onSelect } {
+    render(
+      <Menu
+        trigger={<Button variant="ghost">菜单</Button>}
+        items={submenu.map((entry) =>
+          entry.type === 'separator'
+            ? entry
+            : entry.type === 'submenu'
+              ? { ...entry, items: entry.items.map((item) => ({ ...item, onSelect })) }
+              : { ...entry, onSelect }
+        )}
+      />
+    )
+    return { onSelect }
+  }
+
+  it('子菜单触发器有 menu 语义与展开箭头；ArrowRight 展开、子项可选中', async () => {
+    const { onSelect } = renderSubmenu()
+    fireEvent.keyDown(screen.getByRole('button', { name: '菜单' }), { key: 'ArrowDown' })
+
+    const skills = screen.getByTestId('menu-ref-skills')
+    expect(skills).toHaveAttribute('aria-haspopup', 'menu')
+    expect(skills.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+
+    skills.focus()
+    fireEvent.keyDown(skills, { key: 'ArrowRight' })
+    await tick()
+
+    const read = screen.getByTestId('menu-ref-read')
+    expect(read).toBeInTheDocument()
+    read.focus()
+    fireEvent.keyDown(read, { key: 'Enter' })
+
+    expect(onSelect).toHaveBeenCalledWith('read')
+  })
+
+  it('子菜单条目为空 → 由调用方给一条禁用项，且不可选中', async () => {
+    const onSelect = vi.fn()
+    render(
+      <Menu
+        trigger={<Button variant="ghost">菜单</Button>}
+        items={[
+          {
+            id: 'plugins',
+            type: 'submenu',
+            label: '引用插件',
+            testId: 'menu-ref-plugins',
+            items: [{ id: 'empty', label: '没有已启用的插件', disabled: true, onSelect }]
+          }
+        ]}
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('button', { name: '菜单' }), { key: 'ArrowDown' })
+
+    const plugins = screen.getByTestId('menu-ref-plugins')
+    plugins.focus()
+    fireEvent.keyDown(plugins, { key: 'ArrowRight' })
+    await tick()
+
+    const item = screen.getByRole('menuitem', { name: '没有已启用的插件' })
+    expect(item).toHaveAttribute('data-disabled')
+    fireEvent.keyDown(item, { key: 'Enter' })
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+})

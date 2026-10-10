@@ -395,6 +395,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
       )}
       <div className="shrink-0 px-4 pt-4 pb-6">
         <Composer
+          threadId={threadId}
           busy={busy}
           queuedCount={queuedCount}
           onSend={submit}

@@ -1,11 +1,12 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { ChevronRight } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 import { cn } from './cn'
 import { OVERLAY_SURFACE_CLASS } from './surface'
 
 export interface MenuActionItem {
   id: string
-  /** 不写就是普通条目；'separator' 的分隔条目见 MenuSeparatorItem */
+  /** 不写就是普通条目；'separator' 的分隔条目见 MenuSeparatorItem，'submenu' 见 MenuSubmenuItem */
   type?: 'item'
   label: ReactNode
   icon?: ReactNode
@@ -24,7 +25,18 @@ export interface MenuSeparatorItem {
   type: 'separator'
 }
 
-export type MenuEntry = MenuActionItem | MenuSeparatorItem
+/** 子菜单条目（round 7）：一层就够——子菜单里不再嵌子菜单 */
+export interface MenuSubmenuItem {
+  id: string
+  type: 'submenu'
+  label: ReactNode
+  icon?: ReactNode
+  disabled?: boolean
+  testId?: string
+  items: Array<MenuActionItem | MenuSeparatorItem>
+}
+
+export type MenuEntry = MenuActionItem | MenuSeparatorItem | MenuSubmenuItem
 
 export interface MenuProps {
   /** 触发元素：单元素，套 Radix 的 asChild（用我们的 Button / IconButton 即可） */
@@ -37,10 +49,78 @@ export interface MenuProps {
   className?: string
 }
 
+/** 条目行（普通条目与子菜单触发器共用；键盘高亮只铺填充，不叠全局焦点环） */
+const MENU_ITEM_CLASS =
+  'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled) focus-visible:shadow-none'
+
+function itemContent(icon: ReactNode | undefined, label: ReactNode): React.JSX.Element {
+  return (
+    <>
+      {icon === undefined ? null : (
+        <span aria-hidden="true" className="size-(--icon-size-md) shrink-0 [&>svg]:size-full">
+          {icon}
+        </span>
+      )}
+      <span className="truncate">{label}</span>
+    </>
+  )
+}
+
+function actionItem(entry: MenuActionItem): React.JSX.Element {
+  return (
+    <DropdownMenu.Item
+      key={entry.id}
+      data-testid={entry.testId}
+      disabled={entry.disabled}
+      aria-current={entry.selected === true ? 'page' : undefined}
+      onSelect={() => entry.onSelect?.(entry.id)}
+      className={cn(
+        MENU_ITEM_CLASS,
+        entry.danger
+          ? 'text-danger data-[highlighted]:bg-danger-bg'
+          : 'data-[highlighted]:bg-hover',
+        entry.selected === true && 'bg-selected'
+      )}
+    >
+      {itemContent(entry.icon, entry.label)}
+    </DropdownMenu.Item>
+  )
+}
+
+function submenuItem(entry: MenuSubmenuItem): React.JSX.Element {
+  return (
+    <DropdownMenu.Sub key={entry.id}>
+      <DropdownMenu.SubTrigger
+        data-testid={entry.testId}
+        disabled={entry.disabled}
+        className={cn(MENU_ITEM_CLASS, 'data-[highlighted]:bg-hover data-[state=open]:bg-hover')}
+      >
+        {itemContent(entry.icon, entry.label)}
+        <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-ink-tertiary" />
+      </DropdownMenu.SubTrigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.SubContent
+          sideOffset={4}
+          className={cn(OVERLAY_SURFACE_CLASS, 'p-(--menu-pad)')}
+        >
+          {entry.items.map((item) =>
+            item.type === 'separator' ? (
+              <DropdownMenu.Separator key={item.id} className="my-1 -mx-2 h-px bg-hairline" />
+            ) : (
+              actionItem(item)
+            )
+          )}
+        </DropdownMenu.SubContent>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Sub>
+  )
+}
+
 /**
  * 下拉菜单（UI 参考 §7 的菜单配方）：底 Bg-Tertiary、**无遮罩**、条目高 36、面板内边距 8、
  * 面板圆角 ≈20、条目 hover 用 Fills-F1、条目圆角 10。
- * 键盘：ArrowUp/Down 走条目、Enter 选中、Esc 关闭并还焦点——都由 Radix 提供。
+ * 键盘：ArrowUp/Down 走条目、Enter 选中、Esc 关闭并还焦点——都由 Radix 提供；
+ * 子菜单（round 7）走 Radix 的 Sub：ArrowRight 展开、ArrowLeft 收回。
  * 焦点指示（R2 round 5，用户实拍 #7）：键盘走到哪条**只铺填充**（data-[highlighted]:bg-hover），
  * 不再叠全局焦点环（focus-visible:shadow-none）——填充已经是可见指示，墨色内环正是用户点名的"黑色框线"。
  */
@@ -68,33 +148,8 @@ export function Menu({
                 <DropdownMenu.Separator key={entry.id} className="my-1 -mx-2 h-px bg-hairline" />
               )
             }
-
-            return (
-              <DropdownMenu.Item
-                key={entry.id}
-                data-testid={entry.testId}
-                disabled={entry.disabled}
-                aria-current={entry.selected === true ? 'page' : undefined}
-                onSelect={() => entry.onSelect?.(entry.id)}
-                className={cn(
-                  'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled) focus-visible:shadow-none',
-                  entry.danger
-                    ? 'text-danger data-[highlighted]:bg-danger-bg'
-                    : 'data-[highlighted]:bg-hover',
-                  entry.selected === true && 'bg-selected'
-                )}
-              >
-                {entry.icon === undefined ? null : (
-                  <span
-                    aria-hidden="true"
-                    className="size-(--icon-size-md) shrink-0 [&>svg]:size-full"
-                  >
-                    {entry.icon}
-                  </span>
-                )}
-                <span className="truncate">{entry.label}</span>
-              </DropdownMenu.Item>
-            )
+            if (entry.type === 'submenu') return submenuItem(entry)
+            return actionItem(entry)
           })}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
