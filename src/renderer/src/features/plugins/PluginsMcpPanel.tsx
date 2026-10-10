@@ -289,7 +289,8 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
                 <Switch
                   checked={server.enabled}
                   disabled={busy !== undefined}
-                  label={server.enabled ? '停用' : '启用'}
+                  // 可访问名稳定（round 7 台账 minor②）：不随开关状态翻转，状态由 aria-checked 表达
+                  label={`启用 ${server.name}`}
                   data-testid={`mcp-server-${index}-enable`}
                   onCheckedChange={(next) =>
                     void apply(server.id, (candidate) => ({ ...candidate, enabled: next }))

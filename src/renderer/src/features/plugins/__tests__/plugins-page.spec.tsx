@@ -37,10 +37,17 @@ interface MockApi {
   state: { servers: McpServerConfig[] }
   testResults: Map<string, McpTestResult>
   puts: Array<McpServerConfig[]>
+  /** 请求发生顺序（round 7 边界用例：钉"dirty 先存再测"的次序） */
+  calls: string[]
 }
 
 function installMockApi(initial: McpServerConfig[]): MockApi {
-  const api: MockApi = { state: { servers: [...initial] }, testResults: new Map(), puts: [] }
+  const api: MockApi = {
+    state: { servers: [...initial] },
+    testResults: new Map(),
+    puts: [],
+    calls: []
+  }
 
   vi.stubGlobal(
     'fetch',
@@ -49,9 +56,11 @@ function installMockApi(initial: McpServerConfig[]): MockApi {
       const method = init?.method ?? 'GET'
 
       if (path === '/api/mcp/servers' && method === 'GET') {
+        api.calls.push('GET')
         return jsonResponse({ servers: api.state.servers })
       }
       if (path === '/api/mcp/servers' && method === 'PUT') {
+        api.calls.push('PUT')
         const body = JSON.parse(String(init?.body)) as { servers: McpServerConfig[] }
         const problems = mcpServersProblems(body.servers)
         if (problems.length > 0) {
@@ -63,6 +72,7 @@ function installMockApi(initial: McpServerConfig[]): MockApi {
       }
       const test = /^\/api\/mcp\/servers\/(.+)\/test$/.exec(path)
       if (test && method === 'POST') {
+        api.calls.push('POST-test')
         const id = decodeURIComponent(test[1])
         const result =
           api.testResults.get(id) ??
@@ -174,11 +184,11 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
     expect(await screen.findByTestId('mcp-server-0')).toHaveTextContent('回显服务')
     expect(screen.getByTestId('mcp-server-0')).toHaveTextContent('stdio')
     expect(screen.getByTestId('mcp-server-0-enable')).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByTestId('mcp-server-0-enable')).toHaveAccessibleName('停用')
+    expect(screen.getByTestId('mcp-server-0-enable')).toHaveAccessibleName('启用 回显服务')
     expect(screen.getByTestId('mcp-server-1')).toHaveTextContent('远程')
     expect(screen.getByTestId('mcp-server-1')).toHaveTextContent('HTTP')
     expect(screen.getByTestId('mcp-server-1-enable')).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByTestId('mcp-server-1-enable')).toHaveAccessibleName('启用')
+    expect(screen.getByTestId('mcp-server-1-enable')).toHaveAccessibleName('启用 远程')
   })
 
   it('开关启停：拨一下 → 落盘 enabled=false；再拨回来 → true（单开关，不再是两个按钮）', async () => {
@@ -274,5 +284,57 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
 
     await waitFor(() => expect(api.state.servers.map((server) => server.id)).toEqual(['remote']))
     expect(await screen.findByTestId('mcp-server-0')).toHaveTextContent('远程')
+  })
+})
+
+describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行为）', () => {
+  it('读不到列表：页面把原因说出来（mcp-page-error），不假装空列表', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('连不上本地服务')
+      })
+    )
+    render(<PluginsPage />)
+    openMcpTab()
+
+    expect(await screen.findByTestId('mcp-page-error')).toHaveTextContent('连不上本地服务')
+    // 不假装成功：没有渲染任何 server 行
+    expect(screen.queryByTestId('mcp-server-0')).not.toBeInTheDocument()
+  })
+
+  it('dirty 先存再测：对话框里改了没保存的字段，点「测试连接」先落盘再真连（顺序 PUT → 测试）', async () => {
+    const api = installMockApi([serverConfig({ enabled: false })])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    openEditor()
+    fireEvent.change(screen.getByTestId('mcp-server-0-name'), { target: { value: '改过的名字' } })
+    fireEvent.click(screen.getByTestId('mcp-edit-cancel'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    api.calls.length = 0
+    fireEvent.click(screen.getByTestId('mcp-server-0-test'))
+    expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent('连接正常')
+
+    expect(api.calls).toEqual(['PUT', 'POST-test'])
+    expect(api.state.servers[0].name).toBe('改过的名字')
+  })
+
+  it('测试连接失败（结果 ok:false）：行内显示失败原因，工具清单不出', async () => {
+    const api = installMockApi([serverConfig({ enabled: false })])
+    api.testResults.set('echo', { ok: false, kind: 'spawn', message: '启动命令找不到' })
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    fireEvent.click(screen.getByTestId('mcp-server-0-test'))
+
+    expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent(
+      '连接失败：启动命令找不到'
+    )
+    // 失败是"测试结果"不是"保存错误"：行内错误位不亮
+    expect(screen.queryByTestId('mcp-server-0-error')).not.toBeInTheDocument()
   })
 })
