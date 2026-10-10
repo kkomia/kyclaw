@@ -102,13 +102,22 @@ async function listenOn(
   return { server, port: address.port }
 }
 
-/** 静默收尾：收不掉只记日志（不能盖住调用方真正关心的那个错误） */
-async function teardownQuietly(mastra: Mastra, storage: LibSQLStore): Promise<void> {
+/**
+ * 静默收尾：收不掉只记日志（不能盖住调用方真正关心的那个错误）。
+ * storage 是句柄的真正持有者 —— 无论 Mastra 收尾成不成功都要关（try/finally，T6 随修）。
+ * 导出只为一件事：失败路径没法用真句柄造（shutdown 抛错），单测拿假件打这条顺序。
+ */
+export async function teardownQuietly(mastra: Mastra, storage: LibSQLStore): Promise<void> {
   try {
     await mastra.shutdown()
-    await storage.close()
   } catch (error) {
-    console.warn('[kyclaw] agent 服务收尾失败', error)
+    console.warn('[kyclaw] agent 服务收尾失败（Mastra）', error)
+  } finally {
+    try {
+      await storage.close()
+    } catch (error) {
+      console.warn('[kyclaw] agent 服务收尾失败（storage）', error)
+    }
   }
 }
 
@@ -183,14 +192,19 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     stop: async () => {
       if (stopped) return
       stopped = true
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()))
-      })
       try {
-        await mastra.shutdown()
+        // 先强制收掉已建立的连接再关监听：SSE 是长连接，等它自然结束会把 stop() 拖死（T6 随修）
+        if ('closeAllConnections' in server) server.closeAllConnections()
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()))
+        })
       } finally {
-        // storage 是句柄的真正持有者，无论 Mastra 收尾成不成功都要关
-        await storage.close()
+        try {
+          await mastra.shutdown()
+        } finally {
+          // storage 是句柄的真正持有者：前面任何一步失败都不能跳过它
+          await storage.close()
+        }
       }
     }
   }

@@ -6,6 +6,7 @@
 @import 'tailwindcss';
 @import './tokens/kimi-tokens.css';
 @import './tokens/semantic.css';
+@import './markdown.css';
 
 /* dark: 变体对齐 html[data-theme='dark']（lib/theme.ts 写属性）。
    不用 .dark 类、也不用 prefers-color-scheme 媒体查询：换主题的机制只有一处。 */

@@ -1,0 +1,221 @@
+/**
+ * 对话内容层：助手的 markdown 正文、代码块（Shiki）与流式光标。
+ * 由 styles/tailwind.css 引入（样式唯一入口）。
+ *
+ * 配色全部来自 token（语义层/原样层），明暗随 html[data-theme] 自动切：
+ *   - Shiki 用 css-variables 主题（不写死配色）：高亮输出的是 var(--shiki-*)，
+ *     这里把它们映到既有 --Syntax-* 语法色家族（T2 已就位）；
+ *   - 正文只消费字阶（markdown-* 八档）与间距/圆角/动效工程阶梯。
+ * 边框纪律：正文里不用 border-left/right 画装饰（代码块/表格用整圈 hairline），
+ * 流式光标是"背景色画的细竖线"，不是边框 —— 渲染完不残留任何边线。
+ */
+
+:root {
+  /* Shiki css-variables 主题吐出的变量 → 原样层语法色。
+     css-variables 主题只给这些别名，映射按语义就近：
+     数字/布尔等字面量 → Literal（Kimi 的 Literal 就是这一档）；
+     函数名/变量 → Mark；参数 → Literal；字符串内插 → String。 */
+  --shiki-foreground: var(--text-primary);
+  --shiki-background: transparent;
+  --shiki-token-comment: var(--Syntax-Comment);
+  --shiki-token-keyword: var(--Syntax-Keyword);
+  --shiki-token-constant: var(--Syntax-Literal);
+  --shiki-token-function: var(--Syntax-Mark);
+  --shiki-token-parameter: var(--Syntax-Literal);
+  --shiki-token-string: var(--Syntax-String);
+  --shiki-token-string-expression: var(--Syntax-String);
+  --shiki-token-punctuation: var(--Syntax-Punctuation);
+  --shiki-token-link: var(--Syntax-String);
+}
+
+/* ===== markdown 正文 ===== */
+.markdown-body {
+  font-size: var(--markdown-B1_Content-font-size);
+  line-height: var(--markdown-B1_Content-line-height);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: var(--space-3) 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: var(--space-5) 0 var(--space-3);
+  font-weight: 600;
+}
+
+.markdown-body h1 {
+  font-size: var(--markdown-H1_Content-font-size);
+  line-height: var(--markdown-H1_Content-line-height);
+}
+
+.markdown-body h2 {
+  font-size: var(--markdown-H2_Content-font-size);
+  line-height: var(--markdown-H2_Content-line-height);
+}
+
+.markdown-body h3 {
+  font-size: var(--markdown-H3_Content-font-size);
+  line-height: var(--markdown-H3_Content-line-height);
+}
+
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--ui-B2-font-size);
+  line-height: var(--ui-B2-line-height);
+  font-weight: 600;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-6);
+}
+
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body ol {
+  list-style: decimal;
+}
+
+.markdown-body li {
+  margin: var(--space-1) 0;
+}
+
+.markdown-body a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body blockquote {
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-button-sm);
+  background-color: var(--fill-selected);
+  color: var(--text-secondary);
+}
+
+.markdown-body hr {
+  margin: var(--space-5) 0;
+  border: none;
+  border-top: var(--border-width-hairline) solid var(--border-hairline);
+}
+
+.markdown-body table {
+  margin: var(--space-3) 0;
+  border-collapse: collapse;
+  font-size: var(--markdown-B3_Content-font-size);
+  line-height: var(--markdown-B3_Content-line-height);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-width-hairline) solid var(--border-hairline);
+  text-align: left;
+}
+
+.markdown-body th {
+  background-color: var(--fill-selected);
+  font-weight: 600;
+}
+
+.markdown-body img {
+  max-width: 100%;
+}
+
+/* 行内 code（代码块里的 code 不落这条：它们都在 pre 里） */
+.markdown-body :not(pre) > code {
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-badge);
+  background-color: var(--fill-selected);
+  font-family: var(--font-mono);
+  font-size: var(--markdown-InlineCode-font-size);
+}
+
+/* ===== 代码块（CodeBlock.tsx） ===== */
+.code-block {
+  margin: var(--space-3) 0;
+  border: var(--border-width-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-panel);
+  background-color: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border-bottom: var(--border-width-hairline) solid var(--border-hairline);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--ui-C1-font-size);
+}
+
+.code-block-body {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--markdown-Codeblocks-font-size);
+  line-height: var(--markdown-Codeblocks-line-height);
+}
+
+.code-block-body pre {
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* ===== 流式光标（细竖线 + 呼吸；尊重 reduced-motion） ===== */
+.markdown-body[data-streaming='true'] > :last-child:not(.streaming-cursor)::after,
+.streaming-cursor {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background-color: currentColor;
+  animation: kyclaw-cursor-breathe var(--duration-loop-slow) ease-in-out infinite;
+}
+
+@keyframes kyclaw-cursor-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.15;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body[data-streaming='true'] > :last-child:not(.streaming-cursor)::after,
+  .streaming-cursor {
+    animation: none;
+    opacity: 0.6;
+  }
+}

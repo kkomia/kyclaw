@@ -1,0 +1,134 @@
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { describe, expect, it } from 'vitest'
+import type { UIMessage } from 'ai'
+import { ChatSession } from '@renderer/features/chat/ChatPage'
+import { MessageList } from '@renderer/features/chat/MessageList'
+import { createMockTransport } from './mock-transport'
+
+/**
+ * 消息流渲染（Step 1）：
+ *   - 纯渲染：user / assistant 两类消息与它们的 text part；
+ *   - 流式：mock transport 推三段文本增量 → 消息列逐步呈现（不碰网络）。
+ */
+function assistantWith(text: string): UIMessage {
+  return { id: 'a1', role: 'assistant', parts: [{ type: 'text', text }] }
+}
+
+function renderSession(control: ReturnType<typeof createMockTransport>): void {
+  render(
+    <MemoryRouter>
+      <ChatSession transport={control.transport} />
+    </MemoryRouter>
+  )
+}
+
+/** 在输入框里敲一句话并回车（真实交互路径，不越过 Composer 直接调 sendMessage） */
+function typeAndSend(text: string): void {
+  const input = screen.getByTestId('composer-input')
+  fireEvent.change(input, { target: { value: text } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+}
+
+describe('消息列渲染', () => {
+  it('用户消息与助手消息各自成条，文本 part 落在自己的条目里', () => {
+    render(
+      <MessageList
+        messages={[
+          { id: 'u1', role: 'user', parts: [{ type: 'text', text: '帮我看下这个文件' }] },
+          assistantWith('好的，先读一下。')
+        ]}
+        status="ready"
+      />
+    )
+
+    const list = screen.getByTestId('message-list')
+    expect(list).toHaveTextContent('帮我看下这个文件')
+    expect(list).toHaveTextContent('好的，先读一下。')
+
+    expect(screen.getByTestId('message-u1')).toHaveAttribute('data-role', 'user')
+    expect(screen.getByTestId('message-a1')).toHaveAttribute('data-role', 'assistant')
+  })
+
+  it('空会话给出空态提示（消息列本身仍在）', () => {
+    render(<MessageList messages={[]} status="ready" />)
+
+    expect(screen.getByTestId('message-list')).toBeInTheDocument()
+    expect(screen.getByTestId('message-list-empty')).toBeInTheDocument()
+  })
+})
+
+describe('滚动跟随', () => {
+  function withLayout(): HTMLElement {
+    const view = screen.getByTestId('message-list')
+    Object.defineProperty(view, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(view, 'clientHeight', { value: 400, configurable: true })
+    return view
+  }
+
+  const first: UIMessage = { id: 'u1', role: 'user', parts: [{ type: 'text', text: '问' }] }
+  const second: UIMessage = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: '答' }] }
+
+  it('本来贴在底部：新内容到达（流式增量）就跟着滚到底', () => {
+    const { rerender } = render(<MessageList messages={[first]} status="streaming" />)
+    const view = withLayout()
+    view.scrollTop = 600 // 1000 - 600 - 400 = 0 → 贴底
+    fireEvent.scroll(view)
+
+    rerender(<MessageList messages={[first, second]} status="streaming" />)
+
+    expect(view.scrollTop).toBe(1000)
+  })
+
+  it('用户向上翻历史时不抢滚动（离底超过阈值就不动了）', () => {
+    const { rerender } = render(<MessageList messages={[first]} status="streaming" />)
+    const view = withLayout()
+    view.scrollTop = 100 // 离底 500 → 用户在看历史
+    fireEvent.scroll(view)
+
+    rerender(<MessageList messages={[first, second]} status="streaming" />)
+
+    expect(view.scrollTop).toBe(100)
+  })
+})
+
+describe('流式逐段呈现（mock transport）', () => {
+  it('三段文本增量按到达顺序上屏，最后拼成完整回复', async () => {
+    const control = createMockTransport()
+    renderSession(control)
+
+    await act(async () => {
+      typeAndSend('你好')
+    })
+
+    // 请求已发出：历史里只有刚发的这条用户消息（服务端无状态，多轮靠客户端全量 messages）
+    expect(control.requests).toHaveLength(1)
+    expect(control.requests[0].trigger).toBe('submit-message')
+    expect(control.requests[0].messages).toHaveLength(1)
+    expect(control.requests[0].messages[0]).toMatchObject({ role: 'user' })
+    expect(screen.getByTestId('message-list')).toHaveTextContent('你好')
+
+    await act(async () => {
+      control.push('（kyclaw 离线模式）')
+    })
+    const list = screen.getByTestId('message-list')
+    expect(list).toHaveTextContent('（kyclaw 离线模式）')
+    expect(list).not.toHaveTextContent('我是 kyclaw')
+
+    await act(async () => {
+      control.push('你好，')
+    })
+    expect(list).toHaveTextContent('（kyclaw 离线模式）你好，')
+    expect(list).not.toHaveTextContent('我是 kyclaw')
+
+    await act(async () => {
+      control.push('我是 kyclaw。')
+      control.finish()
+    })
+    expect(list).toHaveTextContent('（kyclaw 离线模式）你好，我是 kyclaw。')
+
+    // 流结束后回到可发送态
+    expect(screen.getByTestId('composer-send')).toBeInTheDocument()
+    expect(screen.queryByTestId('composer-stop')).not.toBeInTheDocument()
+  })
+})

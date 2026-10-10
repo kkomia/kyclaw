@@ -12,9 +12,14 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MOCK_REPLY_CHUNKS } from '../../../mastra/model'
-import { startAgentServer, type AgentServerHandle, type AgentServerOptions } from '../service'
+import {
+  startAgentServer,
+  teardownQuietly,
+  type AgentServerHandle,
+  type AgentServerOptions
+} from '../service'
 
 const AGENT_ID = 'kyclaw-agent'
 const CHAT_BODY = JSON.stringify({
@@ -146,5 +151,57 @@ describe('startAgentServer', () => {
     const second = await start({ port })
     expect(second.port).toBe(port)
     expect(second.token).not.toBe(first.token)
+  }, 60_000)
+
+  it('stop() 不被挂着的流式连接拖住：先 closeAllConnections，再关监听（T6 随修）', async () => {
+    const { MockLanguageModelV4 } = await import('ai/test')
+    // 永不推数据、也不结束的流：等价于 T7 里"用户正看着的 SSE 长连接"（mock 模型本身瞬间结束，测不出来）
+    const stalling = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start() {
+            /* 挂着不动 */
+          }
+        })
+      })
+    })
+    const server = await start({ model: stalling as never })
+
+    const streaming = chat(server.baseUrl, {
+      headers: { authorization: `Bearer ${server.token}` }
+    })
+    // 响应头已回 = 请求真的挂在服务端的流上
+    const response = await streaming
+
+    const outcome = await Promise.race([
+      server.stop().then(() => 'stopped' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3000))
+    ])
+    expect(outcome).toBe('stopped')
+
+    // 连接被强制收掉：客户端读响应体拿到终止错误，而不是一直挂着
+    await expect(response.text()).rejects.toThrow()
+  }, 60_000)
+
+  it('teardownQuietly：Mastra shutdown 抛错时也要关掉 storage（try/finally），且不往外抛', async () => {
+    const calls: string[] = []
+    const mastra = {
+      shutdown: async (): Promise<void> => {
+        calls.push('shutdown')
+        throw new Error('shutdown 炸了')
+      }
+    }
+    const storage = {
+      close: async (): Promise<void> => {
+        calls.push('close')
+      }
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(teardownQuietly(mastra as never, storage as never)).resolves.toBeUndefined()
+
+    expect(calls).toEqual(['shutdown', 'close'])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   }, 60_000)
 })

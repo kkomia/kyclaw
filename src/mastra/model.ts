@@ -22,6 +22,14 @@ export const FORCE_MOCK_ENV = 'KYCLAW_FORCE_MOCK'
 /** 内置 mock 的 provider/model 标识（写进模型对象，链路上看得见） */
 export const MOCK_PROVIDER_NAME = 'kyclaw-mock'
 
+/**
+ * mock 的段间延迟（ms）。
+ * 原值 1ms 时整条回复在 ~40ms 内到齐，UI 侧一帧就渲染完 —— "流式"在真实窗口里不可观察，
+ * T16 E2E 的"停止按钮生效"也没法点。改 250ms：整条回复约 0.8s，逐段可见、依旧利落。
+ * （只影响离线 mock；配了 provider 就是真模型自己的节奏）
+ */
+export const MOCK_CHUNK_DELAY_MS = 250
+
 /** openai-compatible 的 provider 标识（BaseURL 之外还能一眼看出是哪个通道） */
 export const OPENAI_COMPATIBLE_PROVIDER_NAME = 'kyclaw-openai-compatible'
 
@@ -112,7 +120,7 @@ async function mockModel(): Promise<KyclawModel> {
           { type: 'text-end', id: 'mock-text' },
           { type: 'finish', finishReason, usage }
         ],
-        chunkDelayInMs: 1
+        chunkDelayInMs: MOCK_CHUNK_DELAY_MS
       })
     }),
     doGenerate: async () => ({

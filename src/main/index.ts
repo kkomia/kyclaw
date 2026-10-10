@@ -12,6 +12,10 @@ import { createTray } from './tray'
 import { showMainWindow } from './window'
 import type { AgentEndpoint } from '../shared/ipc'
 
+// R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
+// 必须在这里、在任何动态 import mastra 之前设置；main/index.ts 是应用最早的执行点。
+process.env.MASTRA_TELEMETRY_DISABLED = 'true'
+
 // 单实例：后起的实例不建窗口，直接把已运行的那个拉到前台（第二个实例自己退出）
 if (!app.requestSingleInstanceLock()) {
   app.quit()
