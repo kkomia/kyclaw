@@ -80,13 +80,19 @@ describe('消息列渲染', () => {
 
     const pills = screen.getAllByTestId('message-reference-pill')
     expect(pills.map((pill) => pill.textContent)).toEqual(['技能：整理笔记', '上下文：默认'])
-    // 复制/编辑读到的仍是原文（pill 只改变呈现，不改文本内容）
+    // round 21（图3）：chip = 图标 + 文本；「【引用】」前缀不进可见层（用户点名的问题）
+    for (const pill of pills) {
+      expect(pill.querySelector('svg')).not.toBeNull()
+      expect(pill).not.toHaveTextContent('【引用】')
+    }
     expect(screen.getByTestId('message-u1')).toHaveTextContent(
-      '用【引用】技能：整理笔记 与【引用】上下文：默认 来做'
+      '用技能：整理笔记 与上下文：默认 来做'
     )
+    expect(screen.getByTestId('message-u1')).not.toHaveTextContent('【引用】')
+    // 原文（含前缀）仍在消息数据里：编辑重发/复制路径读的是 message.parts，不受渲染影响
   })
 
-  it('旧「；」合并格式也画 pill（round 7-13 发出的消息不退化）', () => {
+  it('旧「；」合并格式也画 chip（round 7-13 发出的消息不退化；同段多引用并成一个 chip）', () => {
     render(
       <MessageList
         messages={[
@@ -101,7 +107,7 @@ describe('消息列渲染', () => {
     )
 
     const pills = screen.getAllByTestId('message-reference-pill')
-    expect(pills.map((pill) => pill.textContent)).toEqual(['技能：读写文件', '插件：回显服务'])
+    expect(pills.map((pill) => pill.textContent)).toEqual(['技能：读写文件；插件：回显服务'])
   })
 
   it('没有标记的用户消息：不渲染任何 pill（普通文本路径不变）', () => {

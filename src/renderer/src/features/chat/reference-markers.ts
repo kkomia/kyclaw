@@ -2,11 +2,13 @@
  * 引用标记（round 14）：`【引用】<kind>：<label>`（kind ∈ 技能 | 插件 | 上下文 | 文件）。
  *
  * 输入侧在**光标处内联插入**标记（用户口径："不要单独取顶格，会失去在输入文本中的位置"），
- * 发送后就是普通文本（模型看到的是原始标记，无额外协议）；气泡与输入框镜像层用**同一份解析**
- * 把标记画成内联 pill。旧版把多条引用以 `；` 并在一段里（round 7-13 的发送格式）——解析兼容，
- * 展示仍拆成多条。
+ * 发送后就是普通文本（模型看到的是原始标记，无额外协议）；气泡与输入框的 chip 层用**同一份解析**
+ * 把标记画成内联 chip（round 21：图3 风格——细描边圆角 + 图标 + `kind：label`，`【引用】` 前缀不进
+ * 可见层）。旧版把多条引用以 `；` 并在一段里（round 7-13 的发送格式）——解析兼容，展示仍拆成多条。
+ * 每段带 `start` / `raw`（round 21）：chip 的 × 删除按段精确替换；输入框覆盖层用 `raw` 做隐形占位，
+ * 让 chip 的盒宽**恰等于原文宽度**（盖住底层字形、不挪动后面的字）。
  *
- * label 以空白 / `；` / 文末为界：标记插入时自带尾随空格，光标后面继续打的正文不会被吞进 pill
+ * label 以空白 / `；` / 文末为界：标记插入时自带尾随空格，光标后面继续打的正文不会被吞进 chip
  * （代价：label 里含空格时尾段只按普通文本渲染，内容不变、复制不变）。
  */
 export const REFERENCE_KINDS = ['技能', '插件', '上下文', '文件'] as const
@@ -18,7 +20,15 @@ export interface ReferenceItem {
 }
 
 export type MessageSegment =
-  { kind: 'text'; text: string } | { kind: 'reference'; refs: ReferenceItem[] }
+  | { kind: 'text'; text: string }
+  | {
+      kind: 'reference'
+      refs: ReferenceItem[]
+      /** 段在原文里的起点（round 21：chip 的 × 删除要按段精确移除） */
+      start: number
+      /** 段的原文（含 `【引用】` 前缀；round 21：不透明覆盖层用它做隐形占位，chip 宽度 = 原文宽度） */
+      raw: string
+    }
 
 /** 一段标记 = 【引用】 前缀 + 一条或多条 `kind：label`（旧合并格式用 `；` 串联） */
 const MARKER =
@@ -35,7 +45,7 @@ export function parseReferenceMarkers(text: string): MessageSegment[] {
       const at = pair.indexOf('：')
       return { kind: pair.slice(0, at) as ReferenceKind, label: pair.slice(at + 1) }
     })
-    segments.push({ kind: 'reference', refs })
+    segments.push({ kind: 'reference', refs, start: index, raw: match[0] })
     cursor = index + match[0].length
   }
   if (cursor < text.length) segments.push({ kind: 'text', text: text.slice(cursor) })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowUp, Square, X } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
@@ -11,6 +11,7 @@ import type { ComposerNotice } from './ComposerControls'
 import { attachmentProblem, composeOutgoingText, readTextFile } from './composer-attachments'
 import type { PendingAttachment } from './composer-attachments'
 import { ComposerSuggest } from './ComposerSuggest'
+import { ReferenceChipInner } from './reference-chip'
 import {
   detectTrigger,
   fileRows,
@@ -43,7 +44,8 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 附件最小可用（round 7）：只收文本类、≤16KB，内容在发送时内联进消息文本（模型真正能读到；
  * file part 走 provider 看不到内容，实测见 composer-attachments.ts 头注），非文本/过大明确提示不收。
  *
- * 引用（round 14 起=光标处内联标记 + 镜像 pill）：`＋ → 引用…` 与 round 15 的建议浮窗同一条路 ——
+ * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
+ * 与 round 15 的建议浮窗同一条路 ——
  * 键入 `@`（词边界）浮出工作区文件、键入 `/` 浮出插件/技能（见 suggestion-model.ts 与
  * ComposerSuggest.tsx），选中都把触发段替换成 `【引用】<kind>：<label>` 标记。
  *
@@ -91,7 +93,7 @@ export function Composer({
   const [notice, setNotice] = useState<ComposerNotice | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  /** 镜像层（引用 pill 的底色）：与 textarea 同排版，随内容滚动 */
+  /** 引用覆盖层（chip 的盖层）：与 textarea 同排版，随内容滚动（round 21 起在 textarea 之上） */
   const mirrorRef = useRef<HTMLDivElement>(null)
   /** 插入标记后待落的光标位（渲染完再设 selection，避免用旧值越界） */
   const pendingCaret = useRef<number | null>(null)
@@ -249,6 +251,14 @@ export function Composer({
   /** 内部 notice（附件/权限）优先；没有时显示上层给的压缩结果 notice（round 19） */
   const shownNotice = notice ?? externalNotice
 
+  /** round 21：× 删掉一段引用 chip（按段的 [start, start+raw.length) 精确替换；光标落在段起点） */
+  const removeReferenceSegment = (segment: { start: number; raw: string }): void => {
+    const start = Math.max(0, Math.min(segment.start, draft.length))
+    const end = Math.min(draft.length, start + segment.raw.length)
+    pendingCaret.current = start
+    setDraft(draft.slice(0, start) + draft.slice(end))
+  }
+
   const submit = (): void => {
     if (!canSend) return
     onSend(composeOutgoingText({ text: draft, attachments }))
@@ -333,39 +343,51 @@ export function Composer({
 
       {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
           焦点指示由卡片给（focus-ring-container）：输入框自己没有圆角，自己画环就是直角方框。
-          引用标记的 pill 底色由**镜像层**画（round 14）：同字体/内边距/换行、文字透明、
-          pointer-events-none，压在 textarea 底下；textarea 自己写着正常墨色的文字。
-          镜像里的 pill 不加内边距，靠 box-shadow 外扩 2px 出圆角底——排版与 textarea 逐字对齐，
-          观感变化只发生在背景层，不参与布局。 */}
+          round 21（图3 回归）：引用标记由**不透明覆盖层**画成 chip（细描边圆角 + 图标 +
+          `kind：label`，`【引用】` 前缀不进可见层）。覆盖层在 textarea **之上**（z-20），
+          本体 pointer-events-none / aria-hidden（只有 chip 上的 × 放行指针）；每段 chip 先放一个
+          「隐形原文占位」（invisible + whitespace-pre）撑出**与原文等宽**的盒，视觉 chip 再绝对
+          铺满这个盒——于是底层 textarea 的原始字形（含前缀）被完整盖住，后面的字一个也不挪位。
+          代价（如实）：光标落在 chip 区域内不可见（chip 外正常）；标记长过一行时该行与 textarea
+          的折行点可能差半行（隐形占位整段不内折）。chip 底用 **bg-secondary（不透明）**——
+          Fills 系是半透明填充（5% 黑），当"盖字形"的底会透出原文。textarea 关掉拼写检查
+          （spellCheck={false}，图1 的红波浪）。 */}
       <div className="relative">
         <div
           ref={mirrorRef}
           aria-hidden="true"
           data-testid="composer-mirror"
-          className="pointer-events-none absolute inset-0 overflow-hidden text-transparent"
+          className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-transparent"
         >
           <div className="w-full px-4 py-3 text-b1 break-words whitespace-pre-wrap">
             {parseReferenceMarkers(draft).map((segment, index) =>
               segment.kind === 'text' ? (
                 <span key={index}>{segment.text}</span>
               ) : (
-                <span key={index}>
-                  <span>【引用】</span>
-                  {segment.refs.map((ref, refIndex) => (
-                    <span key={refIndex}>
-                      {refIndex > 0 ? '；' : ''}
-                      <span
-                        data-testid="composer-mirror-pill"
-                        className="rounded-button-sm"
-                        style={{
-                          backgroundColor: 'var(--fill-selected)',
-                          boxShadow: '0 0 0 2px var(--fill-selected)'
-                        }}
-                      >
-                        {`${ref.kind}：${ref.label}`}
-                      </span>
-                    </span>
-                  ))}
+                <span key={index} className="relative inline-block align-baseline">
+                  {/* 隐形原文占位：chip 的盒宽 = 原文宽度（含前缀），chip 不出圆角、后面的字不挪位 */}
+                  <span className="invisible whitespace-pre">{segment.raw}</span>
+                  <span
+                    data-testid="composer-ref-chip"
+                    className="absolute inset-0 flex items-center gap-1 overflow-hidden rounded-pill border-(length:--hairline-width) border-hairline bg-secondary px-1.5 text-ink"
+                  >
+                    <ReferenceChipInner
+                      refs={segment.refs}
+                      trailing={
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          aria-hidden="true"
+                          data-testid="composer-ref-remove"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => removeReferenceSegment(segment)}
+                          className="pointer-events-auto ml-auto inline-flex size-4 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+                        >
+                          <X aria-hidden="true" className="size-3" />
+                        </button>
+                      }
+                    />
+                  </span>
                 </span>
               )
             )}
@@ -376,6 +398,7 @@ export function Composer({
           data-testid="composer-input"
           aria-label="输入消息"
           rows={1}
+          spellCheck={false}
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value)

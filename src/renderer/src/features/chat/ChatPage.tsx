@@ -40,16 +40,20 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-/** 对话页的外框：限宽居中列（.content-column，见 styles/tailwind.css）——
- *  活动会话的整列（消息区 + 发送框）都必须挂在这一层里，否则会横向铺满主列被覆盖层侧栏裁掉。
- *  routes.spec 认的也是这一层。 */
+/** 对话页的外框（round 21 拆两层）：
+ *  外层 = **聊天区整幅**（相对定位基准：消息导览轨贴它的右缘 8px，图2 口径）；
+ *  内层 = **限宽内容列**（.content-column，P0 回归口径不变：活动会话的整列——消息区 + 发送框——
+ *  都挂在它里面，否则会横向铺满主列被覆盖层侧栏裁掉；routes.spec / chat-flow.spec 认的也是它）。
+ *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 限宽列。 */
 function ChatFrame({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <section
       data-testid="chat-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col"
+      className="animate-page-in relative flex min-h-0 flex-1 flex-col"
     >
-      {children}
+      <div data-testid="chat-column" className="content-column flex min-h-0 flex-1 flex-col">
+        {children}
+      </div>
     </section>
   )
 }

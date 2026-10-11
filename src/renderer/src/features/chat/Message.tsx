@@ -9,6 +9,7 @@ import { TextPart } from './parts/TextPart'
 import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
 import { isToolPart } from './parts/tool-part'
 import { parseReferenceMarkers } from './reference-markers'
+import { ReferenceChip } from './reference-chip'
 
 /**
  * 一条消息（用户 / 助手两种形态）。
@@ -101,25 +102,13 @@ export function Message({
         {draft === null ? (
           <>
             <div className="max-w-[85%] rounded-panel bg-secondary px-4 py-2 text-b1 break-words whitespace-pre-wrap text-ink">
-              {/* 引用标记画成内联 pill（round 14；底层文本不变——复制出去仍是原文） */}
+              {/* 引用标记画成内联 chip（round 14 起；round 21 换图3 观感：细描边圆角 + 图标，
+                  `【引用】` 前缀不进可见层）。底层消息文本不变——编辑重发仍是原文。 */}
               {parseReferenceMarkers(text).map((segment, index) =>
                 segment.kind === 'text' ? (
                   <span key={index}>{segment.text}</span>
                 ) : (
-                  <span key={index}>
-                    <span className="text-ink-tertiary">【引用】</span>
-                    {segment.refs.map((ref, refIndex) => (
-                      <span key={refIndex}>
-                        {refIndex > 0 ? '；' : ''}
-                        <span
-                          data-testid="message-reference-pill"
-                          className="rounded-button-sm bg-selected px-1"
-                        >
-                          {`${ref.kind}：${ref.label}`}
-                        </span>
-                      </span>
-                    ))}
-                  </span>
+                  <ReferenceChip key={index} refs={segment.refs} />
                 )
               )}
             </div>
@@ -141,6 +130,7 @@ export function Message({
               aria-label="编辑消息"
               value={draft}
               autoFocus
+              spellCheck={false}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {

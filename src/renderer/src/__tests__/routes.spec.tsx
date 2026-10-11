@@ -149,7 +149,9 @@ describe('路由与页面骨架', () => {
   it('内容列限宽居中：各页面都走 .content-column（侧栏覆盖层不压内容、也不横向裁切）', () => {
     renderAt('/chat')
 
-    expect(screen.getByTestId('chat-page')).toHaveClass('content-column')
+    // round 21：对话页套了两层——chat-page = 整幅（摘要轨的定位基准），限宽列是它的子层
+    expect(screen.getByTestId('chat-column')).toHaveClass('content-column')
+    expect(screen.getByTestId('chat-page')).toContainElement(screen.getByTestId('chat-column'))
 
     openSettings()
     expect(screen.getByTestId('settings-page')).toHaveClass('content-column')

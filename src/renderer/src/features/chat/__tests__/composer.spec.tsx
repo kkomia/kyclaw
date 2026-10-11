@@ -103,20 +103,51 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(send).toHaveClass('bg-(--button-primary-bg)', 'text-(--button-primary-fg)')
   })
 
-  it('引用镜像层（round 14）：同排版 / aria-hidden / pointer-events-none；textarea 在上层且滚动同步', () => {
+  it('引用覆盖层（round 21）：同排版 / aria-hidden / pointer-events-none；在 textarea 之上且滚动同步；关掉拼写波浪线', () => {
     setup()
 
     const mirror = screen.getByTestId('composer-mirror')
     expect(mirror).toHaveAttribute('aria-hidden', 'true')
-    expect(mirror).toHaveClass('pointer-events-none', 'text-transparent')
+    expect(mirror).toHaveClass('pointer-events-none', 'text-transparent', 'absolute', 'z-20')
     const layer = mirror.firstElementChild
     expect(layer).toHaveClass('px-4', 'py-3', 'text-b1', 'whitespace-pre-wrap', 'break-words')
+    // 覆盖层在 textarea 之上（chip 要盖住底层字形）；textarea 本体仍在文档流里可交互
     expect(screen.getByTestId('composer-input')).toHaveClass('relative', 'z-10')
+    // 图1 的红波浪：输入框关掉原生拼写检查
+    expect(screen.getByTestId('composer-input')).toHaveAttribute('spellcheck', 'false')
 
     const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
     input.scrollTop = 24
     fireEvent.scroll(input)
     expect(mirror.scrollTop).toBe(24)
+  })
+
+  it('chip 的 ×：删除该段标记（按原文精确移除），光标落回段起点、焦点留在输入框', () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    type('看看【引用】技能：整理笔记 这个')
+    expect(screen.getByTestId('composer-ref-chip')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('composer-ref-remove'))
+
+    // 原文里整段（含【引用】前缀）被移除；chip 随之消失
+    expect(input).toHaveValue('看看 这个')
+    expect(screen.queryByTestId('composer-ref-chip')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(input)
+    expect(input.selectionStart).toBe(2)
+  })
+
+  it('多段标记各是一个 chip：删其中一个不动另一个（精确到段）', () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    type('用【引用】技能：A 整理【引用】上下文：工作区 B')
+    const chips = screen.getAllByTestId('composer-ref-chip')
+    expect(chips).toHaveLength(2)
+    expect(chips.map((chip) => chip.textContent)).toEqual(['技能：A', '上下文：工作区'])
+
+    fireEvent.click(screen.getAllByTestId('composer-ref-remove')[0] as HTMLElement)
+    expect(input).toHaveValue('用 整理【引用】上下文：工作区 B')
+    expect(screen.getAllByTestId('composer-ref-chip')).toHaveLength(1)
   })
 })
 
@@ -262,8 +293,15 @@ describe('round 7 · ＋菜单与引用', () => {
     expect(document.activeElement).toBe(input)
     expect(screen.queryByTestId('composer-reference-整理笔记')).not.toBeInTheDocument()
 
-    // 镜像层：标记处有一个 pill 底（textarea 的文字照常渲染在上层）
-    expect(screen.getByTestId('composer-mirror-pill')).toHaveTextContent('技能：整理笔记')
+    // round 21：覆盖层把标记画成图3 风格 chip（图标 + 文本；【引用】前缀不进可见层）
+    const chip = screen.getByTestId('composer-ref-chip')
+    expect(chip).toHaveTextContent('技能：整理笔记')
+    expect(chip).not.toHaveTextContent('【引用】')
+    expect(chip.querySelector('svg')).not.toBeNull()
+    // chip 的盒宽由隐形原文占位撑出（与 textarea 里的原文逐字对齐，后面的字不挪位）
+    const box = chip.parentElement
+    expect(box?.firstElementChild).toHaveClass('invisible', 'whitespace-pre')
+    expect(box?.firstElementChild).toHaveTextContent('【引用】技能：整理笔记')
   })
 
   it('引用技能：还没有安装技能时给一条禁用说明（也不列内置技能）', async () => {

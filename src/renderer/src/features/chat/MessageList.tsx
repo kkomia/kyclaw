@@ -71,7 +71,10 @@ export function MessageList({
   }, [tail])
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    // round 21：外层**不带 relative**——消息导览轨（absolute）的定位基准因此上溯到
+    // ChatFrame 的 chat 页根（整幅、相对定位），横线列/浮窗贴 chat 区最右缘 8px；
+    // 之前这里自带 relative，轨道被钉在限宽内容列（约 800px）的右缘，图2 的偏差即由此来。
+    <div data-testid="message-list-frame" className="flex min-h-0 flex-1 flex-col">
       {/* 消息区不显示滚动条（round 8 用户实拍：右侧那条滚动条去掉）——滚动能力不变，
           只隐藏原生条；全局 ::-webkit-scrollbar 样式与其它区域不动。 */}
       <div

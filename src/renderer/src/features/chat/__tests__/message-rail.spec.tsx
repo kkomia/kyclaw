@@ -77,12 +77,20 @@ describe('消息导览轨 · 结构', () => {
     )
   })
 
-  it('贴右缘 right-2（滚动条已按 round 8 隐藏；8px 是给节点与内容列之间的呼吸位）', () => {
+  it('贴右缘 right-2（滚动条已按 round 8 隐藏；8px 是给节点与 chat 区右缘之间的呼吸位）', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
     const rail = screen.getByTestId('message-rail')
     expect(rail).toHaveClass('absolute', 'right-2')
     expect(rail).not.toHaveClass('right-1')
+  })
+
+  it('round 21 定位基准：MessageList 外层不再自带 relative——轨道由 chat 页根（整幅）承接，不被钉在内容列右缘', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    // 定位父节点是 ChatFrame 的 chat-page（相对定位），本组件这一层不能带 relative
+    expect(screen.getByTestId('message-list-frame')).not.toHaveClass('relative')
+    expect(screen.getByTestId('message-rail')).toHaveClass('absolute', 'right-2')
   })
 
   it('消息列右侧走廊（round 14）：内容列 pr-14，正文不再钻到轨道下面', () => {

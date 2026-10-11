@@ -121,14 +121,43 @@ describe('线程上下文', () => {
 })
 
 describe('活动会话落在限宽内容列（P0 回归）', () => {
-  it('message-list / composer 都在 chat-page 这一层限宽列里', async () => {
+  it('message-list / composer 都在 chat-page 里的限宽列（chat-column）里', async () => {
     const control = createMockTransport()
     await renderSession(control, makeRuntime(control).runtime)
 
     const frame = screen.getByTestId('chat-page')
-    expect(frame).toHaveClass('content-column')
-    expect(within(frame).getByTestId('message-list')).toBeInTheDocument()
-    expect(within(frame).getByTestId('composer')).toBeInTheDocument()
+    const column = within(frame).getByTestId('chat-column')
+    expect(column).toHaveClass('content-column')
+    expect(within(column).getByTestId('message-list')).toBeInTheDocument()
+    expect(within(column).getByTestId('composer')).toBeInTheDocument()
+  })
+
+  it('摘要轨的定位基准是 chat 页根（round 21）：closest(".relative") = chat-page（整幅），不是限宽列', async () => {
+    const control = createMockTransport()
+    await renderSession(control, makeRuntime(control).runtime)
+
+    // 两条用户消息才会出轨
+    await act(async () => {
+      send('第一问')
+    })
+    await act(async () => {
+      control.push('答一')
+      control.finish()
+    })
+    await act(async () => {
+      send('第二问')
+    })
+    await act(async () => {
+      control.push('答二')
+      control.finish()
+    })
+
+    const rail = screen.getByTestId('message-rail')
+    expect(rail.closest('.relative')).toBe(screen.getByTestId('chat-page'))
+    // chat 页根是整幅（不套 content-column）；限宽列是它的子层
+    const page = screen.getByTestId('chat-page')
+    expect(page).not.toHaveClass('content-column')
+    expect(within(page).getByTestId('chat-column')).toHaveClass('content-column')
   })
 })
 
