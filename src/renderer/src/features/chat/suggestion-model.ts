@@ -5,24 +5,34 @@
  * 于是邮箱（`a@b.com`）、路径（`src/main`、`D:/notes`）里出现在词中的符号**不触发**；
  * 行首或空白后的 `@`/`/` 才触发，触发符与光标之间是过滤关键词。选中某行把 [start, caret)
  * 整段替换成 round 14 的引用标记（`【引用】<kind>：<label>` + 尾随空格）。
- * 「命令」分区本轮不做（没有斜杠命令系统），斜杠浮窗只有 插件 / 技能 两组。
+ *
+ * round 19：`/` 浮窗加了**「命令」分区**（首条 = 「压缩上下文」，次要位显示当前使用率）——
+ * 命令行不插引用标记，选中是"立即执行"（`command` 字段），由 Composer 转交上层；过滤/键盘
+ * 导航照旧（命令行也参与同一根平铺轴）。
  */
 export type SuggestionTriggerKind = 'file' | 'slash'
 
 export interface SuggestionTrigger {
   kind: SuggestionTriggerKind
-  /** 触发符在文本里的下标（选中时把 [start, caret) 换成标记） */
+  /** 触发符在文本里的下标（选中时把 [start, caret) 换成标记 / 命令行则整段移除） */
   start: number
   /** 触发符后到光标的关键词（空串 = 不过滤） */
   query: string
 }
 
-/** 建议行（浮窗统一形状）：主行 label + 次要 hint；选中后插入 reference */
+/**
+ * 建议行（浮窗统一形状）：主行 label + 次要 hint；
+ * 引用行（reference）选中后插入标记，命令行（command）选中后立即执行。
+ */
 export interface SuggestionRow {
   id: string
   label: string
   hint?: string
-  reference: { kind: '文件' | '插件' | '技能'; label: string }
+  /** 不可用（如压缩命令在流式/等审批期间）：可见但点了没反应 */
+  disabled?: boolean
+  reference?: { kind: '文件' | '插件' | '技能'; label: string }
+  /** 命令行的动作标识（round 19 只有一条「压缩上下文」） */
+  command?: 'compact'
 }
 
 export interface SuggestionGroup {
@@ -91,14 +101,46 @@ export interface SlashInputs {
   plugins: ReadonlyArray<{ id: string; name: string }>
   /** 已安装技能（dir + 名字；round 13 起的数据源） */
   skills: ReadonlyArray<{ dir: string; name: string }>
+  /**
+   * 命令分区（round 19）：`percent` = 当前上下文使用率（0–100；取不到 null）；
+   * `busy` = 压缩进行中（hint 显示「压缩中…」）；`disabled` = 流式/等审批时不给点。
+   */
+  command?: {
+    percent: number | null
+    busy: boolean
+    disabled: boolean
+  }
 }
 
-/** / 浮窗的分组（分区只在非空时出现；顺序 = 插件 → 技能） */
+/** / 浮窗的分组（分区只在非空时出现；顺序 = 命令 → 插件 → 技能） */
 export function slashGroups(input: SlashInputs, query: string): SuggestionGroup[] {
   const q = query.trim().toLowerCase()
   const hit = (name: string): boolean => q === '' || name.toLowerCase().includes(q)
 
   const groups: SuggestionGroup[] = []
+  if (hit('压缩上下文')) {
+    const command = input.command
+    groups.push({
+      title: '命令',
+      rows: [
+        {
+          id: 'command:compact',
+          label: '压缩上下文',
+          ...(command === undefined
+            ? {}
+            : {
+                ...(command.busy
+                  ? { hint: '压缩中…' }
+                  : command.percent === null
+                    ? {}
+                    : { hint: `已使用 ${command.percent}%` }),
+                disabled: command.disabled || command.busy
+              }),
+          command: 'compact'
+        }
+      ]
+    })
+  }
   const plugins = input.plugins.filter((plugin) => hit(plugin.name))
   if (plugins.length > 0) {
     groups.push({

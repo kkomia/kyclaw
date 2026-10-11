@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
 import type { Workspace } from '@shared/settings'
+import type { ThreadCompaction } from '@shared/threads'
 import type { ApprovalDecision } from './ApprovalCard'
 import type { ApprovalRequest } from './approval'
+import { CompactionMarker } from './CompactionMarker'
 import { Message } from './Message'
 import { MessageRail } from './MessageRail'
 
@@ -21,6 +23,10 @@ export interface MessageListProps {
   /** 授权工作区列表与审批决策回调：透传给审批卡（T13） */
   workspaces?: readonly Workspace[]
   onApprovalDecision?: (request: ApprovalRequest, decision: ApprovalDecision) => void
+  /** round 19：顶部「上下文已压缩」标记的数据（null = 不渲染标记） */
+  compaction?: ThreadCompaction | null
+  /** 压缩进行中（标记显示「上下文压缩中…」） */
+  compacting?: boolean
 }
 
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
@@ -48,7 +54,9 @@ export function MessageList({
   status,
   onEdit,
   workspaces,
-  onApprovalDecision
+  onApprovalDecision,
+  compaction = null,
+  compacting = false
 }: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
@@ -78,6 +86,7 @@ export function MessageList({
         }}
       >
         <div className="flex w-full flex-col gap-6 py-6 pr-14 pl-4">
+          <CompactionMarker compaction={compaction} compacting={compacting} />
           {messages.map((message) => (
             <Message
               key={message.id}

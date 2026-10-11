@@ -853,3 +853,37 @@ describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', ()
     })
   })
 })
+
+describe('round 19 · / 命令分区（压缩上下文）与压缩 notice', () => {
+  it('键入 /：命令分区在首；回车选中 → onCompact（不插引用标记、触发段清掉、浮窗收起）', () => {
+    const onCompact = vi.fn()
+    setup({ onCompact })
+    const input = typeAt('/')
+
+    expect(screen.getByText('命令')).toBeInTheDocument()
+    expect(screen.getByTestId('suggest-command:compact')).toHaveTextContent('压缩上下文')
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onCompact).toHaveBeenCalledTimes(1)
+    expect(input).toHaveValue('')
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+  })
+
+  it('压缩中：行显示「压缩中…」并禁用（回车无动作）', () => {
+    const onCompact = vi.fn()
+    setup({ onCompact, compactBusy: true })
+    const input = typeAt('/')
+
+    const row = screen.getByTestId('suggest-command:compact')
+    expect(row).toHaveTextContent('压缩中…')
+    expect(row).toBeDisabled()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onCompact).not.toHaveBeenCalled()
+  })
+
+  it('外部 notice（压缩结果）由上层给：照常显示', () => {
+    setup({ externalNotice: { tone: 'success', text: '已压缩历史上下文（保留最近 10 条）' } })
+    expect(screen.getByTestId('composer-notice')).toHaveTextContent('已压缩历史上下文')
+  })
+})

@@ -12,7 +12,7 @@ import {
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { truncateThread } from '@renderer/lib/threads-api'
+import { truncateThread, fetchThreadCompaction } from '@renderer/lib/threads-api'
 import { defaultSettings } from '@shared/settings'
 import { createMockTransport, type MockTransport } from './mock-transport'
 
@@ -30,7 +30,10 @@ vi.mock('@renderer/lib/threads-api', () => ({
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
   truncateThread: vi.fn(async () => 2),
-  generateThreadTitle: vi.fn(async () => ({ title: '', generated: false }))
+  generateThreadTitle: vi.fn(async () => ({ title: '', generated: false })),
+  // round 19：压缩链路（ActiveChat 挂载即读记录；这些用例不做压缩）
+  fetchThreadCompaction: vi.fn(async () => null),
+  compactThread: vi.fn(async () => ({ compacted: false, compaction: null }))
 }))
 
 const THREAD_ID = 'thread-approval'
@@ -629,5 +632,44 @@ describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重
     })
     expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
     expect(control.requests).toHaveLength(2)
+  })
+
+  it('round 19：会话有压缩记录时，挂起 → 决策 → 续跑不受影响；等审批期间压缩命令禁用', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadCompaction).mockResolvedValueOnce({
+      threadId: THREAD_ID,
+      summary: '## 要点\n- 之前聊过写文件',
+      summarized: 4,
+      kept: 10,
+      createdAt: '2026-10-11T02:00:00.000Z'
+    })
+    await renderSession(control)
+    expect(await screen.findByTestId('compaction-marker')).toBeInTheDocument()
+
+    await send('写个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    // 等审批期间：压缩命令行可见但禁用（压缩不与挂起轮打架）
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: '/' } })
+    input.setSelectionRange(1, 1)
+    fireEvent.select(input)
+    expect(screen.getByTestId('suggest-command:compact')).toBeDisabled()
+
+    // 决策 → 自动续跑：照常发出带线程上下文的回灌请求
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(approvalIn(control, 1, 'call-a')).toMatchObject({ approved: true })
+
+    await act(async () => {
+      control.toolOutput('call-a', '已写入 a.txt')
+      control.push('写好了。')
+      control.finish()
+    })
+    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
   })
 })

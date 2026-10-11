@@ -71,7 +71,7 @@ describe('filterFiles / fileRows · 文件过滤', () => {
   })
 })
 
-describe('slashGroups · 插件 / 技能分区', () => {
+describe('slashGroups · 命令 / 插件 / 技能分区', () => {
   const INPUTS = {
     plugins: [
       { id: 'mcp-1', name: '知识库' },
@@ -80,12 +80,17 @@ describe('slashGroups · 插件 / 技能分区', () => {
     skills: [{ dir: 'demo-p1-s1', name: '整理笔记' }]
   }
 
-  it('分区只在非空时出现；顺序 插件 → 技能；选中行带引用 label', () => {
+  it('分区只在非空时出现；顺序 命令 → 插件 → 技能；选中行带引用 label', () => {
     const groups = slashGroups(INPUTS, '')
-    expect(groups.map((group) => group.title)).toEqual(['插件', '技能'])
-    expect(flattenGroups(groups).map((row) => row.label)).toEqual(['知识库', '天气', '整理笔记'])
-    expect(flattenGroups(groups)[0].reference).toEqual({ kind: '插件', label: '知识库' })
-    expect(flattenGroups(groups)[2].reference).toEqual({ kind: '技能', label: '整理笔记' })
+    expect(groups.map((group) => group.title)).toEqual(['命令', '插件', '技能'])
+    expect(flattenGroups(groups).map((row) => row.label)).toEqual([
+      '压缩上下文',
+      '知识库',
+      '天气',
+      '整理笔记'
+    ])
+    expect(flattenGroups(groups)[1].reference).toEqual({ kind: '插件', label: '知识库' })
+    expect(flattenGroups(groups)[3].reference).toEqual({ kind: '技能', label: '整理笔记' })
   })
 
   it('过滤（大小写不敏感）：命中为零的分区整组不出现', () => {
@@ -100,5 +105,49 @@ describe('slashGroups · 插件 / 技能分区', () => {
       'we'
     )
     expect(caseInsensitive[0].rows.map((row) => row.label)).toEqual(['Weather'])
+  })
+
+  it('命令分区（round 19）：首条「压缩上下文」= command 行（不插引用标记）', () => {
+    const groups = slashGroups(
+      { plugins: [], skills: [], command: { percent: 24, busy: false, disabled: false } },
+      ''
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.title).toBe('命令')
+    expect(groups[0]?.rows[0]).toEqual({
+      id: 'command:compact',
+      label: '压缩上下文',
+      hint: '已使用 24%',
+      disabled: false,
+      command: 'compact'
+    })
+    // 关键词过滤：'压缩' 命中的仍是命令行
+    expect(
+      slashGroups(
+        { plugins: [], skills: [], command: { percent: 24, busy: false, disabled: false } },
+        '压缩'
+      )[0]?.rows
+    ).toHaveLength(1)
+    // 使用率取不到：不显示数值（不假装 0%）
+    expect(
+      slashGroups(
+        { plugins: [], skills: [], command: { percent: null, busy: false, disabled: false } },
+        ''
+      )[0]?.rows[0]?.hint
+    ).toBeUndefined()
+  })
+
+  it('命令分区：压缩中显示「压缩中…」并禁用；流式/等审批（disabled）也禁用', () => {
+    const busy = slashGroups(
+      { plugins: [], skills: [], command: { percent: 24, busy: true, disabled: false } },
+      ''
+    )
+    expect(busy[0]?.rows[0]).toMatchObject({ hint: '压缩中…', disabled: true })
+
+    const blocked = slashGroups(
+      { plugins: [], skills: [], command: { percent: 24, busy: false, disabled: true } },
+      ''
+    )
+    expect(blocked[0]?.rows[0]).toMatchObject({ disabled: true })
   })
 })

@@ -76,12 +76,14 @@ export function ComposerSuggest({
               {group.rows.map((row) => {
                 flatIndex += 1
                 const active = flatIndex === activeIndex
+                const disabled = row.disabled === true
                 return (
                   <button
                     key={row.id}
                     type="button"
                     role="option"
                     aria-selected={active}
+                    disabled={disabled}
                     data-testid={`suggest-${row.id}`}
                     data-active={active ? 'true' : undefined}
                     // 按下先别让 textarea 失焦（选区/焦点都是插入要用的状态）
@@ -90,7 +92,8 @@ export function ComposerSuggest({
                     onMouseEnter={() => onHover(flatIndex)}
                     className={cn(
                       'flex w-full cursor-pointer items-center gap-2 rounded-(--menu-item-radius) px-2 py-1.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
-                      active ? 'bg-hover' : 'hover:bg-hover'
+                      active ? 'bg-hover' : 'hover:bg-hover',
+                      disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
                   >
                     <span className="min-w-0 flex-1 truncate text-b2 text-ink">{row.label}</span>

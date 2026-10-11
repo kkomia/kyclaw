@@ -18,7 +18,10 @@ vi.mock('@renderer/lib/threads-api', () => ({
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
   truncateThread: vi.fn(async () => 0),
-  generateThreadTitle: vi.fn(async () => ({ title: '', generated: false }))
+  generateThreadTitle: vi.fn(async () => ({ title: '', generated: false })),
+  // round 19：压缩链路（ActiveChat 挂载即读记录；这些用例不做压缩）
+  fetchThreadCompaction: vi.fn(async () => null),
+  compactThread: vi.fn(async () => ({ compacted: false, compaction: null }))
 }))
 
 afterEach(() => {

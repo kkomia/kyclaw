@@ -1,32 +1,41 @@
 /**
  * 线程 API（T9）：挂在 agent 服务（service.ts）上的 Hono 子路由，路径前缀 /api/threads。
  *
- * 六条：
+ * 八条：
  *   GET    /api/threads                 会话列表（只认 local-user 资源；id/标题/更新时间）
  *   GET    /api/threads/:id/messages    历史回灌的来源（存储消息 JSON，渲染端用 message-map 映射）
  *   PATCH  /api/threads/:id             重命名
  *   DELETE /api/threads/:id             删除（连消息一起；幂等）
  *   POST   /api/threads/:id/truncate    编辑重发的服务端半边（R2：从 messageId 起连它一起删）
  *   POST   /api/threads/:id/title       首轮后生成标题（失败降级截断首句；已有标题直接回）
+ *   POST   /api/threads/:id/compact     上下文压缩（round 19：摘要旧消息、保留最近一段；
+ *                                       失败给人话错误，由调用方降级——见 compaction.ts 头注）
+ *   GET    /api/threads/:id/compaction  该会话的压缩记录（顶部「上下文已压缩」标记的数据面）
  *
  * 三条纪律：
  *   1. **服务端是线程数据的权威**：列表/回灌/删除/截断都直接读写 Mastra Memory（libsql）；
  *      渲染端发来的 messages 只是"这一轮的输入"，历史以存储为准。
  *   2. 入参（路由参数 + JSON body）全部过 zod（shared/threads.ts），非法即 400；
  *      回包结构也定义在同一处，渲染端 parse。
- *   3. 缺失的线程：GET messages / truncate 走"空结果"（幂等），PATCH / title 走 404
- *      （改一个不存在的东西是错误，不是空操作）。
+ *   3. 缺失的线程：GET messages / truncate 走"空结果"（幂等），PATCH / title / compact 走 404
+ *      （改一个不存在的东西是错误，不是空操作）；GET compaction 是读，跟 messages 同口径（空结果）。
  */
 import { Hono } from 'hono'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { StorageThreadType } from '@mastra/core/memory'
 import {
+  compactThreadRequestSchema,
+  compactThreadResponseSchema,
   LOCAL_USER_RESOURCE_ID,
   renameThreadRequestSchema,
+  threadCompactionResponseSchema,
   threadIdParamsSchema,
-  truncateThreadRequestSchema
+  truncateThreadRequestSchema,
+  type ThreadCompaction
 } from '../../shared/threads'
 import type { ModelResolver } from '../agents/kyclaw'
+import { compactionErrorText } from '../compaction'
+import { ProviderConfigError } from '../model'
 import { generateThreadTitle } from '../title'
 
 export interface ThreadsRouterOptions {
@@ -45,6 +54,19 @@ export interface ThreadsRouterOptions {
    * 是"顺带的旁路"，不该拖慢/弄坏删除本身——实现方自己吞错（见 main/agent/service.ts）。
    */
   onThreadDeleted?: (threadId: string) => void
+  /**
+   * 上下文压缩（round 19）：缺省不接线时，GET 回"没有记录"、POST 回 503——
+   * 生产由 service.ts 注入（记录读写 + 摘要服务，见 mastra/compaction.ts）。
+   */
+  compaction?: {
+    /** 真压缩：keep 缺省由服务端定；失败抛错（路由转人话） */
+    compact: (
+      threadId: string,
+      keep?: number
+    ) => Promise<{ compacted: boolean; compaction: ThreadCompaction | null }>
+    /** 读现有记录（顶部标记的数据面） */
+    of: (threadId: string) => Promise<ThreadCompaction | null>
+  }
 }
 
 /** 存储线程 → 列表项（title 空串归一成 null；时间转 ISO） */
@@ -200,6 +222,42 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       resolveModel: options.resolveModel
     })
     return context.json({ title, generated: true })
+  })
+
+  // round 19：上下文压缩。缺省未接线（测试的窄构造）→ 503，生产由 service.ts 注入。
+  router.post('/:id/compact', async (context) => {
+    const params = threadIdParamsSchema.safeParse(context.req.param())
+    if (!params.success) return context.json(badRequest('线程 id'), 400)
+    // 空 body（不带 keep）是合法入参：默认保留窗口由服务端定
+    const body = compactThreadRequestSchema.safeParse(await context.req.json().catch(() => ({})))
+    if (!body.success) return context.json(badRequest('keep'), 400)
+
+    if (options.compaction === undefined) {
+      return context.json({ error: '压缩服务没有接线（内部错误）' }, 503)
+    }
+    if ((await findThread(memory, params.data.id)) === null) {
+      return context.json({ error: 'not-found' }, 404)
+    }
+
+    try {
+      const outcome = await options.compaction.compact(params.data.id, body.data.keep)
+      return context.json(compactThreadResponseSchema.parse(outcome))
+    } catch (error) {
+      // 人话口径见 compaction.ts 的 compactionErrorText：ProviderConfigError 原文透出，其余一行通用
+      const message = compactionErrorText(error)
+      const detail = error instanceof Error ? error.message : String(error)
+      console.error(`[kyclaw] 上下文压缩失败（已回人话文案）：${detail}`, error)
+      const status = error instanceof ProviderConfigError ? 400 : 500
+      return context.json({ error: message }, status)
+    }
+  })
+
+  router.get('/:id/compaction', async (context) => {
+    const params = threadIdParamsSchema.safeParse(context.req.param())
+    if (!params.success) return context.json(badRequest('线程 id'), 400)
+    const compaction =
+      options.compaction === undefined ? null : await options.compaction.of(params.data.id)
+    return context.json(threadCompactionResponseSchema.parse({ compaction }))
   })
 
   return router

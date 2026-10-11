@@ -80,6 +80,40 @@ export const threadTitleResponseSchema = z.strictObject({
   generated: z.boolean()
 })
 
+/**
+ * 会话级压缩记录（round 19）：更早的历史被摘要后，原始消息从存储删除，摘要存这里。
+ * 后续请求由 agent 的输入处理器把摘要注入成系统前缀（不落 UI 消息流）；顶部标记读它。
+ */
+export const threadCompactionSchema = z.strictObject({
+  threadId: z.string().min(1),
+  /** 结构化摘要原文（要点/决定/未完成事项/关键文件与结论） */
+  summary: z.string().min(1),
+  /** 被摘要并删除的消息条数 */
+  summarized: z.number().int().min(1),
+  /** 保留的最近消息条数（压缩时刻） */
+  kept: z.number().int().min(0),
+  /** ISO 时间串（压缩完成时刻） */
+  createdAt: z.string()
+})
+
+export type ThreadCompaction = z.infer<typeof threadCompactionSchema>
+
+/** POST /api/threads/:id/compact 的入参：keep = 保留最近多少条（缺省由服务端定） */
+export const compactThreadRequestSchema = z.strictObject({
+  keep: z.number().int().min(2).max(40).optional()
+})
+
+/** 压缩回包：compacted=false（没到可压的规模）时 compaction 为现有记录或 null */
+export const compactThreadResponseSchema = z.strictObject({
+  compacted: z.boolean(),
+  compaction: threadCompactionSchema.nullable()
+})
+
+/** GET /api/threads/:id/compaction 的回包（没有记录 = null，读侧幂等） */
+export const threadCompactionResponseSchema = z.strictObject({
+  compaction: threadCompactionSchema.nullable()
+})
+
 /** 无内容回包（删除等） */
 export const okResponseSchema = z.strictObject({ ok: z.literal(true) })
 

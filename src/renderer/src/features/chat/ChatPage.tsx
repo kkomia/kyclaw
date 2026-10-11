@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useChat } from '@ai-sdk/react'
 import type { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'
+import type { ThreadCompaction } from '@shared/threads'
 import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
-import { truncateThread } from '@renderer/lib/threads-api'
+import { compactThread, fetchThreadCompaction, truncateThread } from '@renderer/lib/threads-api'
+import { fetchThreadContext } from '@renderer/lib/usage-api'
+import { shouldCompact, thresholdTokensOf } from '@renderer/lib/compact'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import {
@@ -14,6 +17,7 @@ import {
 } from './approval'
 import type { ApprovalRequest } from './approval'
 import type { ApprovalDecision } from './ApprovalCard'
+import type { ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
 import type { ThreadChatRuntime } from './thread-chats'
 import { Composer } from './Composer'
@@ -218,6 +222,14 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
   const [queuedCount, setQueuedCount] = useState(0)
   /** 服务端截断失败时的重试素材（不静默丢） */
   const [pendingSync, setPendingSync] = useState<PendingSync | null>(null)
+  /** round 19：压缩记录（顶部「上下文已压缩」标记的数据面） */
+  const [compaction, setCompaction] = useState<ThreadCompaction | null>(null)
+  /** 压缩进行中（自动触发 / 手动入口共用；发送会按 busy 语义排队） */
+  const [compacting, setCompacting] = useState(false)
+  /** 压缩结果的一行 notice（成功/失败/降级；交给 Composer 显示） */
+  const [compactNotice, setCompactNotice] = useState<ComposerNotice | null>(null)
+  /** 发送预检进行中（取用量 → 也许压缩）的防抖锁：status 更新前的小窗口里防连按双发 */
+  const sending = useRef(false)
 
   const { messages, sendMessage, regenerate, stop, status, error, addToolApprovalResponse } =
     useChat({
@@ -229,6 +241,78 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
   /** "永久允许"没写进设置（只在本次对话生效）：露一行给用户，不静默当成永久生效 */
   const [permissionError, setPermissionError] = useState<string | null>(null)
+
+  /** 压缩记录随会话挂载读一次（顶部标记的数据面；取不到就停在无标记态，不打扰对话） */
+  useEffect(() => {
+    let alive = true
+    void fetchThreadCompaction(threadId).then(
+      (record) => {
+        if (alive) setCompaction(record)
+      },
+      () => {
+        /* 服务没起来/单测未装桥：停在无标记态 */
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [threadId])
+
+  /**
+   * 跑一轮压缩（自动触发与手动入口共用）：进行中压缩中置忙；失败不抛出，
+   * 把原因原样交给调用方决定提示与降级（自动 = 照发 + 警示；手动 = danger notice）。
+   */
+  const runCompact = useCallback(async (): Promise<
+    | { ok: true; compacted: boolean; compaction: ThreadCompaction | null }
+    | { ok: false; error: string }
+  > => {
+    setCompacting(true)
+    try {
+      const result = await compactThread(threadId)
+      if (result.compaction !== null) setCompaction(result.compaction)
+      return { ok: true, compacted: result.compacted, compaction: result.compaction }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      setCompacting(false)
+    }
+  }, [threadId])
+
+  /**
+   * 发送预检（round 19 自动触发）：最近一轮上下文用量 ≥ 阈值（contextPct × contextWindow）时
+   * 先压一轮再发；压缩失败不阻塞——照常发送 + 一行警示。用量取不到（服务没起来 / usage 行
+   * 还没落）就不压缩：如实降级，不假装判过（偏差见报告）。
+   */
+  const sendWithPreflight = useCallback(
+    async (text: string): Promise<void> => {
+      setCompactNotice(null)
+      try {
+        const context = await fetchThreadContext(threadId)
+        const threshold = thresholdTokensOf(useSettingsStore.getState().settings)
+        if (shouldCompact(context.lastInput, threshold)) {
+          const outcome = await runCompact()
+          if (!outcome.ok) {
+            setCompactNotice({ tone: 'warning', text: `压缩失败：${outcome.error}；已直接发送` })
+          }
+        }
+      } catch {
+        /* 用量取不到：不压缩，照常发送 */
+      }
+      void sendMessage({ text }, threadRequestOptions(threadId))
+    },
+    [runCompact, sendMessage, threadId]
+  )
+
+  /** 统一发送入口（submit 与队列补发都走它）：预检锁覆盖预检窗口，防双发 */
+  const dispatch = useCallback(
+    (text: string): void => {
+      sending.current = true
+      void sendWithPreflight(text).finally(() => {
+        sending.current = false
+      })
+    },
+    [sendWithPreflight]
+  )
 
   /**
    * 审批决策（T13）：
@@ -285,8 +369,9 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     if (next === undefined) return
     pending.current = rest
     setQueuedCount(rest.length)
-    void sendMessage({ text: next }, threadRequestOptions(threadId))
-  }, [sendMessage, threadId])
+    // 走统一发送入口：补发同样过"超阈值先压缩"的预检（用户排队时可能已越过阈值）
+    dispatch(next)
+  }, [dispatch])
 
   /**
    * 一轮结束（从 busy 回到 ready）→ 补发排队的下一条。
@@ -310,14 +395,14 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
    */
   const submit = useCallback(
     (text: string) => {
-      if (busy || waitingApproval) {
+      if (busy || waitingApproval || compacting || sending.current) {
         pending.current = [...pending.current, text]
         setQueuedCount(pending.current.length)
         return
       }
-      void sendMessage({ text }, threadRequestOptions(threadId))
+      dispatch(text)
     },
-    [busy, waitingApproval, sendMessage, threadId]
+    [busy, waitingApproval, compacting, dispatch]
   )
 
   /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致）。
@@ -326,7 +411,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
    *  窄路径上会被擦边：编辑入口本身在挂起期间是关的）。 */
   const editResend = useCallback(
     (messageId: string, text: string) => {
-      if (busy || waitingApproval) return
+      if (busy || waitingApproval || compacting) return
       setPendingSync(null)
       truncateThread(threadId, messageId).then(
         () => {
@@ -337,13 +422,13 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         }
       )
     },
-    [busy, waitingApproval, sendMessage, threadId]
+    [busy, waitingApproval, compacting, sendMessage, threadId]
   )
 
   /** 重试 = 整轮重生成：先删掉最后一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
    *  T13 N1：同 editResend——等审批/流式中不重试（错误卡的旧重试按钮不能绕开闸门）。 */
   const retry = useCallback(() => {
-    if (busy || waitingApproval) return
+    if (busy || waitingApproval || compacting) return
     const last = messages[messages.length - 1]
     if (last === undefined) return
     setPendingSync(null)
@@ -357,7 +442,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         setPendingSync({ kind: 'retry', messageId: last.id })
       }
     )
-  }, [busy, waitingApproval, messages, regenerate, threadId])
+  }, [busy, waitingApproval, compacting, messages, regenerate, threadId])
 
   /** 截断失败的重试：把刚才没做完的动作原样再做一遍 */
   const retryPendingSync = useCallback(() => {
@@ -369,6 +454,24 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     }
   }, [editResend, pendingSync, retry])
 
+  /** 「/」→「压缩上下文」（round 19）：立即压缩并给 notice；流式/等审批/压缩中命令行为禁用态 */
+  const compactManually = useCallback(() => {
+    if (busy || waitingApproval || compacting) return
+    setCompactNotice(null)
+    void runCompact().then((outcome) => {
+      if (!outcome.ok) {
+        setCompactNotice({ tone: 'danger', text: `压缩失败：${outcome.error}` })
+      } else if (!outcome.compacted) {
+        setCompactNotice({ tone: 'warning', text: '当前没有可压缩的旧消息' })
+      } else {
+        setCompactNotice({
+          tone: 'success',
+          text: `已压缩历史上下文（保留最近 ${outcome.compaction?.kept ?? 0} 条）`
+        })
+      }
+    })
+  }, [busy, waitingApproval, compacting, runCompact])
+
   const syncError = pendingSync
     ? new Error('会话历史没能在服务端同步，已取消发送（重试会重做这一步）')
     : null
@@ -379,10 +482,13 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         messages={messages}
         status={status}
         // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
-        // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）
-        onEdit={busy || waitingApproval ? undefined : editResend}
+        // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
+        // round 19：压缩进行中也不给（两边都动同一批消息）
+        onEdit={busy || waitingApproval || compacting ? undefined : editResend}
         workspaces={workspaces}
         onApprovalDecision={decideApproval}
+        compaction={compaction}
+        compacting={compacting}
       />
       {error ? (
         <div className="px-4 pt-2">
@@ -408,6 +514,10 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
           onStop={() => {
             void stop()
           }}
+          onCompact={compactManually}
+          compactBusy={compacting}
+          compactDisabled={busy || waitingApproval}
+          externalNotice={compactNotice}
         />
       </div>
     </>

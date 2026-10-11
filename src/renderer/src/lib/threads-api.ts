@@ -7,13 +7,16 @@
  */
 import type { z } from 'zod'
 import {
+  compactThreadResponseSchema,
   okResponseSchema,
+  threadCompactionResponseSchema,
   threadListResponseSchema,
   threadMessagesResponseSchema,
   threadSummarySchema,
   threadTitleResponseSchema,
   truncateThreadResponseSchema,
   type StoredMessage,
+  type ThreadCompaction,
   type ThreadSummary
 } from '@shared/threads'
 
@@ -92,4 +95,35 @@ export async function generateThreadTitle(
     method: 'POST'
   })
   return json(response, threadTitleResponseSchema)
+}
+
+/**
+ * round 19：触发一次上下文压缩（POST /compact）。失败时把服务端那句人话带出来
+ * （400/500 的 body 里就是给人看的文案，见路由层）；调用方负责降级与 notice。
+ */
+export async function compactThread(
+  threadId: string,
+  keep?: number
+): Promise<{ compacted: boolean; compaction: ThreadCompaction | null }> {
+  const response = await authorized(`/api/threads/${encodeURIComponent(threadId)}/compact`, {
+    method: 'POST',
+    body: JSON.stringify(keep === undefined ? {} : { keep })
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null
+    const detail = typeof body?.error === 'string' ? body.error : ''
+    throw new Error(detail === '' ? `压缩服务返回 ${response.status}` : detail)
+  }
+  const parsed = compactThreadResponseSchema.safeParse(await response.json())
+  if (!parsed.success) {
+    throw new Error(`压缩服务回包格式不对：${parsed.error.issues[0]?.message ?? '未知'}`)
+  }
+  return parsed.data
+}
+
+/** round 19：该会话的压缩记录（顶部「上下文已压缩」标记的数据面；没有记录 = null） */
+export async function fetchThreadCompaction(threadId: string): Promise<ThreadCompaction | null> {
+  const response = await authorized(`/api/threads/${encodeURIComponent(threadId)}/compaction`)
+  const { compaction } = await json(response, threadCompactionResponseSchema)
+  return compaction
 }

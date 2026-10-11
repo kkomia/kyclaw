@@ -3,6 +3,8 @@ import { ArrowUp, Square } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
+import { fetchThreadContext } from '@renderer/lib/usage-api'
+import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
@@ -57,6 +59,14 @@ export interface ComposerProps {
   queuedCount?: number
   onSend: (text: string) => void
   onStop: () => void
+  /** round 19：「/」→「压缩上下文」被选中（立即压缩；进行中/不可用时命令行为禁用态） */
+  onCompact?: () => void
+  /** 压缩进行中（命令行 hint 显示「压缩中…」并禁用） */
+  compactBusy?: boolean
+  /** 压缩不可用（流式 / 等审批）：命令行可见但不可点 */
+  compactDisabled?: boolean
+  /** 压压缩结果的一行 notice（由上层给：成功/失败/降级）；与附件等内部 notice 合并显示 */
+  externalNotice?: ComposerNotice | null
 }
 
 let uidCounter = 0
@@ -70,7 +80,11 @@ export function Composer({
   busy = false,
   queuedCount = 0,
   onSend,
-  onStop
+  onStop,
+  onCompact,
+  compactBusy = false,
+  compactDisabled = false,
+  externalNotice = null
 }: ComposerProps): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -122,6 +136,8 @@ export function Composer({
   const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [files, setFiles] = useState<{ threadId: string; list: readonly string[] } | null>(null)
   const [filesError, setFilesError] = useState<string | undefined>(undefined)
+  /** round 19：「压缩上下文」命令行显示的使用率（打开 / 浮窗时取一次；取不到 = 不显示） */
+  const [usagePercent, setUsagePercent] = useState<number | null>(null)
 
   const refreshTrigger = (value: string, caret: number | null): void => {
     const trigger = detectTrigger(value, caret ?? value.length)
@@ -153,7 +169,14 @@ export function Composer({
       ? []
       : suggest.kind === 'file'
         ? [{ title: '', rows: fileRows(fileReady ? files.list : [], suggest.query) }]
-        : slashGroups({ plugins: enabledPlugins, skills: installedSkills }, suggest.query)
+        : slashGroups(
+            {
+              plugins: enabledPlugins,
+              skills: installedSkills,
+              command: { percent: usagePercent, busy: compactBusy, disabled: compactDisabled }
+            },
+            suggest.query
+          )
   const suggestionRows = flattenGroups(suggestionGroups)
   const activeIndex =
     suggestionRows.length === 0 ? 0 : Math.min(activeSuggestion, suggestionRows.length - 1)
@@ -180,9 +203,36 @@ export function Composer({
     }
   }, [suggest?.kind, threadId, files, workspaceApi])
 
-  /** 选中一条建议：把触发段 [start, end) 换成引用标记，光标落后面、关浮窗 */
+  /** 打开 `/` 时取一次使用率（命令行「压缩上下文」的次要位是数值展示，不是解释小字） */
+  useEffect(() => {
+    if (suggest?.kind !== 'slash' || threadId === null || threadId === '') return
+    let alive = true
+    void fetchThreadContext(threadId).then(
+      (context) => {
+        if (alive) setUsagePercent(usagePercentOf(context.lastInput, thresholdTokensOf(settings)))
+      },
+      () => {
+        // 取不到（服务没起来 / 单测未装桥）：不显示数值，命令照常可用
+        if (alive) setUsagePercent(null)
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [suggest?.kind, threadId, settings])
+
+  /** 选中一条建议：命令行走"立即执行"（移除触发段）；引用行把触发段换成引用标记 */
   const pickSuggestion = (row: SuggestionRow): void => {
-    if (suggest === null) return
+    if (suggest === null || row.disabled === true) return
+    if (row.command === 'compact') {
+      const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
+      pendingCaret.current = suggest.start
+      setDraft(remaining)
+      setSuggest(null)
+      onCompact?.()
+      return
+    }
+    if (row.reference === undefined) return
     const inserted = replaceRangeWithMarker(
       draft,
       suggest.start,
@@ -196,6 +246,8 @@ export function Composer({
   }
 
   const canSend = draft.trim() !== '' || attachments.length > 0
+  /** 内部 notice（附件/权限）优先；没有时显示上层给的压缩结果 notice（round 19） */
+  const shownNotice = notice ?? externalNotice
 
   const submit = (): void => {
     if (!canSend) return
@@ -375,15 +427,19 @@ export function Composer({
         />
       </div>
 
-      {notice === null ? null : (
+      {shownNotice === null ? null : (
         <p
           data-testid="composer-notice"
           className={cn(
             'px-3 pb-1 text-c1',
-            notice.tone === 'danger' ? 'text-danger' : 'text-warning'
+            shownNotice.tone === 'danger'
+              ? 'text-danger'
+              : shownNotice.tone === 'success'
+                ? 'text-ink-secondary'
+                : 'text-warning'
           )}
         >
-          {notice.text}
+          {shownNotice.text}
         </p>
       )}
 

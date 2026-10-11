@@ -238,17 +238,18 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const langfuseFor = options.langfuse ?? ((): LangfuseExportConfig | null => null)
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory, usage, sessionProjects, telemetry } = await createKyclawMastra({
-    dataDir: options.dataDir,
-    resolveModel: resolveModelFor,
-    workspaces: workspacesFor,
-    defaultWorkspace: defaultWorkspaceFor,
-    projects: projectsFor,
-    permissionRules: permissionRulesFor,
-    mcpServers: mcpServersFor,
-    mcpTools: (gate) => mcpLifecycle.tools(gate),
-    langfuse: langfuseFor
-  })
+  const { mastra, storage, memory, usage, sessionProjects, compaction, telemetry } =
+    await createKyclawMastra({
+      dataDir: options.dataDir,
+      resolveModel: resolveModelFor,
+      workspaces: workspacesFor,
+      defaultWorkspace: defaultWorkspaceFor,
+      projects: projectsFor,
+      permissionRules: permissionRulesFor,
+      mcpServers: mcpServersFor,
+      mcpTools: (gate) => mcpLifecycle.tools(gate),
+      langfuse: langfuseFor
+    })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
   // （退化为默认工作区），下一轮写入/重启还会再试 —— 一条副线不该让整个对话起不来。
@@ -298,6 +299,15 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
         void sessionProjects.clear(threadId).catch((error: unknown) => {
           console.warn('[kyclaw] 删除会话后清理项目映射失败（不影响删除本身）', error)
         })
+        // round 19：压缩记录同理（它的 thread_id 指向已不存在的会话）
+        void compaction.clear(threadId).catch((error: unknown) => {
+          console.warn('[kyclaw] 删除会话后清理压缩记录失败（不影响删除本身）', error)
+        })
+      },
+      // round 19：上下文压缩（记录读 + 摘要服务）；POST 失败在路由层转人话
+      compaction: {
+        compact: (threadId, keep) => compaction.compact(threadId, keep),
+        of: (threadId) => compaction.current(threadId)
       }
     })
   )

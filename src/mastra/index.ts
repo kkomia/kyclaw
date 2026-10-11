@@ -31,6 +31,13 @@ import type { MastraMemory } from '@mastra/core/memory'
 import type { Project } from '../shared/projects'
 import type { McpServerConfig, PermissionRule, Workspace } from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
+import {
+  compactionSqlClient,
+  createCompactionProcessor,
+  createCompactionService,
+  createCompactionStore,
+  type CompactionService
+} from './compaction'
 import type { McpToolGate } from './mcp'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
@@ -80,6 +87,8 @@ export interface KyclawMastra {
   usage: UsageStore
   /** 会话↔项目映射的表读写口 + 内存镜像（/api/projects/mappings 与工具取根共用一份） */
   sessionProjects: SessionProjectStore
+  /** round 19：上下文压缩（记录读写 + 摘要服务；注入处理器与 /api/threads/:id/compact 共用） */
+  compaction: CompactionService
   /** T17：本次装配有没有挂上 Langfuse 导出（设置页拿它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
 }
@@ -158,6 +167,15 @@ export async function createKyclawMastra(options: {
   await usage.ensureTable()
   // 会话↔项目映射（T18）同库同寿命：表在这里建好；内存镜像是工具同步取根的来源
   const sessionProjects = createSessionProjectStore(storage)
+  // 上下文压缩（round 19）：记录表同库；摘要服务用当前模型解析器，记账并进 usage
+  const compactionStore = createCompactionStore(compactionSqlClient(storage))
+  await compactionStore.ensureTable()
+  const compaction = createCompactionService({
+    memory,
+    store: compactionStore,
+    resolveModel: options.resolveModel,
+    usage
+  })
   // 追踪（T17）：默认关——没配齐（或建不起来）就没有 observability，Mastra 自己走 no-op
   const observability = await langfuseObservabilityQuietly(options.langfuse?.() ?? null)
   const mastra = new MastraClass({
@@ -179,8 +197,12 @@ export async function createKyclawMastra(options: {
         chatRoute({
           path: CHAT_ROUTE_PATH,
           version: CHAT_PROTOCOL_VERSION,
-          // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）
-          defaultOptions: { onFinish: createUsageRecorder({ store: usage }) }
+          // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）；
+          // round 19：输入处理器把该会话的压缩摘要注入成系统前缀（不碰消息流/存储，见 compaction.ts）
+          defaultOptions: {
+            onFinish: createUsageRecorder({ store: usage }),
+            inputProcessors: [createCompactionProcessor(compactionStore)]
+          }
         })
       ],
       // C-1：chatRoute 的 handler 在流开始前抛错（如模型解析失败）时会走到这里
@@ -202,6 +224,7 @@ export async function createKyclawMastra(options: {
     memory,
     usage,
     sessionProjects,
+    compaction,
     telemetry: { langfuse: observability !== null }
   }
 }

@@ -43,7 +43,7 @@ import type { ReferenceKind } from './reference-markers'
  * 图标按钮 hover 铺灰底（Fills-F1）= 图10 口径；不给说明性小字（雷点 2）。
  */
 export interface ComposerNotice {
-  tone: 'danger' | 'warning'
+  tone: 'danger' | 'warning' | 'success'
   text: string
 }
 
