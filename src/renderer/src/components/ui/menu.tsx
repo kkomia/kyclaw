@@ -16,6 +16,8 @@ export interface MenuActionItem {
   danger?: boolean
   /** 当前项（菜单里也能是导航入口）：选中底 Fills-F2 + aria-current="page" */
   selected?: boolean
+  /** 条目右侧的小标记（模块 2：视觉模型标一个「看图」；不给解释性小字，只做标记） */
+  trailing?: ReactNode
   /** 条目的 data-testid（R4：关键交互节点给 E2E 稳定选择器） */
   testId?: string
   onSelect?: (id: string) => void
@@ -103,6 +105,9 @@ function actionItem(entry: MenuActionItem): React.JSX.Element {
       )}
     >
       {itemContent(entry.icon, entry.label)}
+      {entry.trailing === undefined ? null : (
+        <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{entry.trailing}</span>
+      )}
     </DropdownMenu.Item>
   )
 }

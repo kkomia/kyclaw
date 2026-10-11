@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { UIMessage } from 'ai'
+import { Paperclip } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 import { ReasoningPart } from './parts/ReasoningPart'
 import { TextPart } from './parts/TextPart'
@@ -24,6 +25,7 @@ export interface MessageProps {
 
 type MessagePart = UIMessage['parts'][number]
 type TextPartType = Extract<MessagePart, { type: 'text' }>
+type FilePartType = Extract<MessagePart, { type: 'file' }>
 
 /** 用户消息里的纯文本（气泡里不渲染 markdown：用户输入按原样显示） */
 function userText(message: UIMessage): string {
@@ -31,6 +33,11 @@ function userText(message: UIMessage): string {
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('\n\n')
+}
+
+/** 用户消息里的 file part（模块 2：图片随消息发出去就是它们） */
+function userFiles(message: UIMessage): FilePartType[] {
+  return message.parts.filter((part): part is FilePartType => part.type === 'file')
 }
 
 /** 最后一个"真渲染出来"的 part 的下标（光标挂它身上）；没有就是 -1 */
@@ -72,6 +79,7 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
 
   if (message.role === 'user') {
     const text = userText(message)
+    const files = userFiles(message)
     const submitEdit = (): void => {
       const next = (draft ?? '').trim()
       setDraft(null)
@@ -86,6 +94,37 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
       >
         {draft === null ? (
           <>
+            {/* 随消息发出去的图片（模块 2）：最小实现——直接给缩略图；非图片的 file part 给一条文件名 */}
+            {files.length === 0 ? null : (
+              <div
+                data-testid="message-files"
+                className="flex max-w-[85%] flex-wrap justify-end gap-1.5"
+              >
+                {files.map((part, index) =>
+                  part.mediaType.startsWith('image/') ? (
+                    <img
+                      key={`${part.url.slice(0, 24)}-${index}`}
+                      data-testid="message-image"
+                      src={part.url}
+                      alt={part.filename ?? '图片'}
+                      className="max-h-64 max-w-64 rounded-panel border-(length:--hairline-width) border-hairline object-contain"
+                    />
+                  ) : (
+                    <span
+                      key={`${part.url.slice(0, 24)}-${index}`}
+                      data-testid="message-file"
+                      className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline px-2.5 text-c1 text-ink-secondary"
+                    >
+                      <Paperclip
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-ink-tertiary"
+                      />
+                      <span className="min-w-0 truncate">{part.filename ?? part.mediaType}</span>
+                    </span>
+                  )
+                )}
+              </div>
+            )}
             <div className="max-w-[85%] rounded-panel bg-secondary px-4 py-2 text-b1 break-words whitespace-pre-wrap text-ink">
               {/* 引用标记画成内联 chip（round 14 起；round 21 换图3 观感：细描边圆角 + 图标，
                   `【引用】` 前缀不进可见层）。底层消息文本不变——编辑重发仍是原文。 */}

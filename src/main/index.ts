@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
+import { registerAttachmentsIpc } from './ipc/attachments'
 import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-models'
 import { registerMemoryIpc } from './ipc/memory'
 import { registerPluginIpc } from './ipc/plugins'
@@ -126,6 +127,8 @@ if (!app.requestSingleInstanceLock()) {
     registerProjectsIpc(userDataDir)
     registerPluginIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
+    // 模块 2：附件（PDF 文字层抽取在主进程跑，渲染端零新依赖）
+    registerAttachmentsIpc()
     // 追踪通道（T17）：地址读 settings.json（与设置页写的是同一份），密钥在 secrets.json
     registerTelemetryIpc({
       dataDir: userDataDir,

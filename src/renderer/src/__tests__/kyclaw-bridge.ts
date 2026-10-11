@@ -16,6 +16,7 @@ import {
 import type { PluginsOverview } from '@shared/plugins'
 import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
 import type { TranslateResult } from '@shared/translate'
+import type { PdfExtractResult } from '@shared/attachments'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 import type {
   FilePreview,
@@ -480,6 +481,20 @@ export function translateApiStub(): TranslateApiStub {
 }
 
 /**
+ * 附件面（模块 2）：默认回"抽不出文字"（`{ok:false}`）——**不假装抽成功**，
+ * 于是没关心过 PDF 的用例不会被一条假附件带偏。用例自己 `mockResolvedValue({ok:true,...})` 喂结果。
+ */
+export interface AttachmentsApiStub {
+  extractPdf: Mock<(bytes: Uint8Array) => Promise<PdfExtractResult>>
+}
+
+export function attachmentsApiStub(): AttachmentsApiStub {
+  return {
+    extractPdf: vi.fn(async () => ({ ok: false as const, message: '这个 PDF 没有文字层' }))
+  }
+}
+
+/**
  * 「本地模型」面（模块 3B）：总览是"当前值 + 订阅"的形状（主进程会推下载进度），
  * 所以桩里也放一份 current，并给个 `push` 让用例模拟主进程的推送。
  */
@@ -530,6 +545,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   memory: MemoryApiStub
   localModels: LocalModelsApiStub
   translate: TranslateApiStub
+  attachments: AttachmentsApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -546,6 +562,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const memory = memoryApiStub()
   const localModels = localModelsApiStub()
   const translate = translateApiStub()
+  const attachments = attachmentsApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -554,6 +571,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     terminal,
     projects,
     agent: agentApiStub(),
+    attachments,
     updates,
     telemetry,
     plugins,
@@ -574,7 +592,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     plugins,
     memory,
     localModels,
-    translate
+    translate,
+    attachments
   }
 }
 

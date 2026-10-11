@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
 import { Input } from '@renderer/components/ui/input'
+import { Switch } from '@renderer/components/ui/switch'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { visionOf } from '@shared/models'
 import type { ConnectionTestResult } from '@shared/ipc'
 import {
   newCustomProvider,
@@ -64,7 +66,9 @@ function keyStatusText(state: ProviderKeyState | undefined): string {
 
 export function ModelSettings(): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
+  const modelCapabilities = useSettingsStore((state) => state.settings.modelCapabilities)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
+  const setModelCapability = useSettingsStore((state) => state.setModelCapability)
   const removeProvider = useSettingsStore((state) => state.removeProvider)
 
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
@@ -217,8 +221,45 @@ export function ModelSettings(): React.JSX.Element {
     [refreshKeyStates, removeProvider]
   )
 
+  /** 当前模型 = 默认通道（没有默认标记就是第一条）——与模型解析、composer 的模型 chip 同一口径 */
+  const currentProvider = providers.find((provider) => provider.isDefault) ?? providers[0]
+
+  /** 模块 2：写"当前模型能不能看图"的用户覆盖（生效口径 用户覆盖 > 注册表 > false） */
+  const setVision = useCallback(
+    async (model: string, vision: boolean): Promise<void> => {
+      setPageError(undefined)
+      try {
+        await setModelCapability(model, { vision })
+      } catch (error) {
+        setPageError(messageOf(error))
+      }
+    },
+    [setModelCapability]
+  )
+
   return (
     <div data-testid="model-settings" className="flex flex-col gap-4">
+      {/* 当前模型能力（模块 2）：图片收/拒看这一格。只看"当前模型"——与 composer 判的那一个同源 */}
+      {currentProvider === undefined ? null : (
+        <section
+          data-testid="model-vision"
+          className="flex items-center justify-between gap-3 rounded-panel border border-hairline p-4"
+        >
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-b1 text-ink">支持看图</span>
+            <span className="truncate text-c1 text-ink-tertiary">
+              {currentProvider.model === '' ? currentProvider.id : currentProvider.model}
+            </span>
+          </div>
+          <Switch
+            label="支持看图"
+            data-testid="model-vision-switch"
+            checked={visionOf(currentProvider.model, modelCapabilities[currentProvider.model])}
+            onCheckedChange={(checked) => void setVision(currentProvider.model, checked)}
+          />
+        </section>
+      )}
+
       {providers.length === 0 ? (
         <p data-testid="model-empty" className="text-b2 text-ink-secondary">
           还没有模型通道：从下面的预设里加一个，或选「自定义」。

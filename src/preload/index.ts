@@ -24,6 +24,7 @@ import {
   workspaceOpenInExplorerResultSchema,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawAttachmentsApi,
   type KyclawLocalModelsApi,
   type KyclawMemoryApi,
   type KyclawPluginsApi,
@@ -38,6 +39,7 @@ import {
   type KyclawWorkspaceApi,
   type UpdateState
 } from '../shared/ipc'
+import { pdfExtractResultSchema } from '../shared/attachments'
 import { translateResultSchema } from '../shared/translate'
 import { localModelsOverviewSchema, type LocalModelsOverview } from '../shared/local-models'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
@@ -208,6 +210,20 @@ const agentApi: KyclawAgentApi = {
       await ipcRenderer.invoke(IPC_CHANNELS.agent.endpoint)
     )
     if (!parsed.success) throw new Error('[kyclaw] agent 端点响应结构不合法')
+    return parsed.data
+  }
+}
+
+/**
+ * 附件面（模块 2）：PDF 文字层抽取在主进程跑。
+ * `ok:false` 是产品语言的一等结果（扫描件/加密/坏文件），不当异常；只有**结构不合法**才抛。
+ */
+const attachmentsApi: KyclawAttachmentsApi = {
+  extractPdf: async (bytes) => {
+    const parsed = pdfExtractResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.attachments.extractPdf, bytes)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] PDF 抽取响应结构不合法')
     return parsed.data
   }
 }
@@ -499,6 +515,7 @@ export const kyclawApi: KyclawApi = {
   terminal: terminalApi,
   projects: projectsApi,
   agent: agentApi,
+  attachments: attachmentsApi,
   updates: updatesApi,
   telemetry: telemetryApi,
   plugins: pluginsApi,

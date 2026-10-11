@@ -345,3 +345,47 @@ describe('模型组 · 测试连接', () => {
     expect(bridge.testProvider).not.toHaveBeenCalled()
   })
 })
+
+describe('模块 2 · 当前模型的「支持看图」开关（用户覆盖 > 注册表 > false）', () => {
+  it('注册表说没有视觉（deepseek）→ 开关是关的；打开就写一条覆盖', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+
+    const toggle = screen.getByTestId('model-vision-switch')
+    expect(screen.getByTestId('model-vision')).toHaveTextContent('deepseek-flash')
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenLastCalledWith({
+        modelCapabilities: { 'deepseek-flash': { vision: true } }
+      })
+    )
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('已有覆盖时按覆盖显示（键 = 模型名原文，不归一）', async () => {
+    await mount({
+      ...withProviders({ ...OPENAI, isDefault: true }, { ...DEEPSEEK, isDefault: false }),
+      modelCapabilities: { 'gpt-4o-mini': { vision: true } }
+    })
+
+    expect(screen.getByTestId('model-vision')).toHaveTextContent('gpt-4o-mini')
+    expect(screen.getByTestId('model-vision-switch')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('写覆盖失败：错误露在页上，不静默', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
+
+    fireEvent.click(screen.getByTestId('model-vision-switch'))
+
+    expect(await screen.findByTestId('model-page-error')).toHaveTextContent('磁盘满了')
+  })
+
+  it('没有 provider 时不画这一格（没有"当前模型"可标）', async () => {
+    await mount(defaultSettings())
+
+    expect(screen.queryByTestId('model-vision')).not.toBeInTheDocument()
+  })
+})

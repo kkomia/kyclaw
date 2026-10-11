@@ -15,7 +15,7 @@ import {
  * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件与置顶/归档/探测字段为空 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置 / 语义召回默认开（本地）/ 思考翻译默认关', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件与置顶/归档/探测字段为空 / 模型能力覆盖为空 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置 / 语义召回默认开（本地）/ 思考翻译默认关', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
@@ -28,6 +28,7 @@ describe('AppSettings schema', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
+      modelCapabilities: {},
       probedModels: {},
       pinnedThreads: [],
       pinnedProjects: [],
@@ -374,6 +375,43 @@ describe('思考翻译设置 schema（round 32：开关 + 模式 + 服务三项 
       model: 'my-translate',
       targetLanguage: 'English'
     })
+  })
+})
+
+describe('模型能力覆盖（模块 2：按模型名的视觉标记）', () => {
+  it('形状锁死：只有 vision 一个布尔键；取值随键走（不归一模型名）', () => {
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        modelCapabilities: { 'gpt-4o': { vision: true }, 'deepseek-chat': { vision: false } }
+      }).success
+    ).toBe(true)
+    // 空对象合法（= 没有任何覆盖）
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, modelCapabilities: {} }).success
+    ).toBe(true)
+    // 多余键 / 非布尔都不收
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        modelCapabilities: { m: { vision: 'yes' } }
+      }).success
+    ).toBe(false)
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        modelCapabilities: { m: { vision: true, audio: true } }
+      }).success
+    ).toBe(false)
+  })
+
+  it('补丁可以整表替换（设置页的"支持看图"开关走这条路）', () => {
+    expect(
+      appSettingsPatchSchema.parse({ modelCapabilities: { 'gpt-4o': { vision: true } } })
+    ).toEqual({ modelCapabilities: { 'gpt-4o': { vision: true } } })
+    expect(appSettingsPatchSchema.safeParse({ modelCapabilities: { m: 'yes' } }).success).toBe(
+      false
+    )
   })
 })
 

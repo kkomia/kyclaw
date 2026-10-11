@@ -9,6 +9,7 @@ import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { shouldCompact, thresholdTokensOf } from '@renderer/lib/compact'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import type { OutgoingMessage } from './composer-attachments'
 import {
   allowForSession,
   isAllowedForSession,
@@ -282,8 +283,9 @@ function ActiveChat({
   /**
    * 流式中发的消息排队（最简队列：先进先出，一轮结束自动发下一条）。
    * 队列本体放 ref（状态回调里要读最新值）；state 只存条数给界面看。
+   * 队列装的是**完整载荷**（正文 + 要真发的图片），不是纯文本——模块 2 起图片是 file part。
    */
-  const pending = useRef<string[]>([])
+  const pending = useRef<OutgoingMessage[]>([])
   const [queuedCount, setQueuedCount] = useState(0)
   /** 服务端截断失败时的重试素材（不静默丢） */
   const [pendingSync, setPendingSync] = useState<PendingSync | null>(null)
@@ -362,7 +364,7 @@ function ActiveChat({
    * 还没落）就不压缩：如实降级，不假装判过（偏差见报告）。
    */
   const sendWithPreflight = useCallback(
-    async (text: string): Promise<void> => {
+    async (message: OutgoingMessage): Promise<void> => {
       setCompactNotice(null)
       try {
         const context = await fetchThreadContext(threadId)
@@ -376,16 +378,23 @@ function ActiveChat({
       } catch {
         /* 用量取不到：不压缩，照常发送 */
       }
-      void sendMessage({ text }, threadRequestOptions(threadId))
+      // 图片走 file part（module 2）：没有图片时连字段都不带，保持"纯文本消息"的老形状
+      void sendMessage(
+        {
+          text: message.text,
+          ...(message.files.length === 0 ? {} : { files: message.files })
+        },
+        threadRequestOptions(threadId)
+      )
     },
     [runCompact, sendMessage, threadId]
   )
 
   /** 统一发送入口（submit 与队列补发都走它）：预检锁覆盖预检窗口，防双发 */
   const dispatch = useCallback(
-    (text: string): void => {
+    (message: OutgoingMessage): void => {
       sending.current = true
-      void sendWithPreflight(text).finally(() => {
+      void sendWithPreflight(message).finally(() => {
         sending.current = false
       })
     },
@@ -483,13 +492,13 @@ function ActiveChat({
    * （决策 → resume → 收尾）真正结束再发，语义与"流式中发送"完全一致。
    */
   const submit = useCallback(
-    (text: string) => {
+    (message: OutgoingMessage) => {
       if (busy || waitingApproval || compacting || sending.current) {
-        pending.current = [...pending.current, text]
+        pending.current = [...pending.current, message]
         setQueuedCount(pending.current.length)
         return
       }
-      dispatch(text)
+      dispatch(message)
     },
     [busy, waitingApproval, compacting, dispatch]
   )

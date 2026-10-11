@@ -24,7 +24,8 @@ import {
   formatTokens,
   isProbedFresh,
   probedKeyOf,
-  thinkingEffortsOf
+  thinkingEffortsOf,
+  visionOf
 } from '@shared/models'
 import type { ProbedModelSpec } from '@shared/models'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
@@ -53,6 +54,9 @@ export interface ComposerNotice {
 /** 图标按钮（composer 内统一形态：32px、**圆形** hover 底 —— round 15 用户实拍：不要圆角方框） */
 const ICON_TRIGGER_CLASS =
   'inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none'
+
+/** 视觉模型在模型菜单里的小标记（模块 2：自绘、不解释后端——它只是"这个模型能看图"的事实标记） */
+const VISION_MARK = '看图'
 
 export interface PlusMenuProps {
   onAddFile: () => void
@@ -378,6 +382,7 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const probedModels = useSettingsStore((state) => state.settings.probedModels)
+  const modelCapabilities = useSettingsStore((state) => state.settings.modelCapabilities)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
   const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
@@ -460,6 +465,10 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
       id: provider.id,
       label: provider.model === '' ? provider.id : provider.model,
       selected: provider.isDefault,
+      // 模块 2：视觉模型给一个小标记（不解释后端；判据 = 用户覆盖 > 注册表 > false）
+      trailing: visionOf(provider.model, modelCapabilities[provider.model])
+        ? VISION_MARK
+        : undefined,
       testId: `composer-model-${provider.id}`,
       onSelect: select
     })),
@@ -591,6 +600,7 @@ export interface PendingChipsProps {
 /**
  * 附件 chip 行：数据（名字/大小）直接印在 chip 上，× 移除；没有内容时整行不渲染。
  * round 14：引用不再走这里（改为输入框内联标记 + 镜像 pill，见 reference-markers.ts）。
+ * 模块 2：图片把回形针换成**缩略图**（发送前就能确认是哪张）；PDF 额外印一截页数（数据，不是说明小字）。
  */
 export function PendingChips({
   attachments,
@@ -606,8 +616,25 @@ export function PendingChips({
           data-testid={`composer-attachment-${attachment.name}`}
           className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
         >
-          <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+          {attachment.image === undefined ? (
+            <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+          ) : (
+            <img
+              data-testid={`composer-attachment-thumb-${attachment.name}`}
+              src={attachment.image.url}
+              alt=""
+              aria-hidden="true"
+              className="size-5 shrink-0 rounded-control object-cover"
+            />
+          )}
           <span className="min-w-0 truncate">{attachment.name}</span>
+          {attachment.pdf === undefined ? null : (
+            <span className="shrink-0 text-ink-tertiary">
+              {attachment.pdf.truncated
+                ? `${attachment.pdf.pages} 页（已截断）`
+                : `${attachment.pdf.pages} 页`}
+            </span>
+          )}
           <span className="shrink-0 text-ink-tertiary">{formatBytes(attachment.size)}</span>
           <button
             type="button"

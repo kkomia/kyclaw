@@ -42,6 +42,32 @@ function typeAt(value: string): HTMLTextAreaElement {
   return input
 }
 
+/**
+ * 发送载荷里的正文（模块 2 起 onSend 收 `{ text, files }`：图片要随消息真发，
+ * 不能只交一个字符串了）。返回值 = 第 n 次发送的正文。
+ */
+function sentText(onSend: ReturnType<typeof vi.fn>, call = 0): string {
+  const payload = onSend.mock.calls[call]?.[0] as { text?: string } | undefined
+  return payload?.text ?? ''
+}
+
+/** 发送载荷里随消息真发的文件（image 之外的类型本轮不发） */
+function sentFiles(onSend: ReturnType<typeof vi.fn>, call = 0): unknown[] {
+  const payload = onSend.mock.calls[call]?.[0] as { files?: unknown[] } | undefined
+  return payload?.files ?? []
+}
+
+/** 一个设置里有默认 provider（模型名可指定）的环境——图片收/拒要看它 */
+function settingsWithProvider(model: string, extra: Partial<AppSettings> = {}): AppSettings {
+  return {
+    ...defaultSettings(),
+    providers: [
+      { id: 'p1', type: 'openai-compatible', model, isDefault: true, baseUrl: 'http://x/v1' }
+    ],
+    ...extra
+  }
+}
+
 describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', () => {
   it('max 768 / 圆角 24 / 输入区自适应（48–170）/ 工具条 48 / 发送钮 36', () => {
     setup()
@@ -158,7 +184,7 @@ describe('输入卡键盘行为', () => {
 
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
 
-    expect(onSend).toHaveBeenCalledWith('你好')
+    expect(sentText(onSend)).toBe('你好')
     expect(screen.getByTestId('composer-input')).toHaveValue('')
   })
 
@@ -211,7 +237,7 @@ describe('输入卡流式态', () => {
 
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
 
-    expect(onSend).toHaveBeenCalledWith('接着问一句')
+    expect(sentText(onSend)).toBe('接着问一句')
     expect(screen.getByTestId('composer-input')).toHaveValue('')
   })
 
@@ -354,7 +380,7 @@ describe('round 7 · ＋菜单与引用', () => {
     expect(input).toHaveValue('总结一下【引用】上下文：工作区-默认 ')
 
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
-    expect(onSend).toHaveBeenCalledWith('总结一下【引用】上下文：工作区-默认')
+    expect(sentText(onSend)).toBe('总结一下【引用】上下文：工作区-默认')
   })
 
   it('引用上下文：没有工作区时菜单项禁用（点了没有用的事不给做）', () => {
@@ -523,7 +549,7 @@ describe('round 7 · 添加文件（最小可用：文本 ≤16KB，内容随消
     type('看这个文件')
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
 
-    expect(onSend).toHaveBeenCalledWith('看这个文件\n\n【附件】note.txt\n```\nhello 附件\n```')
+    expect(sentText(onSend)).toBe('看这个文件\n\n【附件】note.txt\n```\nhello 附件\n```')
     // 发送后 chip 清空
     expect(screen.queryByTestId('composer-attachment-note.txt')).not.toBeInTheDocument()
   })
@@ -535,24 +561,24 @@ describe('round 7 · 添加文件（最小可用：文本 ≤16KB，内容随消
     await screen.findByTestId('composer-attachment-only.txt')
 
     fireEvent.click(screen.getByTestId('composer-send'))
-    expect(onSend).toHaveBeenCalledWith('【附件】only.txt\n```\n只发文件\n```')
+    expect(sentText(onSend)).toBe('【附件】only.txt\n```\n只发文件\n```')
   })
 
   it('非文本 / 超大明确提示不收（不假装附加成功）', async () => {
     setup()
 
-    const image = new File(['x'], 'photo.png', { type: 'image/png' })
+    const binary = new File(['x'], 'archive.zip', { type: 'application/zip' })
     const big = new File([new Uint8Array(17 * 1024)], 'big.txt', { type: 'text/plain' })
     fireEvent.change(screen.getByTestId('composer-file-input'), {
-      target: { files: [image, big] }
+      target: { files: [binary, big] }
     })
 
     await waitFor(() =>
       expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '未附加：photo.png（不是文本文件）、big.txt（超过 16KB）'
+        '未附加：archive.zip（不是文本文件）、big.txt（超过 16KB）'
       )
     )
-    expect(screen.queryByTestId('composer-attachment-photo.png')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-attachment-archive.zip')).not.toBeInTheDocument()
     expect(screen.queryByTestId('composer-attachment-big.txt')).not.toBeInTheDocument()
   })
 
@@ -1011,5 +1037,136 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
 
     await tick()
     expect(bridge.probeModels).not.toHaveBeenCalled()
+  })
+})
+
+describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
+  /** 装一个"有默认 provider"的环境：模型名 + 用户覆盖决定视觉能力 */
+  function mount(
+    model: string,
+    capabilities: AppSettings['modelCapabilities'] = {}
+  ): { onSend: ReturnType<typeof vi.fn>; bridge: KyclawBridgeStubs } {
+    const initial: AppSettings = { ...settingsWithProvider(model), modelCapabilities: capabilities }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const { onSend } = setup()
+    return { onSend, bridge }
+  }
+
+  function pick(files: File[]): void {
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files } })
+  }
+
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  it('vision=false（注册表：deepseek 全系没有视觉）→ 图片人话拒收，不假装收下', async () => {
+    mount('deepseek-chat')
+
+    pick([new File(['x'], 'shot.png', { type: 'image/png' })])
+
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
+        '当前模型不支持看图：可在设置 → 模型里标记视觉模型，或把图片内容用文字描述'
+      )
+    )
+    expect(screen.queryByTestId('composer-attachment-shot.png')).not.toBeInTheDocument()
+  })
+
+  it('vision=true（用户覆盖）→ 收下并给缩略图；发送时图片随消息真发（file part）', async () => {
+    const { onSend } = mount('deepseek-chat', { 'deepseek-chat': { vision: true } })
+
+    pick([new File(['png-bytes'], 'shot.png', { type: 'image/png' })])
+
+    await screen.findByTestId('composer-attachment-shot.png')
+    expect(screen.getByTestId('composer-attachment-thumb-shot.png')).toBeInTheDocument()
+
+    type('这是什么')
+    fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+
+    expect(sentText(onSend)).toBe('这是什么')
+    const files = sentFiles(onSend) as Array<{ mediaType: string; url: string; filename?: string }>
+    expect(files).toHaveLength(1)
+    expect(files[0].mediaType).toBe('image/png')
+    expect(files[0].filename).toBe('shot.png')
+    expect(files[0].url.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('PDF（所有模型统一）：抽取文本内联进正文，chip 上印页数；不随消息发文件', async () => {
+    const { onSend, bridge } = mount('deepseek-chat')
+    bridge.attachments.extractPdf.mockResolvedValue({
+      ok: true,
+      pages: 3,
+      truncated: false,
+      text: '【第 1 页】\n内容'
+    })
+
+    pick([new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })])
+
+    const chip = await screen.findByTestId('composer-attachment-doc.pdf')
+    expect(chip).toHaveTextContent('3 页')
+
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】doc.pdf\n```\n【第 1 页】\n内容\n```')
+    expect(sentFiles(onSend)).toHaveLength(0)
+  })
+
+  it('PDF 触到上限（truncated）：chip 上如实标「已截断」', async () => {
+    const { bridge } = mount('deepseek-chat')
+    bridge.attachments.extractPdf.mockResolvedValue({
+      ok: true,
+      pages: 240,
+      truncated: true,
+      text: '【第 1 页】\n内容'
+    })
+
+    pick([new File(['%PDF-1.4'], 'big.pdf', { type: 'application/pdf' })])
+
+    const chip = await screen.findByTestId('composer-attachment-big.pdf')
+    expect(chip).toHaveTextContent('240 页（已截断）')
+  })
+
+  it('扫描件 PDF（无文字层）→ 人话拒收', async () => {
+    const { bridge } = mount('deepseek-chat')
+    bridge.attachments.extractPdf.mockResolvedValue({
+      ok: false,
+      message: '这个 PDF 没有文字层（可能是扫描件），读不到文字内容'
+    })
+
+    pick([new File(['%PDF'], 'scan.pdf', { type: 'application/pdf' })])
+
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent('没有文字层')
+    )
+    expect(screen.queryByTestId('composer-attachment-scan.pdf')).not.toBeInTheDocument()
+  })
+
+  it('拖拽入卡与 ＋ 上传是同一条路（拖一个文本文件进去照样成 chip）', async () => {
+    const { onSend } = mount('deepseek-chat')
+
+    fireEvent.dragOver(screen.getByTestId('composer'))
+    expect(screen.getByTestId('composer')).toHaveAttribute('data-dragging', 'true')
+
+    fireEvent.drop(screen.getByTestId('composer'), {
+      dataTransfer: { files: [new File(['拖进来的'], 'drop.txt', { type: 'text/plain' })] }
+    })
+
+    expect(screen.getByTestId('composer')).not.toHaveAttribute('data-dragging', 'true')
+    await screen.findByTestId('composer-attachment-drop.txt')
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】drop.txt\n```\n拖进来的\n```')
+  })
+
+  it('模型菜单：视觉模型带「看图」小标记；没有视觉的不带', async () => {
+    mount('deepseek-chat', { 'deepseek-chat': { vision: true } })
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    await waitFor(() => expect(screen.getByTestId('composer-model-p1')).toHaveTextContent('看图'))
+
+    cleanup()
+    mount('deepseek-chat')
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-model-p1')).not.toHaveTextContent('看图')
   })
 })

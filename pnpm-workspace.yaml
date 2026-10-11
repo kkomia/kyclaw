@@ -3,5 +3,9 @@ allowBuilds:
   esbuild: true
   node-pty: true
   protobufjs: false
+# pdfjs-dist 把 @napi-rs/canvas 列为可选依赖（原生 Node canvas，只为"把 PDF 渲染成图"）。
+# 我们只用它做**文本抽取**，这条原生依赖既不必要、也不允许进包（任务书写明"不加原生依赖"）。
+ignoredOptionalDependencies:
+  - '@napi-rs/canvas'
 overrides:
   'app-builder-lib>@electron/get': 5.1.0

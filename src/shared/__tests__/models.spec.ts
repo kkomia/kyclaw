@@ -9,7 +9,8 @@ import {
   modelSpecOf,
   probedKeyOf,
   requestProviderOptions,
-  thinkingEffortsOf
+  thinkingEffortsOf,
+  visionOf
 } from '../models'
 import type { ProbedModelSpec } from '../models'
 import type { ProviderConfig } from '../providers'
@@ -193,5 +194,44 @@ describe('round 22 · probed 实测优先（GET /models 的真实元数据盖过
   it('探测键：`<providerId>:<modelId>`（模型名原文，不归一）', () => {
     expect(probedKeyOf('deepseek', 'deepseek-flash')).toBe('deepseek:deepseek-flash')
     expect(probedKeyOf('p1', 'DeepSeek-V4-Pro')).toBe('p1:DeepSeek-V4-Pro')
+  })
+})
+
+describe('视觉能力（模块 2：用户覆盖 > 注册表 > false）', () => {
+  it('注册表：deepseek 全系没有视觉（如实标 false）；未知模型保守 false', () => {
+    for (const model of [
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'deepseek-flash',
+      'deepseek-chat',
+      'deepseek-reasoner'
+    ]) {
+      expect(visionOf(model), model).toBe(false)
+    }
+    expect(visionOf('kimi-k3')).toBe(false)
+    expect(visionOf(undefined)).toBe(false)
+    expect(visionOf('')).toBe(false)
+    // 名字归一（大小写 / provider 前缀）与注册表匹配同口径
+    expect(visionOf('DeepSeek-V4-Pro')).toBe(false)
+  })
+
+  it('用户覆盖压过注册表：true 覆盖 false，false 覆盖"注册表没写"的保守值', () => {
+    expect(visionOf('deepseek-chat', { vision: true })).toBe(true)
+    expect(visionOf('gpt-4o', { vision: true })).toBe(true)
+    expect(visionOf('gpt-4o', { vision: false })).toBe(false)
+    // 覆盖对象在但没写 vision = 没覆盖（回落注册表）
+    expect(visionOf('gpt-4o', {})).toBe(false)
+    expect(visionOf('gpt-4o', undefined)).toBe(false)
+  })
+
+  it('modelSpecOf 带上 vision（probed 覆盖上下文/挡位时也不丢）', () => {
+    expect(modelSpecOf('deepseek-flash').vision).toBe(false)
+    expect(
+      modelSpecOf('deepseek-flash', {
+        contextWindow: 1_000_000,
+        efforts: ['low'],
+        fetchedAt: '2026-10-11T00:00:00.000Z'
+      }).vision
+    ).toBe(false)
   })
 })

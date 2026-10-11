@@ -151,6 +151,22 @@ export const modelPrefsSchema = z.strictObject({
 export type ModelPrefs = z.infer<typeof modelPrefsSchema>
 
 /**
+ * 模型能力的**用户覆盖**（模块 2）：按键 = 模型名（`provider.model` 原文，不归一——
+ * 用户改模型名时旧覆盖自然失配，回落注册表，不会把整份设置读不出来）。
+ *
+ * 为什么需要覆盖：`GET /models` **给不出视觉能力**（探测回包里没有这一项，猜就是编），
+ * 注册表只覆盖我们实测/明确知道的档位（deepseek 全系没有视觉，如实标 false）；
+ * 用户自配的端点（本地多模态模型、第三方兼容服务）只能由用户说了算。
+ * 生效口径：**用户覆盖 > 注册表 > false（保守）**，见 shared/models.ts 的 visionOf。
+ */
+export const modelCapabilitySchema = z.strictObject({
+  /** 这个模型能不能看图（真发图片给模型；false = 图片会被 composer 人话拒收） */
+  vision: z.boolean().optional()
+})
+
+export type ModelCapability = z.infer<typeof modelCapabilitySchema>
+
+/**
  * 探测到的模型元数据（round 22）：`GET {baseUrl}/models` 的实测值，键 = `<providerId>:<modelId>`
  * （provider 的模型名原文，不归一——探测和消费两边同一个键函数 `probedKeyOf`）。
  * 取值优先级 = probed → 注册表 → 默认（见 shared/models.ts）；`fetchedAt` 用于 >24h 过期重抓。
@@ -312,6 +328,8 @@ export const appSettingsSchema = z.strictObject({
   installedPlugins: z.array(installedPluginSchema),
   /** round 18 的模型级偏好（`${providerId}/${model}` → 思考挡位 / 对话长度百分比；走 settings:update 补丁） */
   modelPrefs: z.record(z.string(), modelPrefsSchema),
+  /** 模块 2 的模型能力用户覆盖（模型名 → 视觉等；走 settings:update 补丁。旧落盘文件由 main/settings.ts 补空表） */
+  modelCapabilities: z.record(z.string(), modelCapabilitySchema),
   /** round 22 的模型元数据实测缓存（`${providerId}:${model}` → 上下文/挡位；主进程探测，见 main/model-probe.ts） */
   probedModels: z.record(z.string(), probedModelSchema),
   /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
@@ -447,7 +465,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   archivedProjects: [],
   langfuse: { endpoint: '' },
   semanticRecall: DEFAULT_SEMANTIC_RECALL,
-  reasoningTranslate: DEFAULT_REASONING_TRANSLATE
+  reasoningTranslate: DEFAULT_REASONING_TRANSLATE,
+  modelCapabilities: {}
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -462,6 +481,7 @@ export function defaultSettings(): AppSettings {
     pluginMarketplaces: [],
     installedPlugins: [],
     modelPrefs: {},
+    modelCapabilities: {},
     probedModels: {},
     pinnedThreads: [],
     pinnedProjects: [],

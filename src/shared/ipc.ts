@@ -12,6 +12,7 @@ import type { LocalModelsOverview } from './local-models'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
 import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
+import type { PdfExtractResult } from './attachments'
 import {
   type FilePreview,
   type GitCommit,
@@ -146,6 +147,14 @@ export const IPC_CHANNELS = {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
     endpoint: 'agent:endpoint'
   },
+  attachments: {
+    /**
+     * 模块 2：抽一份 PDF 的文字层（入参 [bytes]，返回 PdfExtractResult）。
+     * 放主进程是刻意的：抽取要用 pdfjs（Node 侧能力），渲染端零新依赖；回包是**产品语言**
+     * （扫描件/加密/坏文件都是 `{ok:false, message}`，不抛）。
+     */
+    extractPdf: 'attachments:extract-pdf'
+  },
   updates: {
     /** 读当前更新状态（返回 UpdateState） */
     state: 'updates:state',
@@ -242,6 +251,14 @@ export type AgentEndpoint = z.infer<typeof agentEndpointSchema>
 
 /** settings:update 的入参：单元素元组（payload 形状在 shared/settings.ts） */
 export const settingsUpdateArgsSchema = z.tuple([appSettingsPatchSchema])
+
+/**
+ * attachments:extract-pdf 的入参：[bytes]（PDF 原文件）。
+ * 只管形状（真 Uint8Array）——大小上限在主进程侧判（超限回人话，不抛 IPC 错误）。
+ * 渲染端发的是 `new Uint8Array(await file.arrayBuffer())`：Electron 的 IPC 走结构化克隆，
+ * TypedArray 能原样过桥（不必转 base64，也不落临时文件）。
+ */
+export const pdfExtractArgsSchema = z.tuple([z.instanceof(Uint8Array)])
 
 /** settings:set-provider-key 的入参：[id, key]（都非空；key 只在主进程内存里短暂存在） */
 export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
@@ -556,6 +573,14 @@ export interface KyclawAgentApi {
 }
 
 /**
+ * preload 暴露给渲染端的附件面（模块 2）：目前只有 PDF 文字层抽取。
+ * 结果形状走 `pdfExtractResultSchema`（`ok:false` 是产品语言，不当异常）。
+ */
+export interface KyclawAttachmentsApi {
+  extractPdf(bytes: Uint8Array): Promise<PdfExtractResult>
+}
+
+/**
  * preload 暴露给渲染端的更新面（T17）：当前版本 + 状态 + 手动检查/安装。
  * 状态由主进程推（`updates:state-changed`，进度边走边推），所以这里有订阅；
  * 检查本身是异步长事（下载在后台继续），check() 只等到"检查"这一步落地。
@@ -684,6 +709,8 @@ export interface KyclawApi {
   terminal: KyclawTerminalApi
   projects: KyclawProjectsApi
   agent: KyclawAgentApi
+  /** 模块 2：附件能力（PDF 文字层抽取；抽取在主进程） */
+  attachments: KyclawAttachmentsApi
   updates: KyclawUpdatesApi
   telemetry: KyclawTelemetryApi
   plugins: KyclawPluginsApi

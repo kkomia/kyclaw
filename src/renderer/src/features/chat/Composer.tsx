@@ -6,10 +6,11 @@ import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
+import { visionOf } from '@shared/models'
 import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
-import { attachmentProblem, composeOutgoingText, readTextFile } from './composer-attachments'
-import type { PendingAttachment } from './composer-attachments'
+import { composeOutgoing, prepareAttachment } from './composer-attachments'
+import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
 import { ComposerSuggest } from './ComposerSuggest'
 import { ReferenceChipInner } from './reference-chip'
 import {
@@ -41,8 +42,9 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 字号/提示不做小字说明（雷点 2）：键盘行为靠肌肉记忆与按钮语义，不写提示行；
  * 附件/引用的内容（名字/大小）是数据，不是解释性小字。
  *
- * 附件最小可用（round 7）：只收文本类、≤16KB，内容在发送时内联进消息文本（模型真正能读到；
- * file part 走 provider 看不到内容，实测见 composer-attachments.ts 头注），非文本/过大明确提示不收。
+ * 附件（round 7 起；模块 2 扩三类）：文本类 ≤16KB 读成文本内联；**图片**在当前模型 vision=true 时
+ * 随消息真发（vision=false 人话拒收，不假装收下）；**PDF** 统一由主进程抽文字层再内联（扫描件给人话）。
+ * 拖拽与 ＋ 上传走同一个 pickFiles —— 两条入口的行为必须是同一套。口径见 composer-attachments.ts 头注。
  *
  * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
  * 与 round 15 的建议浮窗同一条路 ——
@@ -59,7 +61,7 @@ export interface ComposerProps {
   busy?: boolean
   /** 已排队的条数（流式中发送的消息），0 时不显示 */
   queuedCount?: number
-  onSend: (text: string) => void
+  onSend: (message: OutgoingMessage) => void
   onStop: () => void
   /** round 19：「/」→「压缩上下文」被选中（立即压缩；进行中/不可用时命令行为禁用态） */
   onCompact?: () => void
@@ -91,6 +93,8 @@ export function Composer({
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [notice, setNotice] = useState<ComposerNotice | null>(null)
+  /** 拖拽悬停中（只做视觉提示；收不收还是 pickFiles 说了算） */
+  const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** 引用覆盖层（chip 的盖层）：与 textarea 同排版，随内容滚动（round 21 起在 textarea 之上） */
@@ -105,6 +109,16 @@ export function Composer({
   const enabledPlugins = settings.mcpServers
     .filter((server) => server.enabled)
     .map((server) => ({ id: server.id, name: server.name }))
+  /**
+   * 当前模型能不能看图（模块 2）：用户覆盖 > 注册表 > false（口径见 shared/models 的 visionOf）。
+   * 图片的收/拒在这一层定，UI 上不给解释性小字——拒的时候由 pickFiles 给一句人话。
+   */
+  const currentProvider =
+    settings.providers.find((provider) => provider.isDefault) ?? settings.providers[0]
+  const vision = visionOf(
+    currentProvider?.model,
+    currentProvider === undefined ? undefined : settings.modelCapabilities[currentProvider.model]
+  )
 
   /** 「引用技能」菜单的数据（round 13：插件装进来的技能；挂载 + 每次打开菜单时拉一遍） */
   const [installedSkills, setInstalledSkills] = useState<
@@ -261,7 +275,7 @@ export function Composer({
 
   const submit = (): void => {
     if (!canSend) return
-    onSend(composeOutgoingText({ text: draft, attachments }))
+    onSend(composeOutgoing({ text: draft, attachments }))
     setDraft('')
     setAttachments([])
     setNotice(null)
@@ -290,21 +304,24 @@ export function Composer({
     pendingCaret.current = null
   })
 
+  /** 主进程的 PDF 抽取（通道缺失=浏览器/单测环境：回一句人话，不抛） */
+  const extractPdf = useCallback<PdfExtractor>(async (bytes) => {
+    const api = window.kyclaw?.attachments
+    if (api === undefined) return { ok: false, message: '附件通道不可用（window.kyclaw 缺失）' }
+    return api.extractPdf(bytes)
+  }, [])
+
+  /**
+   * 收下一批文件（＋ 上传与拖拽共用这一条路）：逐个试收，收下的进附件条、
+   * 没收的攒成一句话（档位与原因见 composer-attachments.ts）。
+   */
   const pickFiles = async (files: File[]): Promise<void> => {
     const rejected: string[] = []
     const accepted: PendingAttachment[] = []
     for (const file of files) {
-      const problem = attachmentProblem(file)
-      if (problem !== null) {
-        rejected.push(`${file.name}（${problem}）`)
-        continue
-      }
-      try {
-        const text = await readTextFile(file)
-        accepted.push({ id: uid(), name: file.name, size: file.size, text })
-      } catch {
-        rejected.push(`${file.name}（读取失败）`)
-      }
+      const result = await prepareAttachment(file, { vision, extractPdf, id: uid() })
+      if ('problem' in result) rejected.push(`${file.name}（${result.problem}）`)
+      else accepted.push(result.attachment)
     }
     if (accepted.length > 0) setAttachments((previous) => [...previous, ...accepted])
     setNotice(
@@ -315,7 +332,26 @@ export function Composer({
   return (
     <div
       data-testid="composer"
-      className="focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
+      className={cn(
+        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
+        dragging && 'border-(--accent)'
+      )}
+      // 拖拽入卡 = 与 ＋ 上传同一套口径（同一个 pickFiles）：hover 反白只是提示，判定都在 pickFiles
+      onDragOver={(event) => {
+        event.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDragging(false)
+      }}
+      onDrop={(event) => {
+        event.preventDefault()
+        setDragging(false)
+        void pickFiles(Array.from(event.dataTransfer.files))
+      }}
+      data-dragging={dragging ? 'true' : undefined}
     >
       {/* 建议浮窗（@ 文件 / 插件·技能）：浮在输入卡上方，非模态 */}
       <ComposerSuggest

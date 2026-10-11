@@ -32,6 +32,11 @@ export interface ModelSpec {
    * 用户没显式选过挡位时，effectiveEffortId 回落它——UI 显示与透传同值。
    */
   defaultEffort: string
+  /**
+   * 能不能看图（模块 2）：**只有明确知道才写** —— 注册表里标了的用它，没标的按 false 保守处理
+   * （`GET /models` 给不出这一项，别猜；用户自配的端点由设置里的覆盖说了算）。
+   */
+  vision?: boolean
 }
 
 /**
@@ -94,28 +99,54 @@ const V4_EFFORTS: readonly ThinkingEffortSpec[] = [
  *  round 22 起这只是**回落值**：探测到真实元数据（probedModels）时以实测为准——
  *  round 18 把 deepseek-flash 写 128K 是臆测，官方端点实测是 1M（context_window=1048576）。 */
 const REGISTRY: ReadonlyArray<{ prefix: string; spec: ModelSpec }> = [
-  // DeepSeek V4 家族：官方 SDK 明确支持 reasoning_effort(low|high|max)
+  // DeepSeek V4 家族：官方 SDK 明确支持 reasoning_effort(low|high|max)；
+  // 视觉（模块 2）：**全系 false** —— DeepSeek 官方接口不收图片（如实标，不猜也不留空）
   {
     prefix: 'deepseek-v4-pro',
-    spec: { contextWindow: 1_000_000, thinkingEfforts: V4_EFFORTS, defaultEffort: 'default' }
+    spec: {
+      contextWindow: 1_000_000,
+      thinkingEfforts: V4_EFFORTS,
+      defaultEffort: 'default',
+      vision: false
+    }
   },
   {
     prefix: 'deepseek-v4-flash',
-    spec: { contextWindow: 128_000, thinkingEfforts: V4_EFFORTS, defaultEffort: 'default' }
+    spec: {
+      contextWindow: 128_000,
+      thinkingEfforts: V4_EFFORTS,
+      defaultEffort: 'default',
+      vision: false
+    }
   },
   // 现行 Flash（官方脚注：遗留名 deepseek-v4-flash 由它承载）
   {
     prefix: 'deepseek-flash',
-    spec: { contextWindow: 128_000, thinkingEfforts: V4_EFFORTS, defaultEffort: 'default' }
+    spec: {
+      contextWindow: 128_000,
+      thinkingEfforts: V4_EFFORTS,
+      defaultEffort: 'default',
+      vision: false
+    }
   },
   // 上一代：不暴露思考挡位 → 如实「默认」单档
   {
     prefix: 'deepseek-chat',
-    spec: { contextWindow: 128_000, thinkingEfforts: DEFAULT_ONLY, defaultEffort: 'default' }
+    spec: {
+      contextWindow: 128_000,
+      thinkingEfforts: DEFAULT_ONLY,
+      defaultEffort: 'default',
+      vision: false
+    }
   },
   {
     prefix: 'deepseek-reasoner',
-    spec: { contextWindow: 128_000, thinkingEfforts: DEFAULT_ONLY, defaultEffort: 'default' }
+    spec: {
+      contextWindow: 128_000,
+      thinkingEfforts: DEFAULT_ONLY,
+      defaultEffort: 'default',
+      vision: false
+    }
   }
 ]
 
@@ -158,7 +189,7 @@ export function modelSpecOf(model: string | null | undefined, probed?: ProbedMod
       ? probed.defaultEffort
       : 'default'
 
-  return { contextWindow, thinkingEfforts, defaultEffort }
+  return { contextWindow, thinkingEfforts, defaultEffort, vision: fallback.vision }
 }
 
 /** 注册表（不含探测）的规格：probed 缺某字段时按字段回落的那一层 */
@@ -169,9 +200,26 @@ function registrySpecOf(model: string | null | undefined): ModelSpec {
     entry?.spec ?? {
       contextWindow: DEFAULT_CONTEXT_WINDOW,
       thinkingEfforts: DEFAULT_ONLY,
-      defaultEffort: 'default'
+      defaultEffort: 'default',
+      vision: false
     }
   )
+}
+
+/**
+ * 这个模型能不能看图（模块 2）。生效口径：**用户覆盖 > 注册表 > false（保守）**。
+ *
+ * 为什么签名里没有 `probed`（与 modelSpecOf 等不同）：`GET /models` **给不出视觉能力**——
+ * 探测回包里没有这一项，按"没有就是 false"猜等于替用户瞎标。所以视觉只认两处**明确**来源：
+ * 注册表（我们实测/明确知道的档位）与用户在设置里的显式勾选（`modelCapabilities`）。
+ * 未知模型一律 false：宁可让 composer 人话拒收（并告诉用户去哪开），也不做"发过去了但模型看不见"。
+ */
+export function visionOf(
+  model: string | null | undefined,
+  override?: { vision?: boolean } | undefined
+): boolean {
+  if (override?.vision !== undefined) return override.vision
+  return registrySpecOf(model).vision === true
 }
 
 /** 该模型的思考挡位（至少一档；probed 实测优先） */
