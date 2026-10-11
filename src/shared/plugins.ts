@@ -1,10 +1,13 @@
+import { existsSync, realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { z } from './zod'
 import { parseMcpServersJson } from './mcp'
 import { pluginMarketplaceSchema, installedPluginSchema } from './settings'
 import type { McpServerConfig } from './settings'
 
 /**
- * 插件市场与插件的**纯逻辑**（round 10；文件系统/ git 动作在 main/plugins/ 里）。
+ * 插件市场与插件的**纯逻辑**（round 10；文件系统/ git 动作在 main/plugins/ 里）；
+ * 只读例外：`resolveWithin` 的 realpath 硬化会读一次 fs（`existsSync`/`realpathSync`，绝不写入）。
  *
  * 生态格式（Claude Code 事实标准，Codex 的 Add a marketplace 同构）：
  *   - 市场 = git 仓库或本机目录，根下 `.claude-plugin/marketplace.json`（name/version/owner/plugins[]）；
@@ -85,10 +88,16 @@ export function normalizePluginSource(raw: string | Record<string, unknown>): Pl
 
 /**
  * 相对路径的 containment：把 `relative` 并在 `root` 里，逃逸（`..` 出头）或绝对路径回 null。
- * 市场的相对 `source` 与 git-subdir 的 `path` 都用它（brief：拒绝 `..` 逃逸，坏路径不落盘）。
+ * 市场的相对 `source`、git-subdir 的 `path`、plugin.json 里 `mcpServers` 的文件路径都用它。
+ *
+ * 两道判定：
+ *   ① 词法（不碰 fs）：绝对路径（含 `C:` 盘符）/ `..` 出头一律拒；
+ *   ② realpath 硬化（仅当 root 存在）：对目标**最深存在的祖先**与 root 各做一次 realpath 再验包含
+ *      —— 市场里塞一个指到外面的 symlink / junction（Windows 免管理员可建）也读不到外面，
+ *      与 main/permission/realpath.ts 的防线同口径。root 不存在（或整条链都不存在）时保持
+ *      纯词法语义：那些路径将来只会在 root 内按 slug 创建，不再有链接可穿。
  */
 export function resolveWithin(root: string, relative: string): string | null {
-  // 只走纯字符串判断，不碰 fs（调用方再 realpath）：绝对路径一律拒
   if (relative === '' || relative.startsWith('/') || relative.startsWith('\\')) return null
   if (/^[a-zA-Z]:[\\/]/.test(relative)) return null
   const cleanRoot = root.replace(/[\\/]+$/, '')
@@ -103,7 +112,35 @@ export function resolveWithin(root: string, relative: string): string | null {
     parts.push(segment)
   }
   if (parts.length === 0) return null
-  return `${cleanRoot}/${parts.join('/')}`
+  const candidate = `${cleanRoot}/${parts.join('/')}`
+  return escapesRoot(cleanRoot, candidate) ? null : candidate
+}
+
+/** true = 目标（或其最深存在的祖先）realpath 后不在 root（realpath 后）内；root 不存在时不拦 */
+function escapesRoot(root: string, candidate: string): boolean {
+  if (!existsSync(root)) return false
+  // 往上找到第一个真实存在的路径段（它的 realpath 已经消化了沿途所有链接）
+  let probe = candidate
+  while (!existsSync(probe)) {
+    const parent = dirname(probe)
+    if (parent === probe) return true // 兜底：走到盘根还没见到存在的路径 → 保守拒绝
+    probe = parent
+  }
+  const realRoot = canonicalPath(root)
+  const realProbe = canonicalPath(probe)
+  return !(realProbe === realRoot || realProbe.startsWith(`${realRoot}/`))
+}
+
+/** realpath（失败就退回原样）；统一正斜杠、去尾斜杠，Windows 上再折成小写后比较 */
+function canonicalPath(path: string): string {
+  let resolved = path
+  try {
+    resolved = realpathSync(path)
+  } catch {
+    resolved = path
+  }
+  const slashed = resolved.replace(/\\/g, '/').replace(/\/+$/, '')
+  return process.platform === 'win32' ? slashed.toLowerCase() : slashed
 }
 
 /** 目录名 / id 用的 slug：小写、非法字符→-、去首尾-、截 32 位 */

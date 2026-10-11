@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   marketplaceManifestSchema,
@@ -12,7 +15,7 @@ import {
 
 /**
  * 插件市场与插件的纯逻辑（round 10）：
- * 来源归一（relative/github/git-subdir/git/unsupported）、containment（拒 `..`/绝对路径）、
+ * 来源归一（relative/github/git-subdir/git/unsupported）、containment（拒 `..`/绝对路径/链接穿透）、
  * slug、`${CLAUDE_PLUGIN_ROOT}` 替换、mcpServers 合并与转 McpServerConfig、清单校验。
  */
 
@@ -298,5 +301,36 @@ describe('marketplaceManifestSchema', () => {
     expect(
       marketplaceManifestSchema.safeParse({ name: 'm', plugins: [{ name: 'p' }] }).success
     ).toBe(false)
+  })
+})
+
+describe('resolveWithin · realpath 硬化（符号链接/junction 穿透）', () => {
+  it('junction 指向 root 外 → 拒；指向 root 内 / 不存在的路径 → 词法放行', () => {
+    const base = mkdtempSync(join(tmpdir(), 'kyclaw-resolve-'))
+    try {
+      const root = join(base, 'root')
+      const outside = join(base, 'outside')
+      mkdirSync(join(root, 'real'), { recursive: true })
+      mkdirSync(outside, { recursive: true })
+      writeFileSync(join(outside, 'x.txt'), 'x')
+      // junction 指到 root 外（Windows 免管理员可建）
+      symlinkSync(outside, join(root, 'link-out'), 'junction')
+
+      expect(resolveWithin(root, './link-out')).toBeNull()
+      expect(resolveWithin(root, './link-out/x.txt')).toBeNull()
+
+      // 指回 root 内的 junction 只是"换了条路"，不拦
+      symlinkSync(join(root, 'real'), join(root, 'link-in'), 'junction')
+      expect(resolveWithin(root, './link-in/x.txt')).toBe(`${root}/link-in/x.txt`)
+
+      // root 内的真实目录、以及尚不存在的路径（祖先在 root 内）：保持词法语义
+      expect(resolveWithin(root, './real/x.txt')).toBe(`${root}/real/x.txt`)
+      expect(resolveWithin(root, './real/nope/x.txt')).toBe(`${root}/real/nope/x.txt`)
+
+      // root 不存在：纯词法（老语义）
+      expect(resolveWithin(join(base, 'nope-root'), './a')).toBe(`${join(base, 'nope-root')}/a`)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })

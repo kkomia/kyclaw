@@ -186,6 +186,38 @@ describe('默认工作区与项目 schema（T18）', () => {
   })
 })
 
+describe('插件字段与补丁 schema（round 10）', () => {
+  it('补丁 schema 里没有 pluginMarketplaces / installedPlugins：市场与安装记录只能走 plugins:* 通道', () => {
+    // 有的话，渲染端就能塞市场 path / 插件 installDir，再借 removeMarketplace / uninstall 删任意目录
+    expect(appSettingsPatchSchema.safeParse({ pluginMarketplaces: [] }).success).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({
+        pluginMarketplaces: [
+          { id: 'm', name: 'm', source: 'x', kind: 'git', path: 'C:\\任意目录', addedAt: 'x' }
+        ]
+      }).success
+    ).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ installedPlugins: [] }).success).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({
+        installedPlugins: [
+          {
+            id: 'p',
+            marketplaceId: 'm',
+            name: 'p',
+            installedAt: 'x',
+            mcpServerIds: [],
+            skillDirs: [],
+            installDir: 'C:\\任意目录'
+          }
+        ]
+      }).success
+    ).toBe(false)
+    // 别的字段照旧可以打补丁
+    expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
+  })
+})
+
 describe('权限规则 schema（T13：审批记忆的"永久允许"）', () => {
   it('元素必须是 {tool, workspace, mode:"allow"}，粒度 = 工具 + 工作区', () => {
     const rules = [{ tool: 'write', workspace: 'D:\\项目\\demo', mode: 'allow' }]

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import { resolveWithin } from '../../../shared/plugins'
 import {
   addMarketplace,
   collectPluginServerMaps,
+  firstLine,
   readMarketplaceManifest,
   readMarketplacePlugins,
   refreshMarketplace,
@@ -125,6 +126,21 @@ describe('addMarketplace · 本地目录', () => {
     await expect(
       addMarketplace({ input: { source: 'not-a-repo' }, dirs, existing: [], addedAt: NOW })
     ).rejects.toThrow(/来源认不出/)
+  })
+
+  it('稀疏路径以 - 开头：人话拒绝，且动 git/磁盘之前就拦（Minor-2）', async () => {
+    const { dirs } = makeFixture(root)
+
+    await expect(
+      addMarketplace({
+        input: { source: 'owner/repo', sparsePaths: ['-x', '--stdin'] },
+        dirs,
+        existing: [],
+        addedAt: NOW
+      })
+    ).rejects.toThrow(/稀疏路径不能以 - 开头：-x/)
+    // 拦在克隆之前：marketplaces 目录都没建
+    expect(existsSync(dirs.marketplaces)).toBe(false)
   })
 })
 
@@ -431,5 +447,68 @@ describe.skipIf(!gitAvailable)('git 市场（克隆 / 刷新 / 移除）', () =>
       })
     ).rejects.toThrow(/克隆失败/)
     expect(existsSync(join(dirs.marketplaces, 'repo'))).toBe(false)
+  })
+})
+
+describe('符号链接硬化 · 集成（I-1）', () => {
+  it('市场里的 junction 指到外面：清单校验拒、plugin.json 的 mcpServers 文件路径不收、安装也拒', async () => {
+    const { market, dirs } = makeFixture(root)
+    const plugin = join(market, 'plugins', 'p-relative')
+    const outside = join(root, 'outside')
+    writeJson(join(outside, 'extra.json'), { mcpServers: { leaked: { command: 'x' } } })
+    symlinkSync(outside, join(market, 'evil'), 'junction')
+    symlinkSync(outside, join(plugin, 'leak'), 'junction')
+
+    // ① plugin.json 的 mcpServers 字符串路径借 junction 逃逸 → 不收（只剩 .mcp.json 里那两个）
+    writeJson(join(plugin, '.claude-plugin', 'plugin.json'), { mcpServers: ['./leak/extra.json'] })
+    const merged = collectPluginServerMaps(plugin)
+    expect(Object.keys(merged)).toEqual(['web', 'local'])
+    expect('leaked' in merged).toBe(false)
+
+    // ② 安装期拿到借 junction 的相对 source（这条不过清单校验）→ 拒
+    const marketplace = {
+      id: 'market',
+      name: 'demo-market',
+      source: market,
+      kind: 'local' as const,
+      path: market,
+      addedAt: NOW
+    }
+    await expect(
+      installPlugin({
+        marketplace,
+        plugin: { name: 'p-evil', source: { kind: 'relative', path: './evil/plugins/p-evil' } },
+        dirs,
+        existingServers: [],
+        installed: [],
+        installedAt: NOW
+      })
+    ).rejects.toThrow(/逃出了市场目录/)
+
+    // ③ 清单里借 junction 的相对 source：读清单与添加都被拒
+    writeJson(join(market, '.claude-plugin', 'marketplace.json'), {
+      name: 'demo-market',
+      plugins: [{ name: 'p-evil', source: './evil/plugins/p-evil' }]
+    })
+    expect(() => readMarketplaceManifest(market)).toThrow(/逃出了市场目录/)
+    await expect(
+      addMarketplace({ input: { source: market }, dirs, existing: [], addedAt: NOW })
+    ).rejects.toThrow(/逃出了市场目录/)
+  })
+})
+
+describe('firstLine · 凭据脱敏（Minor-1）', () => {
+  it('URL 里的 user:secret → user:***（host/path 保留）；不带冒号的 userinfo 与普通文本不动', () => {
+    const raw =
+      "fatal: could not read Username for 'https://user:ghp_SECRET@github.com/org/repo.git': terminal prompts disabled"
+    const line = firstLine(raw)
+    expect(line).toContain('https://user:***@github.com/org/repo.git')
+    expect(line).not.toContain('ghp_SECRET')
+
+    // ssh 的正常写法（无冒号）不动；多行只取第一个非空行
+    expect(firstLine('ssh://git@github.com/org/repo.git 不存在')).toBe(
+      'ssh://git@github.com/org/repo.git 不存在'
+    )
+    expect(firstLine('\n\nnot a url\nsecond')).toBe('not a url')
   })
 })

@@ -181,10 +181,17 @@ export const appSettingsSchema = z.strictObject({
  * 渲染端能塞一个没校验过的根进授权边界），各走自己的通道（workspace:pick-default、projects:*）。
  * **不含 mcpServers**：MCP 配置的写入只有 PUT /api/mcp/servers 一条路（同一条带上
  * "启用必须配置完整"的校验），不另开一条不过校验的口子。
+ * **不含 pluginMarketplaces / installedPlugins**：两者都带路径（`path` / `installDir`），
+ * 写入只有 `plugins:*` 一条路 —— 直接从渲染端改等于给「移除市场 / 卸载插件」的递归删除递任意目录。
  */
-export const appSettingsPatchSchema = appSettingsSchema
-  .partial()
-  .omit({ workspaces: true, defaultWorkspace: true, projects: true, mcpServers: true })
+export const appSettingsPatchSchema = appSettingsSchema.partial().omit({
+  workspaces: true,
+  defaultWorkspace: true,
+  projects: true,
+  mcpServers: true,
+  pluginMarketplaces: true,
+  installedPlugins: true
+})
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>

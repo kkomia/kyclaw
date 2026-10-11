@@ -49,14 +49,24 @@ export function runGit(args: string[], cwd?: string): Promise<{ ok: boolean; std
   })
 }
 
-/** stderr 取首行、裁长（错误只给一句人话） */
+/**
+ * URL 里的 userinfo 脱敏：`scheme://user:secret@host` → `scheme://user:***@host`（保留 host/path）。
+ * git 出错时常原样回显带凭据的 URL，不脱敏就会把 token 落在错误条上；没有冒号的 userinfo
+ * （`ssh://git@host` 这类正常写法）不动。
+ */
+export function redactUserInfo(text: string): string {
+  return text.replace(/\/\/([^/@\s:]*):([^/@\s]+)@/g, (_match, user: string) => `//${user}:***@`)
+}
+
+/** stderr 取首行、脱敏、裁长（错误只给一句人话） */
 export function firstLine(text: string, max = 200): string {
   const line = text
     .split('\n')
     .map((item) => item.trim())
     .find((item) => item !== '')
   if (line === undefined) return ''
-  return line.length > max ? `${line.slice(0, max)}…` : line
+  const redacted = redactUserInfo(line)
+  return redacted.length > max ? `${redacted.slice(0, max)}…` : redacted
 }
 
 export type NormalizedSource =
@@ -166,6 +176,13 @@ export async function addMarketplace(options: {
   addedAt: string
 }): Promise<PluginMarketplace> {
   const normalized = normalizeSourceForAdd(options.input.source)
+  // sparse-checkout 的位置参数：以 `-` 开头会被 git 当 flag（不会被我们拼成真实选项，
+  // 但会把检出模式改歪），拒绝在动 git/磁盘之前
+  for (const sparsePath of options.input.sparsePaths ?? []) {
+    if (sparsePath.startsWith('-')) {
+      throw new Error(`稀疏路径不能以 - 开头：${sparsePath}`)
+    }
+  }
 
   if (normalized.kind === 'local') {
     const manifest = readMarketplaceManifest(normalized.path)
