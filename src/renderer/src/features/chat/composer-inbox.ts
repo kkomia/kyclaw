@@ -221,6 +221,7 @@ async function readBytesOf(
     return { ok: false, problem: `超过 ${result.limit / 1024 / 1024}MB` }
   }
   if (result.kind === 'unsupported') return { ok: false, problem: CONTEXT_UNSUPPORTED }
+  if (result.kind !== 'bytes') return { ok: false, problem: CONTEXT_UNSUPPORTED }
   return { ok: true, format: result.format, bytes: result.bytes, size: result.size }
 }
 

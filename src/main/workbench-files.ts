@@ -28,8 +28,19 @@ import type {
   FilePreview,
   ListDirResult
 } from '../shared/workbench'
-import { PREVIEW_IMAGE_MAX_BYTES, PREVIEW_PDF_MAX_BYTES } from '../shared/workbench'
+import {
+  PREVIEW_IMAGE_MAX_BYTES,
+  PREVIEW_OFFICE_MAX_BYTES,
+  PREVIEW_PDF_MAX_BYTES
+} from '../shared/workbench'
 import { resolveInsideWorkspace } from './permission/realpath'
+import {
+  CSV_TEXT_MAX_BYTES,
+  extractDocx,
+  extractPptx,
+  extractXlsx,
+  parseTableText
+} from './workbench-office'
 
 /** 一层目录最多回多少条（超大目录如实截断） */
 export const DIR_ENTRY_LIMIT = 2000
@@ -183,16 +194,30 @@ export function revealTarget(root: string, relative: string): string {
 
 /* ── 带类型的字节读取（按格式渲染用） ────────────────────────────────────── */
 
-/** 渲染端认得（画得出）的扩展名 → 格式。不在这里的都算不支持。 */
-const EXTENSION_FORMATS: Readonly<Record<string, FileByteFormat>> = {
+/**
+ * 扩展名认路的**期望格式**：渲染端能画的字节格式 + 办公三件 + 表格（csv/tsv）。
+ * 后两类不回原始字节，而是回主进程抽好的结构（见 `readFileBytes`）。
+ */
+type ReadFormat = FileByteFormat | 'docx' | 'xlsx' | 'pptx' | 'table'
+
+/** 渲染端认得（画得出）的扩展名 → 期望格式。不在这里的都算不支持。 */
+const EXTENSION_FORMATS: Readonly<Record<string, ReadFormat>> = {
   '.png': 'image-png',
   '.jpg': 'image-jpeg',
   '.jpeg': 'image-jpeg',
   '.gif': 'image-gif',
   '.webp': 'image-webp',
   '.bmp': 'image-bmp',
-  '.pdf': 'pdf'
+  '.pdf': 'pdf',
+  '.docx': 'docx',
+  '.xlsx': 'xlsx',
+  '.pptx': 'pptx',
+  '.csv': 'table',
+  '.tsv': 'table'
 }
+
+/** 走"抽结构"这条路的格式（不回原始字节） */
+const OFFICE_FORMATS: ReadonlySet<ReadFormat> = new Set(['docx', 'xlsx', 'pptx', 'table'])
 
 /** 取小写扩展名（正反斜杠都认；没有扩展名给空串） */
 function extensionOf(relative: string): string {
@@ -201,8 +226,13 @@ function extensionOf(relative: string): string {
   return dot <= 0 ? '' : base.slice(dot).toLowerCase()
 }
 
+/** 文件名（不含路径），csv/tsv 抽出来当表名用 */
+function baseNameOf(relative: string): string {
+  return relative.slice(Math.max(relative.lastIndexOf('/'), relative.lastIndexOf('\\')) + 1)
+}
+
 /** 文件头判定（magic bytes）：认不出给 null —— 调用方据此判"扩展名与内容对不上" */
-export function sniffFormat(bytes: Buffer): FileByteFormat | null {
+export function sniffFormat(bytes: Buffer): FileByteFormat | 'ooxml' | null {
   const head = (length: number): string => bytes.subarray(0, length).toString('latin1')
   if (head(5) === '%PDF-') return 'pdf'
   if (
@@ -218,10 +248,14 @@ export function sniffFormat(bytes: Buffer): FileByteFormat | null {
   if (gif === 'GIF87a' || gif === 'GIF89a') return 'image-gif'
   if (head(4) === 'RIFF' && head(12).slice(8) === 'WEBP') return 'image-webp'
   if (head(2) === 'BM') return 'image-bmp'
+  // docx / xlsx / pptx 是同一个 zip 头，光看字节分不出是哪一件 —— 由扩展名定名，这里只证"是个 zip"
+  if (head(4) === 'PK\x03\x04' || head(4) === 'PK\x05\x06') return 'ooxml'
   return null
 }
 
-/** 读满整个文件（调用方已按上限拦过；短读按实际读到的算） */
+/**
+ * 读满整个文件（调用方已按上限拦过；短读按实际读到的算）
+ */
 function readWhole(path: string, size: number): Buffer {
   const buffer = Buffer.alloc(size)
   const fd = openSync(path, 'r')
@@ -239,14 +273,18 @@ function readWhole(path: string, size: number): Buffer {
 }
 
 /**
- * 读一个文件的字节（给"按格式渲染"的预览用）：扩展名认路 + 文件头对暗号，两者都对上才回字节。
+ * 读一个文件的字节（给"按格式渲染"的预览用）：扩展名认路 + 文件头对暗号，两者都对上才回结果。
  *   - 越界路径：**抛**（fail closed，与其余工作台通道同口径）；
  *   - 文件没了：回 `missing`（这是常态：树是旧的，点下去文件已经被删了），不抛；
  *   - 目录：抛人话（调用方按扩展名路由，正常到不了这里）；
  *   - 超过该格式上限：回 `too-large`（连字节都不传）；
- *   - 扩展名不认得 / 头与扩展名对不上：回 `unsupported`（渲染端回落二进制占位）。
+ *   - 扩展名不认得 / 头与扩展名对不上：回 `unsupported`（渲染端回落二进制占位）；
+ *   - 图片/PDF：回 `bytes`；办公三件与 csv/tsv：**在主进程抽好结构**再回（docx/xlsx/pptx），
+ *     抽不通抛中文人话（能过两道闸的文件再读不通，就是它坏了，不该含糊成"二进制"）。
+ *
+ * 因为办公档的解包（mammoth / exceljs）是异步的，这条通道整体是 async：IPC 那侧 await 它。
  */
-export function readFileBytes(root: string, relative: string): FileBytesResult {
+export async function readFileBytes(root: string, relative: string): Promise<FileBytesResult> {
   const target = resolveInside(root, relative)
 
   let stat: Stats
@@ -260,13 +298,54 @@ export function readFileBytes(root: string, relative: string): FileBytesResult {
   const expected = EXTENSION_FORMATS[extensionOf(relative)]
   if (expected === undefined) return { kind: 'unsupported', size: stat.size }
 
-  const limit = expected === 'pdf' ? PREVIEW_PDF_MAX_BYTES : PREVIEW_IMAGE_MAX_BYTES
+  const limit =
+    expected === 'pdf'
+      ? PREVIEW_PDF_MAX_BYTES
+      : OFFICE_FORMATS.has(expected)
+        ? PREVIEW_OFFICE_MAX_BYTES
+        : PREVIEW_IMAGE_MAX_BYTES
   if (stat.size > limit) return { kind: 'too-large', size: stat.size, limit }
 
-  const bytes = readWhole(target, stat.size)
+  // csv/tsv：只读头部就够（解析前先截到 2MB），不把 32MB 全拉进内存
+  const whole = expected === 'table' ? Math.min(stat.size, CSV_TEXT_MAX_BYTES) : stat.size
+  const bytes = readWhole(target, whole)
+  const sniffed = sniffFormat(bytes)
+
+  if (expected === 'table') {
+    // csv/tsv 没有 magic：要求"不是别的已知二进制格式"（改名的图片/压缩包一律拒）
+    if (sniffed !== null) return { kind: 'unsupported', size: stat.size }
+    const name = baseNameOf(relative)
+    const sheet = parseTableText(
+      decodeText(bytes),
+      name.replace(/\.[^.]*$/, ''),
+      extensionOf(relative) === '.tsv' ? '\t' : ','
+    )
+    if (stat.size > whole) sheet.truncated = true
+    return { kind: 'xlsx', sheets: [sheet], truncated: false }
+  }
+
+  if (expected === 'docx' || expected === 'xlsx' || expected === 'pptx') {
+    if (sniffed !== 'ooxml') return { kind: 'unsupported', size: stat.size }
+    if (expected === 'docx') {
+      const { markdown, truncated } = await extractDocx(bytes)
+      return { kind: 'docx', markdown, truncated }
+    }
+    if (expected === 'xlsx') {
+      const { sheets, truncated } = await extractXlsx(bytes)
+      return { kind: 'xlsx', sheets, truncated }
+    }
+    const { slides, truncated } = extractPptx(bytes)
+    return { kind: 'pptx', slides, truncated }
+  }
+
   // 头与扩展名对不上（改名的可执行文件之类）：不猜、不画，按不支持走
-  if (sniffFormat(bytes) !== expected) return { kind: 'unsupported', size: stat.size }
+  if (sniffed !== expected) return { kind: 'unsupported', size: stat.size }
 
   // 复制成普通 Uint8Array：Buffer 是 Uint8Array 的子类，但过 IPC 的应该是干净的那一种
   return { kind: 'bytes', format: expected, bytes: new Uint8Array(bytes), size: stat.size }
+}
+
+/** 截断点收在 UTF-8 字符边界上（与文本通道同一口径：不吐半个汉字） */
+function decodeText(bytes: Buffer): string {
+  return trimIncompleteTail(bytes).toString('utf8')
 }

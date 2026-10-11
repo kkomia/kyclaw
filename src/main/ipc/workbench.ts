@@ -122,13 +122,14 @@ export function registerWorkbenchIpc(
     return preview
   })
 
-  ipcMain.handle(IPC_CHANNELS.workbench.readBytes, (_event, ...args) => {
+  ipcMain.handle(IPC_CHANNELS.workbench.readBytes, async (_event, ...args) => {
     const [threadId, relative] = parseIpcArgs(
       workbenchRelativeArgsSchema,
       args,
       IPC_CHANNELS.workbench.readBytes
     )
-    const result: FileBytesResult = readFileBytes(rootOf(threadId), relative)
+    // 办公档（docx/xlsx/pptx）的解包是异步的，这条通道整体走 await
+    const result: FileBytesResult = await readFileBytes(rootOf(threadId), relative)
     return result
   })
 

@@ -137,19 +137,20 @@ describe('通道注册与入参闸门', () => {
   })
 
   it('相对路径族（list-dir / read-file / read-bytes / reveal）：缺参、空 threadId、走样一律拒', async () => {
-    const cases: Array<[string, unknown[][]]> = [
-      [IPC_CHANNELS.workbench.listDir, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]],
-      [IPC_CHANNELS.workbench.readFile, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]],
-      [IPC_CHANNELS.workbench.readBytes, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]]
-    ]
-    for (const [channel, argSets] of cases) {
+    // 同步的那三个（立刻给人话）
+    for (const channel of [IPC_CHANNELS.workbench.listDir, IPC_CHANNELS.workbench.readFile]) {
       const handler = handlerOf(channel)
-      for (const args of argSets) {
-        // 读类动作的 handler 是同步的（立刻给人话）
+      for (const args of [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]) {
         expect(() => handler(EVENT, ...args), `${channel} ${JSON.stringify(args)}`).toThrow(
           IpcInputError
         )
       }
+    }
+
+    // round 43：read-bytes 变 async（办公档的解包是异步的）—— 闸门照旧，拒的方式是 reject
+    const readBytes = handlerOf(IPC_CHANNELS.workbench.readBytes)
+    for (const args of [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]) {
+      await expect(readBytes(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
     }
 
     const reveal = handlerOf(IPC_CHANNELS.workbench.reveal)
@@ -240,9 +241,33 @@ describe('文件族', () => {
     const unsupported = await handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', 'README.md')
     expect(unsupported).toEqual({ kind: 'unsupported', size: Buffer.byteLength('# 标题\n') })
 
-    expect(() => handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '../别的')).toThrow(
-      /路径不可用/
+    await expect(
+      handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '../别的')
+    ).rejects.toThrow(/路径不可用/)
+  })
+
+  it('read-bytes：办公档（docx/xlsx）真过桥回抽好的结构，不是原始字节', async () => {
+    const { renderDocx } = await import('../../../mastra/tools/docx')
+    const { renderXlsx } = await import('../../../mastra/tools/excel')
+    writeFileSync(
+      join(project, '方案.docx'),
+      await renderDocx({ blocks: [{ type: 'paragraph', text: '正文一段' }] })
     )
+    writeFileSync(
+      join(project, '台账.xlsx'),
+      await renderXlsx([{ name: '汇总', rows: [['项目'], ['房租']] }])
+    )
+
+    expect(await handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '方案.docx')).toEqual({
+      kind: 'docx',
+      markdown: '正文一段',
+      truncated: false
+    })
+    expect(await handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '台账.xlsx')).toEqual({
+      kind: 'xlsx',
+      sheets: [{ name: '汇总', rows: [['项目'], ['房租']], truncated: false }],
+      truncated: false
+    })
   })
 
   it('reveal：目录走 shell.openPath，文件走 showItemInFolder', async () => {

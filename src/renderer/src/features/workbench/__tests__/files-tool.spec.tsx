@@ -261,6 +261,158 @@ describe('FilesTool：按格式路由', () => {
   })
 })
 
+describe('round 43 · 办公与代码场景的路由', () => {
+  /** 只列一个文件并点开它（各用例自己喂 readFile / readBytes 的返回值） */
+  async function openOnly(name: string): Promise<void> {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [{ name, kind: 'file', size: 1234 }],
+      truncated: false
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText(name)).toBeInTheDocument())
+    fireEvent.click(screen.getByText(name))
+  }
+
+  it('代码文件走高亮（仍是文本通道：截断提示与位置定位都还在）', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: 'const answer: number = 42\n',
+      size: 4096,
+      truncated: true
+    })
+    await openOnly('index.ts')
+
+    const body = await screen.findByTestId('file-preview-code')
+    const block = await within(body).findByTestId('code-block')
+    expect(block).toHaveAttribute('data-language', 'typescript')
+    // 截断提示仍在外层（文本通道那一套，原样复用）
+    expect(screen.getByText(/只显示前面一部分/)).toBeInTheDocument()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('没打包语法的扩展名（.log）回落 <pre> 纯文本：行为与以前一致', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '2026-10-12 一条日志\n',
+      size: 32,
+      truncated: false
+    })
+    await openOnly('run.log')
+
+    expect(await screen.findByTestId('file-preview-text')).toHaveTextContent('一条日志')
+    expect(screen.queryByTestId('file-preview-code')).toBeNull()
+  })
+
+  it('docx 走字节通道，回来的 markdown 直接复用 markdown 渲染器（含截断提示）', async () => {
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'docx',
+      markdown: '# 一级标题\n\n- 第一项\n',
+      truncated: true
+    })
+    await openOnly('方案.docx')
+
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '方案.docx')
+    )
+    const body = await screen.findByTestId('file-preview-markdown')
+    expect(body.querySelector('h1')?.textContent).toBe('一级标题')
+    expect(body.querySelectorAll('li')).toHaveLength(1)
+    expect(screen.getByTestId('file-preview-docx-truncated')).toHaveTextContent(
+      '只显示了前面一部分'
+    )
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+  })
+
+  it('xlsx 画成多表（切换控件）+ 表张数超上限另有标注', async () => {
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'xlsx',
+      sheets: [
+        {
+          name: '汇总',
+          rows: [
+            ['项目', '金额'],
+            ['房租', '1200']
+          ],
+          truncated: false
+        },
+        { name: '明细', rows: [['备注'], ['第二张']], truncated: true }
+      ],
+      truncated: true
+    })
+    await openOnly('台账.xlsx')
+
+    const table = await screen.findByTestId('file-preview-table')
+    expect(within(table).getAllByTestId('table-sheet-tab')).toHaveLength(2)
+    expect(within(table).getByText('房租')).toBeInTheDocument()
+    expect(screen.getByTestId('file-preview-table-sheets-truncated')).toHaveTextContent(
+      '工作表太多'
+    )
+  })
+
+  it('csv 走同一个表格组件，单表不摆切换控件（表名来自主进程）', async () => {
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'xlsx',
+      sheets: [
+        {
+          name: '名单',
+          rows: [
+            ['姓名', '年龄'],
+            ['张三', '28']
+          ],
+          truncated: false
+        }
+      ],
+      truncated: false
+    })
+    await openOnly('名单.csv')
+
+    const table = await screen.findByTestId('file-preview-table')
+    expect(within(table).queryAllByTestId('table-sheet-tab')).toHaveLength(0)
+    expect(within(table).getByText('张三')).toBeInTheDocument()
+    expect(within(table).getByText('28')).toHaveAttribute('data-numeric', 'true')
+    expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '名单.csv')
+  })
+
+  it('pptx 画成逐页文字卡（含"仅文字提要"的如实说明）', async () => {
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'pptx',
+      slides: [
+        { index: 1, lines: ['汇报'] },
+        { index: 2, title: '进展', lines: ['第一条'] }
+      ],
+      truncated: true
+    })
+    await openOnly('汇报.pptx')
+
+    const body = await screen.findByTestId('file-preview-pptx')
+    expect(within(body).getAllByTestId('pptx-slide')).toHaveLength(2)
+    expect(screen.getByTestId('file-preview-pptx-notice')).toHaveTextContent('版式不还原')
+    expect(screen.getByTestId('file-preview-pptx-truncated')).toBeInTheDocument()
+  })
+
+  it('旧版 Office（.doc/.xls/.ppt）：不读文件，直接给"另存为"的人话', async () => {
+    const cases: Array<[string, string]> = [
+      ['旧方案.doc', '旧版 Word（.doc）暂不支持预览，可用 Word 另存为 .docx'],
+      ['旧台账.xls', '旧版 Excel（.xls）暂不支持预览，可用 Excel 另存为 .xlsx'],
+      ['旧汇报.ppt', '旧版 PowerPoint（.ppt）暂不支持预览，可用 PowerPoint 另存为 .pptx']
+    ]
+    for (const [name, notice] of cases) {
+      bed.bridge.workbench.listDir.mockResolvedValue({
+        entries: [{ name, kind: 'file', size: 4096 }],
+        truncated: false
+      })
+      const { unmount } = render(<FilesTool root={rootOf()} />)
+      await waitFor(() => expect(screen.getByText(name)).toBeInTheDocument())
+      fireEvent.click(screen.getByText(name))
+      expect(await screen.findByTestId('file-preview-legacy')).toHaveTextContent(notice)
+      unmount()
+    }
+    // 两条通道都不该被碰（旧格式连读都不读）
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+})
+
 describe('FilesTool：自绘右键菜单', () => {
   it('右键出菜单：在文件资源管理器中定位 / 复制路径', async () => {
     const writeText = vi.fn(async () => undefined)

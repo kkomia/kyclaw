@@ -2,8 +2,9 @@
  * 「文件」工具：会话根的懒加载目录树 + 单击文件的内联预览 + 自绘右键菜单。
  *
  * 数据流：`workbench:list-dir` 一次只列**一层**（根 = `''`），子目录展开时再列 —— 目录内容按
- * 相对路径缓存在本组件里（展开过一次的路径不重复请求）。单击文件 → `workbench:read-file`
- * 拿有界预览（文本 64KB / 二进制 / 过大三种判别结果）。路径解析与 containment 全在主进程：
+ * 相对路径缓存在本组件里（展开过一次的路径不重复请求）。单击文件按后缀分流（`preview/modes.ts`）：
+ * 文本 / markdown / 代码走 `workbench:read-file`（有界文本），图片 / PDF / 办公三件 / csv 走
+ * `workbench:read-bytes`（原始字节或主进程抽好的结构）。路径解析与 containment 全在主进程：
  * 这里只递相对路径，绝对路径只用来拼"复制路径"的文本。
  *
  * 会话切换（threadId 变）时整棵树清空重来，并用"代次"丢弃晚到的响应（旧会话的目录不会再画回来）。
@@ -30,10 +31,19 @@ import { linesOfSelection, publishContextItem } from '@renderer/features/chat/co
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
 import { ContextMenu, type ContextMenuState, type ContextMenuItem } from './ContextMenu'
+import { CodePreview } from './preview/CodePreview'
 import { ImagePreview } from './preview/ImagePreview'
 import { MarkdownPreview } from './preview/MarkdownPreview'
 import { PdfPreview } from './preview/PdfPreview'
-import { previewModeOf, type PreviewMode } from './preview/modes'
+import { PptxPreview } from './preview/PptxPreview'
+import { TablePreview } from './preview/TablePreview'
+import {
+  LEGACY_OFFICE_NOTICE,
+  codeLanguageOf,
+  extensionOf,
+  previewModeOf,
+  type PreviewMode
+} from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 import { formatBytes } from './format'
 
@@ -108,16 +118,22 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     (relative: string): void => {
       if (workbench === null || threadId === null) return
       const mode = previewModeOf(relative)
+      // 旧版 Office（.doc/.xls/.ppt）：不读文件，直接给人话（"另存为 .docx/.xlsx/.pptx"）
+      if (mode === 'office-legacy') {
+        setPreview({ threadId, relative, mode, status: 'ready' })
+        return
+      }
       setPreview({ threadId, relative, mode, status: 'loading' })
-      // 图片 / PDF 走字节通道（文本通道 64KB 且只给字符串，承载不了真渲染）
-      const request =
-        mode === 'image' || mode === 'pdf'
-          ? workbench
-              .readBytes(threadId, relative)
-              .then((bytes): PreviewValue => ({ channel: 'bytes', bytes }))
-          : workbench
-              .readFile(threadId, relative)
-              .then((preview): PreviewValue => ({ channel: 'text', preview }))
+      // 图片 / PDF 拉原始字节，办公三件与表格拉"抽好的结构"（都在字节通道上）；
+      // 文本 / markdown / 代码走文本通道（64KB 有界，承载不了上面的真渲染）
+      const remote = mode !== 'text' && mode !== 'markdown' && mode !== 'code'
+      const request = remote
+        ? workbench
+            .readBytes(threadId, relative)
+            .then((bytes): PreviewValue => ({ channel: 'bytes', bytes }))
+        : workbench
+            .readFile(threadId, relative)
+            .then((preview): PreviewValue => ({ channel: 'text', preview }))
       void request.then(
         (value) => setPreview({ threadId, relative, mode, status: 'ready', value }),
         (error: unknown) =>
@@ -488,7 +504,9 @@ function Row({
 /**
  * 预览体：按格式分派 ——
  *   - `.md` / `.markdown`：走 markdown 渲染器（内容仍来自文本通道）；
- *   - 图片 / `.pdf`：走字节通道，渲染端真画（data URL / pdfjs canvas）；
+ *   - 代码扩展名（`previewModeOf` 认得出的那些）：同一份文本过代码高亮；
+ *   - 图片 / `.pdf` / 办公三件 / csv：走字节通道（原始字节或主进程抽好的结构）；
+ *   - `.doc` / `.xls` / `.ppt`：不读文件，直接给"另存为新格式"的人话；
  *   - 其余：文本档原样（monospace、换行保留）；二进制/过大给人话。
  */
 function PreviewBody({ state }: { state: PreviewState }): React.JSX.Element {
@@ -503,21 +521,32 @@ function PreviewBody({ state }: { state: PreviewState }): React.JSX.Element {
     return <ToolError testId="file-preview-error" message={state.error ?? '读不了这个文件'} />
   }
 
+  // 旧版 Office：没有 value（压根没读文件），人话在这儿收口
+  if (state.mode === 'office-legacy') {
+    return (
+      <p data-testid="file-preview-legacy" className="px-3 py-2 text-b2 text-ink-secondary">
+        {LEGACY_OFFICE_NOTICE[extensionOf(state.relative)] ?? '这个旧版 Office 文件暂不支持预览'}
+      </p>
+    )
+  }
+
   const value = state.value
   if (value === undefined) return <div />
   if (value.channel === 'bytes') {
-    // key 绑文件名：换文件即重挂，免得上一个文件的状态（坏图标记 / 已画页数）跟过来
-    return <BytesBody key={state.relative} mode={state.mode} result={value.bytes} />
+    // key 绑文件名：换文件即重挂，免得上一个文件的状态（坏图标记 / 已画页数 / 当前工作表）跟过来
+    return <BytesBody key={state.relative} result={value.bytes} />
   }
-  return <TextBody mode={state.mode} preview={value.preview} />
+  return <TextBody mode={state.mode} relative={state.relative} preview={value.preview} />
 }
 
-/** 文本通道的那三种结果（markdown 只是把它们里的 `text` 过一遍渲染器） */
+/** 文本通道的那三种结果（markdown / 代码只是把它们里的 `text` 过一遍对应的渲染器） */
 function TextBody({
   mode,
+  relative,
   preview
 }: {
   mode: PreviewMode
+  relative: string
   preview: FilePreview
 }): React.JSX.Element {
   if (preview.kind === 'binary') {
@@ -535,16 +564,20 @@ function TextBody({
     )
   }
 
+  const language = mode === 'code' ? codeLanguageOf(relative) : null
+
   return (
     <div className="py-2">
       {mode === 'markdown' ? (
         <MarkdownPreview text={preview.text} />
-      ) : (
+      ) : language === null ? (
         <div data-testid="file-preview-text" className="px-3">
           <pre className="font-mono text-b2 whitespace-pre-wrap break-all text-ink">
             {preview.text}
           </pre>
         </div>
+      ) : (
+        <CodePreview text={preview.text} language={language} />
       )}
       {preview.truncated ? (
         <p className="px-3 pt-2 text-b2 text-ink-tertiary">
@@ -556,13 +589,7 @@ function TextBody({
 }
 
 /** 字节通道：认得出的格式交给对应的渲染器；其余三种给人话（与文本档同口径） */
-function BytesBody({
-  mode,
-  result
-}: {
-  mode: PreviewMode
-  result: FileBytesResult
-}): React.JSX.Element {
+function BytesBody({ result }: { result: FileBytesResult }): React.JSX.Element {
   if (result.kind === 'missing') {
     return (
       <p data-testid="file-preview-missing" className="px-3 py-2 text-b2 text-ink-secondary">
@@ -586,7 +613,42 @@ function BytesBody({
     )
   }
 
-  return mode === 'pdf' ? (
+  if (result.kind === 'docx') {
+    // Word 在主进程已转成 markdown：这里就是 markdown 渲染器（同一个组件，零新渲染器）
+    return (
+      <div className="py-2">
+        <MarkdownPreview text={result.markdown} />
+        {result.truncated ? (
+          <p
+            data-testid="file-preview-docx-truncated"
+            className="px-3 pt-2 text-b2 text-ink-tertiary"
+          >
+            文档太长，只显示了前面一部分
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+  if (result.kind === 'xlsx') {
+    return (
+      <div className="py-2">
+        <TablePreview sheets={result.sheets} />
+        {result.truncated ? (
+          <p
+            data-testid="file-preview-table-sheets-truncated"
+            className="px-3 pt-2 text-b2 text-ink-tertiary"
+          >
+            工作表太多，只显示了前 {result.sheets.length} 张
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+  if (result.kind === 'pptx') {
+    return <PptxPreview slides={result.slides} truncated={result.truncated} />
+  }
+
+  return result.format === 'pdf' ? (
     <PdfPreview bytes={result.bytes} />
   ) : (
     <ImagePreview format={result.format} bytes={result.bytes} />
