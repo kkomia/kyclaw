@@ -120,6 +120,8 @@ export interface SaveArtifactOptions {
   markRead?: boolean
   /** markRead 用（会话键 = agent 线程 id） */
   session?: string
+  /** 产出后的结构自检结论（如 '结构校验通过'）：拼在回执尾部，模型/工具卡一眼能看到 */
+  check?: string
 }
 
 /**
@@ -146,7 +148,8 @@ export async function saveArtifact(
     }
 
     const action = existing === null ? '已创建' : '已覆盖'
-    return `${action} ${abs}（${byteLengthOf(bytes)} 字节，${kind}）`
+    const check = options.check === undefined ? '' : `；${options.check}`
+    return `${action} ${abs}（${byteLengthOf(bytes)} 字节，${kind}）${check}`
   })
 }
 

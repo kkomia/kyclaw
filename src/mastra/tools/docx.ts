@@ -11,6 +11,7 @@
  */
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
+import { assertPackage, checkPackage } from './artifact-check'
 import {
   artifactNeedsApproval,
   artifactTarget,
@@ -19,30 +20,57 @@ import {
 } from './artifacts'
 import { sessionKey, type ToolContext } from './guard'
 
+/** 输入上限（依据：模块 4 报告 §六.6 登记的"输入规模无上限"）：超限让模型知道怎么改 */
+const MAX_BLOCKS = 1000
+const MAX_TABLE_ROWS = 2000
+const MAX_PARAGRAPH_CHARS = 20000
+const MAX_BULLET_ITEMS = 200
+const MAX_BULLET_CHARS = 2000
+
 export const docxBlockSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('heading'),
-    text: z.string().min(1).describe('标题文字'),
+    text: z
+      .string()
+      .min(1)
+      .max(MAX_PARAGRAPH_CHARS, `单段文字最长 ${MAX_PARAGRAPH_CHARS} 字，请拆成多段`)
+      .describe(`标题文字（最长 ${MAX_PARAGRAPH_CHARS} 字）`),
     level: z.number().int().min(1).max(6).optional().describe('标题级别 1-6（缺省 1）')
   }),
   z.object({
     type: z.literal('paragraph'),
-    text: z.string().describe('一段正文（空串会被跳过）')
+    text: z
+      .string()
+      .max(MAX_PARAGRAPH_CHARS, `单段文字最长 ${MAX_PARAGRAPH_CHARS} 字，请拆成多段`)
+      .describe(`一段正文（空串会被跳过；最长 ${MAX_PARAGRAPH_CHARS} 字）`)
   }),
   z.object({
     type: z.literal('bullets'),
-    items: z.array(z.string()).min(1).describe('项目符号列表的条目')
+    items: z
+      .array(z.string().max(MAX_BULLET_CHARS, `单条要点最长 ${MAX_BULLET_CHARS} 字，请精简`))
+      .min(1)
+      .max(MAX_BULLET_ITEMS, `一个列表最多 ${MAX_BULLET_ITEMS} 条，请拆分`)
+      .describe(
+        `项目符号列表的条目（最多 ${MAX_BULLET_ITEMS} 条，每条最长 ${MAX_BULLET_CHARS} 字）`
+      )
   }),
   z.object({
     type: z.literal('table'),
     headers: z.array(z.string()).optional().describe('表头（可选；给了就加粗成第一行）'),
-    rows: z.array(z.array(z.string())).describe('数据行（二维字符串数组）')
+    rows: z
+      .array(z.array(z.string()))
+      .max(MAX_TABLE_ROWS, `一张表最多 ${MAX_TABLE_ROWS} 行，请拆分表格`)
+      .describe(`数据行（二维字符串数组；最多 ${MAX_TABLE_ROWS} 行）`)
   })
 ])
 
 export const docxInputSchema = z.object({
   title: z.string().optional().describe('文档标题（写成 Title 段；不给 path 时也用它派生文件名）'),
-  blocks: z.array(docxBlockSchema).min(1).describe('文档内容块（按顺序排列）'),
+  blocks: z
+    .array(docxBlockSchema)
+    .min(1)
+    .max(MAX_BLOCKS, `文档最多 ${MAX_BLOCKS} 个内容块，请拆分或精简`)
+    .describe(`文档内容块（按顺序排列；最多 ${MAX_BLOCKS} 个）`),
   path: z.string().optional().describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名）')
 })
 
@@ -180,7 +208,43 @@ export async function createDocxTool(ctx: ToolContext): Promise<Tool<DocxInput, 
       const abs = artifactTarget(ctx, planInput(input), 'docx', '文档', session)
       const bytes = await renderDocx(input)
 
-      return await saveArtifact(ctx, abs, bytes, `${input.blocks.length} 个内容块`, { session })
+      // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明
+      const check = checkPackage(bytes, { kind: 'docx', texts: sampleText(input) })
+      assertPackage(check)
+
+      return await saveArtifact(ctx, abs, bytes, `${input.blocks.length} 个内容块`, {
+        session,
+        check: check.note
+      })
     }
   })
+}
+
+/** 自检的样本文本：标题优先，否则第一个非空块文本（取不到就给空数组，该检查项不出现） */
+function sampleText(input: DocxInput): string[] {
+  const title = input.title?.trim() ?? ''
+  if (title !== '') return [title]
+
+  for (const block of input.blocks) {
+    switch (block.type) {
+      case 'heading':
+      case 'paragraph': {
+        if (block.text.trim() !== '') return [block.text]
+        break
+      }
+      case 'bullets': {
+        const first = block.items.find((item) => item.trim() !== '')
+        if (first !== undefined) return [first]
+        break
+      }
+      case 'table': {
+        const header = (block.headers ?? []).find((text) => text.trim() !== '')
+        if (header !== undefined) return [header]
+        const cell = block.rows.flat().find((text) => text.trim() !== '')
+        if (cell !== undefined) return [cell]
+        break
+      }
+    }
+  }
+  return []
 }

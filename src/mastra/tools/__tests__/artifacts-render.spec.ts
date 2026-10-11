@@ -170,7 +170,7 @@ describe('renderXlsx：真解包 + 同库读回', () => {
 
 describe('renderPptx：真解包', () => {
   it('解包：16:9 演示文稿，封面 + 每页一张 slide，文字进 slideN.xml', async () => {
-    const bytes = await renderPptx({
+    const { data: bytes, slides } = await renderPptx({
       title: '季度汇报',
       slides: [
         { title: '结论', bullets: ['营收增长 12%', '成本持平'] },
@@ -180,11 +180,13 @@ describe('renderPptx：真解包', () => {
       ]
     })
 
+    // 页数按"实际写入"算：封面 + 两页有内容的（空对象那页被跳过）
+    expect(slides).toBe(3)
+
     const entries = readZipEntries(bytes)
     const names = [...entries.keys()]
     expect(names).toContain('[Content_Types].xml')
     expect(names).toContain('ppt/presentation.xml')
-    // 封面 + 两页有内容的（空对象那页被跳过）
     expect(names).toContain('ppt/slides/slide1.xml')
     expect(names).toContain('ppt/slides/slide2.xml')
     expect(names).toContain('ppt/slides/slide3.xml')
@@ -200,9 +202,29 @@ describe('renderPptx：真解包', () => {
     expect(zipText(entries, 'ppt/presentation.xml')).toContain('sldSz')
   })
 
+  it('防溢出：每个文本框都带 <a:normAutofit（PowerPoint 侧"溢出自动缩小"）', async () => {
+    const { data } = await renderPptx({
+      title: '季度汇报',
+      slides: [{ title: '结论', bullets: ['营收增长 12%'] }]
+    })
+
+    const entries = readZipEntries(data)
+    // 封面 / 页标题 / 要点块三处 addText 都要开 fit:'shrink'
+    for (const name of ['ppt/slides/slide1.xml', 'ppt/slides/slide2.xml']) {
+      const xml = zipText(entries, name)
+      const boxes = xml.match(/<a:normAutofit\b/g) ?? []
+      expect(boxes.length, `${name} 的文本框都应带 normAutofit`).toBeGreaterThan(0)
+    }
+    // 一页两处（标题 + 要点），一共两个
+    expect(
+      (zipText(entries, 'ppt/slides/slide2.xml').match(/<a:normAutofit\b/g) ?? []).length
+    ).toBe(2)
+  })
+
   it('内容全空：仍然产出一页占位（不能是零页演示文稿）', async () => {
-    const entries = readZipEntries(await renderPptx({ slides: [{}] }))
-    expect(zipText(entries, 'ppt/slides/slide1.xml')).toContain('没有内容')
+    const { data, slides } = await renderPptx({ slides: [{}] })
+    expect(slides).toBe(1)
+    expect(zipText(readZipEntries(data), 'ppt/slides/slide1.xml')).toContain('没有内容')
   })
 })
 

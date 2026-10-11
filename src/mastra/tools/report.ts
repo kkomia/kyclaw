@@ -11,6 +11,7 @@
  */
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
+import { checkPdf } from './artifact-check'
 import {
   artifactNeedsApproval,
   artifactTarget,
@@ -24,13 +25,25 @@ import { sessionKey, type ToolContext } from './guard'
 /** 标题缺省时的兜底（渲染进 <title> 与页首；文件名也会用它派生） */
 const FALLBACK_TITLE = '报告'
 
+/** 输入上限（依据：模块 4 报告 §六.6 登记的"输入规模无上限"）：超限让模型知道怎么改 */
+const MAX_TITLE_CHARS = 200
+const MAX_HTML_CHARS = 200000
+
 export const reportInputSchema = z.object({
-  title: z.string().min(1).describe('报告标题（写进页首与 <title>；不给 path 时也用它派生文件名）'),
+  title: z
+    .string()
+    .min(1)
+    .max(MAX_TITLE_CHARS, `标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
+    .describe(
+      `报告标题（写进页首与 <title>；不给 path 时也用它派生文件名；最长 ${MAX_TITLE_CHARS} 字）`
+    ),
   html: z
     .string()
     .min(1)
+    .max(MAX_HTML_CHARS, `正文最多 ${MAX_HTML_CHARS} 字符，请拆分内容`)
     .describe(
-      '报告正文的 HTML 片段（h2/h3、p、ul/ol、table、pre/code、blockquote 都带样式）。' +
+      `报告正文的 HTML 片段（h2/h3、p、ul/ol、table、pre/code、blockquote 都带样式；` +
+        `最多 ${MAX_HTML_CHARS} 字符）。` +
         '不要再写 <html>/<head>/<style> 外壳，也不用重复一级标题——模板已经带上标题'
     ),
   path: z
@@ -42,8 +55,18 @@ export const reportInputSchema = z.object({
 export type ReportInput = z.infer<typeof reportInputSchema>
 
 export const pdfInputSchema = z.object({
-  title: z.string().optional().describe('PDF 文档标题（页首与 <title>；不给就写「报告」）'),
-  html: z.string().min(1).describe('文档正文的 HTML 片段（与 create_report 同一套样式与写法）'),
+  title: z
+    .string()
+    .max(MAX_TITLE_CHARS, `标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
+    .optional()
+    .describe(`PDF 文档标题（页首与 <title>；不给就写「报告」；最长 ${MAX_TITLE_CHARS} 字）`),
+  html: z
+    .string()
+    .min(1)
+    .max(MAX_HTML_CHARS, `正文最多 ${MAX_HTML_CHARS} 字符，请拆分内容`)
+    .describe(
+      `文档正文的 HTML 片段（与 create_report 同一套样式与写法；最多 ${MAX_HTML_CHARS} 字符）`
+    ),
   path: z.string().optional().describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名）')
 })
 
@@ -110,7 +133,13 @@ export async function createPdfTool(
         throw new Error(`PDF 导出失败：${detail}（可以先用 create_report 生成 HTML 报告）`)
       }
 
-      return await saveArtifact(ctx, abs, bytes, 'PDF', { session })
+      // 产出后结构自检：钩子返回的不是 PDF（没有 %PDF- 头 / 末尾没有 %%EOF）就抛错，不落盘
+      const check = checkPdf(bytes)
+      if (!check.ok) {
+        throw new Error(`产出物生成失败：结构自检没通过（${check.reason ?? check.note}）`)
+      }
+
+      return await saveArtifact(ctx, abs, bytes, 'PDF', { session, check: check.note })
     }
   })
 }

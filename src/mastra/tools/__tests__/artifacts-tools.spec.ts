@@ -11,10 +11,10 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { PdfPrinter } from '../artifacts'
-import { createDocxTool } from '../docx'
-import { createExcelTool } from '../excel'
-import { createPptTool } from '../ppt'
-import { createPdfTool, createReportTool } from '../report'
+import { createDocxTool, docxInputSchema } from '../docx'
+import { createExcelTool, excelInputSchema } from '../excel'
+import { createPptTool, pptInputSchema } from '../ppt'
+import { createPdfTool, createReportTool, pdfInputSchema, reportInputSchema } from '../report'
 import { callTool, createBed, readText, type TestBed } from './helpers'
 import { readZipEntries, zipText } from './zip'
 
@@ -154,6 +154,7 @@ describe('create_pdf：注入的打印钩子', () => {
     expect(readFileSync(file).subarray(0, 5).toString('utf8')).toBe('%PDF-')
     expect(out).toContain(file)
     expect(out).toContain('字节，PDF）')
+    expect(out).toContain('；结构校验通过')
 
     expect(printed).toHaveLength(1)
     expect(printed[0]).toContain('<title>月度简报</title>')
@@ -175,6 +176,19 @@ describe('create_pdf：注入的打印钩子', () => {
     await expect(callTool(tool, { title: 'x', html: '<p>x</p>' })).rejects.toThrow(
       /PDF 导出失败：窗口创建失败/
     )
+  })
+
+  it('钩子返回的不是 PDF（没有 %PDF- 头 / 末尾没有 %%EOF）：抛错且不落盘', async () => {
+    const notPdf: PdfPrinter = async () => Buffer.from('<html>其实是 HTML</html>', 'utf8')
+    const tool = await createPdfTool(bed.ctx, notPdf)
+
+    await expect(callTool(tool, { title: 'x', html: '<p>x</p>' })).rejects.toThrow(/结构自检没通过/)
+    expect(existsSync(join(bed.root, 'x.pdf'))).toBe(false)
+
+    const truncated: PdfPrinter = async () => Buffer.from('%PDF-1.4\n1 0 obj\n', 'utf8')
+    const tool2 = await createPdfTool(bed.ctx, truncated)
+    await expect(callTool(tool2, { title: 'y', html: '<p>y</p>' })).rejects.toThrow(/%%EOF/)
+    expect(existsSync(join(bed.root, 'y.pdf'))).toBe(false)
   })
 
   it('越界路径在打印之前就被拒（白跑一次打印是最贵的错）', async () => {
@@ -207,6 +221,8 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     const file = join(bed.root, '销量.xlsx')
     expect(existsSync(file)).toBe(true)
     expect(out).toContain('2 张工作表／3 行')
+    // 产出后结构自检的结论拼在回执尾部
+    expect(out).toContain('；结构校验通过')
     expect(statSync(file).size).toBeGreaterThan(0)
   })
 
@@ -219,6 +235,7 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     const file = join(bed.root, '汇报.pptx')
     expect(existsSync(file)).toBe(true)
     expect(out).toContain('1 页演示文稿')
+    expect(out).toContain('；结构校验通过')
 
     const entries = readZipEntries(readFileSync(file))
     expect([...entries.keys()]).toContain('ppt/presentation.xml')
@@ -241,6 +258,7 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     const file = join(bed.root, 'docs', '方案.docx')
     expect(existsSync(file)).toBe(true)
     expect(out).toContain('2 个内容块')
+    expect(out).toContain('；结构校验通过')
 
     const entries = readZipEntries(readFileSync(file))
     const document = zipText(entries, 'word/document.xml')
@@ -333,5 +351,53 @@ describe('路径口径：产出物只写工作区', () => {
     await callTool(tool, { title: 'keep', html: '<p>x</p>' })
     expect(readText(outside)).toBe('原样')
     expect(existsSync(join(bed.root, 'keep.html'))).toBe(true)
+  })
+})
+
+describe('输入上限：超限被 schema 拒（每件一例）', () => {
+  /** 拒的同时把原因带出来：报错要让模型知道"怎么改" */
+  function issuesOf(result: {
+    success: boolean
+    error?: { issues: Array<{ message: string }> }
+  }): string {
+    return result.error?.issues.map((issue) => issue.message).join('；') ?? ''
+  }
+
+  it('create_ppt：一页要点超过 30 条被拒', () => {
+    const parsed = pptInputSchema.safeParse({
+      slides: [
+        { title: '结论', bullets: Array.from({ length: 31 }, (_, index) => `要点 ${index}`) }
+      ]
+    })
+    expect(parsed.success).toBe(false)
+    expect(issuesOf(parsed)).toContain('一页最多 30 条要点')
+  })
+
+  it('create_excel：单元格字符串超过 32767 字符被拒', () => {
+    const parsed = excelInputSchema.safeParse({
+      sheets: [{ name: 'S', rows: [['x'.repeat(32768)]] }]
+    })
+    expect(parsed.success).toBe(false)
+    expect(issuesOf(parsed)).toContain('单元格字符串最长 32767 字符')
+  })
+
+  it('create_docx：内容块超过 1000 个被拒', () => {
+    const parsed = docxInputSchema.safeParse({
+      blocks: Array.from({ length: 1001 }, () => ({ type: 'paragraph', text: 'x' }))
+    })
+    expect(parsed.success).toBe(false)
+    expect(issuesOf(parsed)).toContain('文档最多 1000 个内容块')
+  })
+
+  it('create_report：正文超过 200000 字符被拒', () => {
+    const parsed = reportInputSchema.safeParse({ title: 'R', html: 'x'.repeat(200001) })
+    expect(parsed.success).toBe(false)
+    expect(issuesOf(parsed)).toContain('正文最多 200000 字符')
+  })
+
+  it('create_pdf：正文超过 200000 字符被拒', () => {
+    const parsed = pdfInputSchema.safeParse({ html: 'x'.repeat(200001) })
+    expect(parsed.success).toBe(false)
+    expect(issuesOf(parsed)).toContain('正文最多 200000 字符')
   })
 })

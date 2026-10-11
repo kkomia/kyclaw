@@ -233,6 +233,9 @@ describe('full 工作区：产出物免审并真落盘', () => {
       expect(receipts, `${kind} 的回执应带路径`).toContain(file)
     }
 
+    // 产出后结构自检的结论进了回执：xlsx / pptx / docx / pdf 四件（HTML 报告没有包结构，不接）
+    expect((toolOutputText(parts).match(/结构校验通过/g) ?? []).length).toBe(4)
+
     // 读回：HTML 文本、PDF 断头、xlsx 解包、pptx/docx 解包读到正文
     expect(readFileSync(files.report, 'utf8')).toContain('<p>稳中向好。</p>')
     expect(readFileSync(files.pdf).subarray(0, 5).toString('utf8')).toBe('%PDF-')
