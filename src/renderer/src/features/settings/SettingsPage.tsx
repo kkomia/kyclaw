@@ -9,6 +9,7 @@ import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
+import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
@@ -130,9 +131,15 @@ export function SettingsPage(): React.JSX.Element {
             </SettingsGroup>
           ) : null}
           {meta.id === 'model' ? (
-            <SettingsGroup title="模型" testId="settings-group-model">
-              <ModelSettings />
-            </SettingsGroup>
+            <>
+              <SettingsGroup title="模型" testId="settings-group-model">
+                <ModelSettings />
+              </SettingsGroup>
+              {/* round 32：思考翻译（思维链是英文时先翻再回显；开关 + 模式 + 翻译服务） */}
+              <SettingsGroup title="思考翻译" testId="settings-group-reasoning-translate">
+                <ReasoningTranslateSettings />
+              </SettingsGroup>
+            </>
           ) : null}
           {meta.id === 'workspaces' ? (
             <SettingsGroup title="工作区" testId="settings-group-workspaces">

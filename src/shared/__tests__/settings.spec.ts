@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   appSettingsPatchSchema,
   appSettingsSchema,
+  DEFAULT_REASONING_TRANSLATE,
   DEFAULT_SETTINGS,
   defaultSettings,
+  effectiveReasoningTranslate,
+  REASONING_TRANSLATE_PRESET,
   SETTINGS_FILE
 } from '../settings'
 
@@ -12,7 +15,7 @@ import {
  * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件与置顶/归档/探测字段为空 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置 / 语义召回默认开（本地）', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件与置顶/归档/探测字段为空 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置 / 语义召回默认开（本地）/ 思考翻译默认关', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
@@ -37,6 +40,13 @@ describe('AppSettings schema', () => {
         baseUrl: 'https://api.siliconflow.cn/v1',
         model: 'BAAI/bge-m3',
         idleMinutes: 5
+      },
+      reasoningTranslate: {
+        enabled: false,
+        mode: 'full',
+        baseUrl: 'http://192.168.31.18:8235/v1',
+        model: 'Index-Translate-2B',
+        targetLanguage: '简体中文'
       }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
@@ -296,6 +306,74 @@ describe('Langfuse 设置 schema（T17：只有服务地址，密钥不在这里
     expect(appSettingsPatchSchema.safeParse({ langfuse: { endpoint: '', extra: 1 } }).success).toBe(
       false
     )
+  })
+})
+
+describe('思考翻译设置 schema（round 32：开关 + 模式 + 服务三项 + 目标语言）', () => {
+  it('形状锁死：mode 只收 full / button，五项一个都不能少（strict）', () => {
+    const good = {
+      enabled: true,
+      mode: 'button' as const,
+      baseUrl: 'http://192.168.31.18:8235/v1',
+      model: 'Index-Translate-2B',
+      targetLanguage: '简体中文'
+    }
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, reasoningTranslate: good }).success
+    ).toBe(true)
+
+    for (const bad of [
+      { ...good, mode: 'auto' },
+      { ...good, enabled: 'yes' },
+      { ...good, extra: 1 },
+      { enabled: true, mode: 'full', baseUrl: '', model: '' }, // 缺 targetLanguage
+      'Index-Translate-2B'
+    ]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, reasoningTranslate: bad }).success,
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+  })
+
+  it('补丁可以改这一组（设置页「思考翻译」组走这条路；密钥不在设置里）', () => {
+    const patch = { reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE, enabled: true } }
+    expect(appSettingsPatchSchema.parse(patch)).toEqual(patch)
+    expect(
+      appSettingsPatchSchema.safeParse({
+        reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE, mode: 'auto' }
+      }).success
+    ).toBe(false)
+  })
+
+  it('预置与生效值：落盘为空串时按预置填（表单与主进程同一份兜底），不回头改写落盘值', () => {
+    // 缺省就是预置（用户打开开关即可用）
+    expect(effectiveReasoningTranslate(DEFAULT_REASONING_TRANSLATE)).toEqual({
+      baseUrl: REASONING_TRANSLATE_PRESET.baseUrl,
+      model: REASONING_TRANSLATE_PRESET.model,
+      targetLanguage: REASONING_TRANSLATE_PRESET.targetLanguage
+    })
+    // 用户清空保存 = 空串；本次使用按预置兜底，但落盘值仍是空串（读盘不静默改写）
+    const cleared = { ...DEFAULT_REASONING_TRANSLATE, baseUrl: '', model: '', targetLanguage: '' }
+    expect(effectiveReasoningTranslate(cleared)).toEqual({
+      baseUrl: REASONING_TRANSLATE_PRESET.baseUrl,
+      model: REASONING_TRANSLATE_PRESET.model,
+      targetLanguage: REASONING_TRANSLATE_PRESET.targetLanguage
+    })
+    expect(cleared.baseUrl).toBe('')
+    // 用户改过的取值原样生效（trim 后）
+    expect(
+      effectiveReasoningTranslate({
+        ...DEFAULT_REASONING_TRANSLATE,
+        baseUrl: ' https://api.example.com/v1 ',
+        model: ' my-translate ',
+        targetLanguage: ' English '
+      })
+    ).toEqual({
+      baseUrl: 'https://api.example.com/v1',
+      model: 'my-translate',
+      targetLanguage: 'English'
+    })
   })
 })
 

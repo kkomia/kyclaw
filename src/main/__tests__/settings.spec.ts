@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS } from '../../shared/settings'
+import { DEFAULT_REASONING_TRANSLATE, DEFAULT_SETTINGS } from '../../shared/settings'
 import { readSettings, settingsPath, updateSettings, writeSettings } from '../settings'
 
 let dir: string
@@ -42,6 +42,13 @@ describe('设置存储（userData 下的 settings.json）', () => {
         baseUrl: '',
         model: '',
         idleMinutes: 5
+      },
+      reasoningTranslate: {
+        enabled: false,
+        mode: 'full' as const,
+        baseUrl: 'http://192.168.31.18:8235/v1',
+        model: 'Index-Translate-2B',
+        targetLanguage: '简体中文'
       }
     }
 
@@ -95,7 +102,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall）读出空值：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -127,7 +134,51 @@ describe('设置存储（userData 下的 settings.json）', () => {
         baseUrl: 'https://api.siliconflow.cn/v1',
         model: 'BAAI/bge-m3',
         idleMinutes: 5
+      },
+      reasoningTranslate: {
+        enabled: false,
+        mode: 'full',
+        baseUrl: 'http://192.168.31.18:8235/v1',
+        model: 'Index-Translate-2B',
+        targetLanguage: '简体中文'
       }
+    })
+  })
+
+  it('思考翻译（round 32）：老文件没有这个字段时补成缺省（关着 + 预置服务）；落过盘的取值原样保留', () => {
+    const file = settingsPath(dir)
+
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'system', fontTier: 'default', providers: [], workspaces: [] }),
+      'utf8'
+    )
+    expect(readSettings(file).reasoningTranslate).toEqual(DEFAULT_REASONING_TRANSLATE)
+
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'system',
+        fontTier: 'default',
+        providers: [],
+        workspaces: [],
+        reasoningTranslate: {
+          enabled: true,
+          mode: 'button',
+          baseUrl: '',
+          model: '',
+          targetLanguage: 'English'
+        }
+      }),
+      'utf8'
+    )
+    // 空串与用户改过的目标语言都原样读回：预置只是"没有这个字段时"的缺省，不回头改写
+    expect(readSettings(file).reasoningTranslate).toEqual({
+      enabled: true,
+      mode: 'button',
+      baseUrl: '',
+      model: '',
+      targetLanguage: 'English'
     })
   })
 

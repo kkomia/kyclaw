@@ -9,6 +9,7 @@ import {
   settingsApiStub,
   telemetryApiStub,
   terminalApiStub,
+  translateApiStub,
   updatesApiStub,
   workbenchApiStub,
   workspaceApiStub
@@ -28,7 +29,7 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
   }
   // T5 起 KyclawApi 多了 settings 面、T6 起多了 agent 面、T18 起多了 projects 面、T17 起多了
   // updates / telemetry 面、round 28 起多了 memory 面、模块 3B 起多了 localModels 面、
-  // 工作台起多了 workbench / terminal 面：
+  // 工作台起多了 workbench / terminal 面、round 32 起多了 translate 面：
   // 本文件只测窗口面，其余给桩即可
   window.kyclaw = {
     window: api,
@@ -42,7 +43,8 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     telemetry: telemetryApiStub(),
     plugins: pluginsApiStub(),
     memory: memoryApiStub(),
-    localModels: localModelsApiStub()
+    localModels: localModelsApiStub(),
+    translate: translateApiStub()
   }
   return api
 }

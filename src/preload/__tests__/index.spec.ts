@@ -508,6 +508,77 @@ describe('preload：window.kyclaw.telemetry（T17）', () => {
   })
 })
 
+describe('preload：window.kyclaw.translate（思考翻译，round 32）', () => {
+  it('暴露 translate 一族（run / keyState / setKey / clearKey）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.translate).sort()).toEqual([
+      'clearKey',
+      'keyState',
+      'run',
+      'setKey'
+    ])
+  })
+
+  it('run 把 { text, targetLanguage } 原样发给 translate:run，结果按同一份 schema 解析', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ok: true, text: '译文' })
+
+    await expect(
+      kyclawApi.translate.run({ text: 'Hello', targetLanguage: '简体中文' })
+    ).resolves.toEqual({ ok: true, text: '译文' })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('translate:run', {
+      text: 'Hello',
+      targetLanguage: '简体中文'
+    })
+
+    // 失败是产品语言的一等结果（原样交给上层，不抛）
+    mocks.invoke.mockResolvedValueOnce({ ok: false, message: '翻译服务没有返回内容' })
+    await expect(kyclawApi.translate.run({ text: 'Hello' })).resolves.toEqual({
+      ok: false,
+      message: '翻译服务没有返回内容'
+    })
+
+    // 结构不对（两个分支混在一起 / 缺 text）→ 抛，不编一个译文本给上层
+    for (const bad of [{ ok: true, text: '译文', message: '多余' }, { ok: false }, null]) {
+      mocks.invoke.mockResolvedValueOnce(bad)
+      await expect(kyclawApi.translate.run({ text: 'Hello' })).rejects.toThrow(/结构不合法/)
+    }
+  })
+
+  it('setKey 只把 {hasKey:true} 交给上层；回包多带明文 = 整个响应不合法', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKey: true })
+
+    await expect(kyclawApi.translate.setKey('sk-translate')).resolves.toEqual({ hasKey: true })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('translate:set-key', 'sk-translate')
+
+    mocks.invoke.mockResolvedValueOnce({ hasKey: true, key: 'sk-translate' })
+    await expect(kyclawApi.translate.setKey('sk-translate')).rejects.toThrow()
+  })
+
+  it('keyState / clearKey 按 schema 解析；结构不对就抛', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ hasKey: false, needsReentry: false })
+
+    await expect(kyclawApi.translate.keyState()).resolves.toEqual({
+      hasKey: false,
+      needsReentry: false
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('translate:key-state')
+
+    mocks.invoke.mockResolvedValueOnce({ hasKey: true, needsReentry: false })
+    await expect(kyclawApi.translate.clearKey()).resolves.toEqual({
+      hasKey: true,
+      needsReentry: false
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('translate:clear-key')
+
+    mocks.invoke.mockResolvedValueOnce({ hasKey: 'yes' })
+    await expect(kyclawApi.translate.keyState()).rejects.toThrow()
+  })
+})
+
 describe('preload：window.kyclaw.workbench / terminal（工作台四工具）', () => {
   it('暴露 workbench 一族（listDir / readFile / reveal / gitOverview / gitLog / gitShow）', async () => {
     const { kyclawApi } = await loadPreload()

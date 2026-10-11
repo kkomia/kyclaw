@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   appSettingsSchema,
+  DEFAULT_REASONING_TRANSLATE,
   DEFAULT_SEMANTIC_RECALL,
   defaultSettings,
   SETTINGS_FILE,
@@ -24,7 +25,7 @@ export function settingsPath(userDataDir: string): string {
  * T13 的 permissions、T12 的 mcpServers、T18 的 defaultWorkspace / projects、T17 的 langfuse、
  * round 10 的 pluginMarketplaces / installedPlugins、round 18 的 modelPrefs、
  * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels、
- * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）。
+ * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）、round 32 的 reasoningTranslate。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  */
@@ -46,6 +47,9 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.archivedThreads === undefined) next.archivedThreads = []
   if (next.archivedProjects === undefined) next.archivedProjects = []
   next.semanticRecall = migrateSemanticRecall(next.semanticRecall)
+  if (next.reasoningTranslate === undefined) {
+    next.reasoningTranslate = { ...DEFAULT_REASONING_TRANSLATE }
+  }
   return next
 }
 

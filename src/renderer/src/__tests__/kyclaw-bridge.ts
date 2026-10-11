@@ -15,6 +15,7 @@ import {
 } from '@shared/settings'
 import type { PluginsOverview } from '@shared/plugins'
 import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
+import type { TranslateResult } from '@shared/translate'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 import type {
   FilePreview,
@@ -451,6 +452,34 @@ export function memoryApiStub(): MemoryApiStub {
 }
 
 /**
+ * 思考翻译面（round 32）：默认回"服务没开"（`{ok:false}`）——**不假装翻成功**，
+ * 于是没关心过翻译的用例不会因为思考块多出一段假译文。用例自己
+ * `mockResolvedValue({ok:true, text:'…'})` 喂译文、`mockRejectedValue` 造通道失败。
+ */
+export interface TranslateApiStub {
+  run: Mock<(input: { text: string; targetLanguage?: string }) => Promise<TranslateResult>>
+  keyState: Mock<() => Promise<ProviderKeyState>>
+  setKey: Mock<(key: string) => Promise<{ hasKey: true }>>
+  clearKey: Mock<() => Promise<ProviderKeyState>>
+}
+
+export function translateApiStub(): TranslateApiStub {
+  let hasKey = false
+  return {
+    run: vi.fn(async () => ({ ok: false as const, message: '翻译服务没有开' })),
+    keyState: vi.fn(async () => ({ hasKey, needsReentry: false })),
+    setKey: vi.fn(async () => {
+      hasKey = true
+      return { hasKey: true as const }
+    }),
+    clearKey: vi.fn(async () => {
+      hasKey = false
+      return { hasKey: false, needsReentry: false }
+    })
+  }
+}
+
+/**
  * 「本地模型」面（模块 3B）：总览是"当前值 + 订阅"的形状（主进程会推下载进度），
  * 所以桩里也放一份 current，并给个 `push` 让用例模拟主进程的推送。
  */
@@ -500,6 +529,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   plugins: PluginsApiStub
   memory: MemoryApiStub
   localModels: LocalModelsApiStub
+  translate: TranslateApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -515,6 +545,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const plugins = pluginsApiStub()
   const memory = memoryApiStub()
   const localModels = localModelsApiStub()
+  const translate = translateApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -527,7 +558,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     telemetry,
     plugins,
     memory,
-    localModels
+    localModels,
+    translate
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
@@ -541,7 +573,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     telemetry,
     plugins,
     memory,
-    localModels
+    localModels,
+    translate
   }
 }
 

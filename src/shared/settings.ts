@@ -107,6 +107,36 @@ export type SemanticRecallSettings = z.infer<typeof semanticRecallSettingsSchema
 export type SemanticRecallSource = SemanticRecallSettings['source']
 
 /**
+ * 思考翻译（round 32）：模型的思维链基本是英文，用户看不懂 —— 启用后思考段的显示
+ * **先调翻译模型翻一遍再回显**。两种模式：
+ *   - `full`  全量翻译（**默认**）：这一段写完就自动翻，默认看到的是译文；
+ *   - `button` 翻译按钮：显示原文 + 一个「翻译」，点了才翻。
+ * 两者前提一样：**思考的语言与目标语言不一致**（判定见 shared/translate.ts 的 needsTranslation）。
+ *
+ * 服务是用户局域网里的 OpenAI 兼容端点（llama.cpp，实测 383ms）；地址/模型/目标语言是普通设置，
+ * 可选 API Key 走 safeStorage 保留槽位（shared/translate.ts 的 TRANSLATE_KEY_SECRET_ID）。
+ * 生效时机：**当场生效**（渲染端现读设置、每段现判语言），与"改嵌入来源要重启"不是一回事。
+ */
+export const REASONING_TRANSLATE_MODES = ['full', 'button'] as const
+
+export const reasoningTranslateSettingsSchema = z.strictObject({
+  /** 总开关（缺省关：翻译要打局域网服务，默认不动） */
+  enabled: z.boolean(),
+  /** 回显模式：全量翻译 / 翻译按钮 */
+  mode: z.enum(REASONING_TRANSLATE_MODES),
+  /** OpenAI 兼容 baseURL（形如 `http://192.168.31.18:8235/v1`）；空串 = 用预置 */
+  baseUrl: z.string(),
+  /** 翻译模型名（形如 `Index-Translate-2B`）；空串 = 用预置 */
+  model: z.string(),
+  /** 目标语言（进提示词，如「简体中文」）；空串 = 用预置 */
+  targetLanguage: z.string()
+})
+
+export type ReasoningTranslateSettings = z.infer<typeof reasoningTranslateSettingsSchema>
+
+export type ReasoningTranslateMode = ReasoningTranslateSettings['mode']
+
+/**
  * 模型级偏好（round 18）：按 `${providerId}/${model}` 存「思考挡位」与「对话长度百分比」。
  * 缺省 = 默认挡 + 100%；挡位 id 只有注册表（shared/models.ts）里列出的才有意义
  * （无效值在读取侧回落默认，不在这里抛——用户改了模型名，旧偏好不该让整份设置读不出来）。
@@ -295,7 +325,9 @@ export const appSettingsSchema = z.strictObject({
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema,
   /** round 28 模块 3 的语义召回（长期记忆；开关 + 嵌入来源，远程 key 走 secrets.json） */
-  semanticRecall: semanticRecallSettingsSchema
+  semanticRecall: semanticRecallSettingsSchema,
+  /** round 32 的思考翻译（默认关；服务地址/模型/目标语言 + 可选 key 走 secrets.json） */
+  reasoningTranslate: reasoningTranslateSettingsSchema
 })
 
 /**
@@ -357,6 +389,45 @@ export const DEFAULT_SEMANTIC_RECALL: SemanticRecallSettings = {
 /** 空闲回收的可选档（分钟；0 = 不回收）——设置页的下拉框与落盘校验共用一处 */
 export const LOCAL_ENGINE_IDLE_OPTIONS = [5, 15, 30, 0] as const
 
+/**
+ * 思考翻译的预置（用户局域网部署的 llama.cpp，2026-10-11 实测可达）：
+ * baseURL / 模型 / 目标语言三项直接当缺省值，用户打开开关就能用；也可以改成任意
+ * OpenAI 兼容端点（如云端翻译接口，那就得再填一把 key）。
+ */
+export const REASONING_TRANSLATE_PRESET = {
+  baseUrl: 'http://192.168.31.18:8235/v1',
+  model: 'Index-Translate-2B',
+  targetLanguage: '简体中文'
+} as const
+
+/** 思考翻译缺省：**关着**（要不要把思考发给翻译服务是用户的显式选择），模式 = 全量翻译 */
+export const DEFAULT_REASONING_TRANSLATE: ReasoningTranslateSettings = {
+  enabled: false,
+  mode: 'full',
+  baseUrl: REASONING_TRANSLATE_PRESET.baseUrl,
+  model: REASONING_TRANSLATE_PRESET.model,
+  targetLanguage: REASONING_TRANSLATE_PRESET.targetLanguage
+}
+
+/**
+ * 生效的翻译服务配置：落盘为空串时按预置填 —— **表单与主进程用同一份兜底**，
+ * 于是"设置页里看见的那三项"就是"翻译时真会用的那三项"。
+ * 注意这只影响**本次使用**，不回头改落盘值（用户清空保存就是清空，同语义召回的预置口径）。
+ */
+export function effectiveReasoningTranslate(settings: ReasoningTranslateSettings): {
+  baseUrl: string
+  model: string
+  targetLanguage: string
+} {
+  const text = (value: string, fallback: string): string =>
+    value.trim() === '' ? fallback : value.trim()
+  return {
+    baseUrl: text(settings.baseUrl, REASONING_TRANSLATE_PRESET.baseUrl),
+    model: text(settings.model, REASONING_TRANSLATE_PRESET.model),
+    targetLanguage: text(settings.targetLanguage, REASONING_TRANSLATE_PRESET.targetLanguage)
+  }
+}
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   fontTier: 'default',
@@ -375,7 +446,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   archivedThreads: [],
   archivedProjects: [],
   langfuse: { endpoint: '' },
-  semanticRecall: DEFAULT_SEMANTIC_RECALL
+  semanticRecall: DEFAULT_SEMANTIC_RECALL,
+  reasoningTranslate: DEFAULT_REASONING_TRANSLATE
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -396,6 +468,7 @@ export function defaultSettings(): AppSettings {
     archivedThreads: [],
     archivedProjects: [],
     langfuse: { endpoint: '' },
-    semanticRecall: { ...DEFAULT_SEMANTIC_RECALL }
+    semanticRecall: { ...DEFAULT_SEMANTIC_RECALL },
+    reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE }
   }
 }

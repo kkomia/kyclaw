@@ -16,6 +16,7 @@ import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerTelemetryIpc } from './ipc/telemetry'
+import { registerTranslateIpc } from './ipc/translate'
 import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
@@ -133,6 +134,9 @@ if (!app.requestSingleInstanceLock()) {
     })
     // round 28：语义召回的远程嵌入密钥（写/清/状态；开关与来源走 settings:update）
     registerMemoryIpc({ secretsFile })
+    // round 32：思考翻译（翻译一段思考文本 + 可选密钥）。服务地址/模型/目标语言走 settings:update，
+    // 密钥与 provider 同一套 safeStorage 槽位；请求只在主进程发（渲染端有 CSP，也不该拿密钥）
+    registerTranslateIpc(userDataDir)
     // 模块 3B：本机嵌入引擎 + 本地模型（下载/删除/生效）。引擎按需启动（懒加载）：
     // 只有设置里来源选「本机引擎」且真用上时才会 spawn（见 llama/service.ts）。
     const pushLocalModels = (): void => {

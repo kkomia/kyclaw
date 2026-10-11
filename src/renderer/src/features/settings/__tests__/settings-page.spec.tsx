@@ -60,10 +60,13 @@ describe('设置页骨架（栏目页）', () => {
     expect(screen.queryByTestId('settings-group-usage')).not.toBeInTheDocument()
   })
 
-  it('「模型」栏：provider 预设入口在这一栏里', () => {
+  it('「模型」栏：provider 预设入口在这一栏里（round 32 起同栏还有「思考翻译」组）', () => {
     renderPage('/settings/model')
 
     expect(screen.getByTestId('settings-group-model')).toHaveTextContent('添加通道')
+    expect(screen.getByTestId('settings-group-reasoning-translate')).toHaveTextContent(
+      '启用思考翻译'
+    )
   })
 
   it('「记忆」/「用量」栏（round 5）：真实管理面（复用独立页的面板），不再是占位', async () => {

@@ -11,6 +11,7 @@ import { z } from './zod'
 import type { LocalModelsOverview } from './local-models'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
+import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
 import {
   type FilePreview,
   type GitCommit,
@@ -173,6 +174,20 @@ export const IPC_CHANNELS = {
     setEmbeddingKey: 'memory:set-embedding-key',
     /** 清除远程嵌入的 API Key（无入参，返回清除后的状态） */
     clearEmbeddingKey: 'memory:clear-embedding-key'
+  },
+  translate: {
+    /**
+     * round 32：翻译一段文本（入参 [{ text, targetLanguage? }]，返回 TranslateResult）。
+     * 目标语言缺省 = 按设置里的「目标语言」兜底；可选 API Key 只活在主进程内存里
+     * （明文不回渲染端、不进日志），服务地址/模型/超时全在主进程侧。
+     */
+    run: 'translate:run',
+    /** 可选 API Key 的状态（无入参，返回 ProviderKeyState——与 provider 密钥同形状） */
+    keyState: 'translate:key-state',
+    /** 写可选 API Key（入参 [key]，返回 {hasKey:true}——永远不回明文） */
+    setKey: 'translate:set-key',
+    /** 清除可选 API Key（无入参，返回清除后的状态） */
+    clearKey: 'translate:clear-key'
   },
   localModels: {
     /** 「本地模型」组的总览（无入参，返回 LocalModelsOverview：清单 + 已下载 + 引擎相位 + 下载进度） */
@@ -435,6 +450,21 @@ export const setLangfuseKeysResultSchema = z.strictObject({ hasKeys: z.literal(t
 export const embeddingKeyArgsSchema = z.tuple([z.string().min(1)])
 
 /**
+ * round 32：思考翻译的入参。
+ *   - `translate:run`：[{ text, targetLanguage? }] —— text 有界（TRANSLATE_MAX_CHARS），
+ *     targetLanguage 可省（主进程按设置里的目标语言兜底）；
+ *   - `translate:key-state` / `clear-key`：无入参；`set-key`：单个非空字符串（同 provider 密钥口径）。
+ */
+export const translateRunArgsSchema = z.tuple([
+  z.strictObject({
+    text: z.string().min(1).max(TRANSLATE_MAX_CHARS),
+    targetLanguage: z.string().min(1).optional()
+  })
+])
+
+export const translateKeyArgsSchema = z.tuple([z.string().min(1)])
+
+/**
  * 插件通道（round 10）的入参与回包：
  *   - 添加市场：{ source, ref?, sparsePaths? }（三态来源判定与克隆在主进程）；
  *   - 安装/卸载/刷新/移除：id / { marketplaceId, name }（市场清单是主进程读的，渲染端只给标识）。
@@ -659,6 +689,7 @@ export interface KyclawApi {
   plugins: KyclawPluginsApi
   memory: KyclawMemoryApi
   localModels: KyclawLocalModelsApi
+  translate: KyclawTranslateApi
 }
 
 /**
@@ -674,6 +705,25 @@ export interface KyclawMemoryApi {
   setEmbeddingKey(key: string): Promise<{ hasKey: true }>
   /** 清除密钥（幂等；返回清除后的状态） */
   clearEmbeddingKey(): Promise<ProviderKeyState>
+}
+
+/**
+ * preload 暴露给渲染端的思考翻译面（round 32）：翻一段文本 + 可选 API Key 的写/清/状态。
+ * 与 provider / Langfuse / 嵌入密钥同一套纪律：**明文只在写方向上出现一次**，读方向只有
+ * "有没有 / 要不要重录"；请求本身由主进程发（地址/模型/超时/密钥全留在主进程内存里）。
+ */
+export interface KyclawTranslateApi {
+  /**
+   * 翻译一段文本（目标语言不写就用设置里的那个）。失败回 `{ok:false, message}`（人话），
+   * 不抛 —— 译文拿不到是常态（服务没开、模型不在），界面要能原样留着并给重试。
+   */
+  run(input: { text: string; targetLanguage?: string }): Promise<TranslateResult>
+  /** 可选 API Key 的状态（没有 = 没配过；本 LAN 服务不需要 key） */
+  keyState(): Promise<ProviderKeyState>
+  /** 写密钥：成功只回 {hasKey:true}（明文永不回渲染端） */
+  setKey(key: string): Promise<{ hasKey: true }>
+  /** 清除密钥（幂等；返回清除后的状态） */
+  clearKey(): Promise<ProviderKeyState>
 }
 
 /**

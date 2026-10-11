@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { ChevronRight, Lightbulb } from 'lucide-react'
+import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
 import { TraceFold } from './TraceFold'
+import { useReasoningTranslation } from './use-reasoning-translation'
 
 /**
  * 思考块（reasoning part，round 6 改造，对照《对话UI-工具链与显示口径 v0.1》§1.3/§1.6）：
@@ -16,6 +18,10 @@ import { TraceFold } from './TraceFold'
  *     `streaming` 早就翻成 false 了（最后可渲染的是那条工具），但它还属于正在跑的过程：
  *     只要这一轮没跑完就该保持展开，否则思考段在工具行到达的瞬间自动收起 = 看不见。
  * 不传 `live` 就与 `streaming` 同档（独立思考块那条旧口径不变）。
+ *
+ * round 32 接上「思考翻译」：思维链多半是英文，启用后按设置翻一遍再回显
+ * （全量 / 按钮两种模式见 use-reasoning-translation）。翻译只影响**显示**：底层 part 文本、
+ * 复制出去的内容与消息存储都不动；语言与目标语言一致时这一段不显示任何翻译控件。
  */
 export interface ReasoningPartProps {
   text: string
@@ -33,6 +39,13 @@ export function ReasoningPart({
   // 用户手动折叠/展开过就听用户的；没动过就跟流式状态走（流式期间展开、结束收起）
   const [override, setOverride] = useState<boolean | null>(null)
   const open = override ?? live ?? streaming
+  const translation = useReasoningTranslation({ text, streaming })
+  const display = translation.showing ? (translation.translated ?? text) : text
+  // 按钮模式的入口，或失败后的重试（全量模式翻成功了只有「原文 / 译文」那对切换）
+  const action =
+    translation.translated === null &&
+    !translation.pending &&
+    (translation.mode === 'button' || translation.error !== null)
 
   return (
     <div data-testid="reasoning-part">
@@ -63,11 +76,68 @@ export function ReasoningPart({
         />
       </button>
       <TraceFold open={open} className="pl-7">
-        <div
-          data-testid="reasoning-text"
-          className="mt-1 max-h-[268px] overflow-auto text-c1 break-words whitespace-pre-wrap text-ink-tertiary [overflow-wrap:anywhere]"
-        >
-          {text}
+        <div className="mt-1 flex flex-col gap-2">
+          <div
+            data-testid="reasoning-text"
+            data-showing={translation.showing ? 'translated' : 'original'}
+            className="max-h-[268px] overflow-auto text-c1 break-words whitespace-pre-wrap text-ink-tertiary [overflow-wrap:anywhere]"
+          >
+            {/* 原文 ⇄ 译文的替换：换 key 让它重挂一次，走一次淡入（雷点 5：整站不许硬切） */}
+            <span
+              key={translation.showing ? 'translated' : 'original'}
+              className="animate-fade-in block"
+            >
+              {display}
+            </span>
+          </div>
+          {translation.needed ? (
+            <div
+              data-testid="reasoning-translate-bar"
+              className="flex animate-fade-in flex-wrap items-center gap-3"
+            >
+              {translation.pending ? (
+                <span data-testid="reasoning-translating" className="trace-live text-c1">
+                  翻译中…
+                </span>
+              ) : null}
+              {translation.translated !== null ? (
+                <>
+                  <Chip
+                    data-testid="reasoning-show-original"
+                    aria-pressed={!translation.showing}
+                    className={cn(!translation.showing && 'bg-selected')}
+                    onClick={translation.showOriginal}
+                  >
+                    原文
+                  </Chip>
+                  <Chip
+                    data-testid="reasoning-show-translated"
+                    aria-pressed={translation.showing}
+                    className={cn(translation.showing && 'bg-selected')}
+                    onClick={translation.showTranslated}
+                  >
+                    译文
+                  </Chip>
+                </>
+              ) : translation.pending ? null : action ? (
+                <Chip
+                  data-testid="reasoning-translate-action"
+                  onClick={translation.request}
+                  className="animate-fade-in"
+                >
+                  {translation.error === null ? '翻译' : '重试'}
+                </Chip>
+              ) : null}
+              {translation.error !== null ? (
+                <span
+                  data-testid="reasoning-translate-error"
+                  className="animate-fade-in text-c1 text-danger"
+                >
+                  {translation.error}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </TraceFold>
     </div>

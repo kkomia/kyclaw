@@ -6,6 +6,7 @@ import {
   type ArchivedProject,
   type ArchivedThread,
   type ModelPrefs,
+  type ReasoningTranslateSettings,
   type SemanticRecallSettings,
   type WorkspaceMode
 } from '@shared/settings'
@@ -92,6 +93,11 @@ export interface SettingsState {
    * 远程嵌入的 API Key 不在设置里，走 memory 通道（与 provider 密钥同一套）。
    */
   saveSemanticRecall: (patch: Partial<SemanticRecallSettings>) => Promise<void>
+  /**
+   * round 32：保存思考翻译设置（模型栏「思考翻译」组；给谁就改谁）。
+   * 可选 API Key 不在设置里，走 translate 通道（与 provider 密钥同一套）。
+   */
+  saveReasoningTranslate: (patch: Partial<ReasoningTranslateSettings>) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
   /** 审批卡"永久允许"：追加一条规则并落盘；以落盘结果为准，失败抛给调用方 */
@@ -236,6 +242,12 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   saveSemanticRecall: async (patch) => {
     const current = get().settings.semanticRecall
     set({ settings: await settingsApi().update({ semanticRecall: { ...current, ...patch } }) })
+  },
+
+  /** round 32：思考翻译设置——合并写（给谁改谁），失败抛给调用方（同召回复选框口径） */
+  saveReasoningTranslate: async (patch) => {
+    const current = get().settings.reasoningTranslate
+    set({ settings: await settingsApi().update({ reasoningTranslate: { ...current, ...patch } }) })
   },
 
   removeProvider: async (id) => {

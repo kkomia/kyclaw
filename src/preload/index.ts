@@ -30,6 +30,7 @@ import {
   type KyclawProjectsApi,
   type KyclawSettingsApi,
   type KyclawTelemetryApi,
+  type KyclawTranslateApi,
   type KyclawUpdatesApi,
   type KyclawWindowApi,
   type KyclawWorkbenchApi,
@@ -37,6 +38,7 @@ import {
   type KyclawWorkspaceApi,
   type UpdateState
 } from '../shared/ipc'
+import { translateResultSchema } from '../shared/translate'
 import { localModelsOverviewSchema, type LocalModelsOverview } from '../shared/local-models'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 import { providerKeyStateSchema } from '../shared/providers'
@@ -297,6 +299,42 @@ const memoryApi: KyclawMemoryApi = {
 }
 
 /**
+ * 思考翻译面（round 32）：翻译一段文本 + 可选密钥的写/清/状态。
+ * `run` 的失败是产品语言的一等结果（`{ok:false, message}` 原样交给上层，不抛）；
+ * 密钥与 provider / 嵌入密钥同一套纪律：回包只有"有没有"，多一个字段都不交给上层。
+ */
+const translateApi: KyclawTranslateApi = {
+  run: async (input) => {
+    const parsed = translateResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.translate.run, input)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 翻译响应结构不合法')
+    return parsed.data
+  },
+  keyState: async () => {
+    const parsed = providerKeyStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.translate.keyState)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 翻译密钥状态响应结构不合法')
+    return parsed.data
+  },
+  setKey: async (key) => {
+    const parsed = setProviderKeyResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.translate.setKey, key)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 翻译密钥保存响应结构不合法')
+    return parsed.data
+  },
+  clearKey: async () => {
+    const parsed = providerKeyStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.translate.clearKey)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 翻译密钥状态响应结构不合法')
+    return parsed.data
+  }
+}
+
+/**
  * 「本地模型」面（模块 3B）：动作都回**新的总览**（结构不对就抛——半截总览没法显示），
  * 进度推送用同一份 schema 解析（结构不对就不交给上层，同更新通道的做法）。
  */
@@ -465,7 +503,8 @@ export const kyclawApi: KyclawApi = {
   telemetry: telemetryApi,
   plugins: pluginsApi,
   memory: memoryApi,
-  localModels: localModelsApi
+  localModels: localModelsApi,
+  translate: translateApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。
