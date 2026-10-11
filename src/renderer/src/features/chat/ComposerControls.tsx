@@ -18,7 +18,8 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
 import { withDefaultProvider } from '@shared/providers'
 import { formatBytes } from './composer-attachments'
-import type { PendingAttachment, PendingReference } from './composer-attachments'
+import type { PendingAttachment } from './composer-attachments'
+import type { ReferenceKind } from './reference-markers'
 
 /**
  * Composer 的控件族（round 7，用户实拍 #10 图4/图5/图7/图8/图10）：
@@ -42,7 +43,8 @@ const ICON_TRIGGER_CLASS =
 
 export interface PlusMenuProps {
   onAddFile: () => void
-  onReference: (reference: Pick<PendingReference, 'kind' | 'label'>) => void
+  /** 选中一条引用：调用方把标记**插到输入框光标处**（round 14；不是顶上挂 chip） */
+  onReference: (reference: { kind: ReferenceKind; label: string }) => void
   /** 「引用上下文」的标签（当前工作区目录名）；null = 判不出 → 该条禁用 */
   contextLabel: string | null
   /** 可引用的插件（已启用的 MCP server；空列表时菜单里给一条禁用说明） */
@@ -306,19 +308,18 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
 
 export interface PendingChipsProps {
   attachments: readonly PendingAttachment[]
-  references: readonly PendingReference[]
   onRemoveAttachment: (id: string) => void
-  onRemoveReference: (id: string) => void
 }
 
-/** 附件 / 引用 chip 行：数据（名字/大小）直接印在 chip 上，× 移除；没有内容时整行不渲染 */
+/**
+ * 附件 chip 行：数据（名字/大小）直接印在 chip 上，× 移除；没有内容时整行不渲染。
+ * round 14：引用不再走这里（改为输入框内联标记 + 镜像 pill，见 reference-markers.ts）。
+ */
 export function PendingChips({
   attachments,
-  references,
-  onRemoveAttachment,
-  onRemoveReference
+  onRemoveAttachment
 }: PendingChipsProps): React.JSX.Element | null {
-  if (attachments.length === 0 && references.length === 0) return null
+  if (attachments.length === 0) return null
 
   return (
     <div data-testid="composer-pending" className="flex flex-wrap items-center gap-2 px-3 pt-3">
@@ -341,35 +342,6 @@ export function PendingChips({
           </button>
         </span>
       ))}
-      {references.map((reference) => (
-        <span
-          key={reference.id}
-          data-testid={`composer-reference-${reference.label}`}
-          className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
-        >
-          <ReferenceIcon kind={reference.kind} />
-          <span className="min-w-0 truncate">{`${reference.kind}：${reference.label}`}</span>
-          <button
-            type="button"
-            aria-label={`移除引用 ${reference.label}`}
-            onClick={() => onRemoveReference(reference.id)}
-            className="mr-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
-          >
-            <X aria-hidden="true" className="size-3" />
-          </button>
-        </span>
-      ))}
     </div>
   )
-}
-
-/** 引用 chip 的行首图标（按种类）：技能 / 插件 / 上下文 */
-function ReferenceIcon({ kind }: { kind: PendingReference['kind'] }): React.JSX.Element {
-  if (kind === '技能') {
-    return <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
-  }
-  if (kind === '插件') {
-    return <Plug aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
-  }
-  return <AtSign aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
 }

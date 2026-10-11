@@ -11,6 +11,8 @@ import { MessageRail } from './MessageRail'
  * 流式标记的判定只在这里做一处：只有"最后一条助手消息 + status=streaming"才带光标。
  * 滚动跟随：本来贴底就跟着新内容走（流式增量、新消息），用户翻了历史就不打扰他。
  * 右缘消息导览轨（round 7）：**不随内容滚动**（挂在滚动区外的相对容器上），节点=用户消息。
+ * 右侧走廊（round 14，用户实拍「摘要条快和消息贴住了」）：消息列右内边距 56px（pr-14）——
+ * 导览轨占右缘 8+40=48px，正文最远停在 56px，任何窗口宽度都不与轨道重叠（留 8px 呼吸位）。
  */
 export interface MessageListProps {
   messages: UIMessage[]
@@ -75,7 +77,7 @@ export function MessageList({
             view.scrollHeight - view.scrollTop - view.clientHeight < STICK_THRESHOLD
         }}
       >
-        <div className="flex w-full flex-col gap-6 px-4 py-6">
+        <div className="flex w-full flex-col gap-6 py-6 pr-14 pl-4">
           {messages.map((message) => (
             <Message
               key={message.id}

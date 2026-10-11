@@ -15,12 +15,6 @@ export interface PendingAttachment {
   text: string
 }
 
-export interface PendingReference {
-  id: string
-  kind: '技能' | '插件' | '上下文'
-  label: string
-}
-
 /** 附件大小上限（保守档）：文本内容会内联进消息与气泡，避免一条消息膨胀成几 MB */
 export const ATTACHMENT_MAX_BYTES = 16 * 1024
 
@@ -120,19 +114,18 @@ function fenceFor(text: string): string {
   return '`'.repeat(Math.max(3, longest + 1))
 }
 
-/** 发送时的组装：正文 → 【引用】行 → 附件块（附件内容包在围栏里，模型按原文读） */
+/**
+ * 发送时的组装（round 14：引用已改为输入框内联标记，不再单独成段）：正文 → 附件块
+ * （附件内容包在围栏里，模型按原文读）。
+ */
 export function composeOutgoingText(input: {
   text: string
-  references: readonly PendingReference[]
   attachments: readonly PendingAttachment[]
 }): string {
-  const { text, references, attachments } = input
+  const { text, attachments } = input
   const blocks: string[] = []
   const trimmed = text.trim()
   if (trimmed !== '') blocks.push(trimmed)
-  if (references.length > 0) {
-    blocks.push(`【引用】${references.map((item) => `${item.kind}：${item.label}`).join('；')}`)
-  }
   for (const attachment of attachments) {
     const content = attachment.text.replace(/\n+$/, '')
     const fence = fenceFor(content)

@@ -10,6 +10,8 @@ import {
   Wrench
 } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { formatToolName } from '@shared/mcp'
 import { TraceFold } from './TraceFold'
 import {
   STATE_LABELS,
@@ -85,6 +87,9 @@ export interface ToolCardProps {
 
 export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.Element {
   const [override, setOverride] = useState<boolean | null>(null)
+  // MCP 工具显示用户注册的服务名（round 14）：`mcp__mcp-1__search` → 「知识库 · search」
+  const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
+  const displayName = formatToolName(part.toolName, mcpServers)
   const output = part.errorText ?? part.output
   const hasOutput = output !== undefined && output !== ''
   const hasBody = part.input !== undefined || hasOutput
@@ -103,7 +108,7 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
       <span aria-hidden="true" className="inline-flex size-5 shrink-0 items-center justify-center">
         <ToolIcon toolName={part.toolName} className="size-[15px] text-ink-tertiary" />
       </span>
-      <span className="shrink-0 font-mono text-c1">{part.toolName}</span>
+      <span className="shrink-0 font-mono text-c1">{displayName}</span>
       {detail === null ? null : (
         <span
           data-testid="tool-detail"

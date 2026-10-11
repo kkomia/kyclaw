@@ -4,12 +4,26 @@ import type { UIMessage } from 'ai'
 import { Message } from '@renderer/features/chat/Message'
 import { ToolCard } from '@renderer/features/chat/parts/ToolCard'
 import { RESULT_PREVIEW_CHARS } from '@renderer/features/chat/parts/tool-part'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { formatToolName } from '@shared/mcp'
+import { defaultSettings, type McpServerConfig } from '@shared/settings'
 
 /**
  * 工具行（round 6 起是"行 + 折叠体"形态，对照《对话UI-工具链与显示口径 v0.1》§1.4-§1.6）：
  * 状态取自 AI SDK 的 tool part 状态机（spec §7.1）；行默认折着（单步没有自动展开档），
  * 展开体 = 入参 + 结果（结果恒 600 字截断）；收起是 grid-rows 折叠、不是条件渲染。
+ * round 14：MCP 工具显示「服务名 · 工具名」（formatToolName，数据取 settings.mcpServers）。
  */
+function mcpServer(): McpServerConfig {
+  return {
+    id: 'mcp-1',
+    name: '知识库',
+    transport: 'http',
+    url: 'http://127.0.0.1:8765/mcp',
+    enabled: true,
+    readOnlyTools: []
+  }
+}
 describe('ToolCard 行与折叠体', () => {
   it('input-streaming：参数还在流进来（没有可展开的东西，行不是按钮）', () => {
     render(<ToolCard part={{ toolName: 'read', state: 'input-streaming' }} running />)
@@ -230,5 +244,33 @@ describe('助手消息里的工具 part（过程块包装）', () => {
     expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('approval-allow-once')).not.toBeInTheDocument()
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
+  })
+})
+
+describe('MCP 工具显示名（round 14）：用户注册的名字', () => {
+  it('formatToolName：已知 server → 「服务名 · 工具名」；未知 / 非 MCP 名原样', () => {
+    const servers = [{ id: 'mcp-1', name: '知识库' }]
+    expect(formatToolName('mcp__mcp-1__search', servers)).toBe('知识库 · search')
+    expect(formatToolName('mcp__gone__search', servers)).toBe('mcp__gone__search')
+    expect(formatToolName('read', servers)).toBe('read')
+  })
+
+  it('ToolCard 行显示「服务名 · 工具名」（不再是 mcp__mcp-1__search）', () => {
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), mcpServers: [mcpServer()] },
+      loaded: true
+    })
+    try {
+      render(
+        <ToolCard
+          part={{ toolName: 'mcp__mcp-1__search', state: 'output-available', output: 'ok' }}
+        />
+      )
+
+      expect(screen.getByTestId('tool-card')).toHaveTextContent('知识库 · search')
+      expect(screen.getByTestId('tool-card')).not.toHaveTextContent('mcp__mcp-1__search')
+    } finally {
+      useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+    }
   })
 })

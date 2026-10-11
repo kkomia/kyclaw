@@ -20,6 +20,9 @@ import type { ToolClassifier } from './tools/guard'
 import type { McpServerConfig } from '../shared/settings'
 import {
   isHttpUrl,
+  MCP_TOOL_PREFIX,
+  mcpToolName,
+  parseMcpToolName,
   URL_PROBLEM,
   type McpFailureKind,
   type McpTestResult,
@@ -27,8 +30,8 @@ import {
 } from '../shared/mcp'
 import type { MastraMCPServerDefinition } from '@mastra/mcp'
 
-/** 工具名前缀；`mcp__<serverId>__<toolName>` */
-export const MCP_TOOL_PREFIX = 'mcp__'
+/** 工具名的拼装/解析实现在 shared/mcp.ts（round 14 搬过去给渲染端复用）；这里 re-export 保持既有调用方 */
+export { MCP_TOOL_PREFIX, mcpToolName, parseMcpToolName }
 
 /** 运行期请求超时（stdio 的**连接握手与每次请求共用一个旋钮**——见 serverDefinition；
  *  库没有给 stdio 单独的 connectTimeout（类型里是 never），所以这一档同时是慢调用上限） */
@@ -40,24 +43,6 @@ export const MCP_TIMEOUT_MS = 30_000
  * 60s 覆盖冷启动；成功一次后缓存就热了，之后的连接都在 10s 内。
  */
 export const MCP_TEST_TIMEOUT_MS = 60_000
-
-/** 工具名拼装：`mcp__echo__echo` */
-export function mcpToolName(serverId: string, toolName: string): string {
-  return `${MCP_TOOL_PREFIX}${serverId}__${toolName}`
-}
-
-/** 反向解析；不是 `mcp__server__tool` 形状回 null（server id 不含 `__`，取第一个分隔） */
-export function parseMcpToolName(name: string): { serverId: string; tool: string } | null {
-  const trimmed = name.trim()
-  if (!trimmed.startsWith(MCP_TOOL_PREFIX)) return null
-  const rest = trimmed.slice(MCP_TOOL_PREFIX.length)
-  const at = rest.indexOf('__')
-  if (at <= 0) return null
-  const serverId = rest.slice(0, at)
-  const tool = rest.slice(at + 2)
-  if (tool === '') return null
-  return { serverId, tool }
-}
 
 /**
  * MCP 工具的分级（spec §5.2「只读类 MCP 工具」由用户确认）：

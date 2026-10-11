@@ -7,7 +7,12 @@ import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
 import { attachmentProblem, composeOutgoingText, readTextFile } from './composer-attachments'
-import type { PendingAttachment, PendingReference } from './composer-attachments'
+import type { PendingAttachment } from './composer-attachments'
+import {
+  insertReferenceMarker,
+  parseReferenceMarkers,
+  type ReferenceKind
+} from './reference-markers'
 import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
 
 /**
@@ -54,9 +59,13 @@ export function Composer({
 }: ComposerProps): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  const [references, setReferences] = useState<PendingReference[]>([])
   const [notice, setNotice] = useState<ComposerNotice | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /** 镜像层（引用 pill 的底色）：与 textarea 同排版，随内容滚动 */
+  const mirrorRef = useRef<HTMLDivElement>(null)
+  /** 插入标记后待落的光标位（渲染完再设 selection，避免用旧值越界） */
+  const pendingCaret = useRef<number | null>(null)
 
   const settings = useSettingsStore((state) => state.settings)
   const projectOf = useProjectsStore((state) => state.projectOf)
@@ -89,20 +98,34 @@ export function Composer({
 
   const submit = (): void => {
     if (!canSend) return
-    onSend(composeOutgoingText({ text: draft, references, attachments }))
+    onSend(composeOutgoingText({ text: draft, attachments }))
     setDraft('')
     setAttachments([])
-    setReferences([])
     setNotice(null)
   }
 
-  const addReference = (reference: Pick<PendingReference, 'kind' | 'label'>): void => {
-    setReferences((previous) => {
-      const id = `${reference.kind}:${reference.label}`
-      if (previous.some((item) => item.id === id)) return previous
-      return [...previous, { id, kind: reference.kind, label: reference.label }]
-    })
+  /**
+   * 「＋ → 引用…」：在**光标处**插入标记文本（round 14 用户口径："不要单独取顶格，
+   * 会失去在输入文本中的位置；一次可能引用多个，是有指向性的"）。插入后光标落在标记后面、
+   * 焦点留在输入框；本来就在输入框里选中的一段文本不会被顶掉（在光标处展开）。
+   */
+  const addReference = (reference: { kind: ReferenceKind; label: string }): void => {
+    const textarea = textareaRef.current
+    const caret = textarea?.selectionStart ?? draft.length
+    const inserted = insertReferenceMarker(draft, caret, reference.kind, reference.label)
+    pendingCaret.current = inserted.caret
+    setDraft(inserted.text)
   }
+
+  /** 插入标记后的光标落位（每次渲染后检查一次 pendingCaret；无待办就什么都不做） */
+  useEffect(() => {
+    if (pendingCaret.current === null) return
+    const textarea = textareaRef.current
+    if (textarea === null) return
+    textarea.focus()
+    textarea.setSelectionRange(pendingCaret.current, pendingCaret.current)
+    pendingCaret.current = null
+  })
 
   const pickFiles = async (files: File[]): Promise<void> => {
     const rejected: string[] = []
@@ -133,33 +156,73 @@ export function Composer({
     >
       <PendingChips
         attachments={attachments}
-        references={references}
         onRemoveAttachment={(id) =>
           setAttachments((previous) => previous.filter((item) => item.id !== id))
-        }
-        onRemoveReference={(id) =>
-          setReferences((previous) => previous.filter((item) => item.id !== id))
         }
       />
 
       {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
-          焦点指示由卡片给（focus-ring-container）：输入框自己没有圆角，自己画环就是直角方框。 */}
-      <textarea
-        data-testid="composer-input"
-        aria-label="输入消息"
-        rows={1}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' || event.shiftKey) return
-          // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
-          if (event.nativeEvent.isComposing) return
-          event.preventDefault()
-          submit()
-        }}
-        placeholder="输入你的问题"
-        className="field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary) focus-visible:shadow-none"
-      />
+          焦点指示由卡片给（focus-ring-container）：输入框自己没有圆角，自己画环就是直角方框。
+          引用标记的 pill 底色由**镜像层**画（round 14）：同字体/内边距/换行、文字透明、
+          pointer-events-none，压在 textarea 底下；textarea 自己写着正常墨色的文字。
+          镜像里的 pill 不加内边距，靠 box-shadow 外扩 2px 出圆角底——排版与 textarea 逐字对齐，
+          观感变化只发生在背景层，不参与布局。 */}
+      <div className="relative">
+        <div
+          ref={mirrorRef}
+          aria-hidden="true"
+          data-testid="composer-mirror"
+          className="pointer-events-none absolute inset-0 overflow-hidden text-transparent"
+        >
+          <div className="w-full px-4 py-3 text-b1 break-words whitespace-pre-wrap">
+            {parseReferenceMarkers(draft).map((segment, index) =>
+              segment.kind === 'text' ? (
+                <span key={index}>{segment.text}</span>
+              ) : (
+                <span key={index}>
+                  <span>【引用】</span>
+                  {segment.refs.map((ref, refIndex) => (
+                    <span key={refIndex}>
+                      {refIndex > 0 ? '；' : ''}
+                      <span
+                        data-testid="composer-mirror-pill"
+                        className="rounded-button-sm"
+                        style={{
+                          backgroundColor: 'var(--fill-selected)',
+                          boxShadow: '0 0 0 2px var(--fill-selected)'
+                        }}
+                      >
+                        {`${ref.kind}：${ref.label}`}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              )
+            )}
+          </div>
+        </div>
+        <textarea
+          ref={textareaRef}
+          data-testid="composer-input"
+          aria-label="输入消息"
+          rows={1}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onScroll={(event) => {
+            const mirror = mirrorRef.current
+            if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.shiftKey) return
+            // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
+            if (event.nativeEvent.isComposing) return
+            event.preventDefault()
+            submit()
+          }}
+          placeholder="输入你的问题"
+          className="relative z-10 field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary) focus-visible:shadow-none"
+        />
+      </div>
 
       {notice === null ? null : (
         <p

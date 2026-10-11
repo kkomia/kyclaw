@@ -81,6 +81,27 @@ describe('消息导览轨 · 结构', () => {
     expect(rail).not.toHaveClass('right-1')
   })
 
+  it('消息列右侧走廊（round 14）：内容列 pr-14，正文不再钻到轨道下面', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    // 轨道占右缘 8px + 40px（横条列），正文停在 56px（pr-14）——任何宽度都不与正文重叠
+    const column = screen.getByTestId('message-list').firstElementChild
+    expect(column).toHaveClass('pr-14', 'pl-4')
+    expect(column).not.toHaveClass('px-4')
+  })
+
+  it('浮窗包裹横条区（round 14，Kimi 图4）：right-0 + 横条列 z-10 在上方可点——命中区连续无缝', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    const panel = screen.getByTestId('rail-panel')
+    expect(panel).toHaveClass('right-0')
+    expect(panel.className).not.toContain('right-full')
+    expect(panel.className).toContain('pr-10') // 内容给横条让位的右侧内边距
+
+    const nodesRow = screen.getByTestId('rail-node-u1').parentElement
+    expect(nodesRow).toHaveClass('relative', 'z-10')
+  })
+
   it('默认收起：摘要列表在 DOM 里但没有展开标记（不硬切，走 opacity 过渡）', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
@@ -145,6 +166,30 @@ describe('消息导览轨 · 结构', () => {
 
       act(() => {
         vi.advanceTimersByTime(1000)
+      })
+      expect(panel()).toHaveAttribute('data-open', 'true')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('从横条移入浮窗走的是同一条宽限（round 14）：半程到达、越过程限也不关', () => {
+    vi.useFakeTimers()
+    try {
+      render(<MessageList messages={MESSAGES} status="ready" />)
+      const rail = screen.getByTestId('message-rail')
+      const panel = (): HTMLElement => screen.getByTestId('rail-panel')
+
+      fireEvent.mouseEnter(rail)
+      fireEvent.mouseLeave(rail)
+      act(() => {
+        vi.advanceTimersByTime(150) // 半程：还没到点
+      })
+      expect(panel()).toHaveAttribute('data-open', 'true')
+
+      fireEvent.mouseEnter(panel()) // 到达浮窗（重入 nav 子树）→ 撤销待关
+      act(() => {
+        vi.advanceTimersByTime(600) // 越过 300ms 宽限
       })
       expect(panel()).toHaveAttribute('data-open', 'true')
     } finally {

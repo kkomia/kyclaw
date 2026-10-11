@@ -2,6 +2,8 @@ import { Wrench } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Tooltip } from '@renderer/components/ui/tooltip'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { formatToolName } from '@shared/mcp'
 import type { Workspace } from '@shared/settings'
 import { resolveApprovalWorkspace, type ApprovalRequest } from './approval'
 import { approvalDiff, type DiffLine } from './approval-diff'
@@ -56,7 +58,10 @@ export function ApprovalCard({
 }: ApprovalCardProps): React.JSX.Element {
   const workspace = resolveApprovalWorkspace(request.input, workspaces)
   const diff = approvalDiff(request.toolName, request.input)
-  const title = TOOL_LABELS[request.toolName.toLowerCase()] ?? request.toolName
+  // 与 ToolCard 一致（round 14）：MCP 工具显示「服务名 · 工具名」，认不出回落原样
+  const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
+  const title =
+    TOOL_LABELS[request.toolName.toLowerCase()] ?? formatToolName(request.toolName, mcpServers)
 
   return (
     <div

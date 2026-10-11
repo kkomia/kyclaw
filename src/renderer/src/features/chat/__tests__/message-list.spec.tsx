@@ -63,6 +63,58 @@ describe('消息列渲染', () => {
     expect(list).toBeInTheDocument()
     expect(list).toHaveTextContent('')
   })
+
+  it('用户气泡里的引用标记画成内联 pill（round 14）；底层文本原样保留', () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            id: 'u1',
+            role: 'user',
+            parts: [{ type: 'text', text: '用【引用】技能：整理笔记 与【引用】上下文：默认 来做' }]
+          }
+        ]}
+        status="ready"
+      />
+    )
+
+    const pills = screen.getAllByTestId('message-reference-pill')
+    expect(pills.map((pill) => pill.textContent)).toEqual(['技能：整理笔记', '上下文：默认'])
+    // 复制/编辑读到的仍是原文（pill 只改变呈现，不改文本内容）
+    expect(screen.getByTestId('message-u1')).toHaveTextContent(
+      '用【引用】技能：整理笔记 与【引用】上下文：默认 来做'
+    )
+  })
+
+  it('旧「；」合并格式也画 pill（round 7-13 发出的消息不退化）', () => {
+    render(
+      <MessageList
+        messages={[
+          {
+            id: 'u1',
+            role: 'user',
+            parts: [{ type: 'text', text: '【引用】技能：读写文件；插件：回显服务' }]
+          }
+        ]}
+        status="ready"
+      />
+    )
+
+    const pills = screen.getAllByTestId('message-reference-pill')
+    expect(pills.map((pill) => pill.textContent)).toEqual(['技能：读写文件', '插件：回显服务'])
+  })
+
+  it('没有标记的用户消息：不渲染任何 pill（普通文本路径不变）', () => {
+    render(
+      <MessageList
+        messages={[{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '普通一句' }] }]}
+        status="ready"
+      />
+    )
+
+    expect(screen.queryByTestId('message-reference-pill')).not.toBeInTheDocument()
+    expect(screen.getByTestId('message-u1')).toHaveTextContent('普通一句')
+  })
 })
 
 describe('滚动跟随', () => {

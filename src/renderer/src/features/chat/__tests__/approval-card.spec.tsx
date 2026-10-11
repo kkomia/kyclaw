@@ -1,14 +1,27 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { Workspace } from '@shared/settings'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { defaultSettings, type McpServerConfig, type Workspace } from '@shared/settings'
 import { ApprovalCard, type ApprovalDecision } from '../ApprovalCard'
 import type { ApprovalRequest } from '../approval'
 
 /**
  * 审批卡（T13，RTL）：四个决策按钮各自 dispatch 正确的决策；diff 预览按行标注增删；
  * "永久允许"只在判得出工作区时出现。
+ * round 14：MCP 工具的标题显示「服务名 · 工具名」（与 ToolCard 同一口径）。
  */
 const WS: Workspace = { path: 'D:\\项目\\demo', mode: 'ask' }
+
+function mcpServer(): McpServerConfig {
+  return {
+    id: 'mcp-1',
+    name: '知识库',
+    transport: 'http',
+    url: 'http://127.0.0.1:8765/mcp',
+    enabled: true,
+    readOnlyTools: []
+  }
+}
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return {
@@ -109,5 +122,29 @@ describe('ApprovalCard · 四决策', () => {
 
     expect(screen.getByTestId('approval-card')).toHaveAttribute('data-workspace', '')
     expect(screen.queryByTestId('approval-allow-forever')).not.toBeInTheDocument()
+  })
+
+  it('MCP 工具：标题显示「服务名 · 工具名」（round 14，与 ToolCard 同一口径）', () => {
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), mcpServers: [mcpServer()] },
+      loaded: true
+    })
+    try {
+      render(
+        <ApprovalCard
+          request={request({ toolName: 'mcp__mcp-1__search', input: { query: 'x' } })}
+          workspaces={[WS]}
+          onDecide={vi.fn()}
+        />
+      )
+
+      const card = screen.getByTestId('approval-card')
+      expect(card).toHaveTextContent('知识库 · search')
+      expect(card).not.toHaveTextContent('mcp__mcp-1__search')
+      // 内部名仍留在 data 属性里（身份不丢，只是换个显示）
+      expect(card).toHaveAttribute('data-tool', 'mcp__mcp-1__search')
+    } finally {
+      useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+    }
   })
 })

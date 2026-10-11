@@ -20,6 +20,46 @@ export const MCP_ID_PATTERN = /^[a-z0-9-]{1,32}$/
 
 const ID_PROBLEM = '标识只能用 1–32 位小写字母、数字或短横线（它要进工具名）'
 
+/**
+ * 工具名前缀与拼装：`mcp__<serverId>__<toolName>`（round 14 从 mastra/mcp.ts 搬到 shared——
+ * 渲染端也要用它把内部名翻译成「服务名 · 工具名」显示）。
+ */
+export const MCP_TOOL_PREFIX = 'mcp__'
+
+/** 工具名拼装：`mcp__echo__echo` */
+export function mcpToolName(serverId: string, toolName: string): string {
+  return `${MCP_TOOL_PREFIX}${serverId}__${toolName}`
+}
+
+/** 反向解析；不是 `mcp__server__tool` 形状回 null（server id 不含 `__`，取第一个分隔） */
+export function parseMcpToolName(name: string): { serverId: string; tool: string } | null {
+  const trimmed = name.trim()
+  if (!trimmed.startsWith(MCP_TOOL_PREFIX)) return null
+  const rest = trimmed.slice(MCP_TOOL_PREFIX.length)
+  const at = rest.indexOf('__')
+  if (at <= 0) return null
+  const serverId = rest.slice(0, at)
+  const tool = rest.slice(at + 2)
+  if (tool === '') return null
+  return { serverId, tool }
+}
+
+/**
+ * 展示名（round 14 用户实拍）：`mcp__<serverId>__<tool>` → 「<服务名> · <工具名>」——
+ * 用户注册 MCP 时取了名字，界面上不该露出内部 id（`mcp__mcp-1__search`）。
+ * 不是 MCP 名 / 列表里找不到该 server → 原样返回（认不出就不猜）。
+ */
+export function formatToolName(
+  toolName: string,
+  servers: ReadonlyArray<{ id: string; name: string }>
+): string {
+  const parsed = parseMcpToolName(toolName)
+  if (parsed === null) return toolName
+  const server = servers.find((candidate) => candidate.id === parsed.serverId)
+  if (server === undefined) return toolName
+  return `${server.name} · ${parsed.tool}`
+}
+
 /** HTTP 地址问题的同一句人话（校验层与 serverDefinition 共用） */
 export const URL_PROBLEM = 'HTTP 地址要是完整的 http:// 或 https:// 地址'
 

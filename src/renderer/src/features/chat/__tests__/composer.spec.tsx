@@ -78,6 +78,22 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     type('有内容了')
     expect(send).toBeEnabled()
   })
+
+  it('引用镜像层（round 14）：同排版 / aria-hidden / pointer-events-none；textarea 在上层且滚动同步', () => {
+    setup()
+
+    const mirror = screen.getByTestId('composer-mirror')
+    expect(mirror).toHaveAttribute('aria-hidden', 'true')
+    expect(mirror).toHaveClass('pointer-events-none', 'text-transparent')
+    const layer = mirror.firstElementChild
+    expect(layer).toHaveClass('px-4', 'py-3', 'text-b1', 'whitespace-pre-wrap', 'break-words')
+    expect(screen.getByTestId('composer-input')).toHaveClass('relative', 'z-10')
+
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    input.scrollTop = 24
+    fireEvent.scroll(input)
+    expect(mirror.scrollTop).toBe(24)
+  })
 })
 
 describe('输入卡键盘行为', () => {
@@ -173,7 +189,7 @@ describe('round 7 · ＋菜单与引用', () => {
     expect(screen.getByTestId('composer-ref-context')).toBeInTheDocument()
   })
 
-  it('引用技能：子菜单 = 插件装进来的已安装技能（round 13：内置技能不再出现）；选一条 → 引用 chip', async () => {
+  it('引用技能：选一条 → **在光标处内联插入标记**（round 14），不顶上挂 chip', async () => {
     const bridge = installKyclawBridge()
     bridge.plugins.overview.mockResolvedValue({
       marketplaces: [],
@@ -183,8 +199,11 @@ describe('round 7 · ＋菜单与引用', () => {
       ]
     })
     setup()
-    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    type('先写一句 ')
+    input.setSelectionRange(2, 2)
 
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
     const skills = screen.getByTestId('composer-ref-skills')
     skills.focus()
     fireEvent.keyDown(skills, { key: 'ArrowRight' })
@@ -193,10 +212,15 @@ describe('round 7 · ＋菜单与引用', () => {
     // 内置技能（读取文件…）不在菜单里；装进来的技能在
     expect(screen.queryByTestId('composer-ref-skill-读取文件')).not.toBeInTheDocument()
     fireEvent.click(await screen.findByTestId('composer-ref-skill-demo-p1-s1'))
-    expect(screen.getByTestId('composer-reference-整理笔记')).toHaveTextContent('技能：整理笔记')
 
-    fireEvent.click(screen.getByLabelText('移除引用 整理笔记'))
+    // 标记插在光标处（不是末尾、也不是顶上 chip）；光标落在标记（+尾随空格）后面，焦点留在输入框
+    expect(input).toHaveValue('先写【引用】技能：整理笔记 一句 ')
+    expect(input.selectionStart).toBe('先写【引用】技能：整理笔记 '.length)
+    expect(document.activeElement).toBe(input)
     expect(screen.queryByTestId('composer-reference-整理笔记')).not.toBeInTheDocument()
+
+    // 镜像层：标记处有一个 pill 底（textarea 的文字照常渲染在上层）
+    expect(screen.getByTestId('composer-mirror-pill')).toHaveTextContent('技能：整理笔记')
   })
 
   it('引用技能：还没有安装技能时给一条禁用说明（也不列内置技能）', async () => {
@@ -229,7 +253,7 @@ describe('round 7 · ＋菜单与引用', () => {
     )
   })
 
-  it('引用上下文：判不出工作区时禁用；有工作区时给「上下文：目录名」chip', async () => {
+  it('引用上下文：判不出工作区时禁用；有工作区时在光标处插入「上下文：目录名」标记并随正文发出', async () => {
     const initial = {
       ...defaultSettings(),
       workspaces: [{ path: 'D:\\kyclaw\\工作区-默认', mode: 'ask' as const }]
@@ -237,16 +261,19 @@ describe('round 7 · ＋菜单与引用', () => {
     installKyclawBridge(initial)
     useSettingsStore.setState({ settings: initial, loaded: true })
     const { onSend } = setup({ threadId: 't1' })
-    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
-
-    fireEvent.click(screen.getByTestId('composer-ref-context'))
-    expect(screen.getByTestId('composer-reference-工作区-默认')).toHaveTextContent(
-      '上下文：工作区-默认'
-    )
 
     type('总结一下')
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    input.setSelectionRange(4, 4)
+
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('composer-ref-context'))
+
+    // 内联插入在光标处：标记成为正文的一部分（不再是独立的一段「【引用】…」）
+    expect(input).toHaveValue('总结一下【引用】上下文：工作区-默认 ')
+
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
-    expect(onSend).toHaveBeenCalledWith('总结一下\n\n【引用】上下文：工作区-默认')
+    expect(onSend).toHaveBeenCalledWith('总结一下【引用】上下文：工作区-默认')
   })
 
   it('引用上下文：没有工作区时菜单项禁用（点了没有用的事不给做）', () => {

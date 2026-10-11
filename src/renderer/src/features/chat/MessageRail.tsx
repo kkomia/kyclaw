@@ -11,10 +11,15 @@ import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
  * 面板走 opacity/translate 过渡（不硬切）；行为只依赖 DOM 里的消息节点，不碰消息数据。
  *
  * 驻留（round 8 用户实拍："鼠标移过去就消失了"）：鼠标移出后**延迟关闭**（宽限 300ms）——
- * 节点列与浮窗之间有 ~4px 空隙，立即关的话鼠标还没够到浮窗它就没了；进入浮窗（它是本 nav 的
- * 子节点，重入会再触发 onMouseEnter）即撤销关闭。点摘要项跳转仍立即关。
+ * 立即关的话鼠标还没够到浮窗它就没了；进入浮窗（它是本 nav 的子节点，重入会再触发 onMouseEnter）
+ * 即撤销关闭。点摘要项跳转仍立即关。
+ *
+ * 包裹横条（round 14，Kimi 图4）：浮窗改 `right-0` + 右侧内边距给横条让位，命中区**覆盖横条区**、
+ * 与横条列连续无缝——从任意横条滑进浮窗全程不离开 nav 子树，不会触发 mouseleave；
+ * 横条容器 `relative z-10` 浮在浮窗之上，保持可点。300ms 宽限作为兜底保留。
  *
  * 定位：贴右缘 `right-2`（8px 呼吸位；消息区的滚动条已按 round 8 隐藏，不再是让条的理由）。
+ * 走廊（round 14 第二块）：消息列在 MessageList 里留了右侧内边距，正文不会钻到轨道下面。
  */
 export interface MessageRailProps {
   messages: UIMessage[]
@@ -122,7 +127,8 @@ export function MessageRail({
         }
       }}
     >
-      <div className="flex flex-col items-end gap-2 py-2 pl-2">
+      {/* 横条列：浮在浮窗之上（z-10），保证"从横条滑入浮窗"时横条仍可点、命中区连续 */}
+      <div className="relative z-10 flex flex-col items-end gap-2 py-2 pl-2">
         {users.map((message) => {
           const active = message.id === activeId
           return (
@@ -147,13 +153,15 @@ export function MessageRail({
         })}
       </div>
 
-      {/* 摘要列表：hover/聚焦展开；收起时留在 DOM 里做淡出（不硬切），并断开指针 */}
+      {/* 摘要列表：hover/聚焦展开；收起时留在 DOM 里做淡出（不硬切），并断开指针。
+          round 14：right-0 + pr-10 —— 面板盒覆盖横条区（40px = 横条列的 pl-2 + w-8），
+          内容仍留在横条左侧；从任意横条滑进浮窗命中区连续无缝。 */}
       <div
         data-testid="rail-panel"
         data-open={open ? 'true' : undefined}
         aria-hidden={open ? undefined : true}
         className={cn(
-          'absolute top-1/2 right-full mr-1 w-64 -translate-y-1/2 overflow-hidden rounded-overlay bg-menu shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+          'absolute top-1/2 right-0 w-72 -translate-y-1/2 overflow-hidden rounded-overlay bg-menu pr-10 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
           open ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-1 opacity-0'
         )}
       >
