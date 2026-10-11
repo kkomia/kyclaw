@@ -20,6 +20,7 @@ import type { ApprovalDecision } from './ApprovalCard'
 import type { ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
 import type { ThreadChatRuntime } from './thread-chats'
+import { ChatHeader } from './ChatHeader'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { MessageList } from './MessageList'
@@ -482,6 +483,8 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
 
   return (
     <>
+      {/* round 24：对话顶部栏（名称 + 同款菜单；背景与 chat 不区分） */}
+      <ChatHeader threadId={threadId} />
       <MessageList
         messages={messages}
         status={status}

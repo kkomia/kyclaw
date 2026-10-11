@@ -38,8 +38,6 @@ function renderList(overrides: Partial<ProjectListProps> = {}): {
         : [],
     activeSessionId: null,
     onSelectSession: vi.fn(),
-    onRenameSession: vi.fn(),
-    onDeleteSession: vi.fn(),
     onDeleteProject: vi.fn(),
     onCreateBlank: vi.fn(),
     onCreateFolder: vi.fn(),

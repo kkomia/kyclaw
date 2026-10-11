@@ -74,7 +74,8 @@ describe('AppShell 三栏骨架', () => {
     // 在内容卡里面（右上角浮层定位），不在顶栏
     expect(screen.getByTestId('content-region')).toContainElement(toggle)
     expect(screen.getByTestId('titlebar')).not.toContainElement(toggle)
-    expect(toggle).toHaveClass('absolute', 'top-2', 'right-2')
+    // round 24：对话页顶部栏（40px）出来之后，按钮就是这条带的右端——上移 6px 与带对齐
+    expect(toggle).toHaveClass('absolute', 'top-0.5', 'right-2')
     // 形态与窗控同口径：无外圈、hover 铺 Fills-F1、图标 18
     expect(toggle).toHaveClass('border-transparent', 'hover:bg-hover')
     expect(toggle.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')

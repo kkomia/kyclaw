@@ -33,19 +33,13 @@ export interface ProjectListProps {
   activeSessionId: string | null
   notices?: Record<string, true>
   onSelectSession: (threadId: string) => void
-  onRenameSession: (threadId: string, title: string) => void
-  onDeleteSession: (threadId: string) => void
   onDeleteProject: (project: Project) => void
   onCreateBlank: () => void
   onCreateFolder: () => void
-  /** round 20：项目名下的会话行同样按新口径给 ⋯ 菜单（透传给 SessionList） */
+  /** round 20：置顶会话的行内图钉标识（透传给 SessionList） */
   pinnedIds?: ReadonlySet<string>
-  projectIdOf?: (threadId: string) => string | null
-  canOpenExplorerOf?: (threadId: string) => boolean
-  onTogglePin?: (threadId: string, pinned: boolean) => void
-  onMoveToProject?: (threadId: string, projectId: string | null) => void
-  onOpenInExplorer?: (threadId: string) => void
-  onArchive?: (threadId: string) => void
+  /** round 24：会话行动作失败的一句话（会话动作已抽到 SessionActionsMenu，见 SessionList） */
+  onActionError?: (message: string) => void
 }
 
 export function ProjectList({
@@ -54,18 +48,11 @@ export function ProjectList({
   activeSessionId,
   notices = {},
   onSelectSession,
-  onRenameSession,
-  onDeleteSession,
   onDeleteProject,
   onCreateBlank,
   onCreateFolder,
   pinnedIds,
-  projectIdOf,
-  canOpenExplorerOf,
-  onTogglePin,
-  onMoveToProject,
-  onOpenInExplorer,
-  onArchive
+  onActionError
 }: ProjectListProps): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
   /** 收起的项目 id（localStorage 轻量持久；默认展开 = 不在集合里） */
@@ -191,16 +178,8 @@ export function ProjectList({
                       emptyHint={false}
                       listClassName="min-h-0 overflow-visible pt-0"
                       onSelect={onSelectSession}
-                      onRename={onRenameSession}
-                      onDelete={onDeleteSession}
                       pinnedIds={pinnedIds}
-                      projects={projects.map((project) => ({ id: project.id, name: project.name }))}
-                      projectIdOf={projectIdOf}
-                      canOpenExplorerOf={canOpenExplorerOf}
-                      onTogglePin={onTogglePin}
-                      onMoveToProject={onMoveToProject}
-                      onOpenInExplorer={onOpenInExplorer}
-                      onArchive={onArchive}
+                      onActionError={onActionError}
                     />
                   </div>
                 </div>

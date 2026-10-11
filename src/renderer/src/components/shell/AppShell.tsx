@@ -93,13 +93,14 @@ export function AppShell(): React.JSX.Element {
               位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。面板开时同一位就是
               面板顶右（按钮始终在卡的右上角，不遮挡消息列/输入卡：卡右缘 - 44px，而内容列 800 封顶）。
               形态与顶栏窗控一致（36 图标钮、无外圈、hover 铺 Fills-F1）；testid / 可访问名不变。
-              round 17：只在对话路由渲染（用户实拍：设置/插件页不该有"属于对话区"的按钮）。 */}
+              round 17：只在对话路由渲染（用户实拍：设置/插件页不该有"属于对话区"的按钮）。
+              round 24：对话页顶部栏（40px）出来之后，按钮就是这条带的右端——上移 6px 与带对齐。 */}
           {inChat ? (
             <IconButton
               data-testid="work-panel-toggle"
               label={workPanelOpen ? '收起工作台' : '展开工作台'}
               icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
-              className="absolute top-2 right-2 z-10 border-transparent hover:bg-hover"
+              className="absolute top-0.5 right-2 z-10 border-transparent hover:bg-hover"
               onClick={toggleWorkPanel}
             />
           ) : null}
