@@ -59,9 +59,11 @@ function textScript(text: string): StreamPart[] {
 function run(overrides: {
   model: string
   provider?: string | null
+  threadId?: string | null
   input?: number
   output?: number
   total?: number
+  cachedInput?: number | null
   cost?: number | null
   at?: Date
 }): UsageRun {
@@ -70,10 +72,11 @@ function run(overrides: {
   return {
     id: `run-${Math.random().toString(36).slice(2)}`,
     runId: null,
+    threadId: overrides.threadId ?? null,
     model: overrides.model,
     provider: overrides.provider ?? null,
     tokens: { input, output, total: overrides.total ?? input + output },
-    cachedInput: null,
+    cachedInput: overrides.cachedInput ?? null,
     cost: overrides.cost ?? null,
     createdAt: (overrides.at ?? new Date()).toISOString()
   }
@@ -236,6 +239,66 @@ describe('用量路由：窗口过滤（真 libsql，注入 now）', () => {
     const response = await app.request('/api/usage?range=nope')
     expect(response.status).toBe(400)
   })
+
+  it('上下文接口（round 18）：无记录 → 全 null；有记录 → 首轮基线 / 最近一轮 / 今日缓存合计', async () => {
+    // 空会话：环停在空态（不假装 0）——thread 维度全 null；today 合计是共享库的累计值，
+    // 这里只对 thread 维度做全等断言（不受前面用例插入的行影响）
+    const empty = await app.request('/api/usage/context?threadId=thread-x')
+    expect(empty.status).toBe(200)
+    expect(await empty.json()).toMatchObject({
+      threadId: 'thread-x',
+      lastInput: null,
+      lastCachedInput: null,
+      baselineInput: null
+    })
+
+    // 同一条会话两轮：首轮 100（当基线）、末轮 400/命中 300；另一条会话不进基线
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-x',
+        input: 100,
+        output: 5,
+        at: new Date(2026, 9, 15, 9, 0, 0)
+      })
+    )
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'other',
+        input: 50,
+        output: 5,
+        at: new Date(2026, 9, 15, 9, 30, 0)
+      })
+    )
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-x',
+        input: 400,
+        output: 5,
+        cachedInput: 300,
+        at: new Date(2026, 9, 15, 10, 0, 0)
+      })
+    )
+
+    const context = await app.request('/api/usage/context?threadId=thread-x')
+    expect(context.status).toBe(200)
+    // 今日合计 = 本用例两条（100 + 400）+ 前面用例今天插入的 m-today(10) 与 other(50)
+    expect(await context.json()).toEqual({
+      threadId: 'thread-x',
+      lastInput: 400,
+      lastCachedInput: 300,
+      baselineInput: 100,
+      todayInput: 560,
+      todayCachedInput: 300
+    })
+  })
+
+  it('上下文接口：threadId 缺失 / 空白 → 400', async () => {
+    expect((await app.request('/api/usage/context')).status).toBe(400)
+    expect((await app.request('/api/usage/context?threadId=%20')).status).toBe(400)
+  })
 })
 
 describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage）', () => {
@@ -327,6 +390,19 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
     expect(today.byModel[0]?.cost).toBeGreaterThan(0)
     // 本地日历的窗口口径：同一批行在"本月"里也应当出现（今天 ⊂ 本月）
     expect((await usage('month')).tokens).toEqual(today.tokens)
+
+    // round 18：这一轮**按会话记上了**（threadId 从 onFinish 事件的 dbMessages 取）——
+    // 上下文环的数据面就靠这条：无 thread_id 时 lastInput 会是 null
+    const contextResponse = await fetch(
+      `${server.baseUrl}/api/usage/context?threadId=thread-usage-known`,
+      { headers: { authorization: `Bearer ${server.token}` } }
+    )
+    expect(contextResponse.status).toBe(200)
+    expect(await contextResponse.json()).toMatchObject({
+      threadId: 'thread-usage-known',
+      lastInput: 1,
+      baselineInput: 1
+    })
   }, 30_000)
 
   it('未知模型：只记 token，cost=null、costIncomplete=true（不把未知当 0）', async () => {

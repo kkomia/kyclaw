@@ -20,6 +20,8 @@ import type { LanguageModel } from 'ai'
 /** 类型专用：mock 的流 part 形状从这里取（import type 会被编译擦掉，不会把 ESM 带进 CJS 产物） */
 import type { MockLanguageModelV4 } from 'ai/test'
 import { providerConfigProblems, type ProviderConfig } from '../shared/providers'
+/** round 18：DeepSeek 官方端点判定 / 兼容层 provider 名搬到了 shared（渲染端也要判）——这里 import 使用 */
+import { isDeepSeekBaseUrl, OPENAI_COMPATIBLE_PROVIDER_NAME } from '../shared/providers'
 
 /** 强制离线的环境变量（值必须是 '1'，避免 "0" 被当真的陷阱） */
 export const FORCE_MOCK_ENV = 'KYCLAW_FORCE_MOCK'
@@ -35,8 +37,8 @@ export const MOCK_PROVIDER_NAME = 'kyclaw-mock'
  */
 export const MOCK_CHUNK_DELAY_MS = 250
 
-/** openai-compatible 的 provider 标识（BaseURL 之外还能一眼看出是哪个通道） */
-export const OPENAI_COMPATIBLE_PROVIDER_NAME = 'kyclaw-openai-compatible'
+/** DeepSeek 官方端点判定 / 兼容层 provider 名 / 官方主机名：round 18 起住在 shared/providers.ts
+ *  （渲染端也要判"这模型在哪个端点上"，好决定 providerOptions 的键）——这里直接 import 使用 */
 
 /** 离线 mock 回吐的文本，按增量切好——服务侧断言与 T16 E2E 共用这一份真身 */
 export const MOCK_REPLY_CHUNKS = ['（kyclaw 离线模式）', '你好，', '我是 kyclaw。'] as const
@@ -73,9 +75,6 @@ export function mockWriteTarget(prompt: PromptLike): string | null {
     .join('\n')
   return MOCK_WRITE_MARKER.exec(text)?.[1] ?? null
 }
-
-/** DeepSeek 官方 API 的主机名（这个端点走 @ai-sdk/deepseek，其余 openai-compatible 走通用兼容层） */
-export const DEEPSEEK_API_HOST = 'api.deepseek.com'
 
 /** 模型来源：mock = 离线兜底，其余 = provider 类型 */
 export type ModelSource = 'mock' | ProviderConfig['type']
@@ -116,15 +115,6 @@ export function selectProviderConfig(
   providers: readonly ProviderConfig[]
 ): ProviderConfig | undefined {
   return providers.find((provider) => provider.isDefault) ?? providers[0]
-}
-
-export function isDeepSeekBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-  try {
-    return new URL(baseUrl).hostname === DEEPSEEK_API_HOST
-  } catch {
-    return false
-  }
 }
 
 function mockUsage(): {

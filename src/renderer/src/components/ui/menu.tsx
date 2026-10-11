@@ -34,7 +34,19 @@ export interface MenuSubmenuItem {
   icon?: ReactNode
   disabled?: boolean
   testId?: string
-  items: Array<MenuActionItem | MenuSeparatorItem>
+  /** 触发器右侧的当前值（round 18：模型浮窗「思考强度   高 ▸」的"高"） */
+  trailing?: ReactNode
+  items: Array<MenuActionItem | MenuSeparatorItem | MenuCustomItem>
+}
+
+/**
+ * 自定义内容条目（round 18）：不参与键盘导航（滑块自己处理方向键），
+ * 也不装作 menuitem——给「对话长度」这类控件用。
+ */
+export interface MenuCustomItem {
+  id: string
+  type: 'custom'
+  content: ReactNode
 }
 
 export type MenuEntry = MenuActionItem | MenuSeparatorItem | MenuSubmenuItem
@@ -104,7 +116,16 @@ function submenuItem(entry: MenuSubmenuItem): React.JSX.Element {
         className={cn(MENU_ITEM_CLASS, 'data-[highlighted]:bg-hover data-[state=open]:bg-hover')}
       >
         {itemContent(entry.icon, entry.label)}
-        <ChevronRight aria-hidden="true" className="ml-auto size-4 shrink-0 text-ink-tertiary" />
+        {entry.trailing === undefined ? null : (
+          <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{entry.trailing}</span>
+        )}
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            'size-4 shrink-0 text-ink-tertiary',
+            entry.trailing === undefined && 'ml-auto'
+          )}
+        />
       </DropdownMenu.SubTrigger>
       <DropdownMenu.Portal>
         <DropdownMenu.SubContent
@@ -114,6 +135,10 @@ function submenuItem(entry: MenuSubmenuItem): React.JSX.Element {
           {entry.items.map((item) =>
             item.type === 'separator' ? (
               <DropdownMenu.Separator key={item.id} className="my-1 -mx-2 h-px bg-hairline" />
+            ) : item.type === 'custom' ? (
+              <div key={item.id} data-testid={`menu-custom-${item.id}`} className="px-2 py-1">
+                {item.content}
+              </div>
             ) : (
               actionItem(item)
             )

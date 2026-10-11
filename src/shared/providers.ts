@@ -147,3 +147,19 @@ export function withDefaultProvider(
 ): ProviderConfig[] {
   return providers.map((provider) => ({ ...provider, isDefault: provider.id === id }))
 }
+
+/** openai-compatible 的 provider 标识（BaseURL 之外还能一眼看出是哪个通道；也用作 providerOptions 的键） */
+export const OPENAI_COMPATIBLE_PROVIDER_NAME = 'kyclaw-openai-compatible'
+
+/** DeepSeek 官方 API 的主机名（这个端点走 @ai-sdk/deepseek，其余 openai-compatible 走通用兼容层） */
+export const DEEPSEEK_API_HOST = 'api.deepseek.com'
+
+/** 这个 baseUrl 是不是 DeepSeek 官方端点（round 18 从 mastra/model.ts 搬到 shared：渲染端也要判） */
+export function isDeepSeekBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  try {
+    return new URL(baseUrl).hostname === DEEPSEEK_API_HOST
+  } catch {
+    return false
+  }
+}

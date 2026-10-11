@@ -650,6 +650,133 @@ describe('round 7 · 权限 chip（ask|full 两档，full 先确认）', () => {
   })
 })
 
+describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下文环', () => {
+  let bridge: KyclawBridgeStubs
+
+  const V4 = {
+    id: 'deepseek',
+    type: 'openai-compatible' as const,
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-v4-pro',
+    isDefault: true
+  }
+
+  beforeEach(() => {
+    const initial = { ...defaultSettings(), providers: [V4] }
+    bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+  })
+
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  /** 打开模型菜单并展开某个二级浮层 */
+  async function openSubmenu(testId: string): Promise<void> {
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    const trigger = screen.getByTestId(testId)
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    await tick()
+  }
+
+  it('两截：上=模型列表；分隔线后是「思考强度 / 对话长度」，右侧显示当前档', () => {
+    setup()
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
+    expect(screen.getByTestId('model-efforts')).toHaveTextContent('思考强度')
+    expect(screen.getByTestId('model-efforts')).toHaveTextContent('默认')
+    expect(screen.getByTestId('model-context')).toHaveTextContent('对话长度')
+    expect(screen.getByTestId('model-context')).toHaveTextContent('100%')
+  })
+
+  it('思考强度：按注册表动态给挡位（v4-pro 四档）；选「高」→ 落 settings.modelPrefs', async () => {
+    setup()
+    await openSubmenu('model-efforts')
+
+    expect(screen.getByTestId('model-effort-default')).toHaveTextContent('默认')
+    expect(screen.getByTestId('model-effort-low')).toHaveTextContent('低')
+    expect(screen.getByTestId('model-effort-high')).toHaveTextContent('高')
+    expect(screen.getByTestId('model-effort-max')).toHaveTextContent('最高')
+    expect(screen.getByTestId('model-effort-default')).toHaveAttribute('aria-current', 'page')
+
+    fireEvent.click(screen.getByTestId('model-effort-high'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        modelPrefs: { 'deepseek/deepseek-v4-pro': { thinkingEffort: 'high' } }
+      })
+    )
+  })
+
+  it('对话长度：滑块 10–100，拖动只改草稿、松手（pointerUp）才落盘；显示百分比与换算', async () => {
+    setup()
+    await openSubmenu('model-context')
+
+    const range = screen.getByTestId('model-context-range')
+    expect(range).toHaveAttribute('min', '10')
+    expect(range).toHaveAttribute('max', '100')
+    expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 1M / 1M')
+
+    fireEvent.change(range, { target: { value: '40' } })
+    expect(screen.getByTestId('model-context-pct')).toHaveTextContent('40%')
+    expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 400K / 1M')
+    expect(bridge.update).not.toHaveBeenCalled() // 拖动中不落盘
+
+    fireEvent.pointerUp(range)
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        modelPrefs: { 'deepseek/deepseek-v4-pro': { contextPct: 40 } }
+      })
+    )
+  })
+
+  it('上下文环与 hover 明细：已用 %、~已用/~总量、分解近似、缓存命中率、阈值（超了转警示）', async () => {
+    // 500K / 500K（阈值 50% × 1M）= 100%，超过阈值 → 警示
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        providers: [V4],
+        modelPrefs: { 'deepseek/deepseek-v4-pro': { contextPct: 50 } }
+      },
+      loaded: true
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          threadId: 't1',
+          lastInput: 500_000,
+          lastCachedInput: 375_000,
+          baselineInput: 100_000,
+          todayInput: 1_000_000,
+          todayCachedInput: 750_000
+        })
+      }))
+    )
+    setup({ threadId: 't1' })
+
+    const ring = await screen.findByTestId('context-ring')
+    await waitFor(() => expect(ring.querySelector('svg')).toHaveAttribute('data-warning', 'true'))
+
+    fireEvent.focus(ring)
+    const card = await screen.findByTestId('context-card')
+    expect(card).toHaveTextContent('上下文已用 100%')
+    expect(card).toHaveTextContent('~500K / 500K')
+    expect(card).toHaveTextContent('系统提示词 / 工具定义')
+    expect(card).toHaveTextContent('~100K')
+    expect(card).toHaveTextContent('对话消息')
+    expect(card).toHaveTextContent('~400K')
+    expect(card).toHaveTextContent('最近一轮 75%')
+    expect(card).toHaveTextContent('今日 75%')
+    expect(card).toHaveTextContent('阈值 50%（已超过）')
+  })
+})
+
 describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', () => {
   let bridge: KyclawBridgeStubs
 

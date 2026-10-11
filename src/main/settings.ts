@@ -36,6 +36,7 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.langfuse === undefined) next.langfuse = { endpoint: '' }
   if (next.pluginMarketplaces === undefined) next.pluginMarketplaces = []
   if (next.installedPlugins === undefined) next.installedPlugins = []
+  if (next.modelPrefs === undefined) next.modelPrefs = {}
   return next
 }
 

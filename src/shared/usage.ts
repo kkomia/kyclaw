@@ -51,3 +51,24 @@ export const usageResponseSchema = z.strictObject({
 })
 
 export type UsageResponse = z.infer<typeof usageResponseSchema>
+
+/**
+ * GET /api/usage/context?threadId= 的回包（round 18：上下文环与 hover 明细的数据面）。
+ *
+ * 口径（都是**近似**，报告里如实标注）：
+ *   - `lastInput` = 该会话最近一轮的输入 tokens（环的分子）；
+ *   - `baselineInput` = 该会话**首轮**的输入 tokens ≈ 系统提示词 + 工具定义的基线；
+ *     分解里"对话消息" = lastInput − baselineInput（不足 0 归 0）；
+ *   - 缓存字段来自 provider 上报（DeepSeek 系有 prompt_cache_hit_tokens → AI SDK 的 cachedInputTokens）；
+ *     端点不报就是 null / 0，不拿它猜命中率；`today*` 是本地日历当天**全部会话**的合计（窗口合计口径）。
+ */
+export const usageThreadContextSchema = z.strictObject({
+  threadId: z.string().min(1),
+  lastInput: z.number().int().min(0).nullable(),
+  lastCachedInput: z.number().int().min(0).nullable(),
+  baselineInput: z.number().int().min(0).nullable(),
+  todayInput: z.number().int().min(0),
+  todayCachedInput: z.number().int().min(0)
+})
+
+export type UsageThreadContext = z.infer<typeof usageThreadContextSchema>

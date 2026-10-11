@@ -100,6 +100,8 @@ export function computeCost(
 export interface UsageRun {
   id: string
   runId: string | null
+  /** round 18：这一轮属于哪条会话（从 onFinish 事件的 dbMessages 里取；取不到 = null） */
+  threadId: string | null
   /** 运行时的模型 id 原文（未知也照记） */
   model: string
   provider: string | null
@@ -119,6 +121,8 @@ export interface UsageStore {
   insert(run: UsageRun): Promise<void>
   /** 窗口内的全部运行（长表逐行读回，聚合在 summarizeUsage 里做） */
   listSince(since: Date): Promise<UsageRun[]>
+  /** 某条会话的运行（**时间升序**：首条当"系统+工具"基线，最后一条当"最近一轮"） */
+  listByThread(threadId: string): Promise<UsageRun[]>
 }
 
 /**
@@ -157,6 +161,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
         `CREATE TABLE IF NOT EXISTS "${USAGE_TABLE}" (
           "id" TEXT PRIMARY KEY,
           "run_id" TEXT,
+          "thread_id" TEXT,
           "model" TEXT NOT NULL,
           "provider" TEXT,
           "input_tokens" INTEGER NOT NULL DEFAULT 0,
@@ -167,8 +172,17 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           "created_at" TEXT NOT NULL
         )`
       )
+      // 已有库补列（round 18）：SQLite 的 ALTER 重复执行会报错，忽略即可（列已存在 = 已完成迁移）
+      try {
+        await client.execute(`ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "thread_id" TEXT`)
+      } catch {
+        // 列已存在
+      }
       await client.execute(
         `CREATE INDEX IF NOT EXISTS "${USAGE_TABLE}_created_at" ON "${USAGE_TABLE}" ("created_at")`
+      )
+      await client.execute(
+        `CREATE INDEX IF NOT EXISTS "${USAGE_TABLE}_thread_id" ON "${USAGE_TABLE}" ("thread_id")`
       )
     })().catch((error: unknown) => {
       ready = null // 失败不缓存：下一次调用再试一遍
@@ -183,11 +197,12 @@ export function createUsageStore(client: SqliteClient): UsageStore {
       await ensureTable()
       await client.execute({
         sql: `INSERT OR REPLACE INTO "${USAGE_TABLE}"
-          ("id", "run_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at")
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ("id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at")
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           run.id,
           run.runId,
+          run.threadId,
           run.model,
           run.provider,
           run.tokens.input,
@@ -202,25 +217,42 @@ export function createUsageStore(client: SqliteClient): UsageStore {
     async listSince(since) {
       await ensureTable()
       const result = await client.execute({
-        sql: `SELECT "id", "run_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at"
+        sql: `SELECT "id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at"
           FROM "${USAGE_TABLE}" WHERE "created_at" >= ? ORDER BY "created_at" DESC`,
         args: [since.toISOString()]
       })
-      return result.rows.map((row) => ({
-        id: String(row.id),
-        runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
-        model: String(row.model),
-        provider: row.provider === null || row.provider === undefined ? null : String(row.provider),
-        tokens: {
-          input: toNumber(row.input_tokens),
-          output: toNumber(row.output_tokens),
-          total: toNumber(row.total_tokens)
-        },
-        cachedInput: toNullableNumber(row.cached_input_tokens),
-        cost: toNullableNumber(row.cost),
-        createdAt: String(row.created_at)
-      }))
+      return result.rows.map(rowOfUsageRun)
+    },
+    async listByThread(threadId) {
+      await ensureTable()
+      const result = await client.execute({
+        sql: `SELECT "id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at"
+          FROM "${USAGE_TABLE}" WHERE "thread_id" = ? ORDER BY "created_at" ASC`,
+        args: [threadId]
+      })
+      return result.rows.map(rowOfUsageRun)
     }
+  }
+}
+
+/** libsql 行 → UsageRun（列名映射只写这一处） */
+function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
+  const text = (value: unknown): string | null =>
+    value === null || value === undefined ? null : String(value)
+  return {
+    id: String(row.id),
+    runId: text(row.run_id),
+    threadId: text(row.thread_id),
+    model: String(row.model),
+    provider: text(row.provider),
+    tokens: {
+      input: toNumber(row.input_tokens),
+      output: toNumber(row.output_tokens),
+      total: toNumber(row.total_tokens)
+    },
+    cachedInput: toNullableNumber(row.cached_input_tokens),
+    cost: toNullableNumber(row.cost),
+    createdAt: String(row.created_at)
   }
 }
 
@@ -292,8 +324,18 @@ export interface UsageFinishEvent {
   usage?: unknown
   totalUsage?: unknown
   model?: { modelId?: string; provider?: string } | null
-  response?: { modelId?: string } | null
+  response?: { modelId?: string; dbMessages?: ReadonlyArray<{ threadId?: unknown }> } | null
   runId?: string | null
+}
+
+/** 从 onFinish 事件的 dbMessages 里取会话 id（Mastra 的 DB 消息带 threadId；取不到 = null） */
+function threadIdOf(event: UsageFinishEvent): string | null {
+  for (const message of event.response?.dbMessages ?? []) {
+    if (typeof message.threadId === 'string' && message.threadId.trim() !== '') {
+      return message.threadId
+    }
+  }
+  return null
 }
 
 /** provider 的 usage 字段有的报数字、有的报 `{ total }` 对象；都收 */
@@ -340,6 +382,7 @@ export function createUsageRecorder(options: {
       await options.store.insert({
         id: randomUUID(),
         runId: event.runId ?? null,
+        threadId: threadIdOf(event),
         model,
         provider,
         tokens: { input, output, total: reportedTotal > 0 ? reportedTotal : input + output },

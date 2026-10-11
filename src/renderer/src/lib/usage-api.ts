@@ -5,7 +5,13 @@
  * 渲染端与服务端不会因为时区/时钟不同步而各算各的。
  */
 import type { z } from 'zod'
-import { usageResponseSchema, type UsageRange, type UsageResponse } from '@shared/usage'
+import {
+  usageResponseSchema,
+  usageThreadContextSchema,
+  type UsageRange,
+  type UsageResponse,
+  type UsageThreadContext
+} from '@shared/usage'
 
 async function authorized(path: string, init: RequestInit = {}): Promise<Response> {
   const { baseUrl, token } = await window.kyclaw.agent.endpoint()
@@ -37,4 +43,13 @@ async function json<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
 export async function fetchUsage(range: UsageRange): Promise<UsageResponse> {
   const response = await authorized(`/api/usage?range=${encodeURIComponent(range)}`)
   return json(response, usageResponseSchema)
+}
+
+/**
+ * 某条会话的上下文用量（round 18）：最近一轮输入 / 首轮基线 / 今日缓存合计——
+ * 上下文环与 hover 明细的数据面（口径见 shared/usage.ts 的 usageThreadContextSchema）。
+ */
+export async function fetchThreadContext(threadId: string): Promise<UsageThreadContext> {
+  const response = await authorized(`/api/usage/context?threadId=${encodeURIComponent(threadId)}`)
+  return json(response, usageThreadContextSchema)
 }

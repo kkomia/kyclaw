@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   AtSign,
   Paperclip,
@@ -14,8 +14,18 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
+import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { fetchThreadContext } from '@renderer/lib/usage-api'
+import {
+  contextTokensFor,
+  contextWindowOf,
+  effectiveEffortId,
+  formatTokens,
+  thinkingEffortsOf
+} from '@shared/models'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
+import type { UsageThreadContext } from '@shared/usage'
 import { withDefaultProvider } from '@shared/providers'
 import { formatBytes } from './composer-attachments'
 import type { PendingAttachment } from './composer-attachments'
@@ -254,15 +264,163 @@ export function PermissionChip({ workspace, onNotice }: PermissionChipProps): Re
 }
 
 export interface ModelChipProps {
+  /** 当前会话（上下文环按这条会话的 usage 取数；null = 不取，环停在空态） */
+  threadId?: string | null
   onNotice: (notice: ComposerNotice | null) => void
 }
 
-export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
+/** 上下文环（round 18，图3）：模型名左侧 16px 小环；超过阈值时整环转警示色 */
+function ContextRing({
+  percent,
+  warning
+}: {
+  percent: number
+  warning: boolean
+}): React.JSX.Element {
+  const radius = 6.5
+  const circumference = 2 * Math.PI * radius
+  const filled = (Math.min(100, Math.max(0, percent)) / 100) * circumference
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      data-warning={warning ? 'true' : undefined}
+      className="size-4 shrink-0 -rotate-90"
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        strokeWidth="2"
+        className="stroke-(--fill-active)"
+      />
+      <circle
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={`${filled} ${circumference}`}
+        className={warning ? 'stroke-warning' : 'stroke-ink-secondary'}
+      />
+    </svg>
+  )
+}
+
+/** 对话长度滑块（二级浮层里的自定义条目）：拖动时只改草稿，松手（或键盘抬手）才落盘 */
+function ContextSlider({
+  model,
+  pct,
+  onCommit
+}: {
+  model: string
+  pct: number
+  onCommit: (pct: number) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState(pct)
+  // props 变了（落盘回来的值 / 换模型）就同步草稿：React 认可的"渲染期调整 state"写法
+  const [lastPct, setLastPct] = useState(pct)
+  if (pct !== lastPct) {
+    setLastPct(pct)
+    setDraft(pct)
+  }
+  const window = contextWindowOf(model)
+  return (
+    <div data-testid="model-context-slider" className="flex w-56 flex-col gap-2">
+      <div className="flex items-baseline justify-between text-c1">
+        <span data-testid="model-context-pct" className="text-ink">
+          {draft}%
+        </span>
+        <span className="text-ink-tertiary tabular-nums">
+          ≈ {formatTokens(contextTokensFor(model, draft))} / {formatTokens(window)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={10}
+        max={100}
+        step={5}
+        value={draft}
+        aria-label="对话长度"
+        data-testid="model-context-range"
+        onChange={(event) => setDraft(Number(event.target.value))}
+        onPointerUp={() => onCommit(draft)}
+        onKeyUp={(event) => {
+          if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') {
+            onCommit(draft)
+          }
+        }}
+        className="h-1 w-full cursor-pointer accent-(--accent)"
+      />
+    </div>
+  )
+}
+
+/**
+ * 模型 chip（round 8 形态；round 18 重做内容）：
+ *   - 触发器 = [上下文环] + 模型名（无描边文字按钮）；
+ *   - 浮窗**上下两截**（用户图1）：上=模型列表（当前项勾选）；下（分隔线之后）=「思考强度」「对话长度」
+ *     两个二级项（右侧显示当前档 + chevron）；
+ *   - 思考强度按注册表（shared/models.ts）动态给挡位——选中即落 settings.modelPrefs 并按
+ *     agent.ts 的口径真透传（能传的模型才列多档，传不了的如实只有「默认」）；
+ *   - 对话长度 = 官方上下文长度 × 10%–100%（滑块，松手即存）；阈值 = 同一根滑块；
+ *   - hover 触发器 = 暗色明细卡（已用 %、~已用/~总量、进度条、分解近似、缓存命中率、阈值）。
+ */
+export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
+  const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
+  const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
+  const [context, setContext] = useState<UsageThreadContext | null>(null)
 
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
+  const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
+  const pref = modelPrefs[prefKey]
+  const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort)
+  const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
+  const windowTokens = contextTokensFor(current?.model, pct)
+
+  const refreshContext = useCallback((): void => {
+    if (threadId === null || threadId === '') return
+    void fetchThreadContext(threadId).then(setContext, () => {
+      // 取不到（服务没起来 / 还没记录）：停在空态，环画 0%，不打扰输入
+    })
+  }, [threadId])
+  useEffect(() => {
+    refreshContext()
+  }, [refreshContext])
+
+  // 只认"这条会话自己"的数据（换会话后旧数据立即失效，不闪现到新会话上）
+  const threadContext = context !== null && context.threadId === threadId ? context : null
+  const usedInput = threadContext?.lastInput ?? null
+  const usedPct =
+    usedInput === null ? 0 : Math.min(100, Math.round((usedInput / windowTokens) * 100))
+  const overThreshold = usedInput !== null && usedInput >= windowTokens
+  const baseline = threadContext?.baselineInput ?? null
+  const messageTokens = usedInput === null ? null : Math.max(0, usedInput - (baseline ?? 0))
+  const lastHitRate =
+    threadContext?.lastCachedInput === null ||
+    threadContext?.lastCachedInput === undefined ||
+    usedInput === null ||
+    usedInput === 0
+      ? null
+      : Math.round((threadContext.lastCachedInput / usedInput) * 100)
+  const todayHitRate =
+    threadContext === null || threadContext.todayInput === 0
+      ? null
+      : Math.round((threadContext.todayCachedInput / threadContext.todayInput) * 100)
+
+  const savePrefs = (patch: { thinkingEffort?: string; contextPct?: number }): void => {
+    if (current === undefined) return
+    const next = { ...modelPrefs, [prefKey]: { ...pref, ...patch } }
+    onNotice(null)
+    saveModelPrefs(next).catch((error: unknown) => {
+      onNotice({ tone: 'danger', text: error instanceof Error ? error.message : String(error) })
+    })
+  }
 
   const select = (id: string): void => {
     if (id === current?.id) return
@@ -277,13 +435,53 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
     )
   }
 
-  const items: MenuEntry[] = providers.map((provider) => ({
-    id: provider.id,
-    label: provider.model === '' ? provider.id : provider.model,
-    selected: provider.isDefault,
-    testId: `composer-model-${provider.id}`,
-    onSelect: select
-  }))
+  const efforts = thinkingEffortsOf(current?.model)
+  const effortLabel = efforts.find((effort) => effort.id === effortId)?.label ?? '默认'
+
+  const items: MenuEntry[] = [
+    ...providers.map((provider) => ({
+      id: provider.id,
+      label: provider.model === '' ? provider.id : provider.model,
+      selected: provider.isDefault,
+      testId: `composer-model-${provider.id}`,
+      onSelect: select
+    })),
+    { id: 'split', type: 'separator' },
+    {
+      id: 'efforts',
+      type: 'submenu',
+      label: '思考强度',
+      testId: 'model-efforts',
+      trailing: effortLabel,
+      items: efforts.map((effort) => ({
+        id: effort.id,
+        label: effort.label,
+        selected: effort.id === effortId,
+        testId: `model-effort-${effort.id}`,
+        onSelect: () => savePrefs({ thinkingEffort: effort.id })
+      }))
+    },
+    {
+      id: 'context',
+      type: 'submenu',
+      label: '对话长度',
+      testId: 'model-context',
+      trailing: `${pct}%`,
+      items: [
+        {
+          id: 'slider',
+          type: 'custom',
+          content: (
+            <ContextSlider
+              model={current?.model ?? ''}
+              pct={pct}
+              onCommit={(nextPct) => savePrefs({ contextPct: nextPct })}
+            />
+          )
+        }
+      ]
+    }
+  ]
 
   const label = current === undefined ? '' : current.model === '' ? current.id : current.model
 
@@ -292,18 +490,73 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
       trigger={
         // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
         // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
+        // round 18：模型名左侧是上下文环（hover 出明细卡）。
         <button
           type="button"
           data-testid="composer-model"
           disabled={pending}
-          className="inline-flex h-8 max-w-44 shrink-0 items-center rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+          className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
         >
+          {current === undefined ? null : (
+            <Tooltip
+              side="top"
+              align="start"
+              className="w-72 p-3"
+              label={
+                <div data-testid="context-card" className="flex flex-col gap-2 text-left">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-b2">上下文已用 {usedPct}%</span>
+                    <span className="text-c1 opacity-70 tabular-nums">
+                      ~{formatTokens(usedInput ?? 0)} / {formatTokens(windowTokens)}
+                    </span>
+                  </div>
+                  <div className="h-1 w-full overflow-hidden rounded-pill bg-(--fill-active)">
+                    <div
+                      className={overThreshold ? 'h-full bg-warning' : 'h-full bg-(--accent-text)'}
+                      style={{ width: `${usedPct}%` }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-0.5 text-c1 opacity-80">
+                    <span className="flex justify-between gap-3">
+                      <span>系统提示词 / 工具定义</span>
+                      <span className="tabular-nums">
+                        {baseline === null ? '—' : `~${formatTokens(baseline)}`}
+                      </span>
+                    </span>
+                    <span className="flex justify-between gap-3">
+                      <span>对话消息</span>
+                      <span className="tabular-nums">
+                        {messageTokens === null ? '—' : `~${formatTokens(messageTokens)}`}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3 text-c1 opacity-80">
+                    <span>缓存命中率</span>
+                    <span className="tabular-nums">
+                      最近一轮 {lastHitRate === null ? '—' : `${lastHitRate}%`} · 今日{' '}
+                      {todayHitRate === null ? '—' : `${todayHitRate}%`}
+                    </span>
+                  </div>
+                  <div className="text-c1 opacity-60">
+                    阈值 {pct}%{overThreshold ? '（已超过）' : ''}
+                  </div>
+                </div>
+              }
+            >
+              <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
+                <ContextRing percent={usedPct} warning={overThreshold} />
+              </span>
+            </Tooltip>
+          )}
           <span className="truncate">{label}</span>
         </button>
       }
       items={items}
       side="top"
       align="start"
+      onOpenChange={(open) => {
+        if (open) refreshContext()
+      }}
     />
   )
 }

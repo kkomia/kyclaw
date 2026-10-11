@@ -24,6 +24,7 @@ describe('AppSettings schema', () => {
       mcpServers: [],
       pluginMarketplaces: [],
       installedPlugins: [],
+      modelPrefs: {},
       langfuse: { endpoint: '' }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)

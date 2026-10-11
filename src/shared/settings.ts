@@ -65,6 +65,20 @@ export const langfuseSettingsSchema = z.strictObject({
 })
 
 /**
+ * 模型级偏好（round 18）：按 `${providerId}/${model}` 存「思考挡位」与「对话长度百分比」。
+ * 缺省 = 默认挡 + 100%；挡位 id 只有注册表（shared/models.ts）里列出的才有意义
+ * （无效值在读取侧回落默认，不在这里抛——用户改了模型名，旧偏好不该让整份设置读不出来）。
+ */
+export const modelPrefsSchema = z.strictObject({
+  /** 思考挡位 id（`default` / `low` / `high` / `max`…，见 shared/models.ts） */
+  thinkingEffort: z.string().optional(),
+  /** 对话长度 = 官方上下文长度 × pct/100（10–100；缺省 100） */
+  contextPct: z.number().min(10).max(100).optional()
+})
+
+export type ModelPrefs = z.infer<typeof modelPrefsSchema>
+
+/**
  * MCP server 的传输（T12）：stdio 起子进程走 stdio 上的 JSON-RPC；http 连 Streamable HTTP 端点。
  */
 export const mcpTransportSchema = z.enum(['stdio', 'http'])
@@ -170,6 +184,8 @@ export const appSettingsSchema = z.strictObject({
   pluginMarketplaces: z.array(pluginMarketplaceSchema),
   /** round 10 的已安装插件记录（安装/卸载走 plugins:* 通道） */
   installedPlugins: z.array(installedPluginSchema),
+  /** round 18 的模型级偏好（`${providerId}/${model}` → 思考挡位 / 对话长度百分比；走 settings:update 补丁） */
+  modelPrefs: z.record(z.string(), modelPrefsSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema
 })
@@ -216,6 +232,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mcpServers: [],
   pluginMarketplaces: [],
   installedPlugins: [],
+  modelPrefs: {},
   langfuse: { endpoint: '' }
 }
 
@@ -230,6 +247,7 @@ export function defaultSettings(): AppSettings {
     mcpServers: [],
     pluginMarketplaces: [],
     installedPlugins: [],
+    modelPrefs: {},
     langfuse: { endpoint: '' }
   }
 }

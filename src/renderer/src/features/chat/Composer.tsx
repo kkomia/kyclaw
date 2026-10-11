@@ -425,7 +425,9 @@ export function Composer({
           ) : null}
         </span>
 
-        {settings.providers.length === 0 ? null : <ModelChip onNotice={setNotice} />}
+        {settings.providers.length === 0 ? null : (
+          <ModelChip threadId={threadId} onNotice={setNotice} />
+        )}
 
         {busy ? (
           <button

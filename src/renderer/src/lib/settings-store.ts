@@ -3,6 +3,7 @@ import {
   defaultSettings,
   type AppSettings,
   type AppSettingsPatch,
+  type ModelPrefs,
   type WorkspaceMode
 } from '@shared/settings'
 import type { Project } from '@shared/projects'
@@ -62,6 +63,8 @@ export interface SettingsState {
   update: (patch: AppSettingsPatch) => Promise<void>
   /** 保存 provider 列表（模型设置页）：以落盘结果为准，失败抛给调用方 */
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
+  /** round 18：保存模型级偏好（思考挡位 / 对话长度百分比；以落盘结果为准，失败抛） */
+  saveModelPrefs: (modelPrefs: Record<string, ModelPrefs>) => Promise<void>
   /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
   saveLangfuseEndpoint: (endpoint: string) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
@@ -126,6 +129,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const api = window.kyclaw?.settings
     if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），provider 没有保存')
     set({ settings: await api.update({ providers }) })
+  },
+
+  /** round 18：模型级偏好（思考挡位 / 对话长度百分比）——与 provider 同族：失败抛给调用方 */
+  saveModelPrefs: async (modelPrefs) => {
+    set({ settings: await settingsApi().update({ modelPrefs }) })
   },
 
   saveLangfuseEndpoint: async (endpoint) => {

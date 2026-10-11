@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage, UIMessageChunk } from 'ai'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
-import { getTransport } from '@renderer/lib/agent'
+import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { defaultSettings } from '@shared/settings'
 
 /**
  * getTransport（T7 传输裁决）：先经 IPC 等 agent 端点（baseUrl + token），再用 Bearer 头
@@ -90,5 +92,44 @@ describe('getTransport', () => {
     expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toEqual([
       { type: 'text-delta', id: 't1', delta: '你好' }
     ])
+  })
+})
+
+describe('threadRequestOptions（round 18：思考挡位真透传进请求体）', () => {
+  afterEach(() => {
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  it('选了挡位（DeepSeek 官方端点）→ body.providerOptions.deepseek.reasoningEffort', () => {
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        providers: [
+          {
+            id: 'ds',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.deepseek.com',
+            model: 'deepseek-v4-pro',
+            isDefault: true
+          }
+        ],
+        modelPrefs: { 'ds/deepseek-v4-pro': { thinkingEffort: 'high' } }
+      },
+      loaded: true
+    })
+
+    expect(threadRequestOptions('t1')).toEqual({
+      body: {
+        memory: { thread: 't1', resource: expect.any(String) },
+        providerOptions: { deepseek: { reasoningEffort: 'high' } }
+      }
+    })
+  })
+
+  it('默认挡 / 没配 provider → 不带 providerOptions（不假装生效）', () => {
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: true })
+    expect(threadRequestOptions('t1')).toEqual({
+      body: { memory: { thread: 't1', resource: expect.any(String) } }
+    })
   })
 })
