@@ -8,7 +8,6 @@ import {
 import { mcpServersProblems, URL_PROBLEM, type McpTestResult } from '@shared/mcp'
 import type { PluginsOverview, MarketplacePluginView, MarketplaceView } from '@shared/plugins'
 import type { InstalledPlugin, McpServerConfig } from '@shared/settings'
-import { BUILTIN_SKILLS } from '../skills'
 import { PluginsPage } from '../PluginsPage'
 
 /**
@@ -182,12 +181,10 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('plugins-tab-plugins')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'false')
     expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'false')
-    // 计数：插件 0 / MCP 0 / 技能 = 内置技能数
+    // 计数：插件 0 / MCP 0 / 技能 0（round 13：技能计数 = 已安装数，内置技能下线）
     expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('0')
     expect(screen.getByTestId('plugins-tab-mcp-count')).toHaveTextContent('0')
-    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent(
-      String(BUILTIN_SKILLS.length)
-    )
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('0')
 
     // 插件区：市场与插件的空态；新增入口是「添加插件市场」（mcp-add 不出现）
     expect(await screen.findByTestId('marketplace-empty')).toHaveTextContent('还没有插件市场')
@@ -202,17 +199,14 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('mcp-add')).toHaveTextContent('新增')
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
 
-    // 技能区：已安装空态 + 内置能力只读清单（克制口吻、没有开关）；没有新增按钮
+    // 技能区：只有「已安装（来自插件）」+ 空态（round 13：内置技能整块下线）；没有新增按钮
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
     expect(screen.getByTestId('plugins-title')).toHaveTextContent('技能')
     expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看可用与已安装的技能')
     expect(screen.getByTestId('skills-installed-empty')).toHaveTextContent(
       '还没有从插件装进来的技能'
     )
-    const skills = screen.getByTestId('plugins-skills')
-    for (const name of ['读取文件', '查找文件', '搜索内容', '写入文件', '修改文件']) {
-      expect(skills, name).toHaveTextContent(name)
-    }
+    expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
     expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
     expect(screen.queryByTestId('plugins-add')).not.toBeInTheDocument()
   })
@@ -835,7 +829,7 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(await screen.findByTestId('plugins-error')).toHaveTextContent('插件通道不可用')
   })
 
-  it('技能分区：已安装条目（名字 + 来自哪个插件）与计数；内置技能仍在', async () => {
+  it('技能分区：已安装条目（名字 + 来自哪个插件）与计数；内置技能块已下线（round 13）', async () => {
     installMockApi([])
     installPluginsBridge({
       marketplaces: [marketplaceView()],
@@ -852,10 +846,9 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(row).toHaveTextContent('s1')
     expect(row).toHaveTextContent('来自 p1')
     expect(screen.getByTestId('skill-installed-orphan-x')).toHaveTextContent('来自插件')
-    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent(
-      String(BUILTIN_SKILLS.length + 2)
-    )
+    // 计数 = 已安装数（2），不再把内置技能算进去
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('2')
     expect(screen.queryByTestId('skills-installed-empty')).not.toBeInTheDocument()
-    expect(screen.getByTestId('plugins-skills')).toHaveTextContent('内置技能')
+    expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
   })
 })

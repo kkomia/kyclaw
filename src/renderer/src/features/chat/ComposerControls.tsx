@@ -5,17 +5,16 @@ import {
   Plug,
   Plus,
   Shield,
-  ShieldCheck,
+  ShieldAlert,
   Sparkles,
   X,
   type LucideIcon
 } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
-import { Chip } from '@renderer/components/ui/chip'
+import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { BUILTIN_SKILLS } from '@renderer/features/plugins/skills'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
 import { withDefaultProvider } from '@shared/providers'
 import { formatBytes } from './composer-attachments'
@@ -23,9 +22,11 @@ import type { PendingAttachment, PendingReference } from './composer-attachments
 
 /**
  * Composer 的控件族（round 7，用户实拍 #10 图4/图5/图7/图8/图10）：
- *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文）；
+ *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文）——round 13 起技能子菜单
+ *     只列**插件装进来的技能**（内置技能默认就暴露给 agent，不再出现）；
  *   - `PermissionChip`：权限两档（每次询问 / 完全访问）——**只走引擎既有两档**，
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
+ *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
  *   - `ModelChip`：模型切换（只列 T8 已配置的 provider，含 isDefault 语义；不带小字说明）；
  *   - `PendingChips`：附件 / 引用 chip 行（可移除）。
  * 图标按钮 hover 铺灰底（Fills-F1）= 图10 口径；不给说明性小字（雷点 2）。
@@ -46,13 +47,22 @@ export interface PlusMenuProps {
   contextLabel: string | null
   /** 可引用的插件（已启用的 MCP server；空列表时菜单里给一条禁用说明） */
   plugins: ReadonlyArray<{ id: string; name: string }>
+  /**
+   * 可引用的技能 = **插件装进来的技能**（round 13：内置技能默认就暴露给 agent，不再进这个菜单；
+   * 空列表时菜单里给一条禁用说明）。
+   */
+  skills: ReadonlyArray<{ dir: string; name: string }>
+  /** 打开菜单时拉一次数据（技能的安装状态可能在别处刚变过；挂载时另有一次，见 Composer） */
+  onOpenMenu?: () => void
 }
 
 export function PlusMenu({
   onAddFile,
   onReference,
   contextLabel,
-  plugins
+  plugins,
+  skills,
+  onOpenMenu
 }: PlusMenuProps): React.JSX.Element {
   const items: MenuEntry[] = [
     {
@@ -69,13 +79,15 @@ export function PlusMenu({
       label: '引用技能',
       icon: <Sparkles />,
       testId: 'composer-ref-skills',
-      items: BUILTIN_SKILLS.map((skill) => ({
-        id: skill.name,
-        label: skill.name,
-        icon: <skill.icon />,
-        testId: `composer-ref-skill-${skill.name}`,
-        onSelect: () => onReference({ kind: '技能', label: skill.name })
-      }))
+      items:
+        skills.length === 0
+          ? [{ id: 'empty', label: '还没有安装技能', disabled: true }]
+          : skills.map((skill) => ({
+              id: skill.dir,
+              label: skill.name,
+              testId: `composer-ref-skill-${skill.dir}`,
+              onSelect: () => onReference({ kind: '技能', label: skill.name })
+            }))
     },
     {
       id: 'plugins',
@@ -120,6 +132,9 @@ export function PlusMenu({
       items={items}
       side="top"
       align="start"
+      onOpenChange={(open) => {
+        if (open) onOpenMenu?.()
+      }}
     />
   )
 }
@@ -175,20 +190,28 @@ export function PermissionChip({ workspace, onNotice }: PermissionChipProps): Re
     }
   ]
 
-  const Icon: LucideIcon = workspace.mode === 'full' ? ShieldCheck : Shield
+  const full = workspace.mode === 'full'
+  // 完全访问 = 警示态（round 13 用户实拍）：用 ShieldAlert（不要带对勾的 ShieldCheck）
+  const Icon: LucideIcon = full ? ShieldAlert : Shield
 
   return (
     <>
       <Menu
         trigger={
-          <Chip
+          // 无描边的文字 chip（round 13 用户实拍：默认不要那个圆角框线；hover / 展开只铺灰底）。
+          // 高度与 ＋ 按钮对齐（h-8）；「完全访问」的文字与图标用警示色。
+          <button
+            type="button"
             data-testid="composer-permission"
             disabled={pending}
-            icon={<Icon />}
-            className="max-w-40"
+            className={cn(
+              'inline-flex h-8 max-w-40 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 transition-colors duration-(--motion-fast) ease-main hover:bg-hover data-[state=open]:bg-hover disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
+              full ? 'text-warning' : 'text-ink-secondary hover:text-ink data-[state=open]:text-ink'
+            )}
           >
-            {MODE_LABELS[workspace.mode]}
-          </Chip>
+            <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">{MODE_LABELS[workspace.mode]}</span>
+          </button>
         }
         items={items}
         side="top"

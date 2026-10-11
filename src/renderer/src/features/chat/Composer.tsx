@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUp, Square } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
@@ -64,6 +65,25 @@ export function Composer({
   const enabledPlugins = settings.mcpServers
     .filter((server) => server.enabled)
     .map((server) => ({ id: server.id, name: server.name }))
+
+  /** 「引用技能」菜单的数据（round 13：插件装进来的技能；挂载 + 每次打开菜单时拉一遍） */
+  const [installedSkills, setInstalledSkills] = useState<
+    ReadonlyArray<{ dir: string; name: string }>
+  >([])
+  const refreshSkills = useCallback((): void => {
+    void fetchPluginsOverview().then(
+      (overview) =>
+        setInstalledSkills(
+          overview.installedSkills.map((skill) => ({ dir: skill.dir, name: skill.name }))
+        ),
+      () => {
+        // 插件通道不可用（浏览器 / 单测未装桥）：菜单退化为空态，不打扰输入
+      }
+    )
+  }, [])
+  useEffect(() => {
+    refreshSkills()
+  }, [refreshSkills])
 
   const canSend = draft.trim() !== '' || attachments.length > 0
 
@@ -176,6 +196,8 @@ export function Composer({
           onReference={addReference}
           contextLabel={contextLabel}
           plugins={enabledPlugins}
+          skills={installedSkills}
+          onOpenMenu={refreshSkills}
         />
         {rootWorkspace === null ? null : (
           <PermissionChip workspace={rootWorkspace} onNotice={setNotice} />

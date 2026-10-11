@@ -47,6 +47,8 @@ export interface MenuProps {
   /** 与触发元素的距离，默认 4（= --space-1） */
   sideOffset?: number
   className?: string
+  /** 面板开合回调（round 13：引用技能菜单借它做"打开时刷新"；缺省不关心） */
+  onOpenChange?: (open: boolean) => void
 }
 
 /** 条目行（普通条目与子菜单触发器共用；键盘高亮只铺填充，不叠全局焦点环） */
@@ -130,10 +132,11 @@ export function Menu({
   align = 'start',
   side = 'bottom',
   sideOffset = 4,
-  className
+  className,
+  onOpenChange
 }: MenuProps): React.JSX.Element {
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content

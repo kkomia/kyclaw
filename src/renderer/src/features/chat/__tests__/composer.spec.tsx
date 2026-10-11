@@ -173,7 +173,15 @@ describe('round 7 · ＋菜单与引用', () => {
     expect(screen.getByTestId('composer-ref-context')).toBeInTheDocument()
   })
 
-  it('引用技能：子菜单 = 内置技能清单；选一条 → 引用 chip（可移除）', async () => {
+  it('引用技能：子菜单 = 插件装进来的已安装技能（round 13：内置技能不再出现）；选一条 → 引用 chip', async () => {
+    const bridge = installKyclawBridge()
+    bridge.plugins.overview.mockResolvedValue({
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'demo-p1-s1', name: '整理笔记', pluginId: 'demo-p1', pluginName: 'p1' }
+      ]
+    })
     setup()
     fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
 
@@ -182,11 +190,29 @@ describe('round 7 · ＋菜单与引用', () => {
     fireEvent.keyDown(skills, { key: 'ArrowRight' })
     await tick()
 
-    fireEvent.click(await screen.findByTestId('composer-ref-skill-读取文件'))
-    expect(screen.getByTestId('composer-reference-读取文件')).toHaveTextContent('技能：读取文件')
+    // 内置技能（读取文件…）不在菜单里；装进来的技能在
+    expect(screen.queryByTestId('composer-ref-skill-读取文件')).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByTestId('composer-ref-skill-demo-p1-s1'))
+    expect(screen.getByTestId('composer-reference-整理笔记')).toHaveTextContent('技能：整理笔记')
 
-    fireEvent.click(screen.getByLabelText('移除引用 读取文件'))
-    expect(screen.queryByTestId('composer-reference-读取文件')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('移除引用 整理笔记'))
+    expect(screen.queryByTestId('composer-reference-整理笔记')).not.toBeInTheDocument()
+  })
+
+  it('引用技能：还没有安装技能时给一条禁用说明（也不列内置技能）', async () => {
+    installKyclawBridge()
+    setup()
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+
+    const skills = screen.getByTestId('composer-ref-skills')
+    skills.focus()
+    fireEvent.keyDown(skills, { key: 'ArrowRight' })
+    await tick()
+
+    expect(screen.getByRole('menuitem', { name: '还没有安装技能' })).toHaveAttribute(
+      'data-disabled'
+    )
+    expect(screen.queryByTestId('composer-ref-skill-读取文件')).not.toBeInTheDocument()
   })
 
   it('引用插件：没有已启用的插件时给一条禁用项（不假装有）', async () => {
@@ -351,6 +377,35 @@ describe('round 7 · 权限 chip（ask|full 两档，full 先确认）', () => {
 
     expect(screen.queryByText('开启完全访问？')).not.toBeInTheDocument()
     await waitFor(() => expect(bridge.workspace.setMode).toHaveBeenCalledWith('D:\\ws', 'ask'))
+  })
+
+  it('round 13：默认无描边（无 border）；hover / 展开只铺灰底；h-8 同 ＋ 按钮', () => {
+    setup({ threadId: 't1' })
+
+    const chip = screen.getByTestId('composer-permission')
+    expect(chip).not.toHaveClass('border-hairline')
+    expect(chip.className).not.toContain('border')
+    expect(chip).toHaveClass('hover:bg-hover', 'hover:text-ink')
+    expect(chip.className).toContain('data-[state=open]:bg-hover')
+    expect(chip).toHaveClass('h-8')
+    expect(chip).not.toHaveClass('h-(--chip-height)')
+  })
+
+  it('round 13：「完全访问」= 警示色 + ShieldAlert（不走带对勾的 ShieldCheck）', () => {
+    const full = {
+      ...defaultSettings(),
+      workspaces: [{ path: 'D:\\ws', mode: 'full' as const }]
+    }
+    bridge = installKyclawBridge(full)
+    useSettingsStore.setState({ settings: full, loaded: true })
+    setup({ threadId: 't1' })
+
+    const chip = screen.getByTestId('composer-permission')
+    expect(chip).toHaveTextContent('完全访问')
+    expect(chip).toHaveClass('text-warning')
+    const icon = chip.querySelector('svg')
+    expect(icon?.getAttribute('class')).toContain('lucide-shield-alert')
+    expect(icon?.getAttribute('class')).not.toContain('shield-check')
   })
 
   it('切换失败：行内给原因，不静默', async () => {

@@ -23,7 +23,6 @@ import {
   newMcpServer,
   parseMcpServersJson
 } from '@shared/mcp'
-import { BUILTIN_SKILLS } from './skills'
 import { addFormToConfig, blankAddForm, type McpAddForm } from './mcp-form'
 import { McpKeyValueEditor } from './McpKeyValueEditor'
 import { PluginsMcpPanel } from './PluginsMcpPanel'
@@ -213,7 +212,8 @@ export function PluginsPage(): React.JSX.Element {
   }, [importText])
 
   const pluginCount = overview?.marketplaces.reduce((total, m) => total + m.plugins.length, 0) ?? 0
-  const skillCount = BUILTIN_SKILLS.length + (overview?.installedSkills.length ?? 0)
+  // 技能计数 = 已安装数（round 13：内置技能不再在界面里列，计数同步）
+  const skillCount = overview?.installedSkills.length ?? 0
   const counts: Record<PluginsTab, number> = {
     plugins: pluginCount,
     mcp: mcpServers.length,

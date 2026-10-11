@@ -1,9 +1,9 @@
 import { PackageOpen } from 'lucide-react'
 import type { InstalledSkillView } from '@shared/plugins'
-import { BUILTIN_SKILLS } from './skills'
 
 /**
- * 插件页「技能」面板：两块——**已安装（来自插件）**（round 10）与**内置技能**（只读清单）。
+ * 插件页「技能」面板：**已安装（来自插件）**（round 10）——round 13 起内置技能整块下线
+ * （用户口径：内置技能本来默认就暴露给 agent，不再在界面里列）。
  * 已安装区读主进程扫出的 `<userData>/skills/` 目录（装插件时复制进去的）；没有就空态一行。
  * 口吻克制（用户实拍 #9）：只讲"能做什么"，不写实现细节、不写"研发中/待接"这类话。
  */
@@ -45,27 +45,6 @@ export function PluginsSkillsPanel({
             </div>
           ))
         )}
-      </section>
-
-      <section className="flex flex-col gap-1">
-        <h2 className="px-3 text-b2 font-medium text-ink">内置技能</h2>
-        {BUILTIN_SKILLS.map((skill) => {
-          const Icon = skill.icon
-          return (
-            <div key={skill.name} className="flex items-center gap-3 px-3 py-2.5">
-              <span
-                aria-hidden="true"
-                className="flex size-8 shrink-0 items-center justify-center rounded-control bg-secondary text-ink-secondary"
-              >
-                <Icon className="size-(--icon-size-md)" />
-              </span>
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-b1 text-ink">{skill.name}</span>
-                <span className="text-c1 text-ink-secondary">{skill.description}</span>
-              </div>
-            </div>
-          )
-        })}
       </section>
     </div>
   )
