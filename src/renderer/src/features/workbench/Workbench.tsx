@@ -11,6 +11,11 @@
  *
  * 面板底铺 `bg-surface`（与内容区同色，看不出差别）：万一 `<webview>` 这种原生客人不吃祖先的
  * visibility，后画的工具面板仍能把它盖住（浏览器是第一个标签，DOM 顺序在最后）。
+ *
+ * 空态（标签全关光）是居中一列动作条目，见 EmptyActions；那一列键帽与这里的窗口级快捷键
+ * 共用 workbench-actions 的同一张表 —— 显示了就必须能用。监听挂在 window 上（面板收起也生效：
+ * Workbench 随 WorkPanel 常驻，收起只是宽 0），但**焦点在 `<webview>` 里时收不到**（客人是
+ * 独立上下文），不承诺跨 webview 生效。
  */
 import {
   FolderTree,
@@ -19,7 +24,6 @@ import {
   Maximize2,
   Minimize2,
   PanelRight,
-  PanelsTopLeft,
   Plus,
   SquareTerminal,
   X,
@@ -30,7 +34,8 @@ import { cn } from '@renderer/components/ui/cn'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { useShellStore } from '@renderer/lib/shell-store'
-import { ToolEmpty } from './bits'
+import { EmptyActions } from './EmptyActions'
+import { matchWorkbenchShortcut } from './workbench-actions'
 import { useWorkbenchRoot, type WorkbenchRoot } from './use-workbench-root'
 import {
   browserTabTitle,
@@ -84,6 +89,20 @@ export function Workbench(): React.JSX.Element {
     setWorkPanelOpen(false)
     resetWorkbench()
   }, [rootPath, resetWorkbench, setWorkPanelOpen])
+
+  // 空态那列键帽对应的快捷键（表在 workbench-actions：显示的组合就是这里接的组合）。
+  // 挂在 window 上而不是面板容器上：面板收起也生效（Workbench 常驻，收起只是宽 0）。
+  // 命中就吞掉事件，别再冒到别处（Electron 里也避免触发默认动作）。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const kind = matchWorkbenchShortcut(event)
+      if (kind === null) return
+      event.preventDefault()
+      openTab(kind)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [openTab])
 
   return (
     <div data-testid="workbench" className="flex min-h-0 flex-1 flex-col">
@@ -178,25 +197,7 @@ export function Workbench(): React.JSX.Element {
       </div>
 
       {tabs.length === 0 ? (
-        <div data-testid="workbench-empty" className="flex min-h-0 flex-1 flex-col">
-          <ToolEmpty testId="workbench-empty-hint" icon={PanelsTopLeft} title="标签页都关掉了" />
-          <div className="flex shrink-0 justify-center pb-5">
-            <Menu
-              trigger={
-                <IconButton
-                  data-testid="workbench-new-tab-empty"
-                  label="新建标签页"
-                  icon={<Plus />}
-                  className="border-transparent hover:bg-hover"
-                />
-              }
-              items={newTabItems(openTab)}
-              side="top"
-              align="center"
-              tooltip="新建标签页"
-            />
-          </div>
-        </div>
+        <EmptyActions openTab={openTab} />
       ) : (
         <div className="relative min-h-0 flex-1">
           {tabs.map((tab) => {
