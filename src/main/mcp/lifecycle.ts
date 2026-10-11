@@ -7,7 +7,7 @@
  * 四条纪律：
  *   1. **随应用启停**：client（stdio 子进程的持有者）在第一次需要工具时建立；`stop()`（应用退出、
  *      服务收尾）一定断开——子进程随 transport 关闭而下线。停掉以后 `tools()` 恒为空，不再重连。
- *   2. **设置现读**：每次 `tools()` 比一次"启用中 server 的连接指纹"（id/transport/command/args/url，
+ *   2. **设置现读**：每次 `tools()` 比一次"启用中 server 的连接指纹"（id/transport/command/args/url/headers/env，
  *      name 与 readOnlyTools 不影响连接）。变了就整体换一条连接——旧连接断开、失败/重启计数清零。
  *   3. **崩溃重启 ≤ maxRestarts（缺省 2）**：发现失败、或工具调用报连接类错误时，记一条日志、
  *      尝试重连；同一个 server **连续**失败用满次数就"暂停使用"（工具从下一轮消失，不再反复拉起）。
@@ -321,7 +321,14 @@ export class McpLifecycle {
   }
 }
 
-/** 连接指纹：只含影响"怎么连"的字段（name / readOnlyTools 变了不该重连） */
+/**
+ * 连接指纹：只含影响"怎么连"的字段（name / readOnlyTools / enabled 不进指纹——
+ * 前两者不改变连接，enabled 由调用方过滤成列表后再进来）。
+ *
+ * headers / env 必须进（round 12：用户给 kybase 加了 `Authorization` 却不重连，
+ * 旧的无头连接被继续复用 → 一直「没有身份」）；两个 record 按键名排序后再序列化，
+ * 键序不同但内容相同 = 同一个指纹。空表与缺省等价（`serverDefinition` 里都不传）。
+ */
 export function connectionKey(servers: readonly McpServerConfig[]): string {
   return JSON.stringify(
     servers
@@ -330,8 +337,15 @@ export function connectionKey(servers: readonly McpServerConfig[]): string {
         transport: server.transport,
         command: server.command ?? '',
         args: server.args ?? [],
-        url: server.url ?? ''
+        url: server.url ?? '',
+        headers: sortedEntries(server.headers),
+        env: sortedEntries(server.env)
       }))
       .sort((a, b) => a.id.localeCompare(b.id))
   )
+}
+
+/** record → 按键名排序的 [k, v] 表（键序无关；值原样） */
+function sortedEntries(record: Record<string, string> | undefined): Array<[string, string]> {
+  return Object.entries(record ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 }

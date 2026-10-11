@@ -2,7 +2,7 @@
 /**
  * McpLifecycle 单测（T12 Step 3）：用假 client 钉四件事——
  *   1. 启用中的 server 会被连接/发现，工具按 `mcp__<server>__<tool>` 命名并挂上权限 gate；
- *   2. 设置变了（停用/删除/改命令）就换连接：旧连接断开（子进程随之下线）；
+ *   2. 设置变了（停用/删除/改命令/改 headers 或 env）就换连接：旧连接断开（子进程随之下线）；
  *   3. 崩溃重启 ≤ 2 次、每次记日志，用满就"暂停使用"（工具消失、不再拉起）；一次成功计数清零；
  *   4. stop()（应用退出）断开一切，之后不再重连。
  * 真子进程的起停/崩溃在 mcp.spec.ts 里用真 fixture 钉（这一份只管顺序与计数）。
@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Tool } from '@mastra/core/tools'
 import type { McpServerConfig } from '../../../shared/settings'
-import { McpLifecycle, MCP_MAX_RESTARTS, type McpClient } from '../lifecycle'
+import { McpLifecycle, MCP_MAX_RESTARTS, connectionKey, type McpClient } from '../lifecycle'
 
 type DiscoveryStep = Record<string, 'ok' | { code: string; message: string }>
 
@@ -262,5 +262,105 @@ describe('McpLifecycle：崩溃重启（≤2 次，记日志）', () => {
 
     await expect(callTool(tools['mcp__echo__echo.business'], {})).rejects.toThrow('远端拒绝')
     expect(client.reconnects).toEqual(['echo'])
+  })
+})
+
+describe('McpLifecycle：鉴权 / 环境变量改了要换连接（round 12，kybase 实锤）', () => {
+  /** 用户的形态：HTTP server + Authorization 头（值是假的占位符，不打印真实凭据） */
+  const kybase = (patch: Partial<McpServerConfig> = {}): McpServerConfig =>
+    config({
+      id: 'kybase',
+      name: '知识库',
+      transport: 'http',
+      command: undefined,
+      args: undefined,
+      url: 'http://192.168.31.18:8765/mcp',
+      ...patch
+    })
+
+  it('已连接的 http 加/改 headers：refresh() 换连接（旧断、新起、重新发现）', async () => {
+    const servers = [kybase()]
+    const { lifecycle, client, factories } = bench([{ kybase: 'ok' }], servers)
+    expect(Object.keys(await lifecycle.tools(gateTrue))).toEqual(['mcp__kybase__echo'])
+    expect(factories()).toBe(1)
+    expect(client.disconnects).toBe(0)
+
+    // 用户场景：给已连接的 server 加上 Authorization（或换 token）
+    servers[0] = kybase({ headers: { Authorization: 'Bearer test-token' } })
+    await lifecycle.refresh()
+
+    expect(factories()).toBe(2)
+    expect(client.disconnects).toBe(1)
+    expect(client.listCalls).toBe(2)
+    expect(Object.keys(await lifecycle.tools(gateTrue))).toEqual(['mcp__kybase__echo'])
+  })
+
+  it('headers 内容相同、仅键序不同：指纹不变（refresh 不重连）', async () => {
+    const servers = [kybase({ headers: { Authorization: 'Bearer t', 'X-Trace': '1' } })]
+    const { lifecycle, client, factories } = bench([{ kybase: 'ok' }], servers)
+    await lifecycle.tools(gateTrue)
+
+    servers[0] = kybase({ headers: { 'X-Trace': '1', Authorization: 'Bearer t' } })
+    await lifecycle.refresh()
+
+    expect(factories()).toBe(1)
+    expect(client.disconnects).toBe(0)
+  })
+
+  it('stdio env 变化同样换连接（round 9 引入的 env 也在指纹里）', async () => {
+    const servers = [config({ env: { API_KEY: 'old' } })]
+    const { lifecycle, client, factories } = bench([{ echo: 'ok' }], servers)
+    await lifecycle.tools(gateTrue)
+    expect(factories()).toBe(1)
+
+    servers[0] = config({ env: { API_KEY: 'new' } })
+    await lifecycle.refresh()
+
+    expect(factories()).toBe(2)
+    expect(client.disconnects).toBe(1)
+  })
+})
+
+describe('connectionKey：只含影响"怎么连"的字段（round 12）', () => {
+  const http = (patch: Partial<McpServerConfig> = {}): McpServerConfig =>
+    config({
+      transport: 'http',
+      command: undefined,
+      args: undefined,
+      url: 'http://127.0.0.1:8765/mcp',
+      ...patch
+    })
+
+  it('headers / env 的值变化（含从无到有）都改变指纹', () => {
+    expect(connectionKey([http()])).not.toBe(
+      connectionKey([http({ headers: { Authorization: 'Bearer a' } })])
+    )
+    expect(connectionKey([http({ headers: { Authorization: 'Bearer a' } })])).not.toBe(
+      connectionKey([http({ headers: { Authorization: 'Bearer b' } })])
+    )
+    expect(connectionKey([config()])).not.toBe(connectionKey([config({ env: { K: 'v' } })]))
+    expect(connectionKey([config({ env: { K: 'v1' } })])).not.toBe(
+      connectionKey([config({ env: { K: 'v2' } })])
+    )
+    // 空表与缺省等价（serverDefinition 里都不传，不必重连）
+    expect(connectionKey([http({ headers: {} })])).toBe(connectionKey([http()]))
+    expect(connectionKey([config({ env: {} })])).toBe(connectionKey([config()]))
+  })
+
+  it('键序无关：headers / env 的键换成不同顺序，指纹不变', () => {
+    expect(connectionKey([http({ headers: { 'X-Trace': '1', Authorization: 'Bearer t' } })])).toBe(
+      connectionKey([http({ headers: { Authorization: 'Bearer t', 'X-Trace': '1' } })])
+    )
+    expect(connectionKey([config({ env: { B: '2', A: '1' } })])).toBe(
+      connectionKey([config({ env: { A: '1', B: '2' } })])
+    )
+  })
+
+  it('不影响连接的字段不进指纹：name / readOnlyTools / enabled', () => {
+    expect(connectionKey([config({ name: '甲' })])).toBe(connectionKey([config({ name: '乙' })]))
+    expect(connectionKey([config({ readOnlyTools: ['echo'] })])).toBe(
+      connectionKey([config({ readOnlyTools: [] })])
+    )
+    expect(connectionKey([config({ enabled: false })])).toBe(connectionKey([config()]))
   })
 })
