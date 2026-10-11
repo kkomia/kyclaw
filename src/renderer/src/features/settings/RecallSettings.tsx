@@ -1,5 +1,6 @@
 import { cn } from '@renderer/components/ui/cn'
 import { Button } from '@renderer/components/ui/button'
+import { Chip } from '@renderer/components/ui/chip'
 import { Input } from '@renderer/components/ui/input'
 import { Switch } from '@renderer/components/ui/switch'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
@@ -7,8 +8,9 @@ import { fetchRecallStatus } from '@renderer/lib/memory-api'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { RecallStatus } from '@shared/memory'
 import type { ProviderKeyState } from '@shared/providers'
-import { SEMANTIC_RECALL_PRESET } from '@shared/settings'
+import { SEMANTIC_RECALL_PRESET, SEMANTIC_RECALL_SOURCES } from '@shared/settings'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { LocalModelSettings } from './LocalModelSettings'
 import { recallStatusText } from './status-text'
 
 /**
@@ -26,13 +28,21 @@ import { recallStatusText } from './status-text'
  * 生效时机：装配在 agent 服务启动时做一次 —— **改这一栏要重启应用才生效**，所以状态行说的是
  * "本次运行开没开"（recallStatusText 的规则：设置值与运行事实不一致时由设置值说话）。
  *
- * UI 从简：不放解释性小字；三项只在开关打开时出现。将来 3B 的「本地模型」组与来源切换
- * （`source: 'localEngine'`）加进来时，这一层只多一组控件，字段形状不动。
+ * 嵌入来源（模块 3B）：`remote` = 下面的服务地址/模型/密钥；`localEngine` = 「本地模型」组
+ * （本机引擎 + 下载到本机的 GGUF，见 LocalModelSettings）。两组互斥显示，来源本身是个普通设置值。
+ *
+ * UI 从简：不放解释性小字；三项只在开关打开时出现。
  */
 interface Draft {
   baseUrl: string
   model: string
   key: string
+}
+
+/** 嵌入来源的显示名（枚举值的唯一文案出处） */
+const SOURCE_LABELS: Record<(typeof SEMANTIC_RECALL_SOURCES)[number], string> = {
+  remote: '嵌入服务',
+  localEngine: '本机引擎'
 }
 
 function messageOf(error: unknown): string {
@@ -208,6 +218,37 @@ export function RecallSettings(): React.JSX.Element {
       </p>
 
       {settings.enabled ? (
+        <>
+          {/* 嵌入来源（模块 3B）：服务 = 任意 OpenAI 兼容端点；本机引擎 = 下载到本机的 GGUF + 子进程。
+              换来源要重启应用才生效（装配只在启动时做一次），状态行说的是"本次运行开没开" */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-b2 text-ink-secondary">嵌入来源</span>
+            <div role="group" aria-label="嵌入来源" className="flex flex-wrap gap-3">
+              {SEMANTIC_RECALL_SOURCES.map((source) => (
+                <Chip
+                  key={source}
+                  data-testid={`recall-source-${source}`}
+                  aria-pressed={settings.source === source}
+                  className={cn(settings.source === source && 'bg-selected')}
+                  disabled={busy}
+                  onClick={() => {
+                    setError(undefined)
+                    saveSemanticRecall({ source }).catch((caught: unknown) =>
+                      setError(messageOf(caught))
+                    )
+                  }}
+                >
+                  {SOURCE_LABELS[source]}
+                </Chip>
+              ))}
+            </div>
+          </div>
+
+          {settings.source === 'localEngine' ? <LocalModelSettings /> : null}
+        </>
+      ) : null}
+
+      {settings.enabled && settings.source === 'remote' ? (
         <>
           <label className="flex flex-col gap-1">
             <span className="text-b2 text-ink-secondary">服务地址</span>

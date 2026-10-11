@@ -35,7 +35,8 @@ describe('AppSettings schema', () => {
         enabled: true,
         source: 'remote',
         baseUrl: 'https://api.siliconflow.cn/v1',
-        model: 'BAAI/bge-m3'
+        model: 'BAAI/bge-m3',
+        idleMinutes: 5
       }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)

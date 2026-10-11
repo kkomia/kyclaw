@@ -6,3 +6,5 @@ out
 *.log*
 # 任务工作区（任务书/复核 diff/取证）：只留本地，不入库
 .superpowers/
+# 本机嵌入引擎的运行时（模块 3B）：二进制不入库，用 `pnpm fetch:llama` 获取（已 pin 版本 + SHA256 校验）
+resources/llama/

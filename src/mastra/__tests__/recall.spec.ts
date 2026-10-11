@@ -163,7 +163,7 @@ async function vectorRows(
 describe('resolveRecall：开关 / 半截配置 / 起不来', () => {
   it('关掉时没有 embedder，状态是 off', async () => {
     const recall = await resolveRecall({
-      settings: { enabled: false, source: 'remote', baseUrl: 'x', model: 'y' },
+      settings: { enabled: false, source: 'remote', baseUrl: 'x', model: 'y', idleMinutes: 5 },
       embeddingKey: 'secret'
     })
     expect(recall.embedder).toBeUndefined()
@@ -172,7 +172,7 @@ describe('resolveRecall：开关 / 半截配置 / 起不来', () => {
 
   it('配置半截（缺地址/模型/密钥）→ 没有 embedder，原因逐项说清', async () => {
     const recall = await resolveRecall({
-      settings: { enabled: true, source: 'remote', baseUrl: '', model: '' },
+      settings: { enabled: true, source: 'remote', baseUrl: '', model: '', idleMinutes: 5 },
       embeddingKey: null
     })
     expect(recall.embedder).toBeUndefined()
@@ -191,7 +191,8 @@ describe('resolveRecall：开关 / 半截配置 / 起不来', () => {
         enabled: true,
         source: 'remote',
         baseUrl: 'http://127.0.0.1:1/v1',
-        model: 'nope'
+        model: 'nope',
+        idleMinutes: 5
       },
       embeddingKey: 'sk-test'
     })
@@ -210,7 +211,8 @@ describe('resolveRecall：开关 / 半截配置 / 起不来', () => {
           enabled: true,
           source: 'remote',
           baseUrl: service.baseUrl,
-          model: 'stub'
+          model: 'stub',
+          idleMinutes: 5
         },
         embeddingKey: 'sk-test'
       })
@@ -331,7 +333,8 @@ describe('服务层：跨会话语义召回（长期记忆）', () => {
         enabled: true,
         source: 'remote',
         baseUrl: embedService.baseUrl,
-        model: 'stub'
+        model: 'stub',
+        idleMinutes: 5
       }),
       embeddingKey: () => 'sk-test'
     })
@@ -507,7 +510,8 @@ describe('失败＝加法：语义召回起不来/挂掉都不拦对话', () => 
         enabled: true,
         source: 'remote',
         baseUrl: 'http://127.0.0.1:1/v1',
-        model: 'nope'
+        model: 'nope',
+        idleMinutes: 5
       }),
       embeddingKey: () => 'sk-test'
     })
@@ -573,7 +577,8 @@ describe('失败＝加法：语义召回起不来/挂掉都不拦对话', () => 
         enabled: true,
         source: 'remote',
         baseUrl: 'x',
-        model: 'y'
+        model: 'y',
+        idleMinutes: 5
       }),
       recallEmbedder: broken
     })

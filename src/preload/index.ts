@@ -24,6 +24,7 @@ import {
   workspaceOpenInExplorerResultSchema,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawLocalModelsApi,
   type KyclawMemoryApi,
   type KyclawPluginsApi,
   type KyclawProjectsApi,
@@ -34,6 +35,7 @@ import {
   type KyclawWorkspaceApi,
   type UpdateState
 } from '../shared/ipc'
+import { localModelsOverviewSchema, type LocalModelsOverview } from '../shared/local-models'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 import { providerKeyStateSchema } from '../shared/providers'
 import {
@@ -275,6 +277,40 @@ const memoryApi: KyclawMemoryApi = {
 }
 
 /**
+ * 「本地模型」面（模块 3B）：动作都回**新的总览**（结构不对就抛——半截总览没法显示），
+ * 进度推送用同一份 schema 解析（结构不对就不交给上层，同更新通道的做法）。
+ */
+const localModelsApi: KyclawLocalModelsApi = {
+  overview: async () =>
+    parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.overview)),
+  download: async (id) =>
+    parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.download, id)),
+  cancel: async () => parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.cancel)),
+  select: async (id) =>
+    parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.select, id)),
+  pickCustom: async () =>
+    parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.pickCustom)),
+  remove: async (id) =>
+    parseLocalModels(await ipcRenderer.invoke(IPC_CHANNELS.localModels.remove, id)),
+  onChanged: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = localModelsOverviewSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.localModels.progressChanged, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.localModels.progressChanged, handler)
+    }
+  }
+}
+
+function parseLocalModels(payload: unknown): LocalModelsOverview {
+  const parsed = localModelsOverviewSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 本地模型响应结构不合法')
+  return parsed.data
+}
+
+/**
  * 插件面（round 10）：市场与插件的动作都回**新的总览**；结构不对就抛（半截总览没法显示）。
  */
 const pluginsApi: KyclawPluginsApi = {
@@ -314,7 +350,8 @@ export const kyclawApi: KyclawApi = {
   updates: updatesApi,
   telemetry: telemetryApi,
   plugins: pluginsApi,
-  memory: memoryApi
+  memory: memoryApi,
+  localModels: localModelsApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。

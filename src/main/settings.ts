@@ -50,13 +50,17 @@ function migrateStoredSettings(raw: unknown): unknown {
 }
 
 /**
- * 语义召回设置的形状迁移（模块 3 v1 → v2）：v1 是「本地 fastembed / 远程」两路
- * （`source: 'local' | 'remote'` + `remoteBaseUrl` / `remoteModel`），v2 统一成
- * OpenAI 兼容嵌入服务（`source: 'remote'` + `baseUrl` / `model`）。v1 从未发布过，
- * 但开发机上可能落过盘——不迁移的话，strict schema 会把整份设置当坏文件（主题/密钥全丢）。
+ * 语义召回设置的形状迁移（模块 3 v1 → v2 → v2.1）。
+ * v1 是「本地 fastembed / 远程」两路（`source: 'local' | 'remote'` + `remoteBaseUrl` / `remoteModel`），
+ * v2 统一成 OpenAI 兼容嵌入服务（`source: 'remote'` + `baseUrl` / `model`）；
+ * v2.1（模块 3B）多一个 `source: 'localEngine'` 与一个 `idleMinutes`。
+ * v1 从未发布过，但开发机上可能落过盘——不迁移的话，strict schema 会把整份设置当坏文件（主题/密钥全丢）。
  * 只做"字段名搬家"：**落过盘的取值原样保留**（空串也保留——用户清空就是清空，
  * 读回来必须还是空；预置只是"没这个字段时"的缺省，见 shared/settings 的
  * SEMANTIC_RECALL_PRESET）。`enabled: false` 是用户显式关掉，同样原样保留。
+ *
+ * 注意 `source` **不能**在这里写死成 `'remote'`：模块 3B 起它是用户的真实选择
+ * （选「本机引擎」就得活过每一次读盘），迁移只会把 v1 的 `local` 翻成 `remote`。
  */
 function migrateSemanticRecall(raw: unknown): unknown {
   if (raw === undefined) return { ...DEFAULT_SEMANTIC_RECALL }
@@ -66,11 +70,22 @@ function migrateSemanticRecall(raw: unknown): unknown {
   const text = (value: unknown): string => (typeof value === 'string' ? value : '')
   const baseUrl = text(record.baseUrl) === '' ? text(record.remoteBaseUrl) : text(record.baseUrl)
   const model = text(record.model) === '' ? text(record.remoteModel) : text(record.model)
+  const source =
+    record.source === 'localEngine'
+      ? 'localEngine'
+      : record.source === 'remote'
+        ? 'remote'
+        : 'remote'
+  const idle = record.idleMinutes
   return {
     enabled: record.enabled !== false,
-    source: 'remote',
+    source,
     baseUrl,
-    model
+    model,
+    idleMinutes:
+      typeof idle === 'number' && Number.isInteger(idle) && idle >= 0 && idle <= 240
+        ? idle
+        : DEFAULT_SEMANTIC_RECALL.idleMinutes
   }
 }
 

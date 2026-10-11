@@ -40,7 +40,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
         enabled: true,
         source: 'remote' as const,
         baseUrl: '',
-        model: ''
+        model: '',
+        idleMinutes: 5
       }
     }
 
@@ -124,7 +125,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
         enabled: true,
         source: 'remote',
         baseUrl: 'https://api.siliconflow.cn/v1',
-        model: 'BAAI/bge-m3'
+        model: 'BAAI/bge-m3',
+        idleMinutes: 5
       }
     })
   })
@@ -153,7 +155,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       enabled: true,
       source: 'remote',
       baseUrl: 'https://embed.example.com/v1',
-      model: 'my-embed'
+      model: 'my-embed',
+      idleMinutes: 5
     })
 
     // 落过盘的取值原样保留（空串也保留：用户清空就是清空，写什么读什么）；
@@ -173,7 +176,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       enabled: false,
       source: 'remote',
       baseUrl: '',
-      model: ''
+      model: '',
+      idleMinutes: 5
     })
   })
 

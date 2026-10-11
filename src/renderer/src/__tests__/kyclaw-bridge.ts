@@ -14,6 +14,7 @@ import {
   type WorkspaceMode
 } from '@shared/settings'
 import type { PluginsOverview } from '@shared/plugins'
+import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 
 /**
@@ -367,6 +368,45 @@ export function memoryApiStub(): MemoryApiStub {
   return stub
 }
 
+/**
+ * 「本地模型」面（模块 3B）：总览是"当前值 + 订阅"的形状（主进程会推下载进度），
+ * 所以桩里也放一份 current，并给个 `push` 让用例模拟主进程的推送。
+ */
+export interface LocalModelsApiStub {
+  overview: Mock<() => Promise<LocalModelsOverview>>
+  download: Mock<(id: string) => Promise<LocalModelsOverview>>
+  cancel: Mock<() => Promise<LocalModelsOverview>>
+  select: Mock<(id: string) => Promise<LocalModelsOverview>>
+  pickCustom: Mock<() => Promise<LocalModelsOverview>>
+  remove: Mock<(id: string) => Promise<LocalModelsOverview>>
+  onChanged: Mock<(listener: (overview: LocalModelsOverview) => void) => () => void>
+  /** 模拟主进程推送一份新总览（下载进度、引擎相位） */
+  push: (overview: LocalModelsOverview) => void
+}
+
+export function localModelsApiStub(
+  initial: LocalModelsOverview = emptyOverview('D:\\models')
+): LocalModelsApiStub {
+  const listeners = new Set<(overview: LocalModelsOverview) => void>()
+  let current = initial
+  return {
+    overview: vi.fn(async () => current),
+    download: vi.fn(async () => current),
+    cancel: vi.fn(async () => current),
+    select: vi.fn(async () => current),
+    pickCustom: vi.fn(async () => current),
+    remove: vi.fn(async () => current),
+    onChanged: vi.fn((listener: (overview: LocalModelsOverview) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    }),
+    push: (overview: LocalModelsOverview) => {
+      current = overview
+      for (const listener of listeners) listener(overview)
+    }
+  }
+}
+
 /** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
@@ -375,6 +415,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   telemetry: TelemetryApiStub
   plugins: PluginsApiStub
   memory: MemoryApiStub
+  localModels: LocalModelsApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -387,6 +428,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
   const plugins = pluginsApiStub()
   const memory = memoryApiStub()
+  const localModels = localModelsApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -396,11 +438,12 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     updates,
     telemetry,
     plugins,
-    memory
+    memory,
+    localModels
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
-  return { ...settings, workspace, projects, updates, telemetry, plugins, memory }
+  return { ...settings, workspace, projects, updates, telemetry, plugins, memory, localModels }
 }
 
 export function clearKyclawBridge(): void {

@@ -8,6 +8,7 @@
  * 窗口几何（宽高/位置）只落盘在主进程（main/store.ts），不过桥：渲染端用不到，越小越稳。
  */
 import { z } from './zod'
+import type { LocalModelsOverview } from './local-models'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
 import {
@@ -125,6 +126,22 @@ export const IPC_CHANNELS = {
     setEmbeddingKey: 'memory:set-embedding-key',
     /** 清除远程嵌入的 API Key（无入参，返回清除后的状态） */
     clearEmbeddingKey: 'memory:clear-embedding-key'
+  },
+  localModels: {
+    /** 「本地模型」组的总览（无入参，返回 LocalModelsOverview：清单 + 已下载 + 引擎相位 + 下载进度） */
+    overview: 'localModels:overview',
+    /** 开始下载一个推荐档（入参 [id]；**立刻回总览**，进度走 progressChanged 推送） */
+    download: 'localModels:download',
+    /** 取消当前下载（无入参；半截文件留着，下次续传） */
+    cancel: 'localModels:cancel',
+    /** 设为生效（入参 [id]；文件与记录都在才行） */
+    select: 'localModels:select',
+    /** 选一个本机自备的 GGUF 并设为生效（无入参：走原生选择器；取消=不改动） */
+    pickCustom: 'localModels:pick-custom',
+    /** 删除一个已下载的推荐档（入参 [id]；`custom` = 只是取消选择，不删用户文件） */
+    remove: 'localModels:remove',
+    /** 主进程 → 渲染端：总览变化（下载进度 / 引擎相位 / 选择变化） */
+    progressChanged: 'localModels:progress-changed'
   },
   plugins: {
     /** 插件总览（无入参：市场 + 插件清单 + 安装记录 + 已装技能） */
@@ -248,6 +265,14 @@ export type ConnectionTestResult = z.infer<typeof connectionTestResultSchema>
 
 /** 无入参通道的入参 schema：ipcRenderer.invoke 不给参数时 args 为空数组 */
 export const noArgsSchema = z.tuple([])
+
+/**
+ * 模块 3B：「本地模型」通道的入参。
+ *   - 下载/设为生效/删除：单个模型 id（形状校验在这里，id 认不认识由主进程查清单）；
+ *   - 取消 / 选自定义 / 总览：无入参（noArgsSchema）。
+ * 自定义模型的路径**不在入参里**：它只能由主进程的原生选择器写（同工作区/项目的纪律）。
+ */
+export const localModelIdArgsSchema = z.tuple([z.string().min(1)])
 
 /**
  * 更新通道（T17）的状态机取值：idle 未检查过 / checking 检查中 / up-to-date 已是最新 /
@@ -502,12 +527,14 @@ export interface KyclawApi {
   telemetry: KyclawTelemetryApi
   plugins: KyclawPluginsApi
   memory: KyclawMemoryApi
+  localModels: KyclawLocalModelsApi
 }
 
 /**
  * preload 暴露给渲染端的记忆面（round 28，只有语义召回的远程嵌入密钥）：
  * 开关与来源是普通设置（settings:update 的补丁里就有），这里只管密钥的写/清/状态——
  * 与 provider / Langfuse 同一套纪律：写方向见明文一次，读方向永远只有"有没有 / 要不要重录"。
+ * （本机引擎这一路没有用户密钥：网关那把 key 是主进程每次启动现生成的，见 main/llama/service.ts。）
  */
 export interface KyclawMemoryApi {
   /** 远程嵌入的 API Key 状态（没有 = 没配过） */
@@ -516,6 +543,24 @@ export interface KyclawMemoryApi {
   setEmbeddingKey(key: string): Promise<{ hasKey: true }>
   /** 清除密钥（幂等；返回清除后的状态） */
   clearEmbeddingKey(): Promise<ProviderKeyState>
+}
+
+/**
+ * preload 暴露给渲染端的「本地模型」面（模块 3B）：模型清单/下载/删除/生效 + 引擎相位。
+ * 每个动作都回**新的总览**（与 workspace/plugins 同一口径：界面以主进程的真相为准）；
+ * `download` 不等到下完（600MB 级要几分钟）——立刻回总览，进度经 `onChanged` 推。
+ * 自定义模型的路径只由主进程的原生选择器写（`pickCustom`），渲染端传不了任意路径。
+ */
+export interface KyclawLocalModelsApi {
+  overview(): Promise<LocalModelsOverview>
+  download(id: string): Promise<LocalModelsOverview>
+  cancel(): Promise<LocalModelsOverview>
+  select(id: string): Promise<LocalModelsOverview>
+  /** 打开原生选择器挑一个本机 GGUF 并设为生效（取消 = 不改动） */
+  pickCustom(): Promise<LocalModelsOverview>
+  remove(id: string): Promise<LocalModelsOverview>
+  /** 订阅总览变化（下载进度、引擎相位），返回退订函数 */
+  onChanged(listener: (overview: LocalModelsOverview) => void): () => void
 }
 
 /**

@@ -3,8 +3,9 @@
  * 并如实回答"这次启动到底有没有召回"（状态行见 shared/memory.ts 的 RecallStatus）。
  *
  * 嵌入接口只有一条：**OpenAI 兼容 `/embeddings`**（baseURL + model + key）。它既能接外部服务，
- * 也正好是将来「本机引擎」（llama.cpp 子进程，模块 3B）的形状——所以这里的命名不带 "remote"：
- * 3B 以**给 source 加一项**（`localEngine`）+ 加一个工厂分支的方式接进来，本模块的形状不用改。
+ * 也正好是本机引擎（llama.cpp 子进程，模块 3B）的形状——3B 就是这么接进来的：
+ * 给 source 加一项（`localEngine`）+ 这里多一个分支，`ResolveRecallOptions.localEmbedding`
+ * 由主进程注入（引擎与网关都在 `src/main/llama/*`，本模块只知道"给我一个 OpenAI 兼容端点"）。
  *
  * 失败＝加法（硬口径）：开关关着、配置半截、服务不通、启动自检不过 —— 任何一种都只是
  * **这一次没有召回**：不动 Memory 的历史窗口与画像、不拦对话；原因进日志 + 状态行。
@@ -18,11 +19,19 @@
  * 依赖形态：@mastra/core/llm 是 ESM-only，主进程产物是 CJS —— 运行时动态 import()（同 model.ts）。
  */
 import type { MastraEmbeddingModel } from '@mastra/core/vector'
+import { LOCAL_EMBEDDING_MODELS } from '../shared/local-models'
 import type { RecallStatus } from '../shared/memory'
 import type { SemanticRecallSettings } from '../shared/settings'
 
 /** 远程嵌入的探测超时（挂上 embedder 前那一次最小调用） */
 const PROBE_TIMEOUT_MS = 15_000
+
+/**
+ * 本机引擎的探测超时：第一次调用要把 `llama-server` 拉起来并**把模型读进内存**
+ * （实测 bge-small-zh 25MB 约 0.2 秒；Qwen3-Embedding-0.6B Q8_0 610MB 量级在秒级，
+ * 慢盘上更久）——所以这一路的探测给足 60 秒，别把一次正常的冷启动判成"不可用"。
+ */
+const LOCAL_PROBE_TIMEOUT_MS = 60_000
 
 /** 启动自检的超时（挂上后、服务起来前，让 Memory 自己那条"取维度"的路先跑一遍） */
 export const EMBEDDER_VALIDATION_TIMEOUT_MS = 20_000
@@ -53,10 +62,24 @@ export interface ResolvedRecall extends RecallRuntime {
   embedder?: MastraEmbeddingModel<string>
 }
 
+/** 本机嵌入引擎给的端点（主进程算好；`apiKey` 是网关那把本机密钥，不是用户的密钥） */
+export interface LocalEmbeddingEndpoint {
+  baseUrl: string
+  /** 本地模型标识（当 embedder 的 model 名用；引擎不校验它） */
+  modelId: string
+  apiKey: string
+}
+
 export interface ResolveRecallOptions {
   settings: SemanticRecallSettings
   /** 嵌入服务的 API Key（主进程 safeStorage 解出来的明文；缺省 = null） */
   embeddingKey?: string | null
+  /**
+   * 本机引擎的端点获取器（模块 3B）：设置里来源选「本机引擎」时才会被调用。
+   * 生产由 main/index.ts 注入（它会先确保引擎起来）；返回 null = 还没有可用的本机模型。
+   * 缺省 = 没接上（这一路直接按"不可用"处理，不拦启动）。
+   */
+  localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
   /** 测试用：直接给一个 embedder（跳过配置解析与探测） */
   embedder?: MastraEmbeddingModel<string>
   /** 日志口（缺省 console.warn；文案里绝不带密钥） */
@@ -145,8 +168,115 @@ export async function resolveRecall(options: ResolveRecallOptions): Promise<Reso
     )
   }
 
-  // 3B 在这里加 `localEngine` 分支（本机引擎工厂）；这一版只有 remote
+  // 模块 3B：本机引擎这一支（llama.cpp 子进程 + 本地 GGUF）；其余走 OpenAI 兼容服务
+  if (settings.source === 'localEngine') {
+    return await resolveLocalRecall({ ...options, settings })
+  }
   return await resolveRemoteRecall({ ...options, settings })
+}
+
+/**
+ * 本机引擎这一支：把 embedder 指到主进程给的**嵌入网关**地址上（`127.0.0.1:<port>/v1`）。
+ *
+ * 与远程那一路的三点不同：
+ *   1. 没有 baseUrl / key 配置项 —— 地址由主进程现场算（引擎端口随起随落，网关端口固定）；
+ *   2. "没有模型"不是配置错，只是**还没下载**：状态照实说，界面会给下一步动作；
+ *   3. 探测给足 60 秒：这一次调用会顺手把引擎拉起来（冷启动的成本记在这一步上）。
+ *
+ * 引擎/网关的细节全在 `src/main/llama/*`：本模块只知道"给个 OpenAI 兼容端点"。
+ */
+async function resolveLocalRecall(
+  options: ResolveRecallOptions & { settings: SemanticRecallSettings }
+): Promise<ResolvedRecall> {
+  const log = options.log ?? defaultLog
+  const settings = options.settings
+  const provide = options.localEmbedding
+
+  if (provide === undefined) {
+    return unavailableOf(
+      settings.source,
+      true,
+      'unavailable',
+      '本机引擎没有接上（这次运行没有召回）'
+    )
+  }
+
+  let endpoint: LocalEmbeddingEndpoint | null
+  try {
+    endpoint = await provide()
+  } catch (error) {
+    log('[kyclaw] 语义召回：本机嵌入引擎起不来（不影响对话）', error)
+    return unavailableOf(
+      settings.source,
+      true,
+      'unavailable',
+      `本机嵌入引擎起不来：${reasonOf(error)}（这次运行没有召回）`
+    )
+  }
+  if (endpoint === null) {
+    return unavailableOf(
+      settings.source,
+      true,
+      'unavailable',
+      '还没有启用本机嵌入模型（这次运行没有召回）'
+    )
+  }
+
+  let embedder: MastraEmbeddingModel<string>
+  try {
+    const { ModelRouterEmbeddingModel } = await import('@mastra/core/llm')
+    embedder = new ModelRouterEmbeddingModel({
+      providerId: 'kyclaw-local-engine',
+      modelId: endpoint.modelId,
+      url: endpoint.baseUrl,
+      apiKey: endpoint.apiKey
+    })
+  } catch (error) {
+    log('[kyclaw] 语义召回：本机嵌入模型初始化失败（不影响对话）', error)
+    return unavailableOf(
+      settings.source,
+      true,
+      'unavailable',
+      `本机嵌入模型初始化失败：${reasonOf(error)}（这次运行没有召回）`
+    )
+  }
+
+  try {
+    const probe = await embedder.doEmbed({
+      values: ['kyclaw'],
+      abortSignal: AbortSignal.timeout(LOCAL_PROBE_TIMEOUT_MS)
+    })
+    if (probe.embeddings[0] === undefined || probe.embeddings[0].length === 0) {
+      throw new Error('引擎没有返回可用的向量')
+    }
+  } catch (error) {
+    log('[kyclaw] 语义召回：本机嵌入引擎探测失败（不影响对话）', error)
+    return unavailableOf(
+      settings.source,
+      true,
+      'unavailable',
+      `本机嵌入引擎不可用：${reasonOf(error)}（这次运行没有召回）`
+    )
+  }
+
+  return runtimeOf(
+    settings.source,
+    {
+      status: {
+        state: 'active',
+        active: true,
+        enabled: true,
+        source: settings.source,
+        detail: `已开启（本机引擎：${localModelLabel(endpoint.modelId)}）`
+      }
+    },
+    { embedder }
+  )
+}
+
+/** 状态行里的模型名：能对上清单就用清单的中文名，自定义档就叫"自定义模型" */
+function localModelLabel(id: string): string {
+  return LOCAL_EMBEDDING_MODELS.find((model) => model.id === id)?.name ?? '自定义模型'
 }
 
 async function resolveRemoteRecall(

@@ -24,6 +24,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DIST_DIR = join(ROOT, 'dist')
 const UNPACKED_DIR = join(DIST_DIR, 'win-unpacked', 'resources', 'app.asar.unpacked')
+/** 本机嵌入引擎的运行时（模块 3B）：`pnpm fetch:llama` 落的裁剪后 llama.cpp 目录 */
+const LLAMA_DIR = join(ROOT, 'resources', 'llama')
+const LLAMA_EXE = 'llama-server.exe'
 
 function fail(message) {
   console.error(`[package] ${message}`)
@@ -111,6 +114,15 @@ export function cleanStaleOutputs(distDir = DIST_DIR) {
 
 function main() {
   try {
+    // 本机嵌入引擎的运行时必须是现成的：缺了它打出来的包"本地模型"一路直接不可用
+    // （应用不会崩，是失败只做加法的降级——但出包时这是明确缺件，不该悄悄放过）
+    if (!existsSync(join(LLAMA_DIR, LLAMA_EXE))) {
+      fail(
+        `缺本机嵌入引擎运行时：${join(LLAMA_DIR, LLAMA_EXE)}\n` +
+          '  先跑一次 `pnpm fetch:llama`（下载 + SHA256 校验 + 裁剪，约 42MB）再出包'
+      )
+    }
+
     const cleared = cleanStaleOutputs()
     if (cleared.length > 0) {
       console.log(`[package] 预清上一次的打包输出：${cleared.join('、')}`)
@@ -140,7 +152,26 @@ function main() {
       (path) => path.endsWith('.node') && path.includes('@libsql')
     )
     if (libsqlBindings.length === 0) {
-      fail('app.asar.unpacked 里没有 @libsql 的 .node——装了也起不了库（asarUnpack 规则被改坏了？）')
+      fail(
+        'app.asar.unpacked 里没有 @libsql 的 .node——装了也起不了库。\n' +
+          '  常见原因：**没有经 pnpm 跑**（直接 `node scripts/package.mjs` 时 electron-builder 认不出 pnpm，\n' +
+          '  会把平台相关的可选依赖 @libsql/win32-x64-msvc 漏掉）。请用 `pnpm package`。'
+      )
+    }
+    // 引擎运行时走 extraResources：应当在 resources/llama/ 下（**不在** app.asar.unpacked 里，
+    // 也不该出现在 app.asar 内部——它也进不了 asar：exe/dll 得从磁盘直接执行）
+    const engineDir = join(DIST_DIR, 'win-unpacked', 'resources', 'llama')
+    if (!existsSync(join(engineDir, LLAMA_EXE))) {
+      fail(
+        `resources/llama/${LLAMA_EXE} 没有进包（electron-builder.yml 的 extraResources 被改坏了？）`
+      )
+    }
+    const engineBytes = listFiles(engineDir).reduce(
+      (sum, name) => sum + statSync(join(engineDir, name)).size,
+      0
+    )
+    if (engineBytes < 30 * 1024 * 1024) {
+      fail(`resources/llama 只有 ${(engineBytes / 1024 / 1024).toFixed(1)} MB——裁剪结果不完整？`)
     }
 
     console.log('[package] 产物：')
@@ -150,6 +181,9 @@ function main() {
       )
     }
     console.log(`[package] 解包的原生绑定：${libsqlBindings.join('、')}`)
+    console.log(
+      `[package] 本机嵌入引擎：resources/llama 共 ${(engineBytes / 1024 / 1024).toFixed(1)} MB（未压缩）`
+    )
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error))
   }

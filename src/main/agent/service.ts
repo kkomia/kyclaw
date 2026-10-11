@@ -38,7 +38,7 @@ import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { MastraEmbeddingModel } from '@mastra/core/vector'
-import type { RecallRuntime } from '../../mastra/embedding'
+import type { LocalEmbeddingEndpoint, RecallRuntime } from '../../mastra/embedding'
 
 const HOST = '127.0.0.1'
 
@@ -115,6 +115,11 @@ export interface AgentServerOptions {
    * 生产由 main/index.ts 注入"读 secrets.json"的实现。
    */
   embeddingKey?: () => string | null
+  /**
+   * round 28 模块 3B：本机引擎的端点（缺省 = 没接上）。生产由 main/index.ts 注入
+   * `localModelService.embeddingEndpoint`（它会确保引擎起来）；测试可以注入假端点。
+   */
+  localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
   /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
   recallEmbedder?: MastraEmbeddingModel<string>
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
@@ -279,6 +284,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       langfuse: langfuseFor,
       semanticRecall: semanticRecallFor,
       embeddingKey: embeddingKeyFor,
+      ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
       ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder })
     })
 

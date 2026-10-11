@@ -57,6 +57,7 @@ import {
   SEMANTIC_RECALL_MESSAGE_RANGE,
   SEMANTIC_RECALL_TOP_K,
   validateRecallEmbedder,
+  type LocalEmbeddingEndpoint,
   type RecallRuntime
 } from './embedding'
 import type { McpToolGate } from './mcp'
@@ -170,6 +171,11 @@ export async function createKyclawMastra(options: {
   semanticRecall?: () => SemanticRecallSettings
   /** round 28：嵌入服务的 API Key（safeStorage 明文，只在主进程内存里；缺省 = null） */
   embeddingKey?: () => string | null
+  /**
+   * round 28 模块 3B：本机引擎的端点（主进程算；设置里来源选「本机引擎」时才会被调用）。
+   * 缺省 = 没接上（这一路按"不可用"处理，不拦启动）。
+   */
+  localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
   /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
   recallEmbedder?: MastraEmbeddingModel<string>
 }): Promise<KyclawMastra> {
@@ -185,6 +191,7 @@ export async function createKyclawMastra(options: {
   const recall = await resolveRecall({
     settings: options.semanticRecall?.() ?? DEFAULT_SEMANTIC_RECALL,
     ...(options.embeddingKey === undefined ? {} : { embeddingKey: options.embeddingKey() }),
+    ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
     ...(options.recallEmbedder === undefined ? {} : { embedder: options.recallEmbedder })
   })
   // storage 直接给 Memory（而不是只挂 Mastra 实例）：线程 API 在 agent 跑起来之前就会

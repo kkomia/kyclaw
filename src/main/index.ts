@@ -6,9 +6,11 @@
  * （telemetry，Langfuse 默认关）——两者都不挡窗口、失败只记日志。
  */
 import { app } from 'electron'
+import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
+import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-models'
 import { registerMemoryIpc } from './ipc/memory'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
@@ -17,6 +19,7 @@ import { registerTelemetryIpc } from './ipc/telemetry'
 import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
+import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
 import { getProviderKey, secretsPath } from './secrets'
@@ -40,6 +43,18 @@ process.env.MASTRA_TELEMETRY_DISABLED = 'true'
 
 /** 任务栏归组/通知的 AppUserModelID：与 electron-builder.yml 的 appId 同值（NSIS 快捷方式写的也是它） */
 const APP_USER_MODEL_ID = 'com.kkomia.kyclaw'
+
+/**
+ * 本机嵌入引擎的可执行文件位置（模块 3B）：
+ *   - 打包后：`<resources>/llama/llama-server.exe`（electron-builder 的 extraResources 放的）；
+ *   - 开发态：仓库的 `resources/llama/llama-server.exe`（先跑 `pnpm fetch:llama` 获取，见该脚本头注）。
+ * 找不到时引擎起不来，只影响"本机引擎"这一路召回（失败只做加法，不拦对话）。
+ */
+function llamaBinaryPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'llama', 'llama-server.exe')
+    : join(app.getAppPath(), 'resources', 'llama', 'llama-server.exe')
+}
 
 // 单实例：后起的实例不建窗口，直接把已运行的那个拉到前台（第二个实例自己退出）
 if (!app.requestSingleInstanceLock()) {
@@ -106,6 +121,30 @@ if (!app.requestSingleInstanceLock()) {
     })
     // round 28：语义召回的远程嵌入密钥（写/清/状态；开关与来源走 settings:update）
     registerMemoryIpc({ secretsFile })
+    // 模块 3B：本机嵌入引擎 + 本地模型（下载/删除/生效）。引擎按需启动（懒加载）：
+    // 只有设置里来源选「本机引擎」且真用上时才会 spawn（见 llama/service.ts）。
+    const pushLocalModels = (): void => {
+      void localModels
+        .overview()
+        .then(pushLocalModelsOverview)
+        .catch((error: unknown) => {
+          console.warn('[kyclaw] 本地模型总览推送失败（界面下次打开会重新拉）', error)
+        })
+    }
+    // onChange 只在动作发生之后被调（创建时不会触发），所以这里引用自身是安全的
+    const localModels: LocalModelService = createLocalModelService({
+      userDataDir,
+      binaryPath: llamaBinaryPath(),
+      // 空闲回收：现读设置（改完当场生效；0 = 不回收）
+      idleMs: () => readSettings(settingsPath(userDataDir)).semanticRecall.idleMinutes * 60_000,
+      onChange: pushLocalModels
+    })
+    registerLocalModelsIpc(localModels)
+    app.on('will-quit', () => {
+      void localModels.dispose().catch((error: unknown) => {
+        console.warn('[kyclaw] 本机嵌入引擎收尾失败（进程会随应用退出一起结束）', error)
+      })
+    })
     showMainWindow()
     createTray()
 
@@ -143,7 +182,10 @@ if (!app.requestSingleInstanceLock()) {
       // 语义召回（round 28）：设置现读、装配只做一次（改设置要重启生效）；远程 API Key 在
       // secrets.json 的保留槽位里，解出来的明文只进内存（不进日志、不回渲染端）
       semanticRecall: () => readSettings(settingsPath(userDataDir)).semanticRecall,
-      embeddingKey: () => getProviderKey(secretsFile, EMBEDDING_KEY_SECRET_ID)
+      embeddingKey: () => getProviderKey(secretsFile, EMBEDDING_KEY_SECRET_ID),
+      // 模块 3B：本机引擎这一路（设置里来源选它时才会被调用）。返回 null = 还没有启用的本机模型；
+      // 引擎起不来会抛（装配层把它翻成"这次运行没有召回"的人话，不拦对话）
+      localEmbedding: () => localModels.embeddingEndpoint()
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }

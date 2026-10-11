@@ -7,6 +7,7 @@ import {
   IpcInputError,
   langfuseKeysArgsSchema,
   langfuseStateSchema,
+  localModelIdArgsSchema,
   noArgsSchema,
   parseIpcArgs,
   projectBaseSchema,
@@ -27,6 +28,7 @@ import {
   workspaceRemoveArgsSchema,
   workspaceSetModeArgsSchema
 } from '../ipc'
+import { emptyOverview, localModelsOverviewSchema } from '../local-models'
 import { DEFAULT_SETTINGS } from '../settings'
 
 describe('IPC 契约：window 通道', () => {
@@ -441,5 +443,51 @@ describe('IPC 契约：telemetry 通道（T17）', () => {
       false
     )
     expect(setLangfuseKeysResultSchema.safeParse({ hasKeys: false }).success).toBe(false)
+  })
+})
+
+describe('IPC 契约：localModels 通道（模块 3B）', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.localModels).toEqual({
+      overview: 'localModels:overview',
+      download: 'localModels:download',
+      cancel: 'localModels:cancel',
+      select: 'localModels:select',
+      pickCustom: 'localModels:pick-custom',
+      remove: 'localModels:remove',
+      progressChanged: 'localModels:progress-changed'
+    })
+  })
+
+  it('下载/生效/删除只收一个非空 id（路径**不进**入参：自定义模型只能从原生选择器来）', () => {
+    expect(parseIpcArgs(localModelIdArgsSchema, ['bge-m3-q4-k-m'], 'localModels:download')).toEqual(
+      ['bge-m3-q4-k-m']
+    )
+    for (const bad of [[], [''], ['a', 'b'], [1]]) {
+      expect(
+        parseIpcArgs.bind(null, localModelIdArgsSchema, bad as unknown[], 'localModels:download'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('总览回包：形状严（多一个键、少一个键、相位不认识都不收）', () => {
+    const overview = emptyOverview('D:\\\\models')
+    expect(localModelsOverviewSchema.safeParse(overview).success).toBe(true)
+
+    const withProgress = {
+      ...overview,
+      download: { id: 'x', phase: 'downloading', received: 1, total: 2, message: null }
+    }
+    expect(localModelsOverviewSchema.safeParse(withProgress).success).toBe(true)
+
+    for (const bad of [
+      { ...overview, extra: 1 },
+      { ...overview, engine: { phase: 'unknown', modelId: null, detail: null } },
+      { ...overview, items: [{ id: 'x' }] },
+      { ...withProgress, download: { id: 'x', phase: 'downloading', received: 1 } }
+    ]) {
+      expect(localModelsOverviewSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
   })
 })

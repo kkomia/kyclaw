@@ -19,6 +19,19 @@ files:
   # 过程性材料不进包：docs 是设计与走查、.superpowers 是任务书/复核 diff、fixtures/scripts 只给测试与出包用
   - '!{docs,fixtures,scripts,.superpowers}/**'
   - '!build/**'
+  # 本机嵌入引擎的运行时（模块 3B）**不进 asar**：它由下面的 extraResources 原样放到
+  # resources/llama/（进程要从磁盘上直接执行 exe/dll，asar 里的东西起不来）。
+  # 不加这条会被 asarUnpack 的 resources/** 规则再抄一份进 app.asar.unpacked（白胖 42MB）。
+  - '!resources/llama/**'
+# 本机嵌入引擎（模块 3B）：`pnpm fetch:llama` 下到 resources/llama/ 的裁剪后运行时（42MB），
+# 原样拷到安装目录的 resources/llama/（主进程按 process.resourcesPath/llama 找它）。
+# .cache 是本地的压缩包缓存（获取脚本用），不进包。
+extraResources:
+  - from: resources/llama
+    to: llama
+    filter:
+      - '**/*'
+      - '!.cache/**'
 # asar 里 dlopen 不了 .node：libsql 的原生绑定（@libsql/win32-x64-msvc/index.node）必须解出来，
 # 运行时经 Electron 的 asar 路径重定向落到 app.asar.unpacked。
 # resources/** 是 electron-vite 的 ?asset 资源（托盘/窗口图标），主进程按真实路径读，同样得在 asar 外。

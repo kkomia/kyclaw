@@ -31,6 +31,10 @@ pnpm dev
 # 只出 out/（electron-vite 三层产物）
 pnpm build
 
+# 首次出包前先取本机嵌入引擎的运行时（模块 3B）：下载 + SHA256 校验 + 裁剪到 resources/llama/（约 42MB）
+# 二进制不入库；`pnpm package` 会检查它在不在
+pnpm fetch:llama
+
 # 出 Windows 安装包：dist/kyclaw-<version>-setup.exe（NSIS，用户级安装，不需要管理员）
 pnpm package
 ```

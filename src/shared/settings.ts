@@ -80,17 +80,26 @@ export const langfuseSettingsSchema = z.strictObject({
  *
  * 缺省是"开着但没配地址"：状态行会显示未就绪，对话不受影响；用户填好地址保存、重启后生效。
  */
-export const SEMANTIC_RECALL_SOURCES = ['remote'] as const
+export const SEMANTIC_RECALL_SOURCES = ['remote', 'localEngine'] as const
 
 export const semanticRecallSettingsSchema = z.strictObject({
   /** 总开关（缺省开：长期记忆是这个产品的核心能力；起不来只是没有召回，不拦对话） */
   enabled: z.boolean(),
-  /** 嵌入来源；3B 会加 `localEngine`（本机引擎） */
+  /**
+   * 嵌入来源：`remote` = 任意 OpenAI 兼容的嵌入服务（baseURL + model + key）；
+   * `localEngine` = **本机引擎**（模块 3B 的 llama.cpp 子进程 + 下载到本地的 GGUF）。
+   */
   source: z.enum(SEMANTIC_RECALL_SOURCES),
-  /** OpenAI 兼容 baseURL（形如 `https://api.openai.com/v1`；本机引擎将来给 `http://127.0.0.1:<port>/v1`） */
+  /** OpenAI 兼容 baseURL（形如 `https://api.openai.com/v1`；本机引擎这一路由主进程自己算，不看它） */
   baseUrl: z.string(),
-  /** 嵌入模型名（形如 `text-embedding-3-small`） */
-  model: z.string()
+  /** 嵌入模型名（形如 `text-embedding-3-small`；本机引擎这一路用本地模型 id） */
+  model: z.string(),
+  /**
+   * 本机引擎的空闲回收（分钟）：这段时间没有请求就把引擎进程杀掉（内存 100% 回收），
+   * 下次请求再自动拉起来。`0` = 不回收（一直占着内存）。改这个值**当场生效**（引擎现读），
+   * 与"改嵌入来源要重启应用"不是一回事。
+   */
+  idleMinutes: z.number().int().min(0).max(240)
 })
 
 export type SemanticRecallSettings = z.infer<typeof semanticRecallSettingsSchema>
@@ -340,8 +349,13 @@ export const DEFAULT_SEMANTIC_RECALL: SemanticRecallSettings = {
   enabled: true,
   source: 'remote',
   baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
-  model: SEMANTIC_RECALL_PRESET.model
+  model: SEMANTIC_RECALL_PRESET.model,
+  /** 本机引擎的空闲回收缺省：5 分钟（内存 100% 回收；下次请求自动重启） */
+  idleMinutes: 5
 }
+
+/** 空闲回收的可选档（分钟；0 = 不回收）——设置页的下拉框与落盘校验共用一处 */
+export const LOCAL_ENGINE_IDLE_OPTIONS = [5, 15, 30, 0] as const
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',

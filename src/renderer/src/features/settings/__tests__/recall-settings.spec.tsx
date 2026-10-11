@@ -113,7 +113,7 @@ describe('「记忆」栏的语义召回组', () => {
     useSettingsStore.setState({
       settings: {
         ...defaultSettings(),
-        semanticRecall: { enabled: true, source: 'remote', baseUrl: '', model: '' }
+        semanticRecall: { enabled: true, source: 'remote', baseUrl: '', model: '', idleMinutes: 5 }
       },
       loaded: true
     })
@@ -131,7 +131,8 @@ describe('「记忆」栏的语义召回组', () => {
           enabled: true,
           source: 'remote',
           baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
-          model: SEMANTIC_RECALL_PRESET.model
+          model: SEMANTIC_RECALL_PRESET.model,
+          idleMinutes: 5
         }
       })
     )
@@ -155,7 +156,8 @@ describe('「记忆」栏的语义召回组', () => {
           enabled: true,
           source: 'remote',
           baseUrl: 'https://api.example.com/v1',
-          model: 'my-embed'
+          model: 'my-embed',
+          idleMinutes: 5
         }
       })
     )
@@ -174,7 +176,8 @@ describe('「记忆」栏的语义召回组', () => {
           enabled: false,
           source: 'remote',
           baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
-          model: SEMANTIC_RECALL_PRESET.model
+          model: SEMANTIC_RECALL_PRESET.model,
+          idleMinutes: 5
         }
       })
     )
@@ -200,7 +203,8 @@ describe('「记忆」栏的语义召回组', () => {
           enabled: true,
           source: 'remote',
           baseUrl: 'https://api.example.com/v1',
-          model: 'text-embedding-3-small'
+          model: 'text-embedding-3-small',
+          idleMinutes: 5
         }
       })
     )
@@ -220,6 +224,50 @@ describe('「记忆」栏的语义召回组', () => {
 
     fireEvent.click(screen.getByTestId('recall-clear-key'))
     await waitFor(() => expect(bridge.memory.clearEmbeddingKey).toHaveBeenCalled())
+  })
+
+  it('嵌入来源切到「本机引擎」：落盘 source，服务三项收起来，改由「本地模型」组接管', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    const bridge = installKyclawBridge()
+    render(<RecallSettings />)
+
+    // 来源两档都在，缺省是「嵌入服务」
+    expect(screen.getByTestId('recall-source-remote')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('recall-base-url')).toBeInTheDocument()
+    expect(screen.queryByTestId('local-model-settings')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('recall-source-localEngine'))
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticRecall: expect.objectContaining({ source: 'localEngine' })
+        })
+      )
+    )
+  })
+
+  it('来源已经是「本机引擎」时：不显示服务地址/模型/密钥，显示本地模型组', async () => {
+    stubRecallFetch({
+      state: 'unavailable',
+      active: false,
+      enabled: true,
+      source: 'localEngine',
+      detail: '还没有启用本机嵌入模型（这次运行没有召回）'
+    })
+    installKyclawBridge()
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        semanticRecall: { ...defaultSettings().semanticRecall, source: 'localEngine' }
+      },
+      loaded: true
+    })
+    render(<RecallSettings />)
+
+    expect(await screen.findByTestId('local-model-settings')).toBeInTheDocument()
+    expect(screen.queryByTestId('recall-base-url')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('recall-api-key')).not.toBeInTheDocument()
+    expect(screen.getByTestId('recall-settings-status')).toHaveTextContent('还没有启用本机嵌入模型')
   })
 })
 
