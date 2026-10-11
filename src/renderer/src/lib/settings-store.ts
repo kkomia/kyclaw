@@ -11,6 +11,7 @@ import {
   type SemanticRecallSettings,
   type WorkspaceMode
 } from '@shared/settings'
+import type { WebSearchSettings } from '@shared/search'
 import type { Project } from '@shared/projects'
 import type { KyclawProjectsApi, KyclawWorkspaceApi } from '@shared/ipc'
 import { withAllowedRule } from '@shared/permissions'
@@ -104,6 +105,11 @@ export interface SettingsState {
    * 可选 API Key 不在设置里，走 translate 通道（与 provider 密钥同一套）。
    */
   saveReasoningTranslate: (patch: Partial<ReasoningTranslateSettings>) => Promise<void>
+  /**
+   * round 45：保存联网搜索设置（模型栏「联网搜索」组；给谁就改谁）。
+   * 三个可选 Key（Exa / Tavily / Jina）不在设置里，走 search 通道（与 provider 密钥同一套）。
+   */
+  saveWebSearch: (patch: Partial<WebSearchSettings>) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
   /** 审批卡"永久允许"：追加一条规则并落盘；以落盘结果为准，失败抛给调用方 */
@@ -261,6 +267,12 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   saveReasoningTranslate: async (patch) => {
     const current = get().settings.reasoningTranslate
     set({ settings: await settingsApi().update({ reasoningTranslate: { ...current, ...patch } }) })
+  },
+
+  /** round 45：联网搜索设置——合并写（给谁改谁），失败抛给调用方（同上一组口径） */
+  saveWebSearch: async (patch) => {
+    const current = get().settings.webSearch
+    set({ settings: await settingsApi().update({ webSearch: { ...current, ...patch } }) })
   },
 
   removeProvider: async (id) => {

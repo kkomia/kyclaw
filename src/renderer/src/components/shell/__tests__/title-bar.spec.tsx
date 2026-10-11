@@ -7,6 +7,7 @@ import {
   memoryApiStub,
   pluginsApiStub,
   projectsApiStub,
+  searchApiStub,
   settingsApiStub,
   telemetryApiStub,
   terminalApiStub,
@@ -46,7 +47,8 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     plugins: pluginsApiStub(),
     memory: memoryApiStub(),
     localModels: localModelsApiStub(),
-    translate: translateApiStub()
+    translate: translateApiStub(),
+    search: searchApiStub()
   }
   return api
 }

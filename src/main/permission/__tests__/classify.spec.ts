@@ -56,6 +56,13 @@ describe('classifyToolCall：内置文件工具', () => {
       expect(classifyToolCall(name), name).toBe('write')
     }
   })
+
+  it('round 45 联网搜索：web_search 与 fetch 同档（write = 默认问那一档）', () => {
+    expect(classifyToolCall('web_search')).toBe('write')
+    expect(classifyToolCall('web_search')).toBe(classifyToolCall('fetch'))
+    // 大小写与空白同样不敏感（与既有表项同口径）
+    expect(classifyToolCall(' Web_Search ')).toBe('write')
+  })
 })
 
 describe('classifyToolCall：MCP / 外部工具', () => {
@@ -66,6 +73,8 @@ describe('classifyToolCall：MCP / 外部工具', () => {
     // round28 表项也按末段进"名字证据"（`mcp__x__bash` 仍只是 write 档）
     expect(classifyToolCall('mcp__x__bash')).toBe('write')
     expect(classifyToolCall('mcp__x__git_add')).toBe('write')
+    // round45 的 web_search 同理：MCP 里的同名工具只借"名字证据"，审批走外部工具那一档
+    expect(classifyToolCall('mcp__x__web_search')).toBe('write')
   })
 
   it('未知工具名 → write（默认询问；不是"未知就当只读放行"）', () => {
@@ -101,6 +110,7 @@ describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判
       'move',
       'bash',
       'fetch',
+      'web_search',
       'git_add',
       ''
     ]) {

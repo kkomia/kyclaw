@@ -12,6 +12,7 @@ import { ModelSettings } from './ModelSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
 import { TracingSettings } from './TracingSettings'
+import { WebSearchSettings } from './WebSearchSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
 
@@ -138,6 +139,10 @@ export function SettingsPage(): React.JSX.Element {
               {/* round 32：思考翻译（思维链是英文时先翻再回显；开关 + 模式 + 翻译服务） */}
               <SettingsGroup title="思考翻译" testId="settings-group-reasoning-translate">
                 <ReasoningTranslateSettings />
+              </SettingsGroup>
+              {/* round 45：联网搜索（默认免费档开箱即用；可填自己的 Exa / Tavily / Jina Key 升级） */}
+              <SettingsGroup title="联网搜索" testId="settings-group-web-search">
+                <WebSearchSettings />
               </SettingsGroup>
             </>
           ) : null}

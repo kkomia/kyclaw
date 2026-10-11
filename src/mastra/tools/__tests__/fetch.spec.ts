@@ -9,12 +9,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createFetchTool } from '../fetch'
-import { callTool, createBed, type TestBed } from './helpers'
+import { callTool, createBed, readText, type TestBed } from './helpers'
 
 let server: Server
 let baseUrl = ''
 /** 最后一次请求的回显（POST 透传用例用） */
 let seen: { method: string; header?: string; body: string } = { method: '', body: '' }
+/** 阅读模式（round 45）：最后一次打到"阅读服务"的请求回显 */
+let readerSeen: { authorization?: string; accept?: string } = {}
 
 const DOWNLOAD_BYTES = Buffer.alloc(64 * 1024, 7)
 
@@ -30,6 +32,22 @@ beforeAll(async () => {
         body
       }
       const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+
+      // round 45：阅读模式打的是"阅读服务"（`{端点}/{原 url}`）；这里按前缀接住
+      if (path.startsWith('/r/') || path === '/r') {
+        readerSeen = {
+          authorization: request.headers.authorization,
+          accept: request.headers.accept as string | undefined
+        }
+        if (path.includes('boom')) {
+          response.writeHead(500, { 'content-type': 'text/plain' })
+          response.end('reader failed')
+          return
+        }
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+        response.end('# 标题\n\n读回来的干净正文')
+        return
+      }
 
       switch (path) {
         case '/text':
@@ -244,5 +262,63 @@ describe('fetch：审批 gate', () => {
     expect(gate({ url: 'https://example.com/api', save_to: join(bed.outside, 'x.bin') })).toBe(
       false
     )
+  })
+})
+
+describe('fetch：阅读模式（mode: "reader"）', () => {
+  /** 阅读端点 = 本机假服务（`{端点}/{原 url}` 的拼法见 shared/search 的 readerTargetUrl） */
+  const readerEndpoint = (): string => `${baseUrl}/r`
+
+  it('走阅读服务拉 Markdown 正文；默认模式一字未改（仍然直接抓目标地址）', async () => {
+    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+
+    const out = String(await callTool(tool, { url: 'https://example.com/x', mode: 'reader' }))
+    expect(out).toContain('HTTP 200')
+    expect(out).toContain('读回来的干净正文')
+    // 请求头：阅读服务按 text/plain 回干净正文
+    expect(readerSeen.accept).toBe('text/plain')
+
+    const raw = String(await callTool(tool, { url: `${baseUrl}/text` }))
+    expect(raw).toContain('你好，文本')
+  })
+
+  it('配了 Jina Key 就带 Authorization: Bearer（升配额）；没配就不带', async () => {
+    const withoutKey = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    await callTool(withoutKey, { url: 'https://example.com/x', mode: 'reader' })
+    expect(readerSeen.authorization).toBeUndefined()
+
+    const withKey = await createFetchTool(bed.ctx, {
+      endpoint: readerEndpoint,
+      apiKey: () => 'jina-key-1'
+    })
+    await callTool(withKey, { url: 'https://example.com/x', mode: 'reader' })
+    expect(readerSeen.authorization).toBe('Bearer jina-key-1')
+  })
+
+  it('阅读模式也能 save_to：落盘的是干净正文', async () => {
+    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const out = String(
+      await callTool(tool, { url: 'https://example.com/x', mode: 'reader', save_to: 'doc.md' })
+    )
+
+    expect(out).toContain('已下载')
+    expect(readText(join(bed.root, 'doc.md'))).toContain('读回来的干净正文')
+  })
+
+  it('阅读服务非 2xx：人话 + "可以改用默认模式"的出口', async () => {
+    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    await expect(callTool(tool, { url: 'https://boom.test/x', mode: 'reader' })).rejects.toThrow(
+      /阅读模式抓取失败：HTTP 500/
+    )
+    await expect(callTool(tool, { url: 'https://boom.test/x', mode: 'reader' })).rejects.toThrow(
+      /可以改用默认模式/
+    )
+  })
+
+  it('阅读模式只做 GET：带 method: "POST" 直接拒（中文人话）', async () => {
+    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    await expect(
+      callTool(tool, { url: 'https://example.com/x', mode: 'reader', method: 'POST', body: 'x' })
+    ).rejects.toThrow(/只支持 GET/)
   })
 })

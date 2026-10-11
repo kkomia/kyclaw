@@ -15,6 +15,7 @@ import {
   SETTINGS_FILE,
   type AppSettings
 } from '../shared/settings'
+import { DEFAULT_WEB_SEARCH } from '../shared/search'
 
 export function settingsPath(userDataDir: string): string {
   return join(userDataDir, SETTINGS_FILE)
@@ -26,7 +27,7 @@ export function settingsPath(userDataDir: string): string {
  * round 10 的 pluginMarketplaces / installedPlugins、round 18 的 modelPrefs、
  * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels、
  * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）、round 32 的 reasoningTranslate、
- * 模块 2 的 modelCapabilities。
+ * round 45 的 webSearch、模块 2 的 modelCapabilities。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  */
@@ -52,6 +53,7 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.reasoningTranslate === undefined) {
     next.reasoningTranslate = { ...DEFAULT_REASONING_TRANSLATE }
   }
+  if (next.webSearch === undefined) next.webSearch = { ...DEFAULT_WEB_SEARCH }
   return next
 }
 

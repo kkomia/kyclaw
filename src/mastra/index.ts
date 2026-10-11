@@ -47,6 +47,7 @@ import {
   type SemanticRecallSettings,
   type Workspace
 } from '../shared/settings'
+import type { WebSearchRuntime } from '../shared/search'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import {
   compactionSqlClient,
@@ -65,6 +66,7 @@ import {
 } from './embedding'
 import type { McpToolGate } from './mcp'
 import type { PdfPrinter } from './tools/artifacts'
+import type { WebSearchDeps } from './search/backends'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
@@ -214,6 +216,13 @@ export async function createKyclawMastra(options: {
    * 缺省 = 没有（create_pdf 报"环境不支持"，其余产出物照常）。
    */
   printPdf?: PdfPrinter
+  /**
+   * round 45：联网搜索的运行时配置（现读：设置 + Exa/Tavily/Jina 三个可选 Key）。
+   * 缺省 = 免费档、没 Key（web_search 仍可用；fetch 阅读模式走免费档）。
+   */
+  webSearch?: () => WebSearchRuntime
+  /** round 45：搜索依赖（测试注入假 fetch / 客户端；生产不传） */
+  searchDeps?: WebSearchDeps
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass, LibSQLVector: LibSQLVectorClass } =
@@ -306,7 +315,10 @@ export async function createKyclawMastra(options: {
         mcpServers: options.mcpServers,
         mcpTools: options.mcpTools,
         // 模块 4：产出物的 PDF 钩子（缺省没有；有 electron 的那一侧才给得出真实现）
-        printPdf: options.printPdf
+        printPdf: options.printPdf,
+        // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
+        webSearch: options.webSearch,
+        searchDeps: options.searchDeps
       })
     },
     storage,

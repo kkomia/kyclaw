@@ -16,6 +16,7 @@ import {
   projectFolderSchema,
   projectOpenInExplorerResultSchema,
   providerKeyStatesSchema,
+  searchKeyStatesSchema,
   setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
   updateStateSchema,
@@ -29,6 +30,7 @@ import {
   type KyclawMemoryApi,
   type KyclawPluginsApi,
   type KyclawProjectsApi,
+  type KyclawSearchApi,
   type KyclawSettingsApi,
   type KyclawTelemetryApi,
   type KyclawTranslateApi,
@@ -37,10 +39,12 @@ import {
   type KyclawWorkbenchApi,
   type KyclawTerminalApi,
   type KyclawWorkspaceApi,
+  type SearchKeyStates,
   type UpdateState
 } from '../shared/ipc'
 import { pdfExtractResultSchema } from '../shared/attachments'
 import { translateResultSchema } from '../shared/translate'
+import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from '../shared/search'
 import { localModelsOverviewSchema, type LocalModelsOverview } from '../shared/local-models'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
 import { providerKeyStateSchema } from '../shared/providers'
@@ -353,6 +357,33 @@ const translateApi: KyclawTranslateApi = {
 }
 
 /**
+ * 联网搜索面（round 45）：Exa / Tavily / Jina 三个可选 Key 的写/清/状态。
+ * 与翻译面同一套纪律：回包只有"有没有"，写方向见一次明文；状态回包的三档缺一不可（否则抛）。
+ */
+const searchApi: KyclawSearchApi = {
+  keyStates: async () =>
+    parseSearchKeyStates(await ipcRenderer.invoke(IPC_CHANNELS.search.keyStates)),
+  setKey: async (target, key) => {
+    const parsed = setProviderKeyResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.search.setKey, target, key)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 搜索密钥保存响应结构不合法')
+    return parsed.data
+  },
+  clearKey: async (target: SearchKeyTarget) =>
+    parseSearchKeyStates(await ipcRenderer.invoke(IPC_CHANNELS.search.clearKey, target))
+}
+
+function parseSearchKeyStates(payload: unknown): SearchKeyStates {
+  const parsed = searchKeyStatesSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 搜索密钥状态响应结构不合法')
+  for (const target of SEARCH_KEY_TARGETS) {
+    if (parsed.data[target] === undefined) throw new Error('[kyclaw] 搜索密钥状态缺少一档')
+  }
+  return parsed.data as SearchKeyStates
+}
+
+/**
  * 「本地模型」面（模块 3B）：动作都回**新的总览**（结构不对就抛——半截总览没法显示），
  * 进度推送用同一份 schema 解析（结构不对就不交给上层，同更新通道的做法）。
  */
@@ -530,7 +561,8 @@ export const kyclawApi: KyclawApi = {
   plugins: pluginsApi,
   memory: memoryApi,
   localModels: localModelsApi,
-  translate: translateApi
+  translate: translateApi,
+  search: searchApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。

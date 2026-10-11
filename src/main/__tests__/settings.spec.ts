@@ -50,6 +50,12 @@ describe('设置存储（userData 下的 settings.json）', () => {
         baseUrl: 'http://192.168.31.18:8235/v1',
         model: 'Index-Translate-2B',
         targetLanguage: '简体中文'
+      },
+      webSearch: {
+        mode: 'free' as const,
+        provider: 'exa' as const,
+        exaEndpoint: 'https://mcp.exa.ai/mcp',
+        readerEndpoint: 'https://r.jina.ai'
       }
     }
 
@@ -103,7 +109,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate）读出空值：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate、round 45 之前没有 webSearch）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -143,6 +149,12 @@ describe('设置存储（userData 下的 settings.json）', () => {
         baseUrl: 'http://192.168.31.18:8235/v1',
         model: 'Index-Translate-2B',
         targetLanguage: '简体中文'
+      },
+      webSearch: {
+        mode: 'free',
+        provider: 'exa',
+        exaEndpoint: 'https://mcp.exa.ai/mcp',
+        readerEndpoint: 'https://r.jina.ai'
       }
     })
   })

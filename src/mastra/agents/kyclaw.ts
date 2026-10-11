@@ -1,8 +1,8 @@
 /**
  * kyclaw agent 的装配（身份 + 模型 + 工具集 + 记忆）。
  *
- * 工具集（T11 + round28 模块 1 + 模块 4）：文件工具五件套（read/write/edit/glob/grep）+
- * bash / fetch / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit）
+ * 工具集（T11 + round28 模块 1 + 模块 4 + round45）：文件工具五件套（read/write/edit/glob/grep）+
+ * bash / fetch / web_search / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit）
  * + 产出物五件（create_report/create_pdf/create_excel/create_ppt/create_docx），
  * 全部经 guard 装配——文件工具与产出物路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
  * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问；(工具×工作区) 规则与
@@ -41,6 +41,11 @@ import type { Tool } from '@mastra/core/tools'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { Project } from '../../shared/projects'
 import type { PermissionRule, McpServerConfig, Workspace } from '../../shared/settings'
+import {
+  DEFAULT_WEB_SEARCH_RUNTIME,
+  effectiveWebSearch,
+  type WebSearchRuntime
+} from '../../shared/search'
 import { sessionRoots } from '../../main/projects'
 import { currentShell, type ResolvedShell } from '../../main/git-bash'
 import { createToolContext, needsApproval } from '../tools/guard'
@@ -49,7 +54,7 @@ import { createDeleteTool } from '../tools/delete'
 import { createDocxTool } from '../tools/docx'
 import { createEditTool } from '../tools/edit'
 import { createExcelTool } from '../tools/excel'
-import { createFetchTool } from '../tools/fetch'
+import { createFetchTool, type FetchReaderOptions } from '../tools/fetch'
 import { createGitTools } from '../tools/git'
 import { createGlobTool } from '../tools/glob'
 import { createGrepTool } from '../tools/grep'
@@ -57,8 +62,10 @@ import { createMoveTool } from '../tools/move'
 import { createPptTool } from '../tools/ppt'
 import { createReadTool } from '../tools/read'
 import { createPdfTool, createReportTool } from '../tools/report'
+import { createWebSearchTool } from '../tools/web-search'
 import { createWriteTool } from '../tools/write'
 import type { PdfPrinter } from '../tools/artifacts'
+import type { WebSearchDeps } from '../search/backends'
 import { createMcpClassify, type McpToolGate } from '../mcp'
 import type { KyclawModel } from '../model'
 
@@ -88,6 +95,13 @@ export interface KyclawAgentTools {
    */
   mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
   /**
+   * round 45：联网搜索的运行时配置（现读的取值函数 —— 设置 + 两个可选 Key）。
+   * 缺省 = 免费档、没 Key：没接线时 web_search 仍能用（Exa 免费端点），fetch 阅读模式走免费档。
+   */
+  webSearch?: () => WebSearchRuntime
+  /** round 45：搜索依赖（单测注入假 fetch / 客户端；生产不传） */
+  searchDeps?: WebSearchDeps
+  /**
    * 模块 4：PDF 打印钩子（HTML → PDF 字节）。**缺省 = 没有**（create_pdf 报"环境不支持"，
    * 其余产出物照常）。生产由 main/index.ts 注入 Electron printToPDF 的实现，测试注入 stub
    * —— 工具层不 import electron，这一层是唯一的注入点。
@@ -101,7 +115,7 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
 - 你只能看到用户在这个对话里给你的内容；不确定就直说，不要编造事实或执行结果。
 - 文件工具（read / write / edit / glob / grep / delete / move）与 git 工具只作用于当前会话的工作区（项目文件夹或默认工作区）。越界会直接失败：如实告诉用户失败原因，并给出下一步（改用 bash、把文件夹加进「设置 → 工作区」），不要反复换写法重试。
 - bash 工具执行 shell 命令：默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请放到后台，不要前台常驻。
-- 联网用 fetch 工具（GET/POST、自定义请求头）；要保存响应就带 save_to（落进工作区）。
+- 联网：要查最新信息或多来源查证用 web_search（一次拿到标题 / 链接 / 摘要）；要看某个**已知网页**的干净正文用 fetch 的阅读模式（mode: "reader"）；要调接口、发 POST 或下载文件用 fetch（GET/POST、自定义请求头，保存响应就带 save_to 落进工作区）。
 - git 用 git_status / git_diff / git_log 查看（只读）；git_add / git_commit 提交改动；不做 push，需要推远端时请用户自己操作。
 - 产出物按成品形态选工具，都落到当前会话工作区（相对路径；不给 path 就按标题派生文件名），返回文件路径与字节数：
   · create_report：排版好的单文件 HTML 报告（自带样式、离线可看、可打印）——说明性长文、方案、总结、带表格的盘点首选；
@@ -111,7 +125,7 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
   · create_docx：Word 文档（heading / paragraph / bullets / table 四种块，按顺序排）。
   报告与 PDF 的 html 是**真 HTML 片段**（不是 Markdown）：用 h2/h3、p、ul/ol、table、pre/code 写正文，
   不要写 <html>/<head>/<style> 外壳、不要重复一级标题（模板已经带上标题与样式）。
-- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）与 MCP 外部工具的调用执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
+- 写类操作（write / edit / delete / move / bash / fetch / web_search / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）与 MCP 外部工具的调用执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
 /**
@@ -134,6 +148,13 @@ export async function createKyclawAgent(
   const projectsFor = toolOptions?.projects ?? (() => [])
   const defaultWorkspaceFor = toolOptions?.defaultWorkspace ?? (() => null)
   const projectOf = toolOptions?.projectOf ?? (() => null)
+  // round 45：联网搜索的运行时（现读）——web_search 与 fetch 阅读模式共用这一份
+  const webSearchRuntime = (): WebSearchRuntime =>
+    toolOptions?.webSearch?.() ?? DEFAULT_WEB_SEARCH_RUNTIME
+  const readerOptions: FetchReaderOptions = {
+    endpoint: () => effectiveWebSearch(webSearchRuntime().settings).readerEndpoint,
+    apiKey: () => webSearchRuntime().readerKey
+  }
 
   /**
    * 会话根（T18）：session 有值 = 工具执行口径（项目 → 默认工作区 → 授权列表）；
@@ -163,7 +184,13 @@ export async function createKyclawAgent(
     grep: await createGrepTool(ctx),
     // bash 刻意不在这里建：它的描述要按"当前解析出来的 shell"给（Git Bash / 回落 PowerShell），
     // 所以放进下面每轮现取的 tools 函数里（round 33，与指令的现算口径一致）
-    fetch: await createFetchTool(ctx),
+    // round 45：fetch 带阅读模式的依赖（端点/可选 Jina Key 都现读）
+    fetch: await createFetchTool(ctx, readerOptions),
+    // round 45：内置联网搜索（默认免费档；审批与 fetch 同档，见 main/permission/classify.ts）
+    web_search: await createWebSearchTool(ctx, {
+      runtime: webSearchRuntime,
+      ...(toolOptions?.searchDeps === undefined ? {} : { deps: toolOptions.searchDeps })
+    }),
     delete: await createDeleteTool(ctx),
     move: await createMoveTool(ctx),
     // 模块 4：产出物五件（报告 / PDF / Excel / PPT / Word）。printPdf 是主进程注入的钩子，

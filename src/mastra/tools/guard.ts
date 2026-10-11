@@ -258,7 +258,8 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *       · **内置工作区文件工具**（write/edit）：执行路径必过引擎。目标明确落在 mode='full' 的
  *         工作区、或 (工具, 工作区) 命中一条"永久允许"规则才放行；目标解析不到时**不问**
  *         —— 我们的工具马上会 fail closed 拒掉，弹一张"批了也不会执行"的卡只会误导用户。
- *       · **能力类工具**（round28：bash / fetch / git_add / git_commit）：按它们的"显式目标"
+ *       · **能力类工具**（round28：bash / fetch / git_add / git_commit；round45 增加 web_search）：
+ *         按它们的"显式目标"
  *         字段（bash=cwd、fetch=save_to、git=path）解析；没给目标时执行层的根 = 会话根，
  *         审批层拿不到会话 —— 单工作区就绑它，多工作区只有**全部 full** 才免审（有一条 ask
  *         就说不清执行会落哪）。**full 对四种能力都生效**（round28 用户口径修正：开着
@@ -334,7 +335,10 @@ function capabilityOf(tool: string): Capability | null {
   switch (tool.trim().toLowerCase()) {
     case 'bash':
       return 'shell'
+    // round 45：web_search 与 fetch 同属"网络出站"这一档 —— 它没有 save_to 那种显式目标，
+    // 走的就是 fetch 不带 save_to 的同一条判定（单工作区 full / 全 full → 免审；单工作区规则放行）
     case 'fetch':
+    case 'web_search':
       return 'network'
     case 'git_add':
     case 'git_commit':

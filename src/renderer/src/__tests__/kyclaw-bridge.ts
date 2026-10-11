@@ -5,6 +5,7 @@ import type {
   KyclawApi,
   KyclawWindowApi,
   LangfuseState,
+  SearchKeyStates,
   UpdateState
 } from '@shared/ipc'
 import {
@@ -16,6 +17,7 @@ import {
 import type { PluginsOverview } from '@shared/plugins'
 import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
 import type { TranslateResult } from '@shared/translate'
+import type { SearchKeyTarget } from '@shared/search'
 import type { PdfExtractResult } from '@shared/attachments'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 import type {
@@ -491,10 +493,39 @@ export function translateApiStub(): TranslateApiStub {
 export interface AttachmentsApiStub {
   extractPdf: Mock<(bytes: Uint8Array) => Promise<PdfExtractResult>>
 }
-
 export function attachmentsApiStub(): AttachmentsApiStub {
   return {
     extractPdf: vi.fn(async () => ({ ok: false as const, message: '这个 PDF 没有文字层' }))
+  }
+}
+
+/**
+ * 联网搜索面（round 45）：三档 Key 的写/清/状态，桩里"有状态"（写/清之后状态跟着变）
+ * —— 与主进程口径一致（明文只在写方向出现一次，读方向只有"有没有"）。
+ */
+export interface SearchApiStub {
+  keyStates: Mock<() => Promise<SearchKeyStates>>
+  setKey: Mock<(target: SearchKeyTarget, key: string) => Promise<{ hasKey: true }>>
+  clearKey: Mock<(target: SearchKeyTarget) => Promise<SearchKeyStates>>
+}
+
+export function searchApiStub(): SearchApiStub {
+  const keys: Record<SearchKeyTarget, boolean> = { exa: false, tavily: false, jina: false }
+  const states = (): SearchKeyStates => ({
+    exa: { hasKey: keys.exa, needsReentry: false },
+    tavily: { hasKey: keys.tavily, needsReentry: false },
+    jina: { hasKey: keys.jina, needsReentry: false }
+  })
+  return {
+    keyStates: vi.fn(async () => states()),
+    setKey: vi.fn(async (target: SearchKeyTarget) => {
+      keys[target] = true
+      return { hasKey: true as const }
+    }),
+    clearKey: vi.fn(async (target: SearchKeyTarget) => {
+      keys[target] = false
+      return states()
+    })
   }
 }
 
@@ -549,6 +580,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   memory: MemoryApiStub
   localModels: LocalModelsApiStub
   translate: TranslateApiStub
+  search: SearchApiStub
   attachments: AttachmentsApiStub
 }
 
@@ -566,6 +598,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const memory = memoryApiStub()
   const localModels = localModelsApiStub()
   const translate = translateApiStub()
+  const search = searchApiStub()
   const attachments = attachmentsApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
@@ -581,7 +614,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     plugins,
     memory,
     localModels,
-    translate
+    translate,
+    search
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
@@ -597,6 +631,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     memory,
     localModels,
     translate,
+    search,
     attachments
   }
 }

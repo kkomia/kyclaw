@@ -40,6 +40,7 @@ import type { MastraMemory } from '@mastra/core/memory'
 import type { MastraEmbeddingModel } from '@mastra/core/vector'
 import type { LocalEmbeddingEndpoint, RecallRuntime } from '../../mastra/embedding'
 import type { PdfPrinter } from '../../mastra/tools/artifacts'
+import type { WebSearchRuntime } from '../../shared/search'
 
 const HOST = '127.0.0.1'
 
@@ -128,6 +129,12 @@ export interface AgentServerOptions {
    * 生产由 main/index.ts 注入 Electron printToPDF 的实现（本模块刻意不 import electron）。
    */
   printPdf?: PdfPrinter
+  /**
+   * round 45：联网搜索的运行时配置（现读：设置 + 三个可选 Key）。
+   * 缺省 = 从 dataDir/settings.json 读设置、没有 Key（密钥在 safeStorage 里，本模块不 import electron；
+   * 生产由 main/index.ts 注入"读设置 + 解密钥"的实现）。
+   */
+  webSearch?: () => WebSearchRuntime
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -275,6 +282,14 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   // 语义召回（round 28）：设置现读（装配只做一次，改设置要重启生效）；密钥同样在 safeStorage 里
   const semanticRecallFor = options.semanticRecall ?? (() => settingsFor().semanticRecall)
   const embeddingKeyFor = options.embeddingKey ?? ((): string | null => null)
+  // round 45：联网搜索设置现读；Key 在 safeStorage 里（本模块读不到 → 缺省没有，走免费档）
+  const webSearchFor =
+    options.webSearch ??
+    ((): WebSearchRuntime => ({
+      settings: settingsFor().webSearch,
+      searchKey: null,
+      readerKey: null
+    }))
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
   const { mastra, storage, memory, usage, sessionProjects, compaction, telemetry, recall } =
@@ -293,7 +308,9 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
       ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder }),
       // 模块 4：产出物的 PDF 钩子（缺省没有 —— 无窗口环境/测试里 create_pdf 会明确报不支持）
-      ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf })
+      ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf }),
+      // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
+      webSearch: webSearchFor
     })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑

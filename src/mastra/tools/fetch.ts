@@ -1,10 +1,13 @@
 /**
  * fetch 工具：发起任意 HTTP(S) 请求（round28 模块 1 的"网络请求"能力）。
  *
- * 能力面：GET / POST（method / headers / body 透传）、超时、重定向跟随（最终地址回显）。
+ * 能力面：GET / POST（method / headers / body 透传）、超时、重定向跟随（最终地址回显）、
+ * **阅读模式（round 45）**：`mode: 'reader'` 时改走 Jina Reader（`{阅读端点}/{url}`）拉干净正文。
  * 契约与取舍：
  *   - **非 2xx 也把状态码 + 正文交给模型**（404 的页面/JSON 是排障信息，不是异常）；
  *     网络层错误（DNS、拒绝连接、超时）才抛中文人话错误。
+ *   - **阅读模式（round 45）**：只支持 GET；配了 Jina Key 就带 `Authorization: Bearer`（升配额），
+ *     没配就走免费档。它失败时给人话 + "可以直接用默认模式抓原始内容"的出口（默认模式行为一字不动）。
  *   - **无 save_to**：正文最多读 1MB（多的截停，防把内存/上下文撑爆）；文本类回传正文
  *     （超过 64KB 首尾保留），二进制类只回元信息 —— 把 PNG 的字节塞给模型没有意义。
  *   - **有 save_to**：响应体流式落盘（走 guard 的工作区边界与审批；父目录自动建），
@@ -18,6 +21,7 @@ import { mkdir, open, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
+import { WEB_SEARCH_PRESET, readerTargetUrl } from '../../shared/search'
 import { clipText, formatSeconds } from './exec'
 import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
 
@@ -59,10 +63,23 @@ export const fetchInputSchema = z.object({
   save_to: z
     .string()
     .optional()
-    .describe('把响应保存到工作区里的这个路径（父目录自动建；仅 2xx 才写）')
+    .describe('把响应保存到工作区里的这个路径（父目录自动建；仅 2xx 才写）'),
+  mode: z
+    .enum(['raw', 'reader'])
+    .optional()
+    .describe('raw（缺省）= 直接抓原始响应；reader = 走阅读服务抓干净正文（Markdown，只支持 GET）')
 })
 
 export type FetchInput = z.infer<typeof fetchInputSchema>
+
+/**
+ * 阅读模式（round 45）的依赖：端点与可选 Key 都**现读**（改设置当场生效，不必重启工具）。
+ * 缺省端点 = shared/search 的预置；缺省没有 Key（走免费档）。
+ */
+export interface FetchReaderOptions {
+  endpoint?: () => string
+  apiKey?: () => string | null
+}
 
 /** 本工具抛出的错误（中文，已可给用户看）：catch 时原样放行，不再包一层 */
 const FETCH_ERROR_NAME = 'KyclawFetchError'
@@ -73,7 +90,10 @@ function toolError(message: string): Error {
   return error
 }
 
-export async function createFetchTool(ctx: ToolContext): Promise<Tool<FetchInput, string>> {
+export async function createFetchTool(
+  ctx: ToolContext,
+  reader?: FetchReaderOptions
+): Promise<Tool<FetchInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
 
   return createTool({
@@ -81,7 +101,8 @@ export async function createFetchTool(ctx: ToolContext): Promise<Tool<FetchInput
     description:
       '发起 HTTP(S) 请求（GET/POST，可带 headers 与 body），返回状态码与响应正文（非 2xx 也回正文）。' +
       '响应是二进制或很大时：不带 save_to 只回元信息；带 save_to 则把响应下载到工作区该路径' +
-      '（仅 2xx 才写）。执行前会请求用户批准。',
+      '（仅 2xx 才写）。**要看一个网页的干净正文（去导航/广告）就带 mode: "reader"**' +
+      '（走阅读服务抓 Markdown，只支持 GET）。执行前会请求用户批准。',
     inputSchema: fetchInputSchema,
     outputSchema: z.string(),
     requireApproval: (input) => needsApproval(ctx, 'fetch', input),
@@ -90,6 +111,10 @@ export async function createFetchTool(ctx: ToolContext): Promise<Tool<FetchInput
       const method = input.method ?? 'GET'
       if (method === 'GET' && input.body !== undefined) {
         throw toolError('fetch 失败：GET 请求不能带 body（要发数据请用 method: "POST"）')
+      }
+      const useReader = input.mode === 'reader'
+      if (useReader && method !== 'GET') {
+        throw toolError('fetch 失败：阅读模式（mode: "reader"）只支持 GET')
       }
 
       // save_to 先解析：批了再打的目标写不进去就整单失败（fail closed，不打无意义的请求）
@@ -104,6 +129,23 @@ export async function createFetchTool(ctx: ToolContext): Promise<Tool<FetchInput
         }
       }
 
+      // 阅读模式：请求打的是阅读服务（`{端点}/{原 url}`），可选 Jina Key 只进 Authorization 头
+      const readerKey = useReader ? (reader?.apiKey?.() ?? null) : null
+      const requestUrl = useReader
+        ? parseHttpUrl(
+            readerTargetUrl(reader?.endpoint?.() ?? WEB_SEARCH_PRESET.readerEndpoint, url.href)
+          )
+        : url
+      const requestHeaders = useReader
+        ? {
+            accept: 'text/plain',
+            ...(readerKey === null || readerKey === ''
+              ? {}
+              : { authorization: `Bearer ${readerKey}` }),
+            ...input.headers
+          }
+        : input.headers
+
       const timeoutMs = input.timeout_ms ?? FETCH_DEFAULT_TIMEOUT_MS
       const controller = new AbortController()
       let timedOut = false
@@ -115,27 +157,39 @@ export async function createFetchTool(ctx: ToolContext): Promise<Tool<FetchInput
       try {
         let response: Response
         try {
-          response = await fetch(url, {
+          response = await fetch(requestUrl.href, {
             method,
-            headers: input.headers,
-            body: input.body,
+            headers: requestHeaders,
+            body: useReader ? undefined : input.body,
             signal: controller.signal,
             redirect: 'follow'
           })
         } catch (error) {
-          throw fetchFailure(error, timedOut, url.href, timeoutMs)
+          const failure = fetchFailure(error, timedOut, requestUrl.href, timeoutMs)
+          // 阅读模式失败给出口：默认模式一字未改，随时可以退回去抓原始内容
+          if (useReader) {
+            throw toolError(`${failure.message}；可以改用默认模式（不带 mode）抓原始内容`)
+          }
+          throw failure
+        }
+
+        if (useReader && !response.ok) {
+          throw toolError(
+            `阅读模式抓取失败：HTTP ${response.status}${response.statusText.trim() === '' ? '' : ` ${response.statusText.trim()}`}` +
+              `（${url.href}）；可以改用默认模式（不带 mode）抓原始内容`
+          )
         }
 
         try {
           return saveAbs === null
-            ? await readResponseText(response, url.href)
-            : await downloadResponse(response, saveAbs, input.save_to ?? '', url.href)
+            ? await readResponseText(response, requestUrl.href)
+            : await downloadResponse(response, saveAbs, input.save_to ?? '', requestUrl.href)
         } catch (error) {
           if (error instanceof Error && error.name === FETCH_ERROR_NAME) throw error
           if (isAbortLike(error) || timedOut) {
-            throw fetchFailure(error, timedOut, url.href, timeoutMs)
+            throw fetchFailure(error, timedOut, requestUrl.href, timeoutMs)
           }
-          throw toolError(`请求失败：${detailOf(error)}（${url.href}）`)
+          throw toolError(`请求失败：${detailOf(error)}（${requestUrl.href}）`)
         }
       } finally {
         clearTimeout(timer)

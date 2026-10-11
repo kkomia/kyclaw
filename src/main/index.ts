@@ -15,6 +15,7 @@ import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-mod
 import { registerMemoryIpc } from './ipc/memory'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
+import { registerSearchIpc } from './ipc/search'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerTelemetryIpc } from './ipc/telemetry'
 import { registerTranslateIpc } from './ipc/translate'
@@ -40,6 +41,7 @@ import { showMainWindow } from './window'
 import { installWebviewGuard } from './webview'
 import { resolveModel } from '../mastra/model'
 import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
+import { SEARCH_KEY_SECRET_ID } from '../shared/search'
 import type { AgentEndpoint } from '../shared/ipc'
 
 // R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
@@ -141,6 +143,8 @@ if (!app.requestSingleInstanceLock()) {
     // round 32：思考翻译（翻译一段思考文本 + 可选密钥）。服务地址/模型/目标语言走 settings:update，
     // 密钥与 provider 同一套 safeStorage 槽位；请求只在主进程发（渲染端有 CSP，也不该拿密钥）
     registerTranslateIpc(userDataDir)
+    // round 45：联网搜索的三个可选 Key（Exa / Tavily / Jina）——写/清/状态，与 provider 密钥同一套纪律
+    registerSearchIpc(userDataDir)
     // 模块 3B：本机嵌入引擎 + 本地模型（下载/删除/生效）。引擎按需启动（懒加载）：
     // 只有设置里来源选「本机引擎」且真用上时才会 spawn（见 llama/service.ts）。
     const pushLocalModels = (): void => {
@@ -208,7 +212,17 @@ if (!app.requestSingleInstanceLock()) {
       localEmbedding: () => localModels.embeddingEndpoint(),
       // 模块 4：产出物的 PDF 导出（工具层不 import electron，真实现只能在主进程这一侧给；
       // 隐窗 + printToPDF 见 main/print-pdf.ts）
-      printPdf
+      printPdf,
+      // round 45：联网搜索（现读设置 + 两个可选 Key）。自定义 Key 按当前服务商取；
+      // Jina Key 与搜索链无关，只给 fetch 的阅读模式。明文只进内存，不回渲染端、不进日志。
+      webSearch: () => {
+        const settings = readSettings(settingsPath(userDataDir)).webSearch
+        return {
+          settings,
+          searchKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID[settings.provider]),
+          readerKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID.jina)
+        }
+      }
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }

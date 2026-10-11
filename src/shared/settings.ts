@@ -14,6 +14,7 @@
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
 import { projectSchema } from './projects'
+import { DEFAULT_WEB_SEARCH, webSearchSettingsSchema } from './search'
 
 /** 落盘文件名（userData 下） */
 export const SETTINGS_FILE = 'settings.json'
@@ -345,7 +346,12 @@ export const appSettingsSchema = z.strictObject({
   /** round 28 模块 3 的语义召回（长期记忆；开关 + 嵌入来源，远程 key 走 secrets.json） */
   semanticRecall: semanticRecallSettingsSchema,
   /** round 32 的思考翻译（默认关；服务地址/模型/目标语言 + 可选 key 走 secrets.json） */
-  reasoningTranslate: reasoningTranslateSettingsSchema
+  reasoningTranslate: reasoningTranslateSettingsSchema,
+  /**
+   * round 45 的联网搜索（默认免费档，开箱即用）：后端模式 + 服务商 + 两个预置端点。
+   * 三个可选 Key（Exa / Tavily / Jina）不在设置里，走 safeStorage 保留槽位（见 shared/search.ts）。
+   */
+  webSearch: webSearchSettingsSchema
 })
 
 /**
@@ -466,6 +472,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   langfuse: { endpoint: '' },
   semanticRecall: DEFAULT_SEMANTIC_RECALL,
   reasoningTranslate: DEFAULT_REASONING_TRANSLATE,
+  webSearch: DEFAULT_WEB_SEARCH,
   modelCapabilities: {}
 }
 
@@ -489,6 +496,7 @@ export function defaultSettings(): AppSettings {
     archivedProjects: [],
     langfuse: { endpoint: '' },
     semanticRecall: { ...DEFAULT_SEMANTIC_RECALL },
-    reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE }
+    reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE },
+    webSearch: { ...DEFAULT_WEB_SEARCH }
   }
 }

@@ -38,6 +38,10 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   // 对这两件能力都太松（保守优先，报告里有取舍说明）。
   bash: 'write',
   fetch: 'write',
+  // round 45：web_search 与 fetch **同档**（写类，默认问）。网络出站与 fetch 同性质 ——
+  // guard 的 capabilityOf 把它认成 'network'，判定与 fetch 不带 save_to 时逐字一致
+  // （单工作区 full / 全部 full → 免审；单工作区上落了 (工具×工作区) 规则也放行）。
+  web_search: 'write',
   // git 只读三件套是真只读（git 自己不写索引）；add / commit 动仓库，按写类
   git_status: 'read',
   git_diff: 'read',

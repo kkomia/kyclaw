@@ -12,6 +12,7 @@ import type { LocalModelsOverview } from './local-models'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
 import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
+import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from './search'
 import type { PdfExtractResult } from './attachments'
 import {
   type FileBytesResult,
@@ -204,6 +205,17 @@ export const IPC_CHANNELS = {
     setKey: 'translate:set-key',
     /** 清除可选 API Key（无入参，返回清除后的状态） */
     clearKey: 'translate:clear-key'
+  },
+  search: {
+    /**
+     * round 45：联网搜索的三个可选 Key（Exa / Tavily / Jina）的状态（无入参，
+     * 返回 { exa, tavily, jina } 三份 ProviderKeyState——与 provider 密钥同形状，无明文）。
+     */
+    keyStates: 'search:key-states',
+    /** 写一个 Key（入参 [target, key]，返回 {hasKey:true}——永远不回明文） */
+    setKey: 'search:set-key',
+    /** 清除一个 Key（入参 [target]；返回清除后的三份状态） */
+    clearKey: 'search:clear-key'
   },
   localModels: {
     /** 「本地模型」组的总览（无入参，返回 LocalModelsOverview：清单 + 已下载 + 引擎相位 + 下载进度） */
@@ -489,6 +501,20 @@ export const translateRunArgsSchema = z.tuple([
 export const translateKeyArgsSchema = z.tuple([z.string().min(1)])
 
 /**
+ * round 45：联网搜索的入参/回包。
+ *   - `search:key-states` / `clear-key`：clear-key 收单个 target；key-states 不收参数；
+ *   - `search:set-key`：[target, key]（target 三选一，key 非空；明文只在写方向出现一次）；
+ *   - 状态回包是 target → ProviderKeyState 的记录（与 provider 密钥同形状，复用同一份 schema）。
+ */
+export const searchSetKeyArgsSchema = z.tuple([z.enum(SEARCH_KEY_TARGETS), z.string().min(1)])
+
+export const searchClearKeyArgsSchema = z.tuple([z.enum(SEARCH_KEY_TARGETS)])
+
+export const searchKeyStatesSchema = z.record(z.string(), providerKeyStateSchema)
+
+export type SearchKeyStates = Record<SearchKeyTarget, ProviderKeyState>
+
+/**
  * 插件通道（round 10）的入参与回包：
  *   - 添加市场：{ source, ref?, sparsePaths? }（三态来源判定与克隆在主进程）；
  *   - 安装/卸载/刷新/移除：id / { marketplaceId, name }（市场清单是主进程读的，渲染端只给标识）。
@@ -729,6 +755,8 @@ export interface KyclawApi {
   memory: KyclawMemoryApi
   localModels: KyclawLocalModelsApi
   translate: KyclawTranslateApi
+  /** round 45：联网搜索的三个可选 Key（Exa / Tavily / Jina）的写/清/状态 */
+  search: KyclawSearchApi
 }
 
 /**
@@ -763,6 +791,21 @@ export interface KyclawTranslateApi {
   setKey(key: string): Promise<{ hasKey: true }>
   /** 清除密钥（幂等；返回清除后的状态） */
   clearKey(): Promise<ProviderKeyState>
+}
+
+/**
+ * preload 暴露给渲染端的联网搜索面（round 45）：三个可选 Key 的写/清/状态。
+ * 与 provider / Langfuse / 嵌入 / 翻译密钥同一套纪律：**明文只在写方向上出现一次**，
+ * 读方向只有"有没有 / 要不要重录"；后端模式/服务商/地址是普通设置（走 settings:update），
+ * 搜索请求本身在 agent 进程里发（渲染端拿不到 Key，也不需要）。
+ */
+export interface KyclawSearchApi {
+  /** Exa / Tavily / Jina 三档 Key 的状态（没有 = 没配过） */
+  keyStates(): Promise<SearchKeyStates>
+  /** 写一个 Key：成功只回 {hasKey:true}（明文永不回渲染端） */
+  setKey(target: SearchKeyTarget, key: string): Promise<{ hasKey: true }>
+  /** 清除一个 Key（幂等；返回清除后的三份状态） */
+  clearKey(target: SearchKeyTarget): Promise<SearchKeyStates>
 }
 
 /**
