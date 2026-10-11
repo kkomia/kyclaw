@@ -46,10 +46,13 @@
     "@mastra/memory": "1.36.0",
     "@mastra/observability": "1.18.4",
     "ai": "7.0.137",
+    "docx": "9.9.0",
     "electron-updater": "6.8.9",
+    "exceljs": "4.4.0",
     "hono": "4.13.13",
     "node-pty": "1.1.0",
-    "pdfjs-dist": "6.4.299"
+    "pdfjs-dist": "6.4.299",
+    "pptxgenjs": "4.0.1"
   },
   "devDependencies": {
     "@ai-sdk/react": "4.0.140",

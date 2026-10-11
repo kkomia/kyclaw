@@ -7,6 +7,9 @@
  * round28 模块 1 新增：`bash` / `fetch` 按**写类**（默认问；它们能碰工作区之外的东西，read 档太松）；
  * `git_status` / `git_diff` / `git_log` 只读（git 自己不写索引）；`git_add` / `git_commit` 写类。
  *
+ * 模块 4 新增：产出物五件（create_report / create_pdf / create_excel / create_ppt / create_docx）
+ * 按**写类**，且与内置文件工具同属"执行必过引擎"那一档（见下面的 WORKSPACE_FILE_TOOLS）。
+ *
  * 这个函数不认识设置（纯名字 → 三档），所以它对 MCP 名字的分级只是**名字证据**：
  * 末段是 read/glob/grep 也照样回 'read'。MCP 工具"未标只读默认按写类询问"的口径由
  * `mastra/mcp.ts` 的 `createMcpClassify` 叠加（标了只读才 read；未标按写，末段是 delete/move 保留危险档）。
@@ -40,7 +43,14 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   git_diff: 'read',
   git_log: 'read',
   git_add: 'write',
-  git_commit: 'write'
+  git_commit: 'write',
+  // 模块 4：产出物五件（报告 / PDF / Excel / PPT / Word）。都是"往工作区落一个文件"，
+  // 与 write 同档（默认问；目标工作区 full 或命中"永久允许"规则才免审）
+  create_report: 'write',
+  create_pdf: 'write',
+  create_excel: 'write',
+  create_ppt: 'write',
+  create_docx: 'write'
 }
 
 /** 没在表里的工具（含 MCP 里未标只读的那些）按写类处理：默认问一次，不静默放行 */
@@ -50,8 +60,23 @@ const DEFAULT_CLASS: ToolClass = 'write'
  * 内置文件工具五件套（T11）：执行路径**必过引擎**（guard.toolTarget/scanRoot）——
  * 目标解析不到时执行即拒（fail closed），所以 guard 对"写类 + 目标不可解析"的不问策略
  * 只对它们成立。判身份用**整名**：`mcp__a__write` 末段虽是 write，也不在这里。
+ *
+ * 模块 4 的产出物五件同属这一档：它们只写"guard 解析出来的那个绝对路径"，
+ * 目标不可解析时执行同样 fail closed（工具层先 toolTarget 再渲染/落盘），所以按同一口径判审批
+ * —— 否则 `mode='full'` 的工作区里写文件免审、生成报告却要弹卡，同一件事两套规则说不通。
  */
-const WORKSPACE_FILE_TOOLS = new Set(['read', 'glob', 'grep', 'write', 'edit'])
+const WORKSPACE_FILE_TOOLS = new Set([
+  'read',
+  'glob',
+  'grep',
+  'write',
+  'edit',
+  'create_report',
+  'create_pdf',
+  'create_excel',
+  'create_ppt',
+  'create_docx'
+])
 
 export function classifyToolCall(tool: string, input?: unknown): ToolClass {
   void input

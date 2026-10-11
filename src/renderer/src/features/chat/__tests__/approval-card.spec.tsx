@@ -88,6 +88,32 @@ describe('ApprovalCard · 内容', () => {
     expect(screen.queryByTestId('approval-target')).not.toBeInTheDocument()
     expect(screen.queryByTestId('approval-detail')).not.toBeInTheDocument()
   })
+
+  it('模块 4 产出物：中文标签 + 目标路径，没有 diff 区（不是文本改写，没有行级差异）', () => {
+    decideWith({
+      toolName: 'create_report',
+      input: { title: '季度复盘', html: '<h2>结论</h2>', path: 'reports/q3.html' },
+      path: 'reports/q3.html'
+    })
+
+    const card = screen.getByTestId('approval-card')
+    expect(card).toHaveAttribute('data-tool', 'create_report')
+    expect(card).toHaveTextContent('生成报告')
+    expect(screen.getByTestId('approval-target')).toHaveTextContent('reports/q3.html')
+    expect(screen.queryByTestId('approval-diff')).not.toBeInTheDocument()
+  })
+
+  it('模块 4 产出物：没给 path 时（按标题派生文件名）卡片不炸，只显示已有信息', () => {
+    decideWith({
+      toolName: 'create_pdf',
+      input: { title: '季度复盘', html: '<p>x</p>' },
+      path: null
+    })
+
+    const card = screen.getByTestId('approval-card')
+    expect(card).toHaveTextContent('导出 PDF')
+    expect(screen.queryByTestId('approval-target')).not.toBeInTheDocument()
+  })
 })
 
 describe('ApprovalCard · 四决策', () => {

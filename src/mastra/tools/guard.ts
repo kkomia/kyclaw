@@ -50,7 +50,11 @@ export interface PathStat {
 export interface ToolFs {
   /** 读文件内容；给了 maxBytes 就最多读这么多字节（大文件不整个进内存） */
   readFile(path: string, maxBytes?: number): Promise<Buffer>
-  writeFile(path: string, data: string): Promise<void>
+  /**
+   * 写文件（整文件覆盖）：文本走 string（UTF-8），二进制走 Uint8Array ——
+   * 产出物工具（模块 4）的 PDF / xlsx / pptx / docx 都是二进制容器，走的是后一支。
+   */
+  writeFile(path: string, data: string | Uint8Array): Promise<void>
   stat(path: string): Promise<PathStat>
   /** 递归创建目录 */
   mkdir(path: string): Promise<void>

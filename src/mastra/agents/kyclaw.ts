@@ -1,9 +1,10 @@
 /**
  * kyclaw agent 的装配（身份 + 模型 + 工具集 + 记忆）。
  *
- * 工具集（T11 + round28 模块 1）：文件工具五件套（read/write/edit/glob/grep）+
- * bash / fetch / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit），
- * 全部经 guard 装配——文件工具路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
+ * 工具集（T11 + round28 模块 1 + 模块 4）：文件工具五件套（read/write/edit/glob/grep）+
+ * bash / fetch / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit）
+ * + 产出物五件（create_report/create_pdf/create_excel/create_ppt/create_docx），
+ * 全部经 guard 装配——文件工具与产出物路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
  * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问；(工具×工作区) 规则与
  * mode='full' 工作区都可豁免 —— round28 用户口径：开了「完全访问」就不再为 bash/fetch 弹卡）；
  * 写类按 spec §5.2 挂审批（requireApproval）。
@@ -44,14 +45,19 @@ import { currentShell, type ResolvedShell } from '../../main/git-bash'
 import { createToolContext, needsApproval } from '../tools/guard'
 import { createBashTool, shellGuidance } from '../tools/bash'
 import { createDeleteTool } from '../tools/delete'
+import { createDocxTool } from '../tools/docx'
 import { createEditTool } from '../tools/edit'
+import { createExcelTool } from '../tools/excel'
 import { createFetchTool } from '../tools/fetch'
 import { createGitTools } from '../tools/git'
 import { createGlobTool } from '../tools/glob'
 import { createGrepTool } from '../tools/grep'
 import { createMoveTool } from '../tools/move'
+import { createPptTool } from '../tools/ppt'
 import { createReadTool } from '../tools/read'
+import { createPdfTool, createReportTool } from '../tools/report'
 import { createWriteTool } from '../tools/write'
+import type { PdfPrinter } from '../tools/artifacts'
 import { createMcpClassify, type McpToolGate } from '../mcp'
 import type { KyclawModel } from '../model'
 
@@ -80,6 +86,12 @@ export interface KyclawAgentTools {
    * 传进去的 gate 就是 guard.needsApproval 本身——内置与外部工具一条审批路径。
    */
   mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
+  /**
+   * 模块 4：PDF 打印钩子（HTML → PDF 字节）。**缺省 = 没有**（create_pdf 报"环境不支持"，
+   * 其余产出物照常）。生产由 main/index.ts 注入 Electron printToPDF 的实现，测试注入 stub
+   * —— 工具层不 import electron，这一层是唯一的注入点。
+   */
+  printPdf?: PdfPrinter
 }
 
 /** kyclaw 的身份与行为底线（与 shell 无关的部分；shell 口径见 shellGuidance） */
@@ -90,7 +102,15 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
 - bash 工具执行 shell 命令：默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请放到后台，不要前台常驻。
 - 联网用 fetch 工具（GET/POST、自定义请求头）；要保存响应就带 save_to（落进工作区）。
 - git 用 git_status / git_diff / git_log 查看（只读）；git_add / git_commit 提交改动；不做 push，需要推远端时请用户自己操作。
-- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit）执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
+- 产出物按成品形态选工具，都落到当前会话工作区（相对路径；不给 path 就按标题派生文件名），返回文件路径与字节数：
+  · create_report：排版好的单文件 HTML 报告（自带样式、离线可看、可打印）——说明性长文、方案、总结、带表格的盘点首选；
+  · create_pdf：同样内容的 PDF（A4，走本机 Electron 排版导出）——要外发、打印或归档时用；
+  · create_excel：.xlsx 工作簿（sheets[].rows 是二维单元格数组，数字保持数字）；
+  · create_ppt：.pptx 演示文稿（每页标题 + 要点条目）；
+  · create_docx：Word 文档（heading / paragraph / bullets / table 四种块，按顺序排）。
+  报告与 PDF 的 html 是**真 HTML 片段**（不是 Markdown）：用 h2/h3、p、ul/ol、table、pre/code 写正文，
+  不要写 <html>/<head>/<style> 外壳、不要重复一级标题（模板已经带上标题与样式）。
+- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
 /**
@@ -145,6 +165,13 @@ export async function createKyclawAgent(
     fetch: await createFetchTool(ctx),
     delete: await createDeleteTool(ctx),
     move: await createMoveTool(ctx),
+    // 模块 4：产出物五件（报告 / PDF / Excel / PPT / Word）。printPdf 是主进程注入的钩子，
+    // 没注入时 create_pdf 报"环境不支持"，其余四件不受影响（见 tools/artifacts.ts 头注）
+    create_report: await createReportTool(ctx),
+    create_pdf: await createPdfTool(ctx, toolOptions?.printPdf),
+    create_excel: await createExcelTool(ctx),
+    create_ppt: await createPptTool(ctx),
+    create_docx: await createDocxTool(ctx),
     ...(await createGitTools(ctx))
   }
 

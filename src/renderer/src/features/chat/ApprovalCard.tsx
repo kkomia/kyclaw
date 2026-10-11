@@ -46,7 +46,13 @@ export interface ApprovalCardProps {
 /** 工具名 → 卡片标题（认不出就用工具名本身，不猜） */
 const TOOL_LABELS: Record<string, string> = {
   write: '写入文件',
-  edit: '编辑文件'
+  edit: '编辑文件',
+  // 模块 4：产出物五件（写类，与 write 同档审批）
+  create_report: '生成报告',
+  create_pdf: '导出 PDF',
+  create_excel: '生成 Excel',
+  create_ppt: '生成 PPT',
+  create_docx: '生成 Word'
 }
 
 const LINE_CLASS: Record<DiffLine['kind'], string> = {

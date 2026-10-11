@@ -19,6 +19,9 @@
  *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区 → 授权列表）。
  * - 追踪（T17）：Langfuse exporter **默认关**；地址 + 公私钥配齐（选项 `langfuse` 现读）才挂上
  *   observability 入口，判定与装配在 telemetry.ts。
+ * - 产出物（模块 4）：五个格式工具在 agent 侧注册（tools/report|excel|ppt|docx.ts）；PDF 那件走
+ *   **注入的 printPdf 钩子** —— 本模块不 import electron，真实现（Electron printToPDF）由 main/index.ts
+ *   经选项传进来；没注入时 create_pdf 报"环境不支持"，其余四件照常。
  * - chat 路由用 @mastra/ai-sdk 的 `chatRoute`：`POST /chat/:agentId`，响应是 AI SDK UI 消息流
  *   （SSE）——T7 的 useChat 直接吃这口。
  * - 协议版本 v7（T11）：渲染端是 ai@7；**工具审批 part（`tool-approval-request`）只在 v6 及以后
@@ -61,6 +64,7 @@ import {
   type RecallRuntime
 } from './embedding'
 import type { McpToolGate } from './mcp'
+import type { PdfPrinter } from './tools/artifacts'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
@@ -194,6 +198,11 @@ export async function createKyclawMastra(options: {
   localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
   /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
   recallEmbedder?: MastraEmbeddingModel<string>
+  /**
+   * 模块 4：PDF 打印钩子（HTML → PDF 字节）。生产由 main/index.ts 注入 Electron printToPDF；
+   * 缺省 = 没有（create_pdf 报"环境不支持"，其余产出物照常）。
+   */
+  printPdf?: PdfPrinter
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass, LibSQLVector: LibSQLVectorClass } =
@@ -284,7 +293,9 @@ export async function createKyclawMastra(options: {
         projectOf: (threadId) => sessionProjects.get(threadId),
         permissionRules: options.permissionRules,
         mcpServers: options.mcpServers,
-        mcpTools: options.mcpTools
+        mcpTools: options.mcpTools,
+        // 模块 4：产出物的 PDF 钩子（缺省没有；有 electron 的那一侧才给得出真实现）
+        printPdf: options.printPdf
       })
     },
     storage,

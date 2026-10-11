@@ -44,6 +44,18 @@ describe('classifyToolCall：内置文件工具', () => {
     expect(classifyToolCall(' EDIT ')).toBe('write')
     expect(classifyToolCall('Delete')).toBe('dangerous')
   })
+
+  it('模块 4 产出物五件 → write（默认问；不是"未知名字碰巧落在 write"）', () => {
+    for (const name of [
+      'create_report',
+      'create_pdf',
+      'create_excel',
+      'create_ppt',
+      'create_docx'
+    ]) {
+      expect(classifyToolCall(name), name).toBe('write')
+    }
+  })
 })
 
 describe('classifyToolCall：MCP / 外部工具', () => {
@@ -64,13 +76,27 @@ describe('classifyToolCall：MCP / 外部工具', () => {
 })
 
 describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判定）', () => {
-  it('五件套是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
-    for (const name of ['read', 'glob', 'grep', 'write', 'edit', ' WRITE ']) {
+  it('五件套 + 产出物五件是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
+    for (const name of [
+      'read',
+      'glob',
+      'grep',
+      'write',
+      'edit',
+      ' WRITE ',
+      // 模块 4：产出物只写 guard 解析出来的那个路径，执行同样 fail closed → 与五件套同档
+      'create_report',
+      'create_pdf',
+      'create_excel',
+      'create_ppt',
+      'create_docx'
+    ]) {
       expect(isWorkspaceFileTool(name), name).toBe(true)
     }
     for (const name of [
       'mcp__a__write',
       'mcp__a__edit',
+      'mcp__a__create_report',
       'delete',
       'move',
       'bash',

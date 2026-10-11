@@ -25,6 +25,7 @@ import { registerWorkbenchIpc } from './ipc/workbench'
 import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
+import { printPdf } from './print-pdf'
 import { getProviderKey, secretsPath } from './secrets'
 import { readSettings, settingsPath } from './settings'
 import { readLangfuseConfig } from './telemetry'
@@ -204,7 +205,10 @@ if (!app.requestSingleInstanceLock()) {
       embeddingKey: () => getProviderKey(secretsFile, EMBEDDING_KEY_SECRET_ID),
       // 模块 3B：本机引擎这一路（设置里来源选它时才会被调用）。返回 null = 还没有启用的本机模型；
       // 引擎起不来会抛（装配层把它翻成"这次运行没有召回"的人话，不拦对话）
-      localEmbedding: () => localModels.embeddingEndpoint()
+      localEmbedding: () => localModels.embeddingEndpoint(),
+      // 模块 4：产出物的 PDF 导出（工具层不 import electron，真实现只能在主进程这一侧给；
+      // 隐窗 + printToPDF 见 main/print-pdf.ts）
+      printPdf
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }

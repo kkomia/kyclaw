@@ -39,6 +39,7 @@ import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { MastraEmbeddingModel } from '@mastra/core/vector'
 import type { LocalEmbeddingEndpoint, RecallRuntime } from '../../mastra/embedding'
+import type { PdfPrinter } from '../../mastra/tools/artifacts'
 
 const HOST = '127.0.0.1'
 
@@ -122,6 +123,11 @@ export interface AgentServerOptions {
   localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
   /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
   recallEmbedder?: MastraEmbeddingModel<string>
+  /**
+   * 模块 4：PDF 打印钩子（HTML → PDF 字节）。**缺省 = 没有**（create_pdf 报"环境不支持"）。
+   * 生产由 main/index.ts 注入 Electron printToPDF 的实现（本模块刻意不 import electron）。
+   */
+  printPdf?: PdfPrinter
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -285,7 +291,9 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       semanticRecall: semanticRecallFor,
       embeddingKey: embeddingKeyFor,
       ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
-      ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder })
+      ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder }),
+      // 模块 4：产出物的 PDF 钩子（缺省没有 —— 无窗口环境/测试里 create_pdf 会明确报不支持）
+      ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf })
     })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
