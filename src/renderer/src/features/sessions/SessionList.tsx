@@ -15,7 +15,8 @@ import { navItemClass } from '../../components/shell/nav-item'
  *
  * 交互：
  *   - 点会话 = 选中 + 切回对话页（当前页不在会话上时，点击要能回到对话）；
- *   - 行尾"更多"菜单（hover/聚焦出现）：重命名 / 删除；
+ *   - 行尾"更多"菜单（hover/聚焦出现）：重命名 / 删除；round 16 起 ⋯ 用固定宽度占位
+ *     （w-7 shrink-0，不再是绝对定位压住标题）——长标题截断在按钮内，出现/消失不挪动文本；
  *   - 重命名与删除各是一个**受控 Dialog**（R12）：删除必须二次确认；重命名给输入框；
  *   - `notices[id]` = 该会话在后台完成了回复（人不在它上面）：行内一个小圆点。
  */
@@ -143,12 +144,12 @@ export function SessionList({
                 const title = session.title ?? UNTITLED
 
                 return (
-                  <li key={session.id} className="group/row relative flex items-center">
+                  <li key={session.id} className="group/row flex items-center gap-1">
                     <button
                       type="button"
                       data-testid={`session-item-${session.id}`}
                       aria-current={selected ? 'true' : undefined}
-                      className={navItemClass({ selected })}
+                      className={cn(navItemClass({ selected }), 'min-w-0 flex-1')}
                       onClick={() => {
                         onSelect(session.id)
                         navigate('/chat')
@@ -164,9 +165,11 @@ export function SessionList({
                         />
                       ) : null}
                     </button>
-                    {/* hover / 键盘聚焦时出现的行尾操作（菜单无遮罩，样式见 Menu）；草稿没有 */}
+                    {/* hover / 键盘聚焦时出现的行尾操作（菜单无遮罩，样式见 Menu）；草稿没有。
+                        round 16：⋯ 用固定宽度占位（w-7 shrink-0，不再绝对定位压住标题）——
+                        多长的名字都截在按钮内，出现/消失不挪动文本。 */}
                     {session.draft === true ? null : (
-                      <div className="absolute right-1 opacity-0 transition-opacity duration-(--motion-fast) group-hover/row:opacity-100 focus-within:opacity-100">
+                      <div className="w-7 shrink-0 opacity-0 transition-opacity duration-(--motion-fast) group-hover/row:opacity-100 focus-within:opacity-100">
                         <Menu
                           align="end"
                           trigger={

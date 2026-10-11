@@ -13,8 +13,8 @@ import { useProjectsStore } from './projects-store'
  * 侧栏「项目」区的接线（T18）：把 settings（项目清单）/ projects-store（会话归属）/ sessions-store
  * （会话本体）三份数据拼成 ProjectList 要的形状，并管住三件事：
  *   1. 首屏拉一次映射（与会话列表并行；失败只在区里落一行错误，不炸侧栏）；
- *   2. **点项目行 = 在这个项目里开一个新会话**（当前项目 = 当前会话的归属，见 projects-store 头注；
- *      所以"新建会话"与点项目行同一个落点算法，不会打架）；
+ *   2. **点项目行 = 展开/折叠名下会话**（round 16 用户实拍改口：不再"点开一个新会话"——
+ *      折叠状态由 ProjectList 自己按 id 记忆；在这个项目里开会话走创建对话框的收尾）；
  *   3. 建项目（两路入口 → 同一个对话框）与删项目（连带把名下会话的归属摘掉）的收尾。
  */
 export function ProjectsSection(): React.JSX.Element {
@@ -50,9 +50,7 @@ export function ProjectsSection(): React.JSX.Element {
     [threads, activeId, projectOf, projectIds]
   )
 
-  const activeProjectId = activeId === null ? null : projectOf(activeId)
-
-  /** 在这个项目里开一个新会话（点项目行 / 新建会话都走它） */
+  /** 在这个项目里开一个新会话（round 16 起只有"项目刚建好"这一条路走它） */
   const openSessionIn = (projectId: string | null): void => {
     startNew(projectId)
     navigate('/chat')
@@ -77,10 +75,8 @@ export function ProjectsSection(): React.JSX.Element {
       <ProjectList
         projects={projects}
         sessionsOf={(projectId) => byProject[projectId] ?? []}
-        activeProjectId={activeProjectId}
         activeSessionId={activeId}
         notices={notices}
-        onSelectProject={openSessionIn}
         onSelectSession={(threadId) => {
           select(threadId)
           navigate('/chat')

@@ -3,7 +3,7 @@ import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
-import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
+import { resetProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
 import type { AppSettings } from '@shared/settings'
@@ -304,6 +304,7 @@ describe('SessionsController：项目区（T18）', () => {
 
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
+    window.localStorage.clear()
   })
 
   it('项目名下的会话挂在项目下（平铺区里不再重复出现）', async () => {
@@ -319,23 +320,25 @@ describe('SessionsController：项目区（T18）', () => {
     expect(screen.queryByTestId('session-group-earlier')).not.toBeInTheDocument()
   })
 
-  it('点项目行：在它里面开一个新会话（草稿挂在项目下、选中态），映射写到服务端', async () => {
-    const { server } = await mountWithProjects()
+  it('点项目行：展开/折叠名下会话（round 16 起不再开会话；折叠记 localStorage）', async () => {
+    const { server } = await mountWithProjects([{ threadId: 't-b', projectId: 'p1' }])
 
-    fireEvent.click(screen.getByTestId('project-item-p1'))
+    const projectRow = screen.getByTestId('project-item-p1')
+    const fold = (): HTMLElement => screen.getByTestId('project-sessions-p1')
+    const activeBefore = useSessionsStore.getState().activeId
+    expect(fold()).toHaveAttribute('data-open', 'true')
 
-    const draft = useSessionsStore.getState().activeId
-    expect(draft).not.toBeNull()
-    await waitFor(() => {
-      expect(screen.getByTestId(`session-item-${draft ?? ''}`)).toHaveTextContent('新会话')
-    })
-    expect(screen.getByTestId('project-group-p1')).toContainElement(
-      screen.getByTestId(`session-item-${draft ?? ''}`)
-    )
-    expect(useProjectsStore.getState().projectOf(draft)).toBe('p1')
-    await waitFor(() => {
-      expect(server.mappings).toEqual([{ threadId: draft, projectId: 'p1' }])
-    })
+    fireEvent.click(projectRow)
+
+    expect(fold()).toHaveAttribute('data-open', 'false')
+    expect(projectRow).toHaveAttribute('aria-expanded', 'false')
+    expect(window.localStorage.getItem('kyclaw.projects.collapsed')).toContain('"p1"')
+    // 点击语义只有折叠：没有新会话、没有新映射
+    expect(useSessionsStore.getState().activeId).toBe(activeBefore)
+    expect(server.mappings).toEqual([{ threadId: 't-b', projectId: 'p1' }])
+
+    fireEvent.click(projectRow)
+    expect(fold()).toHaveAttribute('data-open', 'true')
   })
 
   it('点项目名下的会话：选中它并回到对话页', async () => {
