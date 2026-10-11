@@ -10,6 +10,7 @@
  * 判不出唯一根（没有工作区 / 多条并列）时 `notice` 给一句人话，四工具一起显示空态
  * —— 与输入框 `@` 的口径一致（那边也是判不出就拒绝）。
  */
+import { useCallback } from 'react'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
@@ -34,7 +35,14 @@ export interface WorkbenchRoot {
 export function useWorkbenchRoot(): WorkbenchRoot {
   const threadId = useSessionsStore((state) => state.activeId)
   const settings = useSettingsStore((state) => state.settings)
-  const projectOf = useProjectsStore((state) => state.projectOf)
+  // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
+  // （「移至项目」/ 映射快照迟到）组件不重渲染 → 树停在旧根，而主进程已按新根解析 →
+  // 点文件夹报"这个文件夹不在磁盘上了"（用户实报，回归测试见 workbench-root.spec.tsx）。
+  const mappings = useProjectsStore((state) => state.mappings)
+  const projectOf = useCallback(
+    (id: string | null): string | null => (id === null ? null : (mappings[id] ?? null)),
+    [mappings]
+  )
 
   const workspace = sessionWorkspaceOf({ threadId, settings, projectOf })
   const workbench = window.kyclaw?.workbench ?? null
