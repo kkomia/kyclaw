@@ -320,12 +320,27 @@ export type LangfuseSettings = z.infer<typeof langfuseSettingsSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 
-/** 语义召回缺省：开着、走 OpenAI 兼容嵌入服务（地址与模型留空 = 没配 → 这一路起不来） */
+/**
+ * 远程嵌入档的预置（用户指定：硅基流动的免费嵌入档）：baseURL / 模型 / 拿 key 的页面。
+ * 前两个直接当缺省值，用户贴一把 key 就能用（不必手填服务地址与模型）；也可以改成任意
+ * OpenAI 兼容服务。`keyUrl` 只是"去哪拿 key"的入口，跟着预置走。
+ *
+ * 核实程度（2026-10-11 本机）：`https://api.siliconflow.cn/v1` 与 `/v1/models` 都活着
+ * （无 key 回 401 "Token is invalid"）、key 页可达（307）；模型名按用户/任务书给定
+ * （该值与两个地址都可在设置里随手改掉，改错只是"这次没有召回"）。
+ */
+export const SEMANTIC_RECALL_PRESET = {
+  baseUrl: 'https://api.siliconflow.cn/v1',
+  model: 'BAAI/bge-m3',
+  keyUrl: 'https://cloud.siliconflow.cn/account/ak'
+} as const
+
+/** 语义召回缺省：开着、走预置的嵌入服务（用户贴 key 即用；没配 key = 这一路起不来） */
 export const DEFAULT_SEMANTIC_RECALL: SemanticRecallSettings = {
   enabled: true,
   source: 'remote',
-  baseUrl: '',
-  model: ''
+  baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
+  model: SEMANTIC_RECALL_PRESET.model
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {

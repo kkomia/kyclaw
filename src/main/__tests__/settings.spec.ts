@@ -120,7 +120,60 @@ describe('设置存储（userData 下的 settings.json）', () => {
       archivedThreads: [],
       archivedProjects: [],
       langfuse: { endpoint: '' },
-      semanticRecall: { enabled: true, source: 'remote', baseUrl: '', model: '' }
+      semanticRecall: {
+        enabled: true,
+        source: 'remote',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        model: 'BAAI/bge-m3'
+      }
+    })
+  })
+
+  it('语义召回：v1 形状（本地/远程两路）字段名搬家，取值原样保留（预置只是缺字段时的缺省）', () => {
+    const file = settingsPath(dir)
+
+    // v1 形状：source=local + remoteBaseUrl/remoteModel（从未发布，但开发机可能落过盘）
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'system',
+        fontTier: 'default',
+        providers: [],
+        workspaces: [],
+        semanticRecall: {
+          enabled: true,
+          source: 'local',
+          remoteBaseUrl: 'https://embed.example.com/v1',
+          remoteModel: 'my-embed'
+        }
+      }),
+      'utf8'
+    )
+    expect(readSettings(file).semanticRecall).toEqual({
+      enabled: true,
+      source: 'remote',
+      baseUrl: 'https://embed.example.com/v1',
+      model: 'my-embed'
+    })
+
+    // 落过盘的取值原样保留（空串也保留：用户清空就是清空，写什么读什么）；
+    // 预置只是"没有这个字段时"的缺省，不回头改已经存在的那条
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'system',
+        fontTier: 'default',
+        providers: [],
+        workspaces: [],
+        semanticRecall: { enabled: false, source: 'remote', baseUrl: '', model: '' }
+      }),
+      'utf8'
+    )
+    expect(readSettings(file).semanticRecall).toEqual({
+      enabled: false,
+      source: 'remote',
+      baseUrl: '',
+      model: ''
     })
   })
 

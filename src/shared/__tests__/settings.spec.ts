@@ -31,7 +31,12 @@ describe('AppSettings schema', () => {
       archivedThreads: [],
       archivedProjects: [],
       langfuse: { endpoint: '' },
-      semanticRecall: { enabled: true, source: 'remote', baseUrl: '', model: '' }
+      semanticRecall: {
+        enabled: true,
+        source: 'remote',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        model: 'BAAI/bge-m3'
+      }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
   })

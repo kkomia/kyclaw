@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { RecallStatus } from '@shared/memory'
-import { defaultSettings } from '@shared/settings'
+import { defaultSettings, SEMANTIC_RECALL_PRESET } from '@shared/settings'
 import { RecallSettings, RecallStatusLine } from '../RecallSettings'
 import { recallStatusText } from '../status-text'
 
@@ -74,22 +74,91 @@ describe('状态文案（纯函数）', () => {
 })
 
 describe('「记忆」栏的语义召回组', () => {
-  it('默认：开关是开的（缺省开）、三项空着，状态行显示服务端那句话', async () => {
+  it('默认：开关是开的（缺省开）、地址与模型预置成 SiliconFlow 档，用户只需贴 key', async () => {
     const fetchStub = stubRecallFetch({
       state: 'unavailable',
       active: false,
       enabled: true,
       source: 'remote',
-      detail: '嵌入服务配置不完整：缺服务地址、缺模型名、缺 API Key（这次运行没有召回）'
+      detail: '嵌入服务配置不完整：缺 API Key（这次运行没有召回）'
     })
     installKyclawBridge()
     render(<RecallSettings />)
 
     expect(screen.getByTestId('recall-enabled')).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByTestId('recall-base-url')).toHaveValue('')
-    expect(await screen.findByTestId('recall-settings-status')).toHaveTextContent('缺服务地址')
+    // 预置值来自 shared/settings 的 SEMANTIC_RECALL_PRESET（缺省即预置：不必手填这两项）
+    expect(screen.getByTestId('recall-base-url')).toHaveValue(SEMANTIC_RECALL_PRESET.baseUrl)
+    expect(screen.getByTestId('recall-model')).toHaveValue(SEMANTIC_RECALL_PRESET.model)
+    expect(await screen.findByTestId('recall-settings-status')).toHaveTextContent('缺 API Key')
     // 状态是问 agent 服务要的现读值（不是设置的期望值）
     await waitFor(() => expect(fetchStub.paths).toContain('/api/memory/recall'))
+  })
+
+  it('「获取 API Key」是外部链接（新窗口交给壳层去开系统浏览器）', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    installKyclawBridge()
+    render(<RecallSettings />)
+
+    const link = screen.getByTestId('recall-key-link')
+    expect(link).toHaveTextContent('获取 API Key')
+    expect(link).toHaveAttribute('href', SEMANTIC_RECALL_PRESET.keyUrl)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noreferrer')
+  })
+
+  it('落盘还空着（没配过）时表单先按预置填：贴一把 key 保存，地址与模型一并落盘', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    const bridge = installKyclawBridge()
+    // v2 早期落过盘的形状：enabled 开着但地址/模型是空串（本机 userData 现在就是这个）
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        semanticRecall: { enabled: true, source: 'remote', baseUrl: '', model: '' }
+      },
+      loaded: true
+    })
+    render(<RecallSettings />)
+
+    expect(screen.getByTestId('recall-base-url')).toHaveValue(SEMANTIC_RECALL_PRESET.baseUrl)
+    expect(screen.getByTestId('recall-model')).toHaveValue(SEMANTIC_RECALL_PRESET.model)
+
+    fireEvent.change(screen.getByTestId('recall-api-key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByTestId('recall-save'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        semanticRecall: {
+          enabled: true,
+          source: 'remote',
+          baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
+          model: SEMANTIC_RECALL_PRESET.model
+        }
+      })
+    )
+    await waitFor(() => expect(bridge.memory.setEmbeddingKey).toHaveBeenCalledWith('sk-test'))
+  })
+
+  it('地址/模型可改成任意 OpenAI 兼容服务（保存的就是用户填的值）', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    const bridge = installKyclawBridge()
+    render(<RecallSettings />)
+
+    const baseUrl = screen.getByTestId('recall-base-url')
+    fireEvent.change(baseUrl, { target: { value: 'https://api.example.com/v1' } })
+    expect(baseUrl).toHaveValue('https://api.example.com/v1')
+    fireEvent.change(screen.getByTestId('recall-model'), { target: { value: 'my-embed' } })
+    fireEvent.click(screen.getByTestId('recall-save'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        semanticRecall: {
+          enabled: true,
+          source: 'remote',
+          baseUrl: 'https://api.example.com/v1',
+          model: 'my-embed'
+        }
+      })
+    )
   })
 
   it('关掉开关：落盘 enabled=false（其余字段保持原值）', async () => {
@@ -101,7 +170,12 @@ describe('「记忆」栏的语义召回组', () => {
 
     await waitFor(() =>
       expect(bridge.update).toHaveBeenCalledWith({
-        semanticRecall: { enabled: false, source: 'remote', baseUrl: '', model: '' }
+        semanticRecall: {
+          enabled: false,
+          source: 'remote',
+          baseUrl: SEMANTIC_RECALL_PRESET.baseUrl,
+          model: SEMANTIC_RECALL_PRESET.model
+        }
       })
     )
   })

@@ -7,15 +7,21 @@ import { fetchRecallStatus } from '@renderer/lib/memory-api'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { RecallStatus } from '@shared/memory'
 import type { ProviderKeyState } from '@shared/providers'
+import { SEMANTIC_RECALL_PRESET } from '@shared/settings'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { recallStatusText } from './status-text'
 
 /**
- * 设置页「记忆」栏的语义召回组（round 28 模块 3）：长期记忆的开关与嵌入来源。
+ * 设置页「记忆」栏的语义召回组（round 28 模块 3）：长期记忆的开关与嵌入服务。
  *
- * 分工（与「追踪」栏同一套）：开关 + 来源 + 远程两项是普通设置，经 settings:update 落 settings.json；
- * 远程的 API Key 只经 memory:set-embedding-key 写方向过一次（主进程 safeStorage 落 secrets.json），
+ * 分工（与「追踪」栏同一套）：开关 + 服务地址/模型是普通设置，经 settings:update 落 settings.json；
+ * API Key 只经 memory:set-embedding-key 写方向过一次（主进程 safeStorage 落 secrets.json），
  * 读回来只有"有没有 / 要不要重录"。
+ *
+ * 地址与模型**预置**成 SiliconFlow 的免费嵌入档（缺省值，见 shared/settings 的
+ * SEMANTIC_RECALL_PRESET）：用户只要贴一把 key 就能用；想换服务直接改这两个字段。
+ * Key 字段旁的「获取 API Key」是功能性入口（系统浏览器打开预置服务商的 key 页）——
+ * 壳层已有处置（main/window.ts 的 setWindowOpenHandler → shell.openExternal），这里就是普通外链。
  *
  * 生效时机：装配在 agent 服务启动时做一次 —— **改这一栏要重启应用才生效**，所以状态行说的是
  * "本次运行开没开"（recallStatusText 的规则：设置值与运行事实不一致时由设置值说话）。
@@ -115,9 +121,18 @@ export function RecallSettings(): React.JSX.Element {
     // memoryApi 是 preload 注入的常量桥；重挂一次读一次即可
   }, [memoryApi])
 
-  /** 表单值 = 草稿（用户改过就是它）或落盘值（没改过就是设置的真相） */
+  /**
+   * 表单值 = 草稿（用户改过就是它）或落盘值；落盘值为空（还没配过）时**先按预置填**：
+   * 用户只要贴一把 key 点保存，预置的地址与模型就一并落盘（这两项不必手填）。
+   * 用户改过就按用户的来——保存写下去的就是表单里看到的。
+   */
   const current: Draft = useMemo(
-    () => draft ?? { baseUrl: settings.baseUrl, model: settings.model, key: '' },
+    () =>
+      draft ?? {
+        baseUrl: settings.baseUrl.trim() === '' ? SEMANTIC_RECALL_PRESET.baseUrl : settings.baseUrl,
+        model: settings.model.trim() === '' ? SEMANTIC_RECALL_PRESET.model : settings.model,
+        key: ''
+      },
     [draft, settings.baseUrl, settings.model]
   )
 
@@ -199,7 +214,7 @@ export function RecallSettings(): React.JSX.Element {
             <Input
               data-testid="recall-base-url"
               value={current.baseUrl}
-              placeholder="https://api.openai.com/v1"
+              placeholder={SEMANTIC_RECALL_PRESET.baseUrl}
               disabled={busy}
               onChange={(event) => patchDraft({ baseUrl: event.target.value })}
             />
@@ -210,15 +225,32 @@ export function RecallSettings(): React.JSX.Element {
             <Input
               data-testid="recall-model"
               value={current.model}
-              placeholder="text-embedding-3-small"
+              placeholder={SEMANTIC_RECALL_PRESET.model}
               disabled={busy}
               onChange={(event) => patchDraft({ model: event.target.value })}
             />
           </label>
 
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">API Key</span>
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center justify-between gap-2">
+              <label htmlFor="recall-api-key" className="text-b2 text-ink-secondary">
+                API Key
+              </label>
+              {/* 功能性入口（不是解释性小字）：系统浏览器打开预置服务商的 key 页。
+                  壳层已有"新窗口一律交给系统浏览器"的处置（main/window.ts 的
+                  setWindowOpenHandler → shell.openExternal），所以这里就是一个普通外链。 */}
+              <a
+                href={SEMANTIC_RECALL_PRESET.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="recall-key-link"
+                className="text-b2 text-accent-text underline"
+              >
+                获取 API Key
+              </a>
+            </span>
             <Input
+              id="recall-api-key"
               type="password"
               autoComplete="off"
               data-testid="recall-api-key"
@@ -227,7 +259,7 @@ export function RecallSettings(): React.JSX.Element {
               disabled={busy}
               onChange={(event) => patchDraft({ key: event.target.value })}
             />
-          </label>
+          </div>
 
           {keyState?.needsReentry === true ? (
             <p data-testid="recall-reentry" className="text-c1 text-ink-secondary">

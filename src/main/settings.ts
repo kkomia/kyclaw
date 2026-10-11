@@ -54,6 +54,9 @@ function migrateStoredSettings(raw: unknown): unknown {
  * （`source: 'local' | 'remote'` + `remoteBaseUrl` / `remoteModel`），v2 统一成
  * OpenAI 兼容嵌入服务（`source: 'remote'` + `baseUrl` / `model`）。v1 从未发布过，
  * 但开发机上可能落过盘——不迁移的话，strict schema 会把整份设置当坏文件（主题/密钥全丢）。
+ * 只做"字段名搬家"：**落过盘的取值原样保留**（空串也保留——用户清空就是清空，
+ * 读回来必须还是空；预置只是"没这个字段时"的缺省，见 shared/settings 的
+ * SEMANTIC_RECALL_PRESET）。`enabled: false` 是用户显式关掉，同样原样保留。
  */
 function migrateSemanticRecall(raw: unknown): unknown {
   if (raw === undefined) return { ...DEFAULT_SEMANTIC_RECALL }
@@ -61,11 +64,13 @@ function migrateSemanticRecall(raw: unknown): unknown {
     return { ...DEFAULT_SEMANTIC_RECALL }
   const record = raw as Record<string, unknown>
   const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+  const baseUrl = text(record.baseUrl) === '' ? text(record.remoteBaseUrl) : text(record.baseUrl)
+  const model = text(record.model) === '' ? text(record.remoteModel) : text(record.model)
   return {
     enabled: record.enabled !== false,
     source: 'remote',
-    baseUrl: text(record.baseUrl) === '' ? text(record.remoteBaseUrl) : text(record.baseUrl),
-    model: text(record.model) === '' ? text(record.remoteModel) : text(record.model)
+    baseUrl,
+    model
   }
 }
 
