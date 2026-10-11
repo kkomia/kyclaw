@@ -266,10 +266,19 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *         目标给了解析不出去：bash 的执行层**允许**在工作区外跑（这正是它的用途）→ 问；
  *         fetch/git 的目标过引擎、执行层会 fail closed → 不问（批了也不执行，弹卡是噪音）。
  *       · **其它写类**（MCP 外部工具、未知工具）：执行不走我们的引擎，无法证明"只碰这个工作区"
- *         （入参里的 path 可能根本不是文件路径）。**一律问**；唯一的放行口子是这个目标能解析进
- *         某个工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，用户对这张卡
- *         显式批准过）。工作区的 Full access 不适用：那是对"这个文件夹里的文件操作"的授权，
- *         不是"放行任意外部工具"。
+ *         （入参里的 path 可能根本不是文件路径）。**round 36 用户裁定：完全访问不该弹** ——
+ *         所以"要不要问"接上与 bash/fetch 同一套 full 判定：目标是我们的显式字段且解析得到时
+ *         按那个工作区判（full → 免审）；MCP 工具没有这种字段，走"无显式目标"分支（单工作区
+ *         full → 免审、多工作区全 full → 免审、混合档问）。full 之外是旧口径：目标能解析进某个
+ *         工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，用户对这张卡显式批准过）
+ *         才放行；目标解析不到 → 问（绑不上工作区，规则不生效）。
+ *
+ * 为什么旧论证（"执行不走我们的引擎 → 一律问，full 也不适用"）被推翻（round 36 用户口径）：
+ * 那条论证只证明了"MCP 工具的行为没法被工作区约束"，推不出"该一直弹卡"。而 full 是用户对这台
+ * 机器 / 这个文件夹的**显式**授权（设置里确认过才生效），MCP server 也是用户自己接进来的
+ * （T12），把它排除在 full 之外只会让用户每轮点好几次卡（实测 trace e3530c7f：三次
+ * `tool-call-approval` 全挂在 `mcp__mcp-3__bing_search` 这种只读检索上）。危险档（delete/move）
+ * 与"永久允许"规则路径**不动** —— 前者永远问，后者照旧按全名 + 工作区生效。
  *
  * 为什么按工具身份分叉，而不是按目标不可解析的原因（T12 重审）：原因不改变一个外部工具
  * 实际能干什么 —— `mcp__a__write` 带一个工作区外的 path 不代表它只碰那里，它可能只是恰好有个
@@ -278,8 +287,9 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  * 绕过审批的漏洞，已按此分叉修掉。
  *
  * 能力类工具（bash/fetch/git_*）按**整名**识别：`mcp__shell__bash` 不会被认成内置 bash，
- * 走的是外部工具那一档（一律问，全名规则才放行）。"问一次后可永久允许"的出口对它们是
- * (工具, 工作区) 规则；没给显式目标时单工作区可绑、多工作区全部 full 才免审，混合档问。
+ * 走的是外部工具那一档（round 36 起与内置同名工具同一套 full 判定；除此之外靠全名规则放行）。
+ * "问一次后可永久允许"的出口对它们是 (工具, 工作区) 规则；没给显式目标时单工作区可绑、
+ * 多工作区全部 full 才免审，混合档问。
  *
  * T18（会话根）与这一层的关系：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)`
  * 不传 session）。执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts
@@ -296,17 +306,23 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
   if (capability !== null) return capabilityNeedsApproval(ctx, capability, tool, input)
 
   const target = inputPath(input)
-  if (target === null) return true
-  const resolved = resolveTarget(ctx, target)
+  const resolved = target === null ? null : resolveTarget(ctx, target)
 
   if (!isWorkspaceFileTool(tool)) {
-    // 外部/未知工具：目标解析不到 → 问；解析到 → 只有全名规则能放行（full 不适用）
-    if (!resolved.ok) return true
-    return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
+    // 外部/未知工具（MCP）：round 36 起接入与能力类工具同一套 full 判定。
+    // 目标是显式字段且解析得到：落在 full 工作区 → 免审；否则只有全名规则能放行
+    // （规则路径不动：仍要求目标可解析，绑得上工作区）
+    if (resolved !== null && resolved.ok) {
+      if (resolved.workspace.mode === 'full') return false
+      return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
+    }
+    // 无目标 / 目标解析不到：MCP 工具没有"显式目标"这种字段，按无显式目标分支判 full；
+    // 没被 full 免审就照旧问（规则绑不上工作区，不生效）
+    return !noTargetFullExempt(ctx)
   }
 
   // 内置文件工具：目标解析不到 → 不问（执行即 fail closed）；full 与规则照旧
-  if (!resolved.ok) return false
+  if (resolved === null || !resolved.ok) return false
   if (resolved.workspace.mode === 'full') return false
   return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
 }
@@ -355,15 +371,24 @@ function capabilityNeedsApproval(
     return capability === 'shell'
   }
 
-  // 没给显式目标：执行层的根 = 会话根，审批层拿不到会话 —— 单工作区绑它；多工作区只有
-  // **全部 full** 才免审（有一条 ask 就说不清执行会落哪 → 问，保守方向）
+  // 没给显式目标：先看 full 免审（与外部工具同一处判定，见 noTargetFullExempt），
+  // 再做单工作区上的规则判定
+  if (noTargetFullExempt(ctx)) return false
   const roots = workspaceRoots(ctx)
-  if (roots.length === 1) {
-    if (roots[0].mode === 'full') return false
-    return !isAllowedByRules(ctx.permissionRules(), tool, roots[0].path)
-  }
-  if (roots.length > 1 && roots.every((workspace) => workspace.mode === 'full')) return false
+  if (roots.length === 1) return !isAllowedByRules(ctx.permissionRules(), tool, roots[0].path)
   return true
+}
+
+/**
+ * "无显式目标"时的 full 免审（bash 没给 cwd / fetch 没给 save_to / git 没给 path，以及
+ * MCP 与未知工具这种没有显式目标字段的）：执行层的根 = 会话根，而审批层拿不到会话 ——
+ * 恰好一个工作区就绑它；多个工作区只有**全部 full** 才免审（有一条 ask 就说不清执行会落哪
+ * → 问，保守方向）。**只判 full，不判规则**：规则按 (工具 × 工作区) 绑定，没有目标就绑不上。
+ */
+function noTargetFullExempt(ctx: ToolContext): boolean {
+  const roots = workspaceRoots(ctx)
+  if (roots.length === 1) return roots[0].mode === 'full'
+  return roots.length > 1 && roots.every((workspace) => workspace.mode === 'full')
 }
 
 function inputPath(input: unknown): string | null {

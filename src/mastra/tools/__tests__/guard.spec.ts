@@ -123,7 +123,7 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     ).toBe(false)
   })
 
-  it('外部工具（MCP）：有 path 但解析不出去也照问——path 只是它的一个入参，不能证明安全', () => {
+  it('外部工具（MCP，ask 档）：没有 full 也没有全名规则时一律问——path 只是它的一个入参，不能证明安全', () => {
     expect(
       needsApproval(bed.ctx, 'mcp__a__write', {
         path: join(bed.outside, 'x.txt'),
@@ -134,10 +134,16 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 
-  it('外部工具（MCP）：工作区 full 也不放行——Full access 管的是文件夹里的文件操作', () => {
+  it('外部工具（MCP）：round 36 —— 单工作区 full 就该放行（与 bash/fetch 同一套 full 判定）', () => {
     bed.roots[0].mode = 'full'
-    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
-    expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(true)
+    // 无目标（MCP 工具没有我们的"显式目标"字段）→ 无显式目标分支
+    expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(false)
+    // 目标解析得到、落在 full 工作区 → 免审
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(false)
+    // 目标解析不到也免审：执行层的根就是那个 full 工作区（旧论证"full 不适用"已按用户口径推翻）
+    expect(
+      needsApproval(bed.ctx, 'mcp__a__write', { path: join(bed.outside, 'x.txt'), content: 'x' })
+    ).toBe(false)
   })
 
   it('外部工具（MCP）：只有全名命中的"永久允许"规则才放行，且仍要求目标可解析', () => {
@@ -205,6 +211,74 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
 
     expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
     expect(needsApproval(bed.ctx, 'mcp__b__write', { path: 'a.txt', content: 'x' })).toBe(true)
+  })
+})
+
+describe('needsApproval：外部工具（MCP / 未知工具）的 full 判定（round 36）', () => {
+  it('无目标：单工作区 full → 免审；单工作区 ask → 问', () => {
+    expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(true)
+
+    bed.roots[0].mode = 'full'
+    expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(false)
+    expect(needsApproval(bed.ctx, 'unknown_tool', {})).toBe(false)
+  })
+
+  it('无目标：多工作区全 full → 免审；混合档 → 问（说不清执行会落哪）', () => {
+    const second = createBed()
+    try {
+      bed.roots[0].mode = 'full'
+      bed.roots.push({ path: second.root, mode: 'full' })
+      expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(false)
+
+      bed.roots[1].mode = 'ask'
+      expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(true)
+      // 第二个也切 full 就免审；再切回 ask 又该问（判定每调用现算，不看缓存）
+      bed.roots[1].mode = 'full'
+      expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(false)
+      bed.roots[1].mode = 'ask'
+      expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(true)
+    } finally {
+      bed.roots.pop()
+      bed.roots[0].mode = 'ask'
+      second.dispose()
+    }
+  })
+
+  it('有目标：解析到 full 工作区 → 免审（与 bash 的显式目标同口径）；解析到 ask 工作区 → 问', () => {
+    const second = createBed()
+    try {
+      bed.roots.push({ path: second.root, mode: 'ask' })
+      bed.roots[0].mode = 'full'
+
+      expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(false)
+      expect(
+        needsApproval(bed.ctx, 'mcp__a__write', {
+          path: join(second.root, 'b.txt'),
+          content: 'x'
+        })
+      ).toBe(true)
+    } finally {
+      bed.roots[0].mode = 'ask'
+      bed.roots.pop()
+      second.dispose()
+    }
+  })
+
+  it('危险档不动：mcp__server__delete 在 full 工作区仍永远问', () => {
+    bed.roots[0].mode = 'full'
+
+    expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'mcp__a__move', { path: 'a.txt' })).toBe(true)
+  })
+
+  it('规则路径不动：ask 档下仍是"全名 + 目标可解析"才放行', () => {
+    bed.rules.push({ tool: 'mcp__a__write', workspace: bed.root, mode: 'allow' })
+
+    expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(false)
+    // 目标解析不到 → 绑不上工作区，规则不生效；工作区还是 ask，所以照旧问
+    expect(
+      needsApproval(bed.ctx, 'mcp__a__write', { path: join(bed.outside, 'x.txt'), content: 'x' })
+    ).toBe(true)
   })
 })
 

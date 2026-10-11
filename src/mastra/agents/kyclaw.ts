@@ -20,7 +20,8 @@
  * MCP 外部工具（T12）：`tools` 用 Mastra 支持的**函数形态**（每轮现取），把
  * `mcpTools(gate)` 给的 `mcp__<server>__<tool>` 并进同一张工具表。审批走同一个 gate
  * （guard.needsApproval）：MCP 工具未标只读一律按写类询问；分级由 createMcpClassify 叠加
- * 设置里的"只读"标记（见 mastra/mcp.ts）。
+ * 设置里的"只读"标记（见 mastra/mcp.ts）。**round 36 用户口径**：工作区设为「完全访问」时，
+ * MCP 外部工具与 bash/fetch 同一套 full 判定（不再无差别弹卡，见 guard 的"其它写类"档）。
  *
  * 模型走 Mastra 的 **DynamicArgument**（函数形式）：每次对话重新解析（读 settings + secrets），
  * 所以用户配好 provider/密钥后**不用重启**，下一轮就是真模型；配置半截时解析抛错，
@@ -110,7 +111,7 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
   · create_docx：Word 文档（heading / paragraph / bullets / table 四种块，按顺序排）。
   报告与 PDF 的 html 是**真 HTML 片段**（不是 Markdown）：用 h2/h3、p、ul/ol、table、pre/code 写正文，
   不要写 <html>/<head>/<style> 外壳、不要重复一级标题（模板已经带上标题与样式）。
-- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
+- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）与 MCP 外部工具的调用执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
 /**

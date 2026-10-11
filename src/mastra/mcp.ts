@@ -5,8 +5,10 @@
  *   1. **命名**：工具在 agent 里叫 `mcp__<serverId>__<tool>`（brief 的契约）。@mastra/mcp 自己的
  *      命名是 `serverId_toolName`，这里统一换成带 `__` 的名字，和内置工具一眼分得开、也不跟内置名撞。
  *      `parseMcpToolName` 是反向解析（取第一个 `__` 当分隔；server id 的 schema 里不含 `__`）。
- *   2. **分级**（`createMcpClassify`）：MCP 工具**未标记只读一律按写类询问**——只有用户在设置里
- *      对某个工具勾了"只读"，它才是 read 档；名字像 read 不算数（外部工具的行为我们没法靠名字相信）。
+ *   2. **分级**（`createMcpClassify`）：MCP 工具**未标记只读一律按写类**（"写类"= 默认询问档）——
+ *      只有用户在设置里对某个工具勾了"只读"，它才是 read 档；名字像 read 不算数（外部工具的行为
+ *      我们没法靠名字相信）。**最终要不要弹卡由 guard.needsApproval 判**：round 36 起写类的外部
+ *      工具与 bash/fetch 同一套 full 判定（工作区「完全访问」→ 免审）。
  *      末段是 delete/move 的仍保留"危险类"这一保守信号（永远问，连"永久允许"也放不倒它）。
  *   3. **连接与错误分类**：stdio / Streamable HTTP 两种 server 定义；`testMcpServer` 连接 + 列工具，
  *      失败归到"启动失败 / 握手超时 / 服务没正常响应"三类（UI 行内提示、日志都用同一句）。

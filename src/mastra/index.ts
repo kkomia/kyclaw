@@ -77,20 +77,31 @@ export const AGENT_DB_FILE = 'kyclaw.db'
 export const CHAT_ROUTE_PATH = '/chat/:agentId'
 
 /**
- * 每轮对话的**单轮步数预算**（round 33）：一次 stream 里「模型生成 → 执行工具 → 再生成」
- * 最多跑多少步。Mastra agent 的缺省预算很小（@mastra/core 的 `model.loop`：
- * `stopWhen ?? llmStepCountIs(5)`），一遇到多步任务就会**无声收尾**：最后一步的 finishReason
- * 还是 `tool-calls`，界面看起来就是"任务没做完就断了"（用户实报，trace e3530c7f…）。
+ * 单轮步数的**跑飞兜底**（round 36；口径来自 DeepSeek Harness 源码实证，归档
+ * `.superpowers/sdd/2026-10-10-kyclaw-mvp/agent-steps-design-ref.md`）。
  *
- * 更关键的是**审批挂起恢复流**也吃这个缺省值：恢复时走 `agent.resumeStream(...)`，
- * 它 `deepMerge(agent.getDefaultOptions(), streamOptions)`；chatRoute 的 `defaultOptions`
- * 经 `baseOptions` 传进来（@mastra/ai-sdk 的 `handleChatStream` → `streamV6ApprovalResumes`
- * → `resumeStream`），所以**同一处设置同时覆盖初始流与恢复流**（别再分两处挂）。
+ * DSH 的 agent 循环是 `while(true)`，**没有单轮步数上限**：一轮结束只有五种原因 ——
+ * `completed`（模型不再要工具调用）/ `max-tokens` / `blocked` / `aborted` / `error`。
+ * 它把资源收口放在别处：每步工具 **并发默认 10**（只读滚动池 + 有副作用串行屏障）、
+ * 逐工具**超时**、以及**内容预算**（上下文 1M / 压缩 0.8 / 工具结果 spill 12500 + prune 8192）。
+ * 包自带 README 的原话："No built-in turn budget … a policy that bounds runaway turns must
+ * cancel from an existing lifecycle extension point" —— 限轮数被明确设计成上层策略；
+ * 唯一带 maxRounds 的 ralph 插件默认 `disabled: true`。
  *
- * 60 是"足够宽但不失控"的口径：个人桌面上的多步任务（查资料 + 写文件 + 跑命令）几十步足够；
- * 真到 60 步还没完，界面会给一行"已达单轮步数上限，回复「继续」可接着做"（见渲染端的轮末提示）。
+ * 所以"上限 = 任务边界"是错的：**正常结束靠语义**（模型不再调工具），这个常量只在真跑飞时兜底。
+ * 1000 是一个人一天也走不到的量级，不该成为任何正常任务的边界；真撞上，界面会给一行
+ * "已达单轮步数上限，回复「继续」可接着做"（见渲染端 ChatPage 的轮末提示），用户能看出是兜底触发了
+ * （可观测性：finishReason=tool-calls 收尾就是它，与 completed 的 stop 分得开）。
+ *
+ * 为什么必须**显式**给一个值：Mastra agent 的缺省步数预算很小（@mastra/core 的 `model.loop`：
+ * `stopWhen ?? llmStepCountIs(5)`），多步任务会**无声收尾** —— 最后一步 finishReason 还是
+ * `tool-calls`，界面看起来就是"任务没做完就断了"（用户实报，trace e3530c7f…）。这个值同时覆盖
+ * **审批挂起恢复流**：恢复时走 `agent.resumeStream(...)`，它 `deepMerge(agent.getDefaultOptions(),
+ * streamOptions)`；chatRoute 的 `defaultOptions` 经 `baseOptions` 传进来（@mastra/ai-sdk 的
+ * `handleChatStream` → `streamV6ApprovalResumes` → `resumeStream`），所以**同一处设置同时覆盖
+ * 初始流与恢复流**（别再分两处挂）。
  */
-export const KYCLAW_MAX_STEPS = 60
+export const KYCLAW_MAX_STEPS = 1000
 
 /**
  * chat 路由的 AI SDK UI 协议版本：v7 = 渲染端 ai@7 的原生口径。
@@ -312,7 +323,8 @@ export async function createKyclawMastra(options: {
           // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）；
           // round 19：输入处理器把该会话的压缩摘要注入成系统前缀（不碰消息流/存储，见 compaction.ts）
           defaultOptions: {
-            // round 33：单轮步数预算（初始流与审批恢复流共用这一处，机理见 KYCLAW_MAX_STEPS 头注）
+            // round 33/36：单轮步数**兜底**（不是预算；初始流与审批恢复流共用这一处，
+            // 机理见 KYCLAW_MAX_STEPS 头注）
             maxSteps: KYCLAW_MAX_STEPS,
             onFinish: createUsageRecorder({ store: usage }),
             inputProcessors: [createCompactionProcessor(compactionStore)]

@@ -1,15 +1,20 @@
 // @vitest-environment node
 /**
- * 单轮步数预算（maxSteps）的验收：真 mastra server + 真 Chat + stub 模型。
+ * 单轮步数的验收（round 33 起叫"预算"，round 36 起是**跑飞兜底**）：真 mastra server +
+ * 真 Chat + stub 模型。
  *
  * 现场（round 33，trace e3530c7f…）：一轮里 agent 跑到第 6 步无声收尾，最后结果
  * `{"finishReason":"tool-calls","stepCount":6}` —— 任务没做完就断了。根因是 Mastra
  * agent 的缺省 `maxSteps` 很小（`llmStepCountIs(5)`，见 @mastra/core 的 model.loop），
  * 且**审批挂起恢复后的那次运行会并回这个小数**：不显式给预算，恢复流跑几步就被截停。
  *
- * 本 spec 钉两条：
+ * round 36 改 DSH 口径（设计参考见 index.ts 的 KYCLAW_MAX_STEPS 头注）：一轮正常结束靠
+ * **语义**（模型不再调工具 → finishReason=stop），步数常量只是跑飞兜底，值是 1000。
+ *
+ * 本 spec 钉三条：
  *   1. 初始流：一个 12 步的任务能跑完（旧行为第 5 步截停）；
- *   2. 挂起恢复流：bash 审批挂起 → 真批准 → 恢复后的运行要跑过第 7 步直到完成。
+ *   2. 挂起恢复流：bash 审批挂起 → 真批准 → 恢复后的运行要跑过第 7 步直到完成；
+ *   3. 兜底常量 = 1000（不许悄悄回退成"配额"档的小值）。
  * 判据都用「stub 脚本被消费光 + 最终文本到达」——脚本没被消费 = 服务端没再生成。
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
@@ -21,6 +26,7 @@ import { DefaultChatTransport, type FinishReason, type UIMessage } from 'ai'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { startAgentServer, type AgentServerHandle } from '../../main/agent/service'
 import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
+import { KYCLAW_MAX_STEPS } from '../index'
 import { canResumeAfterApproval } from '../../renderer/src/features/chat/approval'
 import { threadMemoryBody } from '../../shared/threads'
 
@@ -139,7 +145,13 @@ afterAll(async () => {
   }
 })
 
-describe('单轮步数预算（初始流）', () => {
+describe('单轮步数兜底（round 36：不是配额，是跑飞兜底）', () => {
+  it('兜底值 = 1000：DSH 口径（无单轮步数上限），不许悄悄退回小配额', () => {
+    expect(KYCLAW_MAX_STEPS).toBe(1000)
+  })
+})
+
+describe('单轮步数（初始流）', () => {
   it('12 步任务能跑完：初始流不被 ~5 步的缺省预算截停', async () => {
     scripts.length = 0
     for (let step = 0; step < 12; step++) scripts.push(globStep(step))
@@ -162,9 +174,33 @@ describe('单轮步数预算（初始流）', () => {
     // 脚本被消费光 = 服务端真的跑了 13 次生成（12 步 + 收尾），不是中途截停
     expect(scripts.length).toBe(0)
   }, 120_000)
+
+  it('61 步任务也能跑完：旧的 60 这种"配额"口径不再是边界（round 36）', async () => {
+    scripts.length = 0
+    for (let step = 0; step < 61; step++) scripts.push(globStep(step))
+    scripts.push(() => textScript('六十一步全部完成了。'))
+
+    const response = await fetch(`${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${server.token}` },
+      body: JSON.stringify({
+        messages: [
+          { id: 'u-steps-61', role: 'user', parts: [{ type: 'text', text: '跑六十一步' }] }
+        ],
+        ...threadMemoryBody('thread-maxsteps-past60')
+      })
+    })
+    expect(response.status).toBe(200)
+    const parts = sseParts(await response.text())
+
+    const outputs = parts.filter((part) => part.type === 'tool-output-available')
+    expect(outputs.length).toBe(61)
+    expect(textDeltas(parts)).toContain('六十一步全部完成了。')
+    expect(scripts.length).toBe(0)
+  }, 180_000)
 })
 
-describe('单轮步数预算（审批挂起恢复流）', () => {
+describe('单轮步数（审批挂起恢复流）', () => {
   it('恢复后的运行能跑过第 7 步：批准后 12 步 + 收尾全部跑完', async () => {
     scripts.length = 0
     scripts.push(() => toolCallScript('call-bash', 'bash', { command: 'echo step-1-ok' }))

@@ -10,7 +10,8 @@
  *   3. lifecycle：真子进程崩溃（fixture 的 crash 工具 + 状态文件）→ 重启 ≤2 次、记日志、暂停；
  *   4. 路由：GET/PUT /api/mcp/servers（校验 + 落盘）、POST /:id/test；
  *   5. agent 集成（mock 模型 + 真服务）：未标只读 → approval-requested → 批准执行回显；
- *      标了只读不弹；外部工具带工作区外 path 也**必须**弹（T12 必查项①）；全名规则才放行（必查项②）。
+ *      标了只读不弹；外部工具带工作区外 path 也**必须**弹（T12 必查项①）；全名规则才放行（必查项②）；
+ *      round 36：工作区「完全访问」时不弹、直接执行（与 bash/fetch 同一套 full 判定）。
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -851,6 +852,26 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
     expect(JSON.stringify(output?.output)).toContain('note.txt')
 
     writeSettings(settingsPath(dir), { ...defaultSettings(), mcpServers: servers })
+  }, 60_000)
+
+  it('round 36：工作区「完全访问」时，未标只读的 MCP 工具直接执行、不挂审批（真子进程往返）', async () => {
+    // 对照组是本 describe 第一条（同一工具、同一 server，工作区 ask → tool-approval-request）；
+    // 这里只把工作区档切成 full，其余不变
+    workspaces[0] = { path: workspace, mode: 'full' }
+    try {
+      scripts.length = 0
+      scripts.push(() => toolCallScript('mcp-full', 'mcp__echo__echo', { message: '免审直跑' }))
+      scripts.push(() => textScript('免审跑完了。'))
+
+      const parts = await chat([user('u-mcp-full', '直接回显')], 'thread-mcp-full')
+      expect(parts.some((part) => part.type === 'tool-approval-request')).toBe(false)
+      const output = parts.find((part) => part.type === 'tool-output-available')
+      expect(JSON.stringify(output?.output)).toContain('echo: 免审直跑')
+      // 两个脚本都被消费 = 挂起没有发生，整轮真跑完了
+      expect(scripts.length).toBe(0)
+    } finally {
+      workspaces[0] = { path: workspace, mode: 'ask' }
+    }
   }, 60_000)
 })
 
