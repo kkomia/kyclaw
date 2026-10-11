@@ -14,6 +14,7 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
+import { Skeleton } from '@renderer/components/ui/skeleton'
 import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
@@ -43,6 +44,7 @@ import type { ReferenceKind } from './reference-markers'
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
  *   - `ModelChip`：模型切换（只列 T8 已配置的 provider，含 isDefault 语义；不带小字说明）；
+ *     round 41：弹层底部摊开上下文占用 / 分解 / 缓存 / 阈值（与 hover 卡同源）；
  *   - `PendingChips`：附件 / 引用 chip 行（可移除）。
  * 图标按钮 hover 铺灰底（Fills-F1）= 图10 口径；不给说明性小字（雷点 2）。
  */
@@ -316,6 +318,102 @@ function ContextRing({
   )
 }
 
+/**
+ * 上下文明细的取数口径（一处算、两处用：hover 明细卡与模型弹层里的「上下文」区块）：
+ * 百分比与进度条跟上下文环同源（四舍五入、封顶 100），分解 = 已用 − 基线，
+ * 缓存命中率 = 缓存输入 / 输入。**禁止**两处各算一套或各写一份文案。
+ */
+interface ContextStats {
+  /** 已用百分比（环 / 卡 / 弹层同一口径） */
+  usedPct: number
+  /** 最近一轮输入 token（null = 没有这条会话的数据） */
+  usedInput: number | null
+  /** 当前对话长度档位换算出的阈值 token（≈ 总量） */
+  windowTokens: number
+  /** 已用 ≥ 阈值（整环 / 进度条 / 阈值行一起转警示） */
+  overThreshold: boolean
+  /** 系统提示词 + 工具定义的基线（null = 没有数据） */
+  baseline: number | null
+  /** 对话消息部分（= 已用 − 基线） */
+  messageTokens: number | null
+  /** 最近一轮缓存命中率 %（null = 没有数据） */
+  lastHitRate: number | null
+  /** 今日缓存命中率 %（null = 没有数据） */
+  todayHitRate: number | null
+  /** 压缩阈值（= 当前对话长度档位 %） */
+  thresholdPct: number
+}
+
+/**
+ * 上下文明细卡的正文（round 41）：hover 明细卡与模型弹层里的「上下文」区块共用同一份
+ * 布局与文案（口径只此一份）。数据没到时给骨架占位——不闪一个假的 0% 出来（有过渡不硬切）。
+ */
+function ContextCardBody({
+  stats,
+  loading
+}: {
+  stats: ContextStats
+  loading: boolean
+}): React.JSX.Element {
+  if (loading) {
+    return (
+      <div data-testid="context-loading" className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-4 w-20" />
+        </div>
+        <Skeleton className="h-1 w-full rounded-pill" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-2/3" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-b2">上下文已用 {stats.usedPct}%</span>
+        <span className="text-c1 opacity-70 tabular-nums">
+          ~{formatTokens(stats.usedInput ?? 0)} / {formatTokens(stats.windowTokens)}
+        </span>
+      </div>
+      <div className="h-1 w-full overflow-hidden rounded-pill bg-(--fill-active)">
+        <div
+          className={cn(
+            'h-full transition-[width] duration-(--motion-main) ease-main motion-reduce:transition-none',
+            stats.overThreshold ? 'bg-warning' : 'bg-(--accent-text)'
+          )}
+          style={{ width: `${stats.usedPct}%` }}
+        />
+      </div>
+      <div className="flex flex-col gap-0.5 text-c1 opacity-80">
+        <span className="flex justify-between gap-3">
+          <span>系统提示词 / 工具定义</span>
+          <span className="tabular-nums">
+            {stats.baseline === null ? '—' : `~${formatTokens(stats.baseline)}`}
+          </span>
+        </span>
+        <span className="flex justify-between gap-3">
+          <span>对话消息</span>
+          <span className="tabular-nums">
+            {stats.messageTokens === null ? '—' : `~${formatTokens(stats.messageTokens)}`}
+          </span>
+        </span>
+      </div>
+      <div className="flex justify-between gap-3 text-c1 opacity-80">
+        <span>缓存命中率</span>
+        <span className="tabular-nums">
+          最近一轮 {stats.lastHitRate === null ? '—' : `${stats.lastHitRate}%`} · 今日{' '}
+          {stats.todayHitRate === null ? '—' : `${stats.todayHitRate}%`}
+        </span>
+      </div>
+      <div className="text-c1 opacity-60">
+        阈值 {stats.thresholdPct}%{stats.overThreshold ? '（已超过）' : ''}
+      </div>
+    </div>
+  )
+}
+
 /** 对话长度滑块（二级浮层里的自定义条目）：拖动时只改草稿，松手（或键盘抬手）才落盘 */
 function ContextSlider({
   model,
@@ -369,14 +467,16 @@ function ContextSlider({
 }
 
 /**
- * 模型 chip（round 8 形态；round 18 重做内容）：
+ * 模型 chip（round 8 形态；round 18 重做内容；round 41 把上下文摊到弹层里）：
  *   - 触发器 = [上下文环] + 模型名（无描边文字按钮）；
  *   - 浮窗**上下两截**（用户图1）：上=模型列表（当前项勾选）；下（分隔线之后）=「思考强度」「对话长度」
  *     两个二级项（右侧显示当前档 + chevron）；
  *   - 思考强度按注册表（shared/models.ts）动态给挡位——选中即落 settings.modelPrefs 并按
  *     agent.ts 的口径真透传（能传的模型才列多档，传不了的如实只有「默认」）；
  *   - 对话长度 = 官方上下文长度 × 10%–100%（滑块，松手即存）；阈值 = 同一根滑块；
- *   - hover 触发器 = 暗色明细卡（已用 %、~已用/~总量、进度条、分解近似、缓存命中率、阈值）。
+ *   - 弹层底部 = **上下文明细区块**（round 41：已用 %、~已用/~总量、进度条、分解、缓存命中率、阈值）：
+ *     点开弹层就能看全，不用去 hover；与 hover 明细卡同源（同一个 ContextCardBody）；
+ *   - hover 触发器 = 同一张暗色明细卡（行为不变）。
  */
 export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
@@ -387,6 +487,8 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
   const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
   const [context, setContext] = useState<UsageThreadContext | null>(null)
+  /** 取数失败的那条会话（服务没起来 / 还没记录）：没数据时不再给骨架，如实画 0% */
+  const [failedThreadId, setFailedThreadId] = useState<string | null>(null)
 
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
   const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
@@ -400,9 +502,11 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
 
   const refreshContext = useCallback((): void => {
     if (threadId === null || threadId === '') return
-    void fetchThreadContext(threadId).then(setContext, () => {
-      // 取不到（服务没起来 / 还没记录）：停在空态，环画 0%，不打扰输入
-    })
+    void fetchThreadContext(threadId).then(
+      (next) => setContext(next),
+      // 取不到（服务没起来 / 还没记录）：记下这条会话取不到，卡里如实画 0%，不打扰输入
+      () => setFailedThreadId(threadId)
+    )
   }, [threadId])
   useEffect(() => {
     refreshContext()
@@ -434,6 +538,21 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
     threadContext === null || threadContext.todayInput === 0
       ? null
       : Math.round((threadContext.todayCachedInput / threadContext.todayInput) * 100)
+  /** 明细卡的一份口径（hover 卡与弹层区块共用同一份数据与文案） */
+  const contextStats: ContextStats = {
+    usedPct,
+    usedInput,
+    windowTokens,
+    overThreshold,
+    baseline,
+    messageTokens,
+    lastHitRate,
+    todayHitRate,
+    thresholdPct: pct
+  }
+  /** 数据还没到（刚打开弹层 / 刚换会话 / 上一次还没回）：给骨架，不闪假 0% */
+  const contextPending =
+    threadId !== null && threadId !== '' && threadContext === null && failedThreadId !== threadId
 
   const savePrefs = (patch: { thinkingEffort?: string; contextPct?: number }): void => {
     if (current === undefined) return
@@ -507,6 +626,18 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
           )
         }
       ]
+    },
+    // round 41：上下文占用 / 构成分解 / 缓存 / 阈值——**点开弹层就能看全**（不再只藏在 hover 卡里）。
+    // 与 hover 卡同一份口径、同一份文案（ContextCardBody）；只读，不参与键盘导航。
+    { id: 'split-usage', type: 'separator' },
+    {
+      id: 'context-usage',
+      type: 'custom',
+      content: (
+        <div data-testid="model-context-card" className="w-72">
+          <ContextCardBody stats={contextStats} loading={contextPending} />
+        </div>
+      )
     }
   ]
 
@@ -530,43 +661,8 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
               align="start"
               className="w-72 p-3"
               label={
-                <div data-testid="context-card" className="flex flex-col gap-2 text-left">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-b2">上下文已用 {usedPct}%</span>
-                    <span className="text-c1 opacity-70 tabular-nums">
-                      ~{formatTokens(usedInput ?? 0)} / {formatTokens(windowTokens)}
-                    </span>
-                  </div>
-                  <div className="h-1 w-full overflow-hidden rounded-pill bg-(--fill-active)">
-                    <div
-                      className={overThreshold ? 'h-full bg-warning' : 'h-full bg-(--accent-text)'}
-                      style={{ width: `${usedPct}%` }}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-0.5 text-c1 opacity-80">
-                    <span className="flex justify-between gap-3">
-                      <span>系统提示词 / 工具定义</span>
-                      <span className="tabular-nums">
-                        {baseline === null ? '—' : `~${formatTokens(baseline)}`}
-                      </span>
-                    </span>
-                    <span className="flex justify-between gap-3">
-                      <span>对话消息</span>
-                      <span className="tabular-nums">
-                        {messageTokens === null ? '—' : `~${formatTokens(messageTokens)}`}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-3 text-c1 opacity-80">
-                    <span>缓存命中率</span>
-                    <span className="tabular-nums">
-                      最近一轮 {lastHitRate === null ? '—' : `${lastHitRate}%`} · 今日{' '}
-                      {todayHitRate === null ? '—' : `${todayHitRate}%`}
-                    </span>
-                  </div>
-                  <div className="text-c1 opacity-60">
-                    阈值 {pct}%{overThreshold ? '（已超过）' : ''}
-                  </div>
+                <div data-testid="context-card" className="text-left">
+                  <ContextCardBody stats={contextStats} loading={contextPending} />
                 </div>
               }
             >

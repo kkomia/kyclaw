@@ -42,8 +42,9 @@ export interface MenuSubmenuItem {
 }
 
 /**
- * 自定义内容条目（round 18）：不参与键盘导航（滑块自己处理方向键），
- * 也不装作 menuitem——给「对话长度」这类控件用。
+ * 自定义内容条目（round 18）：不参与键盘导航（滑块 / 明细块自己管自己），
+ * 也不装作 menuitem——给「对话长度」滑块与 round 41 的上下文明细块用。
+ * 顶层与子菜单里都可以放（顶层就是"菜单里的一段只读区块"）。
  */
 export interface MenuCustomItem {
   id: string
@@ -51,7 +52,7 @@ export interface MenuCustomItem {
   content: ReactNode
 }
 
-export type MenuEntry = MenuActionItem | MenuSeparatorItem | MenuSubmenuItem
+export type MenuEntry = MenuActionItem | MenuSeparatorItem | MenuSubmenuItem | MenuCustomItem
 
 export interface MenuProps {
   /** 触发元素：单元素，套 Radix 的 asChild（用我们的 Button / IconButton 即可） */
@@ -199,6 +200,13 @@ export function Menu({
               )
             }
             if (entry.type === 'submenu') return submenuItem(entry)
+            if (entry.type === 'custom') {
+              return (
+                <div key={entry.id} data-testid={`menu-custom-${entry.id}`} className="px-2 py-1">
+                  {entry.content}
+                </div>
+              )
+            }
             return actionItem(entry)
           })}
         </DropdownMenu.Content>

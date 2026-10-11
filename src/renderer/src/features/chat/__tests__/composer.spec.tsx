@@ -839,6 +839,100 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(card).toHaveTextContent('今日 75%')
     expect(card).toHaveTextContent('阈值 50%（已超过）')
   })
+
+  /** 会话上下文的取数回包（口径同上面的 hover 卡测试：500K 已用 / 100K 基线 / 75% 缓存） */
+  function contextResponse(): unknown {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        threadId: 't1',
+        lastInput: 500_000,
+        lastCachedInput: 375_000,
+        baselineInput: 100_000,
+        todayInput: 1_000_000,
+        todayCachedInput: 750_000
+      })
+    }
+  }
+
+  /** 阈值收到 50%（500K / 1M 就顶到阈值）+ 已有上下文数据的会话 */
+  function mountHalfWindow(): void {
+    // 设置要落进桥里（不是只改 store）：打开弹层会触发一次 probeModels，回包会带着设置回来
+    const initial: AppSettings = {
+      ...defaultSettings(),
+      providers: [V4],
+      modelPrefs: { 'deepseek/deepseek-v4-pro': { contextPct: 50 } }
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => contextResponse())
+    )
+    setup({ threadId: 't1' })
+  }
+
+  it('round 41：点开弹层就能看全上下文（占用 / 分解 / 缓存 / 阈值）', async () => {
+    mountHalfWindow()
+    await screen.findByTestId('context-ring')
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+
+    const card = screen.getByTestId('model-context-card')
+    await waitFor(() => expect(card).toHaveTextContent('上下文已用 100%'))
+    expect(card).toHaveTextContent('~500K / 500K')
+    expect(card).toHaveTextContent('系统提示词 / 工具定义')
+    expect(card).toHaveTextContent('~100K')
+    expect(card).toHaveTextContent('对话消息')
+    expect(card).toHaveTextContent('~400K')
+    expect(card).toHaveTextContent('最近一轮 75%')
+    expect(card).toHaveTextContent('今日 75%')
+    expect(card).toHaveTextContent('阈值 50%（已超过）')
+    // 超了阈值：进度条与上下文环同一档警示色
+    expect(card.querySelector('div[style]')).toHaveClass('bg-warning')
+  })
+
+  it('round 41：数据还没到 → 弹层里给加载态，不闪一个假的 0%', async () => {
+    // 闸门：端点地址那一步是异步的，fetch 可能晚于本函数的同步段才被调用——放行要能被"追认"
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        await gate
+        return contextResponse()
+      })
+    )
+    setup({ threadId: 't1' })
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    const card = screen.getByTestId('model-context-card')
+    expect(screen.getByTestId('context-loading')).toBeInTheDocument()
+    expect(card).not.toHaveTextContent('上下文已用')
+
+    release()
+    await waitFor(() => expect(card).toHaveTextContent('上下文已用 50%'))
+    expect(screen.queryByTestId('context-loading')).not.toBeInTheDocument()
+    expect(card).toHaveTextContent('阈值 100%')
+    expect(card).not.toHaveTextContent('（已超过）')
+  })
+
+  it('round 41：hover 卡与弹层区块是同源一份（文案逐字一致）', async () => {
+    mountHalfWindow()
+    const ring = await screen.findByTestId('context-ring')
+    await waitFor(() => expect(ring.querySelector('svg')).toHaveAttribute('data-warning', 'true'))
+
+    fireEvent.focus(ring)
+    const hoverText = (await screen.findByTestId('context-card')).textContent
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    await waitFor(() =>
+      expect(screen.getByTestId('model-context-card').textContent).toBe(hoverText)
+    )
+  })
 })
 
 describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', () => {
