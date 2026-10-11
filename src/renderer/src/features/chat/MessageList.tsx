@@ -62,10 +62,12 @@ export function MessageList({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* 消息区不显示滚动条（round 8 用户实拍：右侧那条滚动条去掉）——滚动能力不变，
+          只隐藏原生条；全局 ::-webkit-scrollbar 样式与其它区域不动。 */}
       <div
         ref={viewRef}
         data-testid="message-list"
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onScroll={() => {
           const view = viewRef.current
           if (!view) return

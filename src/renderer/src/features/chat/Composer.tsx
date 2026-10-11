@@ -13,7 +13,8 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
  * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 48 / 最大 170，超出内部滚动）+
  * 底部工具条（48）：左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档
- * ask|full，当前会话工作区）、模型 chip（T8 已配置 provider 的默认项）；右端发送/停止。
+ * ask|full，当前会话工作区）；右端模型 chip（T8 已配置 provider 的默认项；round 8 按用户实拍
+ * 从左侧组移到右侧、发送钮之前）+ 发送/停止。
  *
  * 高度按 Kimi 实况页（a84af355 截图：单行输入 + 一行工具条），默认单行时紧凑，
  * 不再固定三段 "40 + 111 + 49" —— 那是首屏形态，常态下多出来的空白正是用户点名的"过高"。
@@ -164,7 +165,8 @@ export function Composer({
         }}
       />
 
-      {/* 工具条：左起 ＋菜单 / 权限 chip / 模型 chip；中间留给状态（排队条数）；右端发送 / 停止 */}
+      {/* 工具条：左起 ＋菜单 / 权限 chip；中间留给状态（排队条数）；右端模型 chip + 发送 / 停止
+          （round 8：模型 chip 按用户实拍移到右侧组，且在发送钮之前） */}
       <div
         data-testid="composer-footer"
         className="flex h-(--composer-toolbar-height) items-center gap-2 px-3"
@@ -178,7 +180,6 @@ export function Composer({
         {rootWorkspace === null ? null : (
           <PermissionChip workspace={rootWorkspace} onNotice={setNotice} />
         )}
-        {settings.providers.length === 0 ? null : <ModelChip onNotice={setNotice} />}
 
         <span className="min-w-0 flex-1 truncate">
           {queuedCount > 0 ? (
@@ -187,6 +188,8 @@ export function Composer({
             </span>
           ) : null}
         </span>
+
+        {settings.providers.length === 0 ? null : <ModelChip onNotice={setNotice} />}
 
         {busy ? (
           <button

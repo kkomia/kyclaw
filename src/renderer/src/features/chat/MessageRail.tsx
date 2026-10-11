@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { UIMessage } from 'ai'
 import { cn } from '@renderer/components/ui/cn'
 import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
@@ -10,13 +10,20 @@ import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
  *   - 点节点 / 点摘要项 → 平滑滚动定位（reduced-motion 时直接跳，不动画）。
  * 面板走 opacity/translate 过渡（不硬切）；行为只依赖 DOM 里的消息节点，不碰消息数据。
  *
- * 定位（T16 小修批）：贴右缘 `right-2` —— 滚动条宽 6px，早先的 `right-1`（4px）会被它压住 2px。
+ * 驻留（round 8 用户实拍："鼠标移过去就消失了"）：鼠标移出后**延迟关闭**（宽限 300ms）——
+ * 节点列与浮窗之间有 ~4px 空隙，立即关的话鼠标还没够到浮窗它就没了；进入浮窗（它是本 nav 的
+ * 子节点，重入会再触发 onMouseEnter）即撤销关闭。点摘要项跳转仍立即关。
+ *
+ * 定位：贴右缘 `right-2`（8px 呼吸位；消息区的滚动条已按 round 8 隐藏，不再是让条的理由）。
  */
 export interface MessageRailProps {
   messages: UIMessage[]
   /** 消息列的滚动容器（本组件的兄弟节点）：定位与"当前节点"跟踪都基于它 */
   containerRef: RefObject<HTMLDivElement | null>
 }
+
+/** 鼠标移出后的关闭宽限（ms）：够穿过节点列与浮窗之间的空隙并落进浮窗 */
+const PANEL_CLOSE_GRACE_MS = 300
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
@@ -28,6 +35,32 @@ export function MessageRail({
 }: MessageRailProps): React.JSX.Element | null {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
+  const closeTimer = useRef<number | null>(null)
+
+  const cancelClose = useCallback((): void => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+  }, [])
+
+  /** 立刻展开（进入轨/浮窗、键盘聚焦都走它）：顺带撤掉还没到点的关闭定时器 */
+  const openPanel = useCallback((): void => {
+    cancelClose()
+    setOpen(true)
+  }, [cancelClose])
+
+  /** 延迟关闭：给鼠标留穿过空隙的时间；期间重入由 openPanel 撤销 */
+  const closePanelSoon = useCallback((): void => {
+    cancelClose()
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null
+      setOpen(false)
+    }, PANEL_CLOSE_GRACE_MS)
+  }, [cancelClose])
+
+  // 卸载清理：定时器不残留
+  useEffect(() => cancelClose, [cancelClose])
 
   // 依赖数组里要稳定：否则每次滚动引起的 setState → 重渲染 → 重订阅一圈（syncActive 的依赖）
   const users = useMemo(() => messages.filter((message) => message.role === 'user'), [messages])
@@ -64,9 +97,11 @@ export function MessageRail({
         }
       }
       setActiveId(id)
+      // 点项跳转：立即关（不等宽限），顺手撤掉待关的定时器
+      cancelClose()
       setOpen(false)
     },
-    [containerRef]
+    [cancelClose, containerRef]
   )
 
   if (users.length < 2) return null
@@ -76,11 +111,15 @@ export function MessageRail({
       data-testid="message-rail"
       aria-label="消息导览"
       className="absolute top-1/2 right-2 z-10 -translate-y-1/2"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
+      onMouseEnter={openPanel}
+      onMouseLeave={closePanelSoon}
+      onFocus={openPanel}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
+        // 键盘路径：焦点移出整个轨（含浮窗）才关；轨内换焦点不动
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          cancelClose()
+          setOpen(false)
+        }
       }}
     >
       <div className="flex flex-col items-end gap-2 py-2 pl-2">

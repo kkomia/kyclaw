@@ -430,6 +430,19 @@ describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', ()
     expect(screen.getByTestId('composer-model-other')).toHaveTextContent('other')
   })
 
+  it('round 8：默认不带圆角框线（无 border）；hover / 展开才铺灰底', () => {
+    setup()
+
+    const trigger = screen.getByTestId('composer-model')
+    expect(trigger).not.toHaveClass('border-hairline')
+    expect(trigger.className).not.toContain('border')
+    expect(trigger).toHaveClass('hover:bg-hover', 'hover:text-ink')
+    expect(trigger.className).toContain('data-[state=open]:bg-hover')
+    // 文字按钮形态：与 ＋ 按钮同高（h-8），不是 Chip 的药丸（不占 chip 高度 token）
+    expect(trigger).toHaveClass('h-8')
+    expect(trigger).not.toHaveClass('h-(--chip-height)')
+  })
+
   it('切换默认模型：走 saveProviders 落盘，chip 跟着换', async () => {
     setup()
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })

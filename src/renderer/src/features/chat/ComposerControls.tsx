@@ -263,9 +263,16 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   return (
     <Menu
       trigger={
-        <Chip data-testid="composer-model" disabled={pending} className="max-w-44">
+        // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
+        // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
+        <button
+          type="button"
+          data-testid="composer-model"
+          disabled={pending}
+          className="inline-flex h-8 max-w-44 shrink-0 items-center rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+        >
           <span className="truncate">{label}</span>
-        </Chip>
+        </button>
       }
       items={items}
       side="top"
