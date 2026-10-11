@@ -20,6 +20,7 @@ import {
   updateStateSchema,
   windowStateSchema,
   workspaceListFilesResultSchema,
+  workspaceOpenInExplorerResultSchema,
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawPluginsApi,
@@ -121,6 +122,14 @@ const workspaceApi: KyclawWorkspaceApi = {
       await ipcRenderer.invoke(IPC_CHANNELS.workspace.listFiles, threadId)
     )
     if (!parsed.success) throw new Error('[kyclaw] 文件列表响应结构不合法')
+    return parsed.data
+  },
+  // round 20：在文件资源管理器里打开会话根（结构不对就抛——路径是打开动作的凭据）
+  openInExplorer: async (threadId) => {
+    const parsed = workspaceOpenInExplorerResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workspace.openInExplorer, threadId)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 打开文件夹响应结构不合法')
     return parsed.data
   }
 }

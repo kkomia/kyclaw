@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { tick } from '@renderer/components/ui/__tests__/tick'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { resetProjectsStore } from '@renderer/features/projects/projects-store'
@@ -131,6 +132,8 @@ beforeEach(() => {
   resetSessionsStore()
   resetProjectsStore()
   resetThreadChats()
+  // round 20：置顶/归档都写 settings——每个用例从默认设置起（模块级 store 不随 render 重置）
+  useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
 })
 
 afterEach(() => {
@@ -152,7 +155,8 @@ describe('SessionsController：首屏与列表', () => {
     expect(screen.getByTestId('session-group-earlier')).toContainElement(
       screen.getByTestId('session-item-t-b')
     )
-    expect(screen.getByTestId('session-item-t-a')).toHaveClass('bg-selected')
+    // round 20：选中填充挂在**行容器**上（标题 + ⋯ 同一个圆角内），按钮自己只留 aria-current
+    expect(screen.getByTestId('session-row-t-a')).toHaveClass('bg-selected')
   })
 
   it('点会话：选中它并回到对话页', async () => {
@@ -167,7 +171,7 @@ describe('SessionsController：首屏与列表', () => {
     await waitFor(() => {
       expect(useSessionsStore.getState().activeId).toBe('t-b')
     })
-    expect(screen.getByTestId('session-item-t-b')).toHaveClass('bg-selected')
+    expect(screen.getByTestId('session-row-t-b')).toHaveClass('bg-selected')
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
   })
 
@@ -196,7 +200,7 @@ describe('SessionsController：新建', () => {
       const draftId = useSessionsStore.getState().activeId
       expect(draftId).not.toBe(before)
       expect(screen.getByTestId(`session-item-${draftId}`)).toHaveTextContent('新会话')
-      expect(screen.getByTestId(`session-item-${draftId}`)).toHaveClass('bg-selected')
+      expect(screen.getByTestId(`session-row-${draftId}`)).toHaveClass('bg-selected')
       // 草稿还没落库：不给重命名/删除（服务端没有它）
       expect(screen.queryByTestId(`session-more-${draftId}`)).not.toBeInTheDocument()
     })
@@ -390,5 +394,141 @@ describe('SessionsController：项目区（T18）', () => {
       expect(screen.getByTestId('project-error')).toHaveTextContent('项目通道不可用')
     })
     expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+  })
+})
+
+describe('SessionsController·round 20：置顶 / 移至项目 / 资源管理器 / 归档', () => {
+  it('置顶：写 settings.pinnedThreads，行移到置顶分组（带图钉标识）', async () => {
+    const bridge = installKyclawBridge()
+    installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    pick('session-more-t-a', 'session-pin-t-a')
+
+    await waitFor(() => {
+      expect(bridge.update).toHaveBeenCalledWith({ pinnedThreads: ['t-a'] })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('session-group-pinned')).toContainElement(
+        screen.getByTestId('session-row-t-a')
+      )
+    })
+    expect(screen.getByTestId('session-pin-mark-t-a')).toBeInTheDocument()
+  })
+
+  it('移至项目：走 T18 映射通道（PUT），会话挪进项目分组', async () => {
+    const initial = {
+      ...defaultSettings(),
+      projects: [
+        { id: 'p1', name: '项目一', path: 'D:\\p1', createdAt: '2026-10-11T00:00:00.000Z' }
+      ]
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const server = installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    // 子菜单要先展开（Radix：聚焦子菜单触发器 + ArrowRight）
+    fireEvent.keyDown(screen.getByTestId('session-more-t-a'), { key: 'ArrowDown' })
+    const trigger = screen.getByTestId('session-move-t-a')
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    await tick()
+    fireEvent.click(screen.getByTestId('session-move-t-a-p1'))
+
+    await waitFor(() => {
+      expect(server.mappings).toEqual([{ threadId: 't-a', projectId: 'p1' }])
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId('session-item-t-a')
+      )
+    })
+  })
+
+  it('在文件资源管理器中打开：打 workspace:open-in-explorer；失败露一行原因（不静默）', async () => {
+    // 会话根可判（唯一授权目录）→ 菜单项可用
+    const initial = { ...defaultSettings(), workspaces: [{ path: 'D:\\ws', mode: 'ask' as const }] }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    pick('session-more-t-a', 'session-open-t-a')
+    await waitFor(() => {
+      expect(bridge.workspace.openInExplorer).toHaveBeenCalledWith('t-a')
+    })
+
+    // 第二回：主进程回人话错误 → 侧栏露一行
+    bridge.workspace.openInExplorer.mockRejectedValueOnce(new Error('打不开这个文件夹：拒绝访问'))
+    pick('session-more-t-a', 'session-open-t-a')
+    await waitFor(() => {
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent('拒绝访问')
+    })
+  })
+
+  it('归档：写快照（标题/项目/时间）进 settings.archivedThreads，行从侧栏消失、数据不删；选中让给下一条', async () => {
+    const bridge = installKyclawBridge()
+    installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+    // 首屏选中的是最近一条 t-a
+    expect(useSessionsStore.getState().activeId).toBe('t-a')
+
+    pick('session-more-t-a', 'session-archive-t-a')
+
+    await waitFor(() => {
+      const patch = bridge.update.mock.calls.at(-1)?.[0] as {
+        archivedThreads?: {
+          threadId: string
+          title: string | null
+          projectId: string | null
+          archivedAt: string
+        }[]
+      }
+      expect(patch.archivedThreads?.[0]).toMatchObject({
+        threadId: 't-a',
+        title: '今天的会话',
+        projectId: null
+      })
+      expect(typeof patch.archivedThreads?.[0]?.archivedAt).toBe('string')
+    })
+    // 行消失（数据没删：服务端列表与线程都还在，只是从侧栏过滤）
+    await waitFor(() => {
+      expect(screen.queryByTestId('session-item-t-a')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('session-item-t-b')).toBeInTheDocument()
+    // 归档的是当前会话：选中让给下一条可见会话
+    await waitFor(() => {
+      expect(useSessionsStore.getState().activeId).toBe('t-b')
+    })
+  })
+
+  it('归档失败：行还在、露一行原因', async () => {
+    const bridge = installKyclawBridge()
+    bridge.update.mockRejectedValueOnce(new Error('设置通道不可用'))
+    installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    pick('session-more-t-a', 'session-archive-t-a')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-action-error')).toHaveTextContent('设置通道不可用')
+    })
+    expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
   })
 })

@@ -13,6 +13,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  shell,
   type IpcMainInvokeEvent,
   type OpenDialogOptions
 } from 'electron'
@@ -22,6 +23,7 @@ import {
   parseIpcArgs,
   workspaceAddArgsSchema,
   workspaceListFilesArgsSchema,
+  workspaceOpenInExplorerArgsSchema,
   workspaceRemoveArgsSchema,
   workspaceSetModeArgsSchema
 } from '../../shared/ipc'
@@ -89,6 +91,32 @@ export function registerWorkspaceIpc(userDataDir: string, projectIdOf?: ProjectI
     )
     return listFilesForThread(file, threadId, projectIdOf)
   })
+
+  // round 20：在文件资源管理器里打开会话根（读类：入参闸门同步抛，同 list-files；
+  // 打开失败走 openInExplorerForThread 的 rejection，渲染端 catch 后露一行）
+  ipcMain.handle(IPC_CHANNELS.workspace.openInExplorer, (_event, ...args) => {
+    const [threadId] = parseIpcArgs(
+      workspaceOpenInExplorerArgsSchema,
+      args,
+      IPC_CHANNELS.workspace.openInExplorer
+    )
+    return openInExplorerForThread(file, threadId, projectIdOf)
+  })
+}
+
+/** 会话根解析的公共半边：按 sessionRoots 口径（项目 → 默认工作区 → 唯一授权目录）取根列表 */
+function rootsForThread(
+  file: string,
+  threadId: string,
+  projectIdOf?: ProjectIdOf
+): readonly { path: string }[] {
+  const current = readSettings(file)
+  return sessionRoots({
+    workspaces: current.workspaces,
+    defaultWorkspace: current.defaultWorkspace,
+    projects: current.projects,
+    projectId: projectIdOf?.(threadId) ?? null
+  })
 }
 
 /**
@@ -101,13 +129,7 @@ export function listFilesForThread(
   threadId: string,
   projectIdOf?: ProjectIdOf
 ): { files: string[] } {
-  const current = readSettings(file)
-  const roots = sessionRoots({
-    workspaces: current.workspaces,
-    defaultWorkspace: current.defaultWorkspace,
-    projects: current.projects,
-    projectId: projectIdOf?.(threadId) ?? null
-  })
+  const roots = rootsForThread(file, threadId, projectIdOf)
   if (roots.length === 0) {
     throw new Error('这个会话还没有工作区：先在设置里添加一个文件夹，再用 @ 引用文件')
   }
@@ -115,6 +137,33 @@ export function listFilesForThread(
     throw new Error('这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再用 @')
   }
   return { files: listWorkspaceFiles(roots[0].path) }
+}
+
+/**
+ * 会话根 → 系统文件资源管理器（round 20）。同样的唯一根口径：
+ *   - 没有工作区 / 多条并列 → 人话错误（渲染端本来会禁用入口，这里是第二道）；
+ *   - `shell.openPath` 回非空字符串 = 没打开成（回的就是原因）→ 转人话错误。
+ * 测试可注入 opener（缺省 = electron 的 shell.openPath）。
+ */
+export async function openInExplorerForThread(
+  file: string,
+  threadId: string,
+  projectIdOf?: ProjectIdOf,
+  openPath: (path: string) => Promise<string> = (path) => shell.openPath(path)
+): Promise<{ path: string }> {
+  const roots = rootsForThread(file, threadId, projectIdOf)
+  if (roots.length === 0) {
+    throw new Error('这个会话还没有工作区：先在设置里添加一个文件夹')
+  }
+  if (roots.length > 1) {
+    throw new Error('这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再试')
+  }
+  const target = roots[0].path
+  const problem = await openPath(target)
+  if (problem !== '') {
+    throw new Error(`打不开这个文件夹：${problem}`)
+  }
+  return { path: target }
 }
 
 /** 原生选择器（有父窗口走模态，没有也能开）；取消回 undefined */

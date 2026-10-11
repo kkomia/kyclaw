@@ -38,6 +38,14 @@ export interface ProjectListProps {
   onDeleteProject: (project: Project) => void
   onCreateBlank: () => void
   onCreateFolder: () => void
+  /** round 20：项目名下的会话行同样按新口径给 ⋯ 菜单（透传给 SessionList） */
+  pinnedIds?: ReadonlySet<string>
+  projectIdOf?: (threadId: string) => string | null
+  canOpenExplorerOf?: (threadId: string) => boolean
+  onTogglePin?: (threadId: string, pinned: boolean) => void
+  onMoveToProject?: (threadId: string, projectId: string | null) => void
+  onOpenInExplorer?: (threadId: string) => void
+  onArchive?: (threadId: string) => void
 }
 
 export function ProjectList({
@@ -50,7 +58,14 @@ export function ProjectList({
   onDeleteSession,
   onDeleteProject,
   onCreateBlank,
-  onCreateFolder
+  onCreateFolder,
+  pinnedIds,
+  projectIdOf,
+  canOpenExplorerOf,
+  onTogglePin,
+  onMoveToProject,
+  onOpenInExplorer,
+  onArchive
 }: ProjectListProps): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
   /** 收起的项目 id（localStorage 轻量持久；默认展开 = 不在集合里） */
@@ -178,6 +193,14 @@ export function ProjectList({
                       onSelect={onSelectSession}
                       onRename={onRenameSession}
                       onDelete={onDeleteSession}
+                      pinnedIds={pinnedIds}
+                      projects={projects.map((project) => ({ id: project.id, name: project.name }))}
+                      projectIdOf={projectIdOf}
+                      canOpenExplorerOf={canOpenExplorerOf}
+                      onTogglePin={onTogglePin}
+                      onMoveToProject={onMoveToProject}
+                      onOpenInExplorer={onOpenInExplorer}
+                      onArchive={onArchive}
                     />
                   </div>
                 </div>

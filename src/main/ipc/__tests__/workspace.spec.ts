@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => {
   return {
     handlers: new Map<string, Handler>(),
     dialog: vi.fn(),
+    /** round 20：shell.openPath（回空串 = 打开成功；回字符串 = 失败原因） */
+    openPath: vi.fn(async () => ''),
     /** BrowserWindow.fromWebContents 的返回值：null = 没有父窗口 */
     window: null as unknown
   }
@@ -26,13 +28,14 @@ vi.mock('electron', () => ({
     }
   },
   BrowserWindow: { fromWebContents: () => mocks.window },
-  dialog: { showOpenDialog: mocks.dialog }
+  dialog: { showOpenDialog: mocks.dialog },
+  shell: { openPath: mocks.openPath }
 }))
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS, defaultSettings, type Workspace } from '../../../shared/settings'
 import { readSettings, settingsPath, writeSettings } from '../../settings'
-import { registerWorkspaceIpc, type ProjectIdOf } from '../workspace'
+import { registerWorkspaceIpc, openInExplorerForThread, type ProjectIdOf } from '../workspace'
 
 const EVENT = { sender: { id: 1 } }
 
@@ -56,6 +59,8 @@ let realProject: string
 beforeEach(() => {
   mocks.handlers.clear()
   mocks.dialog.mockReset()
+  mocks.openPath.mockReset()
+  mocks.openPath.mockResolvedValue('')
   mocks.window = null
   dir = mkdtempSync(join(tmpdir(), 'kyclaw-workspace-ipc-'))
   project = join(dir, '工作区')
@@ -72,10 +77,11 @@ afterEach(() => {
 const workspaces = (): Workspace[] => readSettings(settingsPath(dir)).workspaces
 
 describe('workspace 通道 handler：注册与入参闸门', () => {
-  it('六条通道都注册了', () => {
+  it('七条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'workspace:add',
       'workspace:list-files',
+      'workspace:open-in-explorer',
       'workspace:pick',
       'workspace:pick-default',
       'workspace:remove',
@@ -372,5 +378,90 @@ describe('workspace:list-files（round 15：@ 引用工作区文件）', () => {
 
     const result = handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't') as { files: string[] }
     expect(result.files).toEqual(['a.txt', '子目录/b.md'])
+  })
+})
+
+describe('workspace:open-in-explorer（round 20：在文件资源管理器里打开会话根）', () => {
+  it('单工作区：把会话根交给 shell.openPath；入参先过闸门', async () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+
+    const result = (await handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, 'thread-1')) as {
+      path: string
+    }
+    expect(result.path).toBe(project)
+    expect(mocks.openPath).toHaveBeenCalledWith(project)
+
+    for (const args of [[], [''], [1], ['a', 'b']]) {
+      expect(() => handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, ...args)).toThrow(
+        IpcInputError
+      )
+    }
+  })
+
+  it('会话属于项目：项目目录优先（projectIdOf 提供映射）', async () => {
+    const other = join(dir, '别的')
+    mkdirSync(other, { recursive: true })
+    const provider: ProjectIdOf = (threadId) => (threadId === 't-project' ? 'proj-1' : null)
+    mocks.handlers.clear()
+    registerWorkspaceIpc(dir, provider)
+    writeSettings(settingsPath(dir), {
+      ...defaultSettings(),
+      workspaces: [
+        { path: project, mode: 'ask' },
+        { path: other, mode: 'ask' }
+      ],
+      projects: [
+        { id: 'proj-1', name: '项目一', path: project, createdAt: '2026-10-11T00:00:00.000Z' }
+      ]
+    })
+
+    const inProject = (await handlerOf(IPC_CHANNELS.workspace.openInExplorer)(
+      EVENT,
+      't-project'
+    )) as { path: string }
+    expect(inProject.path).toBe(project)
+  })
+
+  it('没有工作区 / 根不唯一：人话错误，且不碰 shell', async () => {
+    await expect(handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, 't')).rejects.toThrow(
+      /还没有工作区/
+    )
+    expect(mocks.openPath).not.toHaveBeenCalled()
+
+    const other = join(dir, '别的')
+    mkdirSync(other, { recursive: true })
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, other)
+    await expect(handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, 't')).rejects.toThrow(
+      /不唯一/
+    )
+    expect(mocks.openPath).not.toHaveBeenCalled()
+  })
+
+  it('shell.openPath 回非空 = 没打开成：把原因转成一行人话错误', async () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    mocks.openPath.mockResolvedValueOnce('拒绝访问')
+
+    await expect(handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, 't')).rejects.toThrow(
+      /打不开这个文件夹：拒绝访问/
+    )
+  })
+
+  it('openInExplorerForThread：可注入 opener 的独立函数（缺省用 electron shell）', async () => {
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    const opened: string[] = []
+
+    const result = await openInExplorerForThread(
+      settingsPath(dir),
+      't',
+      undefined,
+      async (path) => {
+        opened.push(path)
+        return ''
+      }
+    )
+
+    expect(opened).toEqual([project])
+    expect(result).toEqual({ path: project })
   })
 })

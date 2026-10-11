@@ -41,6 +41,8 @@ export interface WorkspaceApiStub {
   pickDefault: Mock<() => Promise<AppSettings>>
   /** round 15：@ 文件列表（默认空表；用例用 mockResolvedValue 喂文件） */
   listFiles: Mock<(threadId: string) => Promise<{ files: string[] }>>
+  /** round 20：在文件资源管理器里打开会话根（默认回固定路径） */
+  openInExplorer: Mock<(threadId: string) => Promise<{ path: string }>>
 }
 
 export interface ProjectsApiStub {
@@ -176,7 +178,9 @@ function workspaceApi(state: BridgeState): WorkspaceApiStub {
       return state.current
     }),
     // @ 文件列表：默认空表（用例自己 mockResolvedValue 喂文件；不模拟主进程的会话根解析）
-    listFiles: vi.fn(async () => ({ files: [] }))
+    listFiles: vi.fn(async () => ({ files: [] })),
+    // round 20：在文件资源管理器里打开（默认回一个固定路径；用例自己 mockRejectedValue 造失败）
+    openInExplorer: vi.fn(async () => ({ path: PICKED_WORKSPACE }))
   }
 }
 

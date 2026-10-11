@@ -77,7 +77,7 @@ describe('ProjectList', () => {
     renderList()
 
     const projectRow = screen.getByTestId('project-item-p1')
-    const sessionRow = screen.getByTestId('session-item-t-a')
+    const sessionRow = screen.getByTestId('session-row-t-a')
     // 两行各自的 hover 灰底（指针在哪行亮哪行），不会互相点亮
     expect(projectRow).toHaveClass('hover:bg-hover')
     expect(sessionRow).toHaveClass('hover:bg-hover')

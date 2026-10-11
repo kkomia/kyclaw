@@ -3,6 +3,7 @@ import {
   defaultSettings,
   type AppSettings,
   type AppSettingsPatch,
+  type ArchivedThread,
   type ModelPrefs,
   type WorkspaceMode
 } from '@shared/settings'
@@ -65,6 +66,12 @@ export interface SettingsState {
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
   /** round 18：保存模型级偏好（思考挡位 / 对话长度百分比；以落盘结果为准，失败抛） */
   saveModelPrefs: (modelPrefs: Record<string, ModelPrefs>) => Promise<void>
+  /** round 20：保存置顶会话 id 列表（侧栏排序用；以落盘结果为准，失败抛） */
+  setPinnedThreads: (threadIds: string[]) => Promise<void>
+  /** round 20：归档一个会话（写快照进 archivedThreads，并从置顶里摘掉；数据不删） */
+  archiveThread: (snapshot: ArchivedThread) => Promise<void>
+  /** round 20：取消归档（把这条快照去掉，会话回侧栏；没归档过是幂等空操作） */
+  unarchiveThread: (threadId: string) => Promise<void>
   /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
   saveLangfuseEndpoint: (endpoint: string) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
@@ -134,6 +141,35 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   /** round 18：模型级偏好（思考挡位 / 对话长度百分比）——与 provider 同族：失败抛给调用方 */
   saveModelPrefs: async (modelPrefs) => {
     set({ settings: await settingsApi().update({ modelPrefs }) })
+  },
+
+  /** round 20：置顶列表（整表替换，顺序无关）；与 provider 同族：失败抛给调用方 */
+  setPinnedThreads: async (threadIds) => {
+    set({ settings: await settingsApi().update({ pinnedThreads: threadIds }) })
+  },
+
+  /**
+   * round 20：归档 = 写一份快照 + 从置顶里摘掉（**不删会话数据**）。
+   * 同一条会话重复归档是覆盖（幂等）；失败抛给调用方（侧栏要能看见"没归档成"）。
+   */
+  archiveThread: async (snapshot) => {
+    const { archivedThreads, pinnedThreads } = get().settings
+    const next = [
+      ...archivedThreads.filter((entry) => entry.threadId !== snapshot.threadId),
+      snapshot
+    ]
+    set({
+      settings: await settingsApi().update({
+        archivedThreads: next,
+        pinnedThreads: pinnedThreads.filter((id) => id !== snapshot.threadId)
+      })
+    })
+  },
+
+  /** round 20：取消归档（过滤掉这条；没归档过是幂等空操作） */
+  unarchiveThread: async (threadId) => {
+    const next = get().settings.archivedThreads.filter((entry) => entry.threadId !== threadId)
+    set({ settings: await settingsApi().update({ archivedThreads: next }) })
   },
 
   saveLangfuseEndpoint: async (endpoint) => {

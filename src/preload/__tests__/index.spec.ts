@@ -242,17 +242,30 @@ describe('preload：window.kyclaw.workspace', () => {
     workspaces: [{ path: 'D:\\项目', mode: 'ask' as const }]
   }
 
-  it('暴露 workspace 一族（pick / pickDefault / add / setMode / remove / listFiles）', async () => {
+  it('暴露 workspace 一族（pick / pickDefault / add / setMode / remove / listFiles / openInExplorer）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.workspace).sort()).toEqual([
       'add',
       'listFiles',
+      'openInExplorer',
       'pick',
       'pickDefault',
       'remove',
       'setMode'
     ])
+  })
+
+  it('openInExplorer 把 threadId 发给 workspace:open-in-explorer，回包过 { path } schema', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ path: 'D:\\项目' })
+
+    await expect(kyclawApi.workspace.openInExplorer('t1')).resolves.toEqual({ path: 'D:\\项目' })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workspace:open-in-explorer', 't1')
+
+    // 结构不对就抛（路径是打开动作的凭据，不交半截对象）
+    mocks.invoke.mockResolvedValueOnce({ nope: true })
+    await expect(kyclawApi.workspace.openInExplorer('t1')).rejects.toThrow(/结构不合法/)
   })
 
   it('pick 打 workspace:pick（不带入参），回包按同一份 settings schema 解析', async () => {

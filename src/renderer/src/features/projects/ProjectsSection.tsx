@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router'
 import type { Project } from '@shared/projects'
 import { Button } from '@renderer/components/ui/button'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { sessionWorkspaceOf } from '../chat/session-workspace'
 import { useSessionsStore } from '../sessions/sessions-store'
 import { composeSidebarSessions } from '../sessions/sidebar-sessions'
 import { CreateProjectDialog, type CreateProjectMode } from './CreateProjectDialog'
@@ -35,6 +36,10 @@ export function ProjectsSection(): React.JSX.Element {
   const error = useProjectsStore((state) => state.error)
   const clearProjectMappings = useProjectsStore((state) => state.clearProjectMappings)
 
+  const settings = useSettingsStore((state) => state.settings)
+  const archivedThreads = settings.archivedThreads
+  const pinnedThreads = settings.pinnedThreads
+
   const [dialog, setDialog] = useState<{ mode: CreateProjectMode; key: number } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -43,12 +48,97 @@ export function ProjectsSection(): React.JSX.Element {
   }, [ensureLoaded])
 
   const projectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects])
-  const projectOf = useMemo(() => (threadId: string) => mappings[threadId] ?? null, [mappings])
+  const projectOf = useMemo(
+    () => (threadId: string | null) => (threadId === null ? null : (mappings[threadId] ?? null)),
+    [mappings]
+  )
+  // round 20：归档的会话不出现在任何分组；置顶的在项目桶里也排最前
+  const archivedIds = useMemo(
+    () => new Set(archivedThreads.map((entry) => entry.threadId)),
+    [archivedThreads]
+  )
+  const pinnedIds = useMemo(() => new Set(pinnedThreads), [pinnedThreads])
 
   const { byProject } = useMemo(
-    () => composeSidebarSessions({ threads, activeId, projectOf, projectIds }),
-    [threads, activeId, projectOf, projectIds]
+    () =>
+      composeSidebarSessions({
+        threads,
+        activeId,
+        projectOf,
+        projectIds,
+        archivedIds,
+        pinnedIds
+      }),
+    [threads, activeId, projectOf, projectIds, archivedIds, pinnedIds]
   )
+
+  /** round 20：项目名下的会话行工具（与会话平铺区同口径；动作在 SessionsController/这里各自接线） */
+  const canOpenExplorerOf = useMemo(
+    () => (threadId: string) => sessionWorkspaceOf({ threadId, settings, projectOf }) !== null,
+    [settings, projectOf]
+  )
+
+  const togglePin = (threadId: string, pinned: boolean): void => {
+    const current = useSettingsStore.getState().settings.pinnedThreads
+    const next = pinned
+      ? [...current.filter((id) => id !== threadId), threadId]
+      : current.filter((id) => id !== threadId)
+    setActionError(null)
+    useSettingsStore
+      .getState()
+      .setPinnedThreads(next)
+      .catch((cause: unknown) => {
+        console.error('[kyclaw] 置顶会话失败', cause)
+        setActionError(cause instanceof Error ? cause.message : String(cause))
+      })
+  }
+
+  const moveToProject = (threadId: string, projectId: string | null): void => {
+    void useProjectsStore.getState().assignSession(threadId, projectId)
+  }
+
+  const openInExplorer = (threadId: string): void => {
+    const api = window.kyclaw?.workspace
+    if (api === undefined) return
+    setActionError(null)
+    void api.openInExplorer(threadId).catch((cause: unknown) => {
+      console.error('[kyclaw] 打开会话文件夹失败', cause)
+      setActionError(cause instanceof Error ? cause.message : String(cause))
+    })
+  }
+
+  /** 归档：快照此刻的标题与项目，行从项目桶里消失（数据不删；取消归档回原项目） */
+  const archive = (threadId: string): void => {
+    const listed = threads.find((thread) => thread.id === threadId)
+    const snapshot = {
+      threadId,
+      title: listed?.title ?? null,
+      projectId: projectOf(threadId),
+      archivedAt: new Date().toISOString()
+    }
+    setActionError(null)
+    useSettingsStore
+      .getState()
+      .archiveThread(snapshot)
+      .then(
+        () => {
+          if (useSessionsStore.getState().activeId !== threadId) return
+          const nowArchived = new Set(
+            useSettingsStore.getState().settings.archivedThreads.map((entry) => entry.threadId)
+          )
+          const remaining = useSessionsStore
+            .getState()
+            .threads.filter((thread) => !nowArchived.has(thread.id))
+          const next = remaining[0]
+          if (next === undefined) startNew()
+          else select(next.id)
+        },
+        (cause: unknown) => {
+          console.error('[kyclaw] 归档会话失败', cause)
+          setActionError(cause instanceof Error ? cause.message : String(cause))
+        }
+      )
+  }
 
   /** 在这个项目里开一个新会话（round 16 起只有"项目刚建好"这一条路走它） */
   const openSessionIn = (projectId: string | null): void => {
@@ -90,6 +180,13 @@ export function ProjectsSection(): React.JSX.Element {
         onDeleteProject={onDeleteProject}
         onCreateBlank={() => setDialog({ mode: 'blank', key: Date.now() })}
         onCreateFolder={() => setDialog({ mode: 'folder', key: Date.now() })}
+        pinnedIds={pinnedIds}
+        projectIdOf={projectOf}
+        canOpenExplorerOf={canOpenExplorerOf}
+        onTogglePin={togglePin}
+        onMoveToProject={moveToProject}
+        onOpenInExplorer={openInExplorer}
+        onArchive={archive}
       />
 
       {error === null && actionError === null ? null : (

@@ -202,7 +202,8 @@ describe('IPC 契约：workspace 通道', () => {
       setMode: 'workspace:set-mode',
       remove: 'workspace:remove',
       pickDefault: 'workspace:pick-default',
-      listFiles: 'workspace:list-files'
+      listFiles: 'workspace:list-files',
+      openInExplorer: 'workspace:open-in-explorer'
     })
   })
 

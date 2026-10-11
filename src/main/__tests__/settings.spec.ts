@@ -30,6 +30,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
+      pinnedThreads: [],
+      archivedThreads: [],
       langfuse: { endpoint: 'https://cloud.langfuse.com' }
     }
 
@@ -83,7 +85,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse）读出空值：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -103,6 +105,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
+      pinnedThreads: [],
+      archivedThreads: [],
       langfuse: { endpoint: '' }
     })
   })

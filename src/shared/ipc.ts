@@ -63,7 +63,13 @@ export const IPC_CHANNELS = {
      * round 15：列会话根下的文件（入参 [threadId]，返回 { files: 相对路径[] }）——
      * 输入框 `@` 引用工作区文件用。只读不写；会话根的解析与文件工具同口径（sessionRoots）。
      */
-    listFiles: 'workspace:list-files'
+    listFiles: 'workspace:list-files',
+    /**
+     * round 20：在系统文件资源管理器里打开**会话根**（入参 [threadId]，返回 { path }）——
+     * 会话行 ⋯ 菜单用。路径解析与 list-files 同口径（sessionRoots 在主进程算，渲染端传不了任意路径）；
+     * 判不出唯一根（没有工作区 / 多条并列）时回人话错误。
+     */
+    openInExplorer: 'workspace:open-in-explorer'
   },
   projects: {
     /** T18：空白项目的默认基底目录（无入参，返回 { base }；创建对话框的默认路径用） */
@@ -156,6 +162,12 @@ export const workspaceListFilesArgsSchema = z.tuple([z.string().min(1)])
 
 /** workspace:list-files 的回包：{ files: 相对路径[] }（有界列表，见 main/workspace-files.ts） */
 export const workspaceListFilesResultSchema = z.strictObject({ files: z.array(z.string()) })
+
+/** workspace:open-in-explorer 的入参：[threadId]（会话根同样在主进程解析，同 list-files 口径） */
+export const workspaceOpenInExplorerArgsSchema = z.tuple([z.string().min(1)])
+
+/** workspace:open-in-explorer 的回包：实际打开的目录（绝对路径；测试与排障都看得到） */
+export const workspaceOpenInExplorerResultSchema = z.strictObject({ path: z.string().min(1) })
 
 /**
  * projects:create 的入参：单元素对象 { name, path }。
@@ -398,6 +410,11 @@ export interface KyclawWorkspaceApi {
    * 会话根的解析在**主进程**（sessionRoots 同口径）——渲染端传不了任意路径。
    */
   listFiles(threadId: string): Promise<{ files: string[] }>
+  /**
+   * round 20：在系统文件资源管理器里打开这个会话的根目录（路径同样由主进程解析）。
+   * 判不出唯一根 / 目录打不开时抛人话错误；渲染端按 `sessionWorkspaceOf` 预判并禁用入口。
+   */
+  openInExplorer(threadId: string): Promise<{ path: string }>
 }
 
 /**

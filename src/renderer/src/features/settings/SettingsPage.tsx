@@ -7,6 +7,7 @@ import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
+import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
@@ -16,7 +17,7 @@ import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from 
  * 设置页（T5 起「外观」，T8 起「模型」；UI 返工 R1 改成栏目页）：
  * 左列由 SettingsNav 给（返回 + 栏目菜单），这里只渲染**当前栏目**的内容。
  * 栏目表在 sections.ts（唯一来源），URL 是 /settings/:section；脏值回落默认栏。
- * T17 起多了「追踪」（Langfuse）与「关于」（版本与更新）两栏。
+ * T17 起多了「追踪」（Langfuse）与「关于」（版本与更新）两栏；round 20 多了「归档」一栏。
  *
  * 三选/三档的取值直接来自 shared/settings 的 schema（options 顺序就是显示顺序），
  * 免得 UI 里再抄一份字面量、跟落盘校验漂开。
@@ -146,6 +147,12 @@ export function SettingsPage(): React.JSX.Element {
           <div data-testid="settings-group-usage" className="flex flex-col gap-3">
             <UsagePanel />
           </div>
+        ) : null}
+        {/* round 20：归档（查看 / 搜索 / 取消归档；数据与实现见 features/settings/ArchiveSettings.tsx） */}
+        {meta.id === 'archived' ? (
+          <SettingsGroup title="归档" testId="settings-group-archived">
+            <ArchiveSettings />
+          </SettingsGroup>
         ) : null}
         {/* 追踪 / 关于（T17）：都是显式配置项；两组各一行状态文字，不套框线（雷点 v1 的第 7 条） */}
         {meta.id === 'tracing' ? (

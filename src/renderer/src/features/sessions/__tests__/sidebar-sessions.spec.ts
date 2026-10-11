@@ -72,4 +72,44 @@ describe('composeSidebarSessions', () => {
     expect(result.ungrouped.map((entry) => entry.id)).toEqual(['t1', 't2', 't3'])
     expect(result.ungrouped.every((entry) => entry.draft === undefined)).toBe(true)
   })
+
+  it('round 20：归档的会话整条不出现（含草稿与项目桶）', () => {
+    const result = composeSidebarSessions({
+      threads,
+      activeId: 't2',
+      projectOf: (id) => (id === 't2' ? 'p1' : null),
+      projectIds: new Set(['p1']),
+      archivedIds: new Set(['t2'])
+    })
+
+    expect(result.byProject).toEqual({})
+    expect(result.ungrouped.map((entry) => entry.id)).toEqual(['t1', 't3'])
+  })
+
+  it('round 20：归档当前草案（还没落成线程）也不出现', () => {
+    const result = composeSidebarSessions({
+      threads,
+      activeId: 'draft-1',
+      projectOf: () => null,
+      projectIds: new Set(),
+      archivedIds: new Set(['draft-1'])
+    })
+
+    expect(result.ungrouped.map((entry) => entry.id)).toEqual(['t1', 't2', 't3'])
+  })
+
+  it('round 20：置顶的排在各桶最前（stable：同档保持服务端顺序；草稿仍在置顶之后但在其余之前）', () => {
+    const result = composeSidebarSessions({
+      threads,
+      activeId: 'draft-1',
+      projectOf: (id) => (id === 't2' || id === 'draft-1' ? 'p1' : null),
+      projectIds: new Set(['p1']),
+      pinnedIds: new Set(['t3', 't2'])
+    })
+
+    // 平铺区：t3 置顶排最前（t1 在它后面）
+    expect(result.ungrouped.map((entry) => entry.id)).toEqual(['t3', 't1'])
+    // 项目桶：t2 置顶，但草稿永远更靠前（T18 的口径不动）
+    expect(result.byProject['p1']?.map((entry) => entry.id)).toEqual(['draft-1', 't2'])
+  })
 })

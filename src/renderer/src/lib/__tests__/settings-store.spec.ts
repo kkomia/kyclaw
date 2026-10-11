@@ -245,3 +245,71 @@ describe('settings store · allowToolForever（审批卡"永久允许"）', () =
     await expect(store().allowToolForever('write', PROJECT)).rejects.toThrow(/设置通道不可用/)
   })
 })
+
+describe('settings store · round 20 置顶与归档', () => {
+  const snapshot = {
+    threadId: 't1',
+    title: '会话一',
+    projectId: 'p1',
+    archivedAt: '2026-10-11T12:00:00.000Z'
+  }
+
+  it('setPinnedThreads：整表替换 pinnedThreads，以落盘回吐为准', async () => {
+    const bridge = installKyclawBridge()
+
+    await store().setPinnedThreads(['t1', 't2'])
+
+    expect(bridge.update).toHaveBeenCalledWith({ pinnedThreads: ['t1', 't2'] })
+    expect(store().settings.pinnedThreads).toEqual(['t1', 't2'])
+  })
+
+  it('archiveThread：写快照并从置顶里摘掉同一条；store 跟着落盘结果走', async () => {
+    const initial = { ...defaultSettings(), pinnedThreads: ['t1', 't2'] }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+
+    await store().archiveThread(snapshot)
+
+    expect(bridge.update).toHaveBeenCalledWith({
+      archivedThreads: [snapshot],
+      pinnedThreads: ['t2']
+    })
+    expect(store().settings.archivedThreads).toEqual([snapshot])
+    expect(store().settings.pinnedThreads).toEqual(['t2'])
+  })
+
+  it('archiveThread：重复归档同一条是覆盖（不留两行）', async () => {
+    const second = { ...snapshot, title: '改过标题', archivedAt: '2026-10-12T08:00:00.000Z' }
+    const initial = { ...defaultSettings(), archivedThreads: [snapshot] }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+
+    await store().archiveThread(second)
+
+    expect(store().settings.archivedThreads).toEqual([second])
+  })
+
+  it('unarchiveThread：过滤掉这条（没有归档过是幂等空操作）', async () => {
+    const other = { ...snapshot, threadId: 't9' }
+    const initial = { ...defaultSettings(), archivedThreads: [snapshot, other] }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+
+    await store().unarchiveThread('t1')
+    expect(store().settings.archivedThreads).toEqual([other])
+
+    await store().unarchiveThread('不存在')
+    expect(store().settings.archivedThreads).toEqual([other])
+    expect(bridge.update).toHaveBeenLastCalledWith({ archivedThreads: [other] })
+  })
+
+  it('失败抛给调用方（侧栏/归档栏据此露一行），没有 preload 桥也抛', async () => {
+    const bridge = installKyclawBridge()
+    bridge.update.mockRejectedValueOnce(new Error('设置落盘失败'))
+    await expect(store().setPinnedThreads(['t1'])).rejects.toThrow('设置落盘失败')
+
+    clearKyclawBridge()
+    await expect(store().archiveThread(snapshot)).rejects.toThrow(/设置通道不可用/)
+    await expect(store().unarchiveThread('t1')).rejects.toThrow(/设置通道不可用/)
+  })
+})

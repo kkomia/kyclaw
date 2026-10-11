@@ -160,6 +160,24 @@ export const installedPluginSchema = z.strictObject({
 export type PluginMarketplace = z.infer<typeof pluginMarketplaceSchema>
 export type InstalledPlugin = z.infer<typeof installedPluginSchema>
 
+/**
+ * 归档记录（round 20）：归档 = 从侧栏移除 + 在这里留一份快照（**不删会话数据**）。
+ * 快照里的 title / projectId 是**归档那一刻**的值——会话后来改了标题或挪了项目，
+ * 归档列表仍按快照显示（"归档时它是什么样"）；取消归档只是把这条从列表里去掉，
+ * 会话本体（服务端线程 + 消息 + 项目映射）原样回侧栏。
+ */
+export const archivedThreadSchema = z.strictObject({
+  threadId: z.string().min(1),
+  /** 归档时的标题（还没生成标题时是 null，展示侧回落"新会话"） */
+  title: z.string().nullable(),
+  /** 归档时所属项目（没有 = null）；展示侧按 id 现查项目名，项目删了就只剩标题 */
+  projectId: z.string().nullable(),
+  /** ISO 时间串（归档时刻；列表按它倒序） */
+  archivedAt: z.string()
+})
+
+export type ArchivedThread = z.infer<typeof archivedThreadSchema>
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
@@ -186,6 +204,10 @@ export const appSettingsSchema = z.strictObject({
   installedPlugins: z.array(installedPluginSchema),
   /** round 18 的模型级偏好（`${providerId}/${model}` → 思考挡位 / 对话长度百分比；走 settings:update 补丁） */
   modelPrefs: z.record(z.string(), modelPrefsSchema),
+  /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
+  pinnedThreads: z.array(z.string().min(1)),
+  /** round 20 的归档快照列表（从侧栏移出、数据不删；设置页「归档」栏查看/搜索/取消归档） */
+  archivedThreads: z.array(archivedThreadSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema
 })
@@ -233,6 +255,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pluginMarketplaces: [],
   installedPlugins: [],
   modelPrefs: {},
+  pinnedThreads: [],
+  archivedThreads: [],
   langfuse: { endpoint: '' }
 }
 
@@ -248,6 +272,8 @@ export function defaultSettings(): AppSettings {
     pluginMarketplaces: [],
     installedPlugins: [],
     modelPrefs: {},
+    pinnedThreads: [],
+    archivedThreads: [],
     langfuse: { endpoint: '' }
   }
 }

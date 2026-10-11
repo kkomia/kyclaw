@@ -244,4 +244,14 @@ describe('「追踪」/「关于」栏（T17）', () => {
     expect(screen.queryByTestId('settings-group-tracing')).not.toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-appearance')).not.toBeInTheDocument()
   })
+
+  it('round 20：/settings/archived 渲染「归档」栏（标题 + 空态），其余组不出现', () => {
+    installKyclawBridge()
+    renderPage('/settings/archived')
+
+    expect(screen.getByTestId('settings-group-archived')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: '归档' })).toBeInTheDocument()
+    expect(screen.getByTestId('archive-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-usage')).not.toBeInTheDocument()
+  })
 })

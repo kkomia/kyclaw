@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive,
   Brain,
   ChartColumn,
   Cpu,
@@ -64,6 +65,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     navTestId: 'settings-nav-usage',
     groupTestId: 'settings-group-usage',
     icon: ChartColumn
+  },
+  {
+    id: 'archived',
+    label: '归档',
+    navTestId: 'settings-nav-archived',
+    groupTestId: 'settings-group-archived',
+    icon: Archive
   },
   {
     id: 'tracing',
