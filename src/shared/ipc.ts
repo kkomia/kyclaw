@@ -9,6 +9,7 @@
  */
 import { z } from './zod'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
+import type { PluginsOverview } from './plugins'
 import {
   appSettingsPatchSchema,
   workspaceModeSchema,
@@ -90,6 +91,20 @@ export const IPC_CHANNELS = {
     setLangfuseKeys: 'telemetry:set-langfuse-keys',
     /** 清除 Langfuse 公私钥（无入参，返回清除后的 LangfuseState） */
     clearLangfuseKeys: 'telemetry:clear-langfuse-keys'
+  },
+  plugins: {
+    /** 插件总览（无入参：市场 + 插件清单 + 安装记录 + 已装技能） */
+    overview: 'plugins:overview',
+    /** 添加市场（入参 [{ source, ref?, sparsePaths? }]，返回新的总览） */
+    addMarketplace: 'plugins:add-marketplace',
+    /** 刷新市场（入参 [id]：git pull / 重读清单；返回新的总览） */
+    refreshMarketplace: 'plugins:refresh-marketplace',
+    /** 移除市场（入参 [id]：删克隆目录 + 连带卸载该市场的插件；返回新的总览） */
+    removeMarketplace: 'plugins:remove-marketplace',
+    /** 安装插件（入参 [{ marketplaceId, name }]；返回新的总览） */
+    install: 'plugins:install',
+    /** 卸载插件（入参 [id]；返回新的总览） */
+    uninstall: 'plugins:uninstall'
   }
 } as const
 
@@ -235,6 +250,31 @@ export const langfuseKeysArgsSchema = z.tuple([z.string().min(1), z.string().min
 /** 写 Langfuse 密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
 export const setLangfuseKeysResultSchema = z.strictObject({ hasKeys: z.literal(true) })
 
+/**
+ * 插件通道（round 10）的入参与回包：
+ *   - 添加市场：{ source, ref?, sparsePaths? }（三态来源判定与克隆在主进程）；
+ *   - 安装/卸载/刷新/移除：id / { marketplaceId, name }（市场清单是主进程读的，渲染端只给标识）。
+ * 总览回包（PluginsOverview）形状见 shared/plugins.ts 的 pluginsOverviewSchema。
+ */
+export const pluginAddMarketplaceArgsSchema = z.tuple([
+  z.strictObject({
+    source: z.string().min(1),
+    ref: z.string().optional(),
+    sparsePaths: z.array(z.string()).optional()
+  })
+])
+
+/** plugins:refresh-marketplace / plugins:remove-marketplace 的入参：[id] */
+export const pluginMarketplaceIdArgsSchema = z.tuple([z.string().min(1)])
+
+/** plugins:install 的入参：[{ marketplaceId, name }] */
+export const pluginInstallArgsSchema = z.tuple([
+  z.strictObject({ marketplaceId: z.string().min(1), name: z.string().min(1) })
+])
+
+/** plugins:uninstall 的入参：[id] */
+export const pluginIdArgsSchema = z.tuple([z.string().min(1)])
+
 /** 跨边界入参不合法（主进程侧抛这个，不静默忽略） */
 export class IpcInputError extends Error {
   constructor(channel: string, detail: string) {
@@ -366,4 +406,23 @@ export interface KyclawApi {
   agent: KyclawAgentApi
   updates: KyclawUpdatesApi
   telemetry: KyclawTelemetryApi
+  plugins: KyclawPluginsApi
+}
+
+/**
+ * preload 暴露给渲染端的插件面（round 10）：市场增/刷/删 + 插件装/卸 + 总览。
+ * 每个动作都回**新的总览**（与 workspace 面回完整设置同一口径：界面以主进程的真相为准）。
+ * 来源判定/克隆/清单校验/containment 都在主进程——渲染端只递用户填的原文与标识。
+ */
+export interface KyclawPluginsApi {
+  overview(): Promise<PluginsOverview>
+  addMarketplace(input: {
+    source: string
+    ref?: string
+    sparsePaths?: string[]
+  }): Promise<PluginsOverview>
+  refreshMarketplace(id: string): Promise<PluginsOverview>
+  removeMarketplace(id: string): Promise<PluginsOverview>
+  install(marketplaceId: string, name: string): Promise<PluginsOverview>
+  uninstall(id: string): Promise<PluginsOverview>
 }

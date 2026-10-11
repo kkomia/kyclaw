@@ -13,6 +13,7 @@ import {
   type AppSettingsPatch,
   type WorkspaceMode
 } from '@shared/settings'
+import type { PluginsOverview } from '@shared/plugins'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 
 /**
@@ -287,12 +288,38 @@ export function telemetryApiStub(endpointOf: () => string = () => ''): Telemetry
   return stub
 }
 
+/** 插件面：默认回一个空总览（用例自己替换单个方法/改 mock 值） */
+export interface PluginsApiStub {
+  overview: Mock<() => Promise<PluginsOverview>>
+  addMarketplace: Mock<
+    (input: { source: string; ref?: string; sparsePaths?: string[] }) => Promise<PluginsOverview>
+  >
+  refreshMarketplace: Mock<(id: string) => Promise<PluginsOverview>>
+  removeMarketplace: Mock<(id: string) => Promise<PluginsOverview>>
+  install: Mock<(marketplaceId: string, name: string) => Promise<PluginsOverview>>
+  uninstall: Mock<(id: string) => Promise<PluginsOverview>>
+}
+
+export function pluginsApiStub(
+  initial: PluginsOverview = { marketplaces: [], installed: [], installedSkills: [] }
+): PluginsApiStub {
+  return {
+    overview: vi.fn(async () => initial),
+    addMarketplace: vi.fn(async () => initial),
+    refreshMarketplace: vi.fn(async () => initial),
+    removeMarketplace: vi.fn(async () => initial),
+    install: vi.fn(async () => initial),
+    uninstall: vi.fn(async () => initial)
+  }
+}
+
 /** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
   projects: ProjectsApiStub
   updates: UpdatesApiStub
   telemetry: TelemetryApiStub
+  plugins: PluginsApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -303,6 +330,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const projects = projectsApi(state)
   const updates = updatesApiStub()
   const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
+  const plugins = pluginsApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -310,11 +338,12 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     projects,
     agent: agentApiStub(),
     updates,
-    telemetry
+    telemetry,
+    plugins
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
-  return { ...settings, workspace, projects, updates, telemetry }
+  return { ...settings, workspace, projects, updates, telemetry, plugins }
 }
 
 export function clearKyclawBridge(): void {

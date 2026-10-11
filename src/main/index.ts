@@ -9,6 +9,7 @@ import { app } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
+import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerTelemetryIpc } from './ipc/telemetry'
@@ -66,6 +67,7 @@ if (!app.requestSingleInstanceLock()) {
     registerSettingsIpc(userDataDir)
     registerWorkspaceIpc(userDataDir)
     registerProjectsIpc(userDataDir)
+    registerPluginIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
     // 追踪通道（T17）：地址读 settings.json（与设置页写的是同一份），密钥在 secrets.json
     registerTelemetryIpc({

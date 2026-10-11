@@ -1,0 +1,237 @@
+import { z } from './zod'
+import { parseMcpServersJson } from './mcp'
+import { pluginMarketplaceSchema, installedPluginSchema } from './settings'
+import type { McpServerConfig } from './settings'
+
+/**
+ * 插件市场与插件的**纯逻辑**（round 10；文件系统/ git 动作在 main/plugins/ 里）。
+ *
+ * 生态格式（Claude Code 事实标准，Codex 的 Add a marketplace 同构）：
+ *   - 市场 = git 仓库或本机目录，根下 `.claude-plugin/marketplace.json`（name/version/owner/plugins[]）；
+ *   - 插件 = 目录：`.claude-plugin/plugin.json`（可选）+ `skills/<name>/SKILL.md` + `.mcp.json`
+ *     （`{"mcpServers": {...}}`，与 round 9 的解析器同格式）+ plugin.json 的 `mcpServers` 字段；
+ *   - `${CLAUDE_PLUGIN_ROOT}`：MCP 服务器的 command/args/env（stdio）与 url/headers（http）里
+ *     替换成插件安装根（绝对路径、正斜杠）。
+ */
+
+/** marketplace.json 的最小形状（宽松：不认识的字段忽略；缺 name / plugins 数组才是错） */
+export const marketplaceManifestSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().optional(),
+  description: z.string().optional(),
+  owner: z
+    .object({ name: z.string().optional(), email: z.string().optional() })
+    .catchall(z.unknown())
+    .optional(),
+  plugins: z.array(
+    z.object({
+      name: z.string().min(1),
+      description: z.string().optional(),
+      version: z.string().optional(),
+      category: z.string().optional(),
+      source: z.union([z.string(), z.record(z.string(), z.unknown())])
+    })
+  )
+})
+
+export type MarketplaceManifest = z.infer<typeof marketplaceManifestSchema>
+
+/** 插件的来源归一（brief 定的四种 + unsupported）——schema 与主进程回包共用一份 */
+export const pluginSourceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('relative'), path: z.string() }),
+  z.strictObject({ kind: z.literal('github'), repo: z.string() }),
+  z.strictObject({ kind: z.literal('git-subdir'), url: z.string(), path: z.string() }),
+  z.strictObject({ kind: z.literal('git'), url: z.string() }),
+  z.strictObject({ kind: z.literal('unsupported'), label: z.string() })
+])
+
+export type PluginSource = z.infer<typeof pluginSourceSchema>
+
+function isHttpOrGitUrl(value: string): boolean {
+  return /^(https?:|git@|ssh:|git\+)/i.test(value)
+}
+
+/** `source` 字段（string 或对象）→ 归一来源；认不出的进 unsupported（安装时给人话） */
+export function normalizePluginSource(raw: string | Record<string, unknown>): PluginSource {
+  if (typeof raw === 'string') {
+    const value = raw.trim()
+    if (value.startsWith('./') || value.startsWith('.\\') || value.startsWith('/')) {
+      return { kind: 'relative', path: value }
+    }
+    if (/^[\w.-]+\/[\w.-]+$/.test(value)) return { kind: 'github', repo: value }
+    if (isHttpOrGitUrl(value)) return { kind: 'git', url: value }
+    return { kind: 'unsupported', label: value }
+  }
+
+  const type = typeof raw.source === 'string' ? raw.source.trim() : ''
+  if (type === 'github') {
+    const repo = typeof raw.repo === 'string' ? raw.repo.trim() : ''
+    if (repo === '') return { kind: 'unsupported', label: 'github（缺 repo）' }
+    return { kind: 'github', repo }
+  }
+  if (type === 'git-subdir') {
+    const url = typeof raw.url === 'string' ? raw.url.trim() : ''
+    const sub = typeof raw.path === 'string' ? raw.path.trim() : ''
+    if (url === '' || sub === '') return { kind: 'unsupported', label: 'git-subdir（缺 url/path）' }
+    return { kind: 'git-subdir', url, path: sub }
+  }
+  if (type === 'url' || type === 'git') {
+    const url = typeof raw.url === 'string' ? raw.url.trim() : ''
+    if (url === '') return { kind: 'unsupported', label: `${type}（缺 url）` }
+    return { kind: 'git', url }
+  }
+  return { kind: 'unsupported', label: type === '' ? '未知来源' : type }
+}
+
+/**
+ * 相对路径的 containment：把 `relative` 并在 `root` 里，逃逸（`..` 出头）或绝对路径回 null。
+ * 市场的相对 `source` 与 git-subdir 的 `path` 都用它（brief：拒绝 `..` 逃逸，坏路径不落盘）。
+ */
+export function resolveWithin(root: string, relative: string): string | null {
+  // 只走纯字符串判断，不碰 fs（调用方再 realpath）：绝对路径一律拒
+  if (relative === '' || relative.startsWith('/') || relative.startsWith('\\')) return null
+  if (/^[a-zA-Z]:[\\/]/.test(relative)) return null
+  const cleanRoot = root.replace(/[\\/]+$/, '')
+  const parts: string[] = []
+  for (const segment of relative.replace(/\\/g, '/').split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (parts.length === 0) return null
+      parts.pop()
+      continue
+    }
+    parts.push(segment)
+  }
+  if (parts.length === 0) return null
+  return `${cleanRoot}/${parts.join('/')}`
+}
+
+/** 目录名 / id 用的 slug：小写、非法字符→-、去首尾-、截 32 位 */
+export function slugify(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+}
+
+/** `${CLAUDE_PLUGIN_ROOT}` 替换：只动 MCP 服务器里那几处字符串（值，不动键） */
+export function substituteMcpServerRoot(
+  servers: Record<string, unknown>,
+  pluginRoot: string
+): Record<string, unknown> {
+  const replacement = pluginRoot.replace(/\\/g, '/')
+  const substitute = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.split('${CLAUDE_PLUGIN_ROOT}').join(replacement)
+    }
+    if (Array.isArray(value)) return value.map(substitute)
+    if (typeof value === 'object' && value !== null) {
+      const next: Record<string, unknown> = {}
+      for (const [key, item] of Object.entries(value)) next[key] = substitute(item)
+      return next
+    }
+    return value
+  }
+
+  const next: Record<string, unknown> = {}
+  for (const [name, server] of Object.entries(servers)) {
+    if (typeof server !== 'object' || server === null || Array.isArray(server)) {
+      next[name] = server
+      continue
+    }
+    const record = server as Record<string, unknown>
+    const rewritten: Record<string, unknown> = { ...record }
+    for (const key of ['command', 'args', 'env', 'url', 'headers'] as const) {
+      if (key in record) rewritten[key] = substitute(record[key])
+    }
+    next[name] = rewritten
+  }
+  return next
+}
+
+/** 多份 mcpServers 来源（.mcp.json + plugin.json 若干形态）合并：后到者覆盖同名条目 */
+export function mergeServerMaps(
+  sources: ReadonlyArray<Record<string, unknown>>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {}
+  for (const source of sources) Object.assign(merged, source)
+  return merged
+}
+
+/** 从一份 `{"mcpServers": {...}}` 形状里取服务器表（不是这个形状 → 空表，由调用方判要不要报错） */
+export function serversFromMcpJson(parsed: unknown): Record<string, unknown> | null {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+  const servers = (parsed as { mcpServers?: unknown }).mcpServers
+  if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null
+  return servers as Record<string, unknown>
+}
+
+/**
+ * 插件的 mcpServers → 我们的 McpServerConfig（复用 round 9 的解析器：type 归一、键值容忍、
+ * 人话错误都同一份）。id 改成 `plugin-<插件slug>-<原服务名>`（截 32、与 existingIds 及批内去重）。
+ */
+export function pluginMcpServersToConfigs(input: {
+  servers: Record<string, unknown>
+  pluginRoot: string
+  pluginSlug: string
+  existingIds: readonly string[]
+}): McpServerConfig[] {
+  const substituted = substituteMcpServerRoot(input.servers, input.pluginRoot)
+  const parsed = parseMcpServersJson(JSON.stringify({ mcpServers: substituted }), [])
+  const used = new Set(input.existingIds)
+  return parsed.map((config) => {
+    const base = slugify(`plugin-${input.pluginSlug}-${config.id}`) || `plugin-${input.pluginSlug}`
+    let id = base.slice(0, 32)
+    let index = 2
+    while (used.has(id)) {
+      const suffix = `-${index}`
+      id = `${base.slice(0, 32 - suffix.length)}${suffix}`
+      index += 1
+    }
+    used.add(id)
+    return { ...config, id }
+  })
+}
+
+/**
+ * 插件总览（`plugins:overview` 的回包；preload 用同一份 schema 解析）：
+ * 市场（含各自的插件清单与组件摘要） + 安装记录 + 已装技能。
+ */
+export const marketplacePluginViewSchema = z.strictObject({
+  name: z.string().min(1),
+  description: z.string(),
+  version: z.string().optional(),
+  category: z.string().optional(),
+  source: pluginSourceSchema,
+  skills: z.array(z.string()),
+  mcpServers: z.array(z.string()),
+  supported: z.boolean()
+})
+
+export const marketplaceViewSchema = pluginMarketplaceSchema.extend({
+  plugins: z.array(marketplacePluginViewSchema),
+  error: z.string().optional()
+})
+
+export const installedSkillViewSchema = z.strictObject({
+  /** `<userData>/skills` 下的目录名 */
+  dir: z.string().min(1),
+  /** 去掉插件前缀后的技能名（显示用） */
+  name: z.string().min(1),
+  /** 来自哪个已安装插件（对不上就 null） */
+  pluginId: z.string().nullable(),
+  pluginName: z.string().nullable()
+})
+
+export const pluginsOverviewSchema = z.strictObject({
+  marketplaces: z.array(marketplaceViewSchema),
+  installed: z.array(installedPluginSchema),
+  installedSkills: z.array(installedSkillViewSchema)
+})
+
+export type MarketplacePluginView = z.infer<typeof marketplacePluginViewSchema>
+export type MarketplaceView = z.infer<typeof marketplaceViewSchema>
+export type InstalledSkillView = z.infer<typeof installedSkillViewSchema>
+export type PluginsOverview = z.infer<typeof pluginsOverviewSchema>

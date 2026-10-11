@@ -12,7 +12,7 @@ import {
  * 这里盯两件事：默认值就是文档写的那几个字段；非法取值一个都不放过。
  */
 describe('AppSettings schema', () => {
-  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers 为空数组 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置', () => {
+  it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件字段为空数组 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
@@ -22,6 +22,8 @@ describe('AppSettings schema', () => {
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
+      pluginMarketplaces: [],
+      installedPlugins: [],
       langfuse: { endpoint: '' }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)
@@ -40,6 +42,9 @@ describe('AppSettings schema', () => {
     expect(DEFAULT_SETTINGS.theme).toBe('system')
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
+    // round 10 的两个新数组同样要新副本
+    expect(first.pluginMarketplaces).not.toBe(DEFAULT_SETTINGS.pluginMarketplaces)
+    expect(first.installedPlugins).not.toBe(DEFAULT_SETTINGS.installedPlugins)
     expect(defaultSettings()).toEqual(DEFAULT_SETTINGS)
   })
 

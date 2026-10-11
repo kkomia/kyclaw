@@ -1,42 +1,51 @@
 import { Plus } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Menu } from '@renderer/components/ui/menu'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import {
+  addPluginMarketplace,
+  fetchPluginsOverview,
+  installPlugin,
+  refreshPluginMarketplace,
+  removePluginMarketplace,
+  uninstallPlugin
+} from '@renderer/lib/plugins-api'
 import { fetchMcpServers, saveMcpServers } from '@renderer/lib/mcp-api'
+import type { PluginsOverview } from '@shared/plugins'
 import {
   mcpServerProblems,
   mcpServersProblems,
   newMcpServer,
   parseMcpServersJson
 } from '@shared/mcp'
+import { BUILTIN_SKILLS } from './skills'
 import { addFormToConfig, blankAddForm, type McpAddForm } from './mcp-form'
 import { McpKeyValueEditor } from './McpKeyValueEditor'
 import { PluginsMcpPanel } from './PluginsMcpPanel'
+import { PluginsPluginPanel } from './PluginsPluginPanel'
 import { PluginsSkillsPanel } from './PluginsSkillsPanel'
 
 /**
- * 插件页（R2 round 5，路由 /plugins）——左侧栏「插件」入口打开；照 Kimi 插件页版式（用户实拍 #9）：
- * 顶部 tab「技能｜MCP」→ 标题行（插件 + 一句说明 + 右上角「＋新增」）→ 页级容器里的内容。
+ * 插件页（round 10 起三分区）：**插件 | MCP | 技能**（默认「插件」，标签带计数）。
+ * 三层定位（用户口径）：MCP = 连接层（独立进程暴露 tools）；技能 = 知识层（SKILL.md 给 Agent 的
+ * 操作手册）；**插件 = 打包分发层**（一个插件可以捆绑 skills / MCP servers 等，靠插件市场分发）。
  *
- * 「＋新增」菜单（round 9 重做）：本地命令（stdio）/ 远程地址（HTTP）/ **从 JSON 导入** ——
- * 点菜单项**直接开对话框填配置**（不再先往列表落一条空草稿、再点齿轮去改；用户实拍）。
- * 打开后才校验：`mcpServerProblems` 实时行内提示，保存 = 通过校验 → 追加（**一律停用**落盘）
- * → 整表 PUT → 关对话框、面板按 revision 重拉。取消 = 什么都不发生。
- *
- * 「从 JSON 导入」吃整段 `{"mcpServers": {...}}`（可多个）或单个 server 对象，
- * 解析器在 shared/mcp.ts 的 parseMcpServersJson（纯函数）；失败保持输入、行内给人话。
- *
- * 嵌套口径（Step D）：页级容器（一张 rounded-panel）> 行；行内不再有第二层框。
+ * 「插件」分区的数据来自主进程的 `plugins:overview`（市场清单 + 插件 + 安装记录 + 已装技能）；
+ * 「＋新增」菜单按分区给不同入口：插件区 = 添加插件市场（照 Codex 的三字段）；MCP 区 = round 9 的三项
+ * （stdio / HTTP / 从 JSON 导入）；技能区没有新增（技能随插件或应用提供）。
+ * 文案照用户口径：不解释后端（雷点 2.1/2.2）。
  */
-type PluginsTab = 'skills' | 'mcp'
+type PluginsTab = 'plugins' | 'mcp' | 'skills'
 
 const TABS: Array<{ id: PluginsTab; label: string; testId: string }> = [
-  { id: 'skills', label: '技能', testId: 'plugins-tab-skills' },
-  { id: 'mcp', label: 'MCP', testId: 'plugins-tab-mcp' }
+  { id: 'plugins', label: '插件', testId: 'plugins-tab-plugins' },
+  { id: 'mcp', label: 'MCP', testId: 'plugins-tab-mcp' },
+  { id: 'skills', label: '技能', testId: 'plugins-tab-skills' }
 ]
 
 /** 导入框里的示例（placeholder 就是口径说明，不写解释性小字） */
@@ -48,19 +57,93 @@ function messageOf(error: unknown): string {
 }
 
 export function PluginsPage(): React.JSX.Element {
-  const [tab, setTab] = useState<PluginsTab>('skills')
-  /** +1 通知 MCP 面板重拉（新增/导入在页面侧，面板只读列表） */
+  const [tab, setTab] = useState<PluginsTab>('plugins')
+  /** +1 通知 MCP 面板重拉（round 9 的 MCP 新增流程用） */
   const [revision, setRevision] = useState(0)
-  /** 新增对话框的表单（null = 关着）；打开时按类型给空白表单 */
+
+  /** 插件总览（round 10）：市场 + 插件 + 安装记录 + 已装技能 */
+  const [overview, setOverview] = useState<PluginsOverview | null>(null)
+  /** 插件区动作失败的原因（行内给，人话） */
+  const [actionError, setActionError] = useState<string | undefined>(undefined)
+  /** 动作进行中的 key（按钮 loading + 禁其余动作） */
+  const [busy, setBusy] = useState<string | null>(null)
+
+  /** 添加插件市场对话框（照 Codex 三字段） */
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false)
+  const [source, setSource] = useState('')
+  const [ref, setRef] = useState('')
+  const [sparseText, setSparseText] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [marketplaceError, setMarketplaceError] = useState<string | undefined>(undefined)
+
+  /** MCP 新增/导入（round 9 流程，保持原样） */
   const [addForm, setAddForm] = useState<McpAddForm | null>(null)
-  /** 导入对话框 */
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
-  /** 两个对话框共用的错误位（不会同时开） */
   const [dialogError, setDialogError] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
 
-  const openAdd = useCallback((transport: 'stdio' | 'http'): void => {
+  const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
+
+  useEffect(() => {
+    let alive = true
+    void fetchPluginsOverview().then(
+      (data) => {
+        if (alive) setOverview(data)
+      },
+      (error: unknown) => {
+        if (alive) setActionError(messageOf(error))
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const run = useCallback(
+    async (key: string, action: () => Promise<PluginsOverview>): Promise<void> => {
+      setBusy(key)
+      setActionError(undefined)
+      try {
+        setOverview(await action())
+        // 装/卸会连带增删 mcpServers：刷新渲染端的设置副本，MCP 标签计数才不是旧的
+        void useSettingsStore.getState().load()
+      } catch (error) {
+        setActionError(messageOf(error))
+      } finally {
+        setBusy(null)
+      }
+    },
+    []
+  )
+
+  const submitMarketplace = useCallback(async (): Promise<void> => {
+    setAdding(true)
+    setMarketplaceError(undefined)
+    try {
+      const sparsePaths = sparseText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+      setOverview(
+        await addPluginMarketplace({
+          source,
+          ...(ref.trim() === '' ? {} : { ref: ref.trim() }),
+          ...(sparsePaths.length === 0 ? {} : { sparsePaths })
+        })
+      )
+      setMarketplaceOpen(false)
+      setSource('')
+      setRef('')
+      setSparseText('')
+    } catch (error) {
+      setMarketplaceError(messageOf(error))
+    } finally {
+      setAdding(false)
+    }
+  }, [ref, source, sparseText])
+
+  const openAddMcp = useCallback((transport: 'stdio' | 'http'): void => {
     setDialogError(undefined)
     setAddForm(blankAddForm(transport))
   }, [])
@@ -71,18 +154,16 @@ export function PluginsPage(): React.JSX.Element {
     setImportOpen(true)
   }, [])
 
-  /** 新增表单的实时校验（用真 schema/规则，不是另写一份）：不通过时保存钮禁用 + 行内说明 */
   const addProblems =
     addForm === null
       ? []
       : mcpServerProblems(addFormToConfig(newMcpServer([], addForm.transport), addForm))
 
-  const submitAdd = useCallback(async (): Promise<void> => {
+  const submitAddMcp = useCallback(async (): Promise<void> => {
     if (addForm === null) return
     setSaving(true)
     setDialogError(undefined)
     try {
-      // 现读列表：id 分配要避开已有项；整表保存以服务端回吐为准
       const list = await fetchMcpServers()
       const config = addFormToConfig(newMcpServer(list, addForm.transport), addForm)
       const problems = mcpServerProblems(config)
@@ -118,12 +199,19 @@ export function PluginsPage(): React.JSX.Element {
       setImportOpen(false)
       setImportText('')
     } catch (error) {
-      // 失败保持输入（不清空），错误行内给人话
       setDialogError(messageOf(error))
     } finally {
       setSaving(false)
     }
   }, [importText])
+
+  const pluginCount = overview?.marketplaces.reduce((total, m) => total + m.plugins.length, 0) ?? 0
+  const skillCount = BUILTIN_SKILLS.length + (overview?.installedSkills.length ?? 0)
+  const counts: Record<PluginsTab, number> = {
+    plugins: pluginCount,
+    mcp: mcpServers.length,
+    skills: skillCount
+  }
 
   return (
     <section
@@ -142,13 +230,19 @@ export function PluginsPage(): React.JSX.Element {
               data-testid={entry.testId}
               onClick={() => setTab(entry.id)}
               className={cn(
-                'border-b-2 pb-2 text-b1 transition-colors duration-(--motion-fast) ease-main',
+                'flex items-center gap-1.5 border-b-2 pb-2 text-b1 transition-colors duration-(--motion-fast) ease-main',
                 selected
                   ? 'border-(--text-primary) font-medium text-ink'
                   : 'border-transparent text-ink-secondary hover:text-ink'
               )}
             >
               {entry.label}
+              <span
+                data-testid={`${entry.testId}-count`}
+                className="text-c1 text-ink-tertiary tabular-nums"
+              >
+                {counts[entry.id]}
+              </span>
             </button>
           )
         })}
@@ -157,9 +251,29 @@ export function PluginsPage(): React.JSX.Element {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-t1 font-medium text-ink">插件</h1>
-          <p className="text-b2 text-ink-secondary">技能随应用提供；MCP 服务按需接入。</p>
+          <p className="text-b2 text-ink-secondary">管理插件、MCP 与技能</p>
         </div>
-        {tab === 'mcp' ? (
+        {tab === 'plugins' ? (
+          <Menu
+            align="end"
+            items={[
+              {
+                id: 'marketplace',
+                label: '添加插件市场',
+                testId: 'marketplace-add',
+                onSelect: () => {
+                  setMarketplaceError(undefined)
+                  setMarketplaceOpen(true)
+                }
+              }
+            ]}
+            trigger={
+              <Button size="sm" icon={<Plus />} data-testid="plugins-add">
+                新增
+              </Button>
+            }
+          />
+        ) : tab === 'mcp' ? (
           <Menu
             align="end"
             items={[
@@ -167,13 +281,13 @@ export function PluginsPage(): React.JSX.Element {
                 id: 'stdio',
                 label: '本地命令（stdio）',
                 testId: 'mcp-add-stdio',
-                onSelect: () => openAdd('stdio')
+                onSelect: () => openAddMcp('stdio')
               },
               {
                 id: 'http',
                 label: '远程地址（HTTP）',
                 testId: 'mcp-add-http',
-                onSelect: () => openAdd('http')
+                onSelect: () => openAddMcp('http')
               },
               {
                 id: 'json',
@@ -191,12 +305,100 @@ export function PluginsPage(): React.JSX.Element {
         ) : null}
       </div>
 
-      {/* 页级容器（Step D 的第 1 层；行是第 2 层）——技能与 MCP 同一块面 */}
+      {/* 页级容器（Step D 的第 1 层；行是第 2 层）——三个分区同一块面 */}
       <div className="rounded-panel bg-secondary p-4">
-        {tab === 'skills' ? <PluginsSkillsPanel /> : <PluginsMcpPanel revision={revision} />}
+        {tab === 'plugins' ? (
+          <PluginsPluginPanel
+            overview={overview}
+            busy={busy}
+            onRefresh={(id) => run(`refresh:${id}`, () => refreshPluginMarketplace(id))}
+            onRemove={(id) => run(`remove:${id}`, () => removePluginMarketplace(id))}
+            onInstall={(marketplaceId, name) =>
+              run(`install:${marketplaceId}:${name}`, () => installPlugin(marketplaceId, name))
+            }
+            onUninstall={(id) => run(`uninstall:${id}`, () => uninstallPlugin(id))}
+          />
+        ) : tab === 'mcp' ? (
+          <PluginsMcpPanel revision={revision} />
+        ) : (
+          <PluginsSkillsPanel installedSkills={overview?.installedSkills ?? []} />
+        )}
       </div>
 
-      {/* 新增对话框（round 9：点菜单项直接开这里填，不再先落草稿行） */}
+      {actionError === undefined ? null : (
+        <p data-testid="plugins-error" className="text-c1 text-danger">
+          {actionError}
+        </p>
+      )}
+
+      {/* 添加插件市场（照 Codex 的 Add a marketplace：来源 / 分支或标签 / 稀疏路径） */}
+      <Dialog
+        open={marketplaceOpen}
+        onOpenChange={(open) => {
+          if (!open) setMarketplaceOpen(false)
+        }}
+        title="添加插件市场"
+        size="md"
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              data-testid="marketplace-cancel"
+              onClick={() => setMarketplaceOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              data-testid="marketplace-save"
+              loading={adding}
+              disabled={source.trim() === ''}
+              onClick={() => void submitMarketplace()}
+            >
+              添加
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-b2 text-ink-secondary">来源</span>
+            <Input
+              data-testid="marketplace-source"
+              value={source}
+              placeholder="owner/repo、git URL 或本地文件夹"
+              onChange={(event) => setSource(event.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-b2 text-ink-secondary">Git 分支或标签</span>
+            <Input
+              data-testid="marketplace-ref"
+              value={ref}
+              placeholder="留空 = 仓库默认分支"
+              onChange={(event) => setRef(event.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-b2 text-ink-secondary">稀疏路径</span>
+            <textarea
+              data-testid="marketplace-sparse"
+              aria-label="稀疏路径"
+              rows={2}
+              value={sparseText}
+              placeholder={'每行一条，留空 = 全量检出\nplugins/foo'}
+              onChange={(event) => setSparseText(event.target.value)}
+              className="w-full resize-none rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 py-2 font-mono text-c1 text-ink outline-none placeholder:text-(--text-quaternary)"
+            />
+          </label>
+          {marketplaceError === undefined ? null : (
+            <p data-testid="marketplace-error" className="text-c1 text-danger">
+              {marketplaceError}
+            </p>
+          )}
+        </div>
+      </Dialog>
+
+      {/* MCP：新增对话框（round 9 流程，原样保留） */}
       <Dialog
         open={addForm !== null}
         onOpenChange={(open) => {
@@ -213,7 +415,7 @@ export function PluginsPage(): React.JSX.Element {
               data-testid="mcp-add-save"
               loading={saving}
               disabled={addProblems.length > 0}
-              onClick={() => void submitAdd()}
+              onClick={() => void submitAddMcp()}
             >
               保存
             </Button>
@@ -319,7 +521,7 @@ export function PluginsPage(): React.JSX.Element {
         )}
       </Dialog>
 
-      {/* 从 JSON 导入（用户实拍：整段 {"mcpServers": {...}} 直接贴） */}
+      {/* MCP：从 JSON 导入（round 9 流程，原样保留） */}
       <Dialog
         open={importOpen}
         onOpenChange={(open) => {

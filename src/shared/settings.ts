@@ -103,6 +103,49 @@ export const mcpServerSchema = z.strictObject({
   readOnlyTools: z.array(z.string())
 })
 
+/**
+ * 插件市场（round 10）：一条 = 一个市场来源（git 仓库或本机目录）。
+ * 写入只有 `plugins:*` IPC 一条路（与 workspaces 同理：路径/克隆都要过主进程校验，patch schema 里没有）。
+ * `path` 是**生效目录**（git = 克隆目录；local = 用户给的目录，原样不动）；`source` 保留用户填的原文（界面显示）。
+ */
+export const pluginMarketplaceSchema = z.strictObject({
+  /** slug（进目录名与插件记录 id；主进程生成） */
+  id: z.string().min(1),
+  /** 市场显示名（marketplace.json 的 name，读回后落盘） */
+  name: z.string().min(1),
+  /** 用户填的来源原文（owner/repo、git URL 或本地文件夹） */
+  source: z.string().min(1),
+  /** git 分支或标签（可选；local 模式无意义） */
+  ref: z.string().optional(),
+  /** 稀疏路径（每行一条；git 模式生效） */
+  sparsePaths: z.array(z.string()).optional(),
+  kind: z.enum(['git', 'local']),
+  /** 生效目录（绝对路径） */
+  path: z.string().min(1),
+  addedAt: z.string()
+})
+
+/**
+ * 已安装插件（round 10）的一条记录：安装时落盘，卸载按它清理。
+ * `installDir` 只有"远端 source 克隆到本机"时才有值（卸载要删）；相对 source 的插件住在市场目录里，为 null。
+ */
+export const installedPluginSchema = z.strictObject({
+  /** `<marketplaceId>-<插件slug>`（同一市场内唯一；mcp id / 技能目录名都带它） */
+  id: z.string().min(1),
+  marketplaceId: z.string().min(1),
+  name: z.string().min(1),
+  version: z.string().optional(),
+  installedAt: z.string(),
+  /** 安装时写进 settings.mcpServers 的 id 列表（卸载按它删条目） */
+  mcpServerIds: z.array(z.string()),
+  /** 复制到 `<userData>/skills/` 下的目录名（卸载按它删目录） */
+  skillDirs: z.array(z.string()),
+  installDir: z.string().nullable()
+})
+
+export type PluginMarketplace = z.infer<typeof pluginMarketplaceSchema>
+export type InstalledPlugin = z.infer<typeof installedPluginSchema>
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
@@ -123,6 +166,10 @@ export const appSettingsSchema = z.strictObject({
   permissions: permissionsSchema,
   /** T12 的 MCP server 列表（增删改走 PUT /api/mcp/servers，见 mastra/routes/mcp.ts） */
   mcpServers: z.array(mcpServerSchema),
+  /** round 10 的插件市场列表（增删刷新走 plugins:* 通道） */
+  pluginMarketplaces: z.array(pluginMarketplaceSchema),
+  /** round 10 的已安装插件记录（安装/卸载走 plugins:* 通道） */
+  installedPlugins: z.array(installedPluginSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema
 })
@@ -160,6 +207,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projects: [],
   permissions: { rules: [] },
   mcpServers: [],
+  pluginMarketplaces: [],
+  installedPlugins: [],
   langfuse: { endpoint: '' }
 }
 
@@ -172,6 +221,8 @@ export function defaultSettings(): AppSettings {
     projects: [],
     permissions: { rules: [] },
     mcpServers: [],
+    pluginMarketplaces: [],
+    installedPlugins: [],
     langfuse: { endpoint: '' }
   }
 }

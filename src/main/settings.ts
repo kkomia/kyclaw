@@ -20,7 +20,8 @@ export function settingsPath(userDataDir: string): string {
 
 /**
  * 读盘兼容：这一版之前的 settings.json 缺后来追加的字段——
- * T13 的 permissions、T12 的 mcpServers、T18 的 defaultWorkspace / projects、T17 的 langfuse。
+ * T13 的 permissions、T12 的 mcpServers、T18 的 defaultWorkspace / projects、T17 的 langfuse、
+ * round 10 的 pluginMarketplaces / installedPlugins。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  */
@@ -33,6 +34,8 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.defaultWorkspace === undefined) next.defaultWorkspace = null
   if (next.projects === undefined) next.projects = []
   if (next.langfuse === undefined) next.langfuse = { endpoint: '' }
+  if (next.pluginMarketplaces === undefined) next.pluginMarketplaces = []
+  if (next.installedPlugins === undefined) next.installedPlugins = []
   return next
 }
 

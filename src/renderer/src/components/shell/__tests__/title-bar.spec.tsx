@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   agentApiStub,
+  pluginsApiStub,
   projectsApiStub,
   settingsApiStub,
   telemetryApiStub,
@@ -30,7 +31,8 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     projects: projectsApiStub(),
     agent: agentApiStub(),
     updates: updatesApiStub(),
-    telemetry: telemetryApiStub()
+    telemetry: telemetryApiStub(),
+    plugins: pluginsApiStub()
   }
   return api
 }

@@ -1,13 +1,21 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import {
+  clearKyclawBridge,
+  installKyclawBridge,
+  type KyclawBridgeStubs
+} from '@renderer/__tests__/kyclaw-bridge'
 import { mcpServersProblems, URL_PROBLEM, type McpTestResult } from '@shared/mcp'
-import type { McpServerConfig } from '@shared/settings'
+import type { PluginsOverview, MarketplacePluginView, MarketplaceView } from '@shared/plugins'
+import type { InstalledPlugin, McpServerConfig } from '@shared/settings'
+import { BUILTIN_SKILLS } from '../skills'
 import { PluginsPage } from '../PluginsPage'
 
 /**
- * 插件页（R2 round 5，用户实拍 #9）：tab「技能｜MCP」/ 行式 MCP 列表（开关启停 + 齿轮编辑 + 测试连接）/
- * 右上角「＋新增」菜单（stdio、HTTP，照 ChatGPT「Add ∨」）/ 编辑对话框（保存、删除、工具免审批开关）。
+ * 插件页（round 5 起，round 10 三分区）：**插件｜MCP｜技能**（默认「插件」）。
+ * 「插件」分区 = 插件市场（添加/刷新/移除）+ 跨市场插件汇总（安装/卸载），数据走 `plugins:overview` 桥；
+ * 「MCP」分区沿用 round 9 的行式列表（开关启停 + 齿轮编辑 + 测试连接 + ＋新增菜单，fetch 面）；
+ * 「技能」分区 = 已安装（来自插件）+ 内置技能只读清单。
  *
  * 服务端（PUT /api/mcp/servers）的校验用 shared/mcp 的同一份实现模拟：启用的 server 配置不完整
  * 就回 400——界面必须把原因行内说出来，不假装成功（行为口径与 T12 一致，换的是布局与控件）。
@@ -90,7 +98,7 @@ function installMockApi(initial: McpServerConfig[]): MockApi {
   return api
 }
 
-/** 切到 MCP tab（技能是默认 tab） */
+/** 切到 MCP tab（round 10 起默认 tab 是「插件」） */
 function openMcpTab(): void {
   fireEvent.click(screen.getByTestId('plugins-tab-mcp'))
 }
@@ -98,6 +106,55 @@ function openMcpTab(): void {
 /** 打开第 index 行的编辑对话框 */
 function openEditor(index = 0): void {
   fireEvent.click(screen.getByTestId(`mcp-server-${index}-edit`))
+}
+
+/* ---- round 10：插件分区的总览 fixture 与桥 ---- */
+
+const EMPTY_OVERVIEW: PluginsOverview = { marketplaces: [], installed: [], installedSkills: [] }
+
+function pluginView(patch: Partial<MarketplacePluginView> = {}): MarketplacePluginView {
+  return {
+    name: 'p1',
+    description: '一个本地插件',
+    source: { kind: 'relative', path: './plugins/p1' },
+    skills: ['s1'],
+    mcpServers: ['web'],
+    supported: true,
+    ...patch
+  }
+}
+
+function marketplaceView(patch: Partial<MarketplaceView> = {}): MarketplaceView {
+  return {
+    id: 'demo',
+    name: 'demo-market',
+    source: 'owner/repo',
+    kind: 'git',
+    path: 'C:/data/plugins/marketplaces/demo',
+    addedAt: '2026-10-11T00:00:00.000Z',
+    plugins: [pluginView()],
+    ...patch
+  }
+}
+
+function installedRecord(patch: Partial<InstalledPlugin> = {}): InstalledPlugin {
+  return {
+    id: 'demo-p1',
+    marketplaceId: 'demo',
+    name: 'p1',
+    installedAt: '2026-10-11T00:00:00.000Z',
+    mcpServerIds: ['plugin-demo-p1-web'],
+    skillDirs: ['demo-p1-s1'],
+    installDir: null,
+    ...patch
+  }
+}
+
+/** 装桥并把插件总览的一次拉取喂成 fixture（用例再按需替换单个方法） */
+function installPluginsBridge(overview: PluginsOverview): KyclawBridgeStubs {
+  const bridge = installKyclawBridge()
+  bridge.plugins.overview.mockResolvedValue(overview)
+  return bridge
 }
 
 beforeEach(() => {
@@ -111,24 +168,46 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('插件页 · 两个 tab', () => {
-  it('默认「技能」：内置能力只读清单（克制口吻、没有开关）；「MCP」tab 才有 ＋新增', async () => {
+describe('插件页 · 三个分区（round 10）', () => {
+  it('默认「插件」：标签 + 计数 + 副标题；插件区空态、MCP 区才有 mcp-add、技能区没有新增', async () => {
     installMockApi([])
+    installPluginsBridge(EMPTY_OVERVIEW)
     render(<PluginsPage />)
 
     expect(screen.getByTestId('plugins-page')).toBeInTheDocument()
-    expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'true')
-    const skills = screen.getByTestId('plugins-skills')
-    for (const name of ['读取文件', '查找文件', '搜索内容', '写入文件', '修改文件']) {
-      expect(skills, name).toHaveTextContent(name)
-    }
-    // 技能 tab 没有新增按钮（内置技能不由用户增删）
+    expect(screen.getByText('管理插件、MCP 与技能')).toBeInTheDocument()
+    expect(screen.getByTestId('plugins-tab-plugins')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'false')
+    // 计数：插件 0 / MCP 0 / 技能 = 内置技能数
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('0')
+    expect(screen.getByTestId('plugins-tab-mcp-count')).toHaveTextContent('0')
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent(
+      String(BUILTIN_SKILLS.length)
+    )
+
+    // 插件区：市场与插件的空态；新增入口是「添加插件市场」（mcp-add 不出现）
+    expect(await screen.findByTestId('marketplace-empty')).toHaveTextContent('还没有插件市场')
+    expect(screen.getByTestId('plugin-empty')).toHaveTextContent('添加市场后')
+    expect(screen.getByTestId('plugins-add')).toHaveTextContent('新增')
     expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
 
     openMcpTab()
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('mcp-add')).toHaveTextContent('新增')
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
+
+    // 技能区：已安装空态 + 内置能力只读清单（克制口吻、没有开关）；没有新增按钮
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    expect(screen.getByTestId('skills-installed-empty')).toHaveTextContent(
+      '还没有从插件装进来的技能'
+    )
+    const skills = screen.getByTestId('plugins-skills')
+    for (const name of ['读取文件', '查找文件', '搜索内容', '写入文件', '修改文件']) {
+      expect(skills, name).toHaveTextContent(name)
+    }
+    expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('plugins-add')).not.toBeInTheDocument()
   })
 
   it('底部常驻添加 chips 已删除（round 5）：新增走右上角菜单（round 9 起含「从 JSON 导入」）', async () => {
@@ -522,5 +601,227 @@ describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行
     fireEvent.click(screen.getByTestId('mcp-server-0-enable'))
     expect(await screen.findByTestId('mcp-server-0-error')).toHaveTextContent(URL_PROBLEM)
     expect(screen.getByTestId('mcp-server-0-enable')).toHaveAttribute('aria-checked', 'false')
+  })
+})
+
+describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', () => {
+  it('市场行与插件行：名称/来源/n 个插件；相对来源显示组件摘要，unsupported 行没有安装按钮', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [
+        marketplaceView({
+          plugins: [
+            pluginView(),
+            pluginView({
+              name: 'p2',
+              description: '',
+              source: { kind: 'unsupported', label: 'npm' },
+              skills: [],
+              mcpServers: [],
+              supported: false
+            })
+          ]
+        })
+      ],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+
+    const row = await screen.findByTestId('marketplace-demo')
+    expect(row).toHaveTextContent('demo-market')
+    expect(row).toHaveTextContent('owner/repo')
+    expect(row).toHaveTextContent('2 个插件')
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('2')
+
+    const p1 = screen.getByTestId('plugin-demo-p1')
+    expect(p1).toHaveTextContent('一个本地插件')
+    expect(p1).toHaveTextContent('技能 1 · MCP 1')
+    expect(screen.getByTestId('plugin-demo-p1-install')).toHaveTextContent('安装')
+
+    const p2 = screen.getByTestId('plugin-demo-p2')
+    expect(p2).toHaveTextContent('这种来源暂不支持')
+    expect(screen.queryByTestId('plugin-demo-p2-install')).not.toBeInTheDocument()
+  })
+
+  it('添加市场：来源空时禁用；提交把三字段带给主进程，成功后关框、列表换新', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    bridge.plugins.addMarketplace.mockResolvedValue({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+
+    await screen.findByTestId('marketplace-empty')
+    fireEvent.keyDown(screen.getByTestId('plugins-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('marketplace-add'))
+
+    const save = screen.getByTestId('marketplace-save')
+    expect(save).toBeDisabled()
+    fireEvent.change(screen.getByTestId('marketplace-source'), { target: { value: 'owner/repo' } })
+    expect(save).toBeEnabled()
+    fireEvent.change(screen.getByTestId('marketplace-ref'), { target: { value: 'v1' } })
+    // 稀疏路径：每行一条，空行与首尾空白被丢
+    fireEvent.change(screen.getByTestId('marketplace-sparse'), {
+      target: { value: 'plugins/foo\n\nplugins/bar ' }
+    })
+    fireEvent.click(save)
+
+    await waitFor(() =>
+      expect(bridge.plugins.addMarketplace).toHaveBeenCalledWith({
+        source: 'owner/repo',
+        ref: 'v1',
+        sparsePaths: ['plugins/foo', 'plugins/bar']
+      })
+    )
+    await waitFor(() => expect(screen.queryByTestId('marketplace-save')).not.toBeInTheDocument())
+    expect(await screen.findByTestId('marketplace-demo')).toBeInTheDocument()
+  })
+
+  it('添加市场失败：行内 marketplace-error 说原因，框不关、输入保留', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    bridge.plugins.addMarketplace.mockRejectedValue(new Error('克隆失败：repository not found'))
+    render(<PluginsPage />)
+
+    await screen.findByTestId('marketplace-empty')
+    fireEvent.keyDown(screen.getByTestId('plugins-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('marketplace-add'))
+    fireEvent.change(screen.getByTestId('marketplace-source'), { target: { value: 'owner/nope' } })
+    fireEvent.click(screen.getByTestId('marketplace-save'))
+
+    expect(await screen.findByTestId('marketplace-error')).toHaveTextContent(
+      '克隆失败：repository not found'
+    )
+    expect(screen.getByTestId('marketplace-save')).toBeInTheDocument()
+    expect(screen.getByTestId('marketplace-source')).toHaveValue('owner/nope')
+    expect(screen.queryByTestId('marketplace-demo')).not.toBeInTheDocument()
+  })
+
+  it('刷新：调 refreshMarketplace 并用回包换市场行', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.refreshMarketplace.mockResolvedValue({
+      marketplaces: [marketplaceView({ name: 'demo-market-v2' })],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+
+    await screen.findByTestId('marketplace-demo')
+    fireEvent.click(screen.getByTestId('marketplace-demo-refresh'))
+
+    await waitFor(() => expect(bridge.plugins.refreshMarketplace).toHaveBeenCalledWith('demo'))
+    expect(await screen.findByTestId('marketplace-demo')).toHaveTextContent('demo-market-v2')
+  })
+
+  it('移除市场：先确认（可取消，不发请求）；确认后调 removeMarketplace，行消失回空态', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.removeMarketplace.mockResolvedValue(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    await screen.findByTestId('marketplace-demo')
+    fireEvent.click(screen.getByTestId('marketplace-demo-remove'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('移除这个插件市场？')
+    fireEvent.click(screen.getByTestId('marketplace-remove-cancel'))
+    expect(bridge.plugins.removeMarketplace).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('marketplace-demo-remove'))
+    fireEvent.click(screen.getByTestId('marketplace-remove-confirm'))
+    await waitFor(() => expect(bridge.plugins.removeMarketplace).toHaveBeenCalledWith('demo'))
+    await waitFor(() => expect(screen.queryByTestId('marketplace-demo')).not.toBeInTheDocument())
+    expect(await screen.findByTestId('marketplace-empty')).toBeInTheDocument()
+  })
+
+  it('安装：调 install 后行变「已安装」；卸载先确认再调 uninstall，行回到「安装」', async () => {
+    installMockApi([])
+    const base: PluginsOverview = {
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    }
+    const bridge = installPluginsBridge(base)
+    bridge.plugins.install.mockResolvedValue({
+      marketplaces: base.marketplaces,
+      installed: [installedRecord()],
+      installedSkills: [{ dir: 'demo-p1-s1', name: 's1', pluginId: 'demo-p1', pluginName: 'p1' }]
+    })
+    bridge.plugins.uninstall.mockResolvedValue(base)
+    render(<PluginsPage />)
+
+    await screen.findByTestId('plugin-demo-p1')
+    fireEvent.click(screen.getByTestId('plugin-demo-p1-install'))
+    await waitFor(() => expect(bridge.plugins.install).toHaveBeenCalledWith('demo', 'p1'))
+    expect(await screen.findByTestId('plugin-demo-p1-state')).toHaveTextContent('已安装')
+
+    fireEvent.click(screen.getByTestId('plugin-demo-p1-uninstall'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('卸载这个插件？')
+    fireEvent.click(screen.getByTestId('plugin-uninstall-confirm'))
+    await waitFor(() => expect(bridge.plugins.uninstall).toHaveBeenCalledWith('demo-p1'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('plugin-demo-p1-state')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('plugin-demo-p1-install')).toBeInTheDocument()
+  })
+
+  it('安装失败：页级 plugins-error 说出原因，不假装装上', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.install.mockRejectedValue(new Error('这个插件暂时装不了'))
+    render(<PluginsPage />)
+
+    await screen.findByTestId('plugin-demo-p1')
+    fireEvent.click(screen.getByTestId('plugin-demo-p1-install'))
+
+    expect(await screen.findByTestId('plugins-error')).toHaveTextContent('这个插件暂时装不了')
+    expect(screen.getByTestId('plugin-demo-p1-install')).toBeInTheDocument()
+  })
+
+  it('总览读不到：页级 plugins-error 说原因（不静默当空列表）', async () => {
+    installMockApi([])
+    const bridge = installKyclawBridge()
+    bridge.plugins.overview.mockRejectedValue(new Error('插件通道不可用（window.kyclaw 缺失）'))
+    render(<PluginsPage />)
+
+    expect(await screen.findByTestId('plugins-error')).toHaveTextContent('插件通道不可用')
+  })
+
+  it('技能分区：已安装条目（名字 + 来自哪个插件）与计数；内置技能仍在', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [installedRecord()],
+      installedSkills: [
+        { dir: 'demo-p1-s1', name: 's1', pluginId: 'demo-p1', pluginName: 'p1' },
+        { dir: 'orphan-x', name: 'x', pluginId: null, pluginName: null }
+      ]
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    const row = await screen.findByTestId('skill-installed-demo-p1-s1')
+    expect(row).toHaveTextContent('s1')
+    expect(row).toHaveTextContent('来自 p1')
+    expect(screen.getByTestId('skill-installed-orphan-x')).toHaveTextContent('来自插件')
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent(
+      String(BUILTIN_SKILLS.length + 2)
+    )
+    expect(screen.queryByTestId('skills-installed-empty')).not.toBeInTheDocument()
+    expect(screen.getByTestId('plugins-skills')).toHaveTextContent('内置技能')
   })
 })

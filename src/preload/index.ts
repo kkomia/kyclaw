@@ -21,6 +21,7 @@ import {
   windowStateSchema,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawPluginsApi,
   type KyclawProjectsApi,
   type KyclawSettingsApi,
   type KyclawTelemetryApi,
@@ -30,6 +31,7 @@ import {
   type UpdateState
 } from '../shared/ipc'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
+import { pluginsOverviewSchema, type PluginsOverview } from '../shared/plugins'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -206,6 +208,29 @@ const telemetryApi: KyclawTelemetryApi = {
   }
 }
 
+/**
+ * 插件面（round 10）：市场与插件的动作都回**新的总览**；结构不对就抛（半截总览没法显示）。
+ */
+const pluginsApi: KyclawPluginsApi = {
+  overview: async () => parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.overview)),
+  addMarketplace: async (input) =>
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.addMarketplace, input)),
+  refreshMarketplace: async (id) =>
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.refreshMarketplace, id)),
+  removeMarketplace: async (id) =>
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.removeMarketplace, id)),
+  install: async (marketplaceId, name) =>
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.install, { marketplaceId, name })),
+  uninstall: async (id) =>
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.uninstall, id))
+}
+
+function parseOverview(payload: unknown): PluginsOverview {
+  const parsed = pluginsOverviewSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 插件总览响应结构不合法')
+  return parsed.data
+}
+
 export const kyclawApi: KyclawApi = {
   window: windowApi,
   settings: settingsApi,
@@ -213,7 +238,8 @@ export const kyclawApi: KyclawApi = {
   projects: projectsApi,
   agent: agentApi,
   updates: updatesApi,
-  telemetry: telemetryApi
+  telemetry: telemetryApi,
+  plugins: pluginsApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。
