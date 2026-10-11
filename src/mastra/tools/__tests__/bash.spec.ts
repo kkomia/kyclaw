@@ -276,22 +276,23 @@ describe.runIf(hasBash)('bash：真进程执行', () => {
     const elapsed = Date.now() - started
 
     expect(out).toContain('[已超时：超过 1.5 秒，已终止进程]')
-    expect(elapsed).toBeLessThan(20_000)
-    expect(await waitUntil(() => existsSync(pidFile), 8000)).toBe(true)
+    // 上界放宽到 35s：断言的是"没在等 60s 的孙进程自然结束"（并行跑整套时机器慢，20s 会误报）
+    expect(elapsed).toBeLessThan(35_000)
+    expect(await waitUntil(() => existsSync(pidFile), 15_000)).toBe(true)
 
     const childPid = Number(readFileSync(pidFile, 'utf8').trim())
     expect(Number.isInteger(childPid)).toBe(true)
     // 关键判据：超时返回后，fork 出去的孙进程在宽限期内真的死掉（不是只杀了 shell）
-    expect(await waitUntil(() => !pidAlive(childPid), 8000)).toBe(true)
-  }, 40_000)
+    expect(await waitUntil(() => !pidAlive(childPid), 15_000)).toBe(true)
+  }, 60_000)
 
-  it('审批 gate：默认问；命中"永久允许"规则放行；full 不豁免', async () => {
+  it('审批 gate：默认问；命中"永久允许"规则放行；full 工作区免审（round28 口径）', async () => {
     const tool = await createBashTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: { command: string }) => boolean
 
     expect(gate({ command: 'echo hi' })).toBe(true)
     bed.roots[0].mode = 'full'
-    expect(gate({ command: 'echo hi' })).toBe(true)
+    expect(gate({ command: 'echo hi' })).toBe(false)
     bed.roots[0].mode = 'ask'
     bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
     expect(gate({ command: 'echo hi' })).toBe(false)

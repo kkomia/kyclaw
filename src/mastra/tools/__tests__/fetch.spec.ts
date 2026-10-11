@@ -225,7 +225,7 @@ describe('fetch：save_to 下载', () => {
 })
 
 describe('fetch：审批 gate', () => {
-  it('默认问；规则放行；save_to 越界不问（执行 fail closed）；full 不豁免', async () => {
+  it('默认问；full 工作区免审；规则放行；save_to 越界不问（执行 fail closed）', async () => {
     const tool = await createFetchTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: {
       url: string
@@ -234,7 +234,7 @@ describe('fetch：审批 gate', () => {
 
     expect(gate({ url: 'https://example.com/api' })).toBe(true)
     bed.roots[0].mode = 'full'
-    expect(gate({ url: 'https://example.com/api' })).toBe(true)
+    expect(gate({ url: 'https://example.com/api' })).toBe(false)
     bed.roots[0].mode = 'ask'
 
     bed.rules.push({ tool: 'fetch', workspace: bed.root, mode: 'allow' })

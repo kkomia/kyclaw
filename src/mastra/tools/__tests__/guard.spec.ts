@@ -209,18 +209,20 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
 })
 
 describe('needsApproval：能力类工具（round28：bash / fetch / git）', () => {
-  it('bash：默认问；命中(工具×工作区)规则放行；full 不豁免（shell 不止碰这个文件夹）', () => {
+  it('bash：默认问；full 工作区免审（round28 口径）；没有 full 时靠(工具×工作区)规则放行', () => {
     expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
 
+    // round28 用户口径修正：开着「完全访问」的文件夹里跑 bash 不再弹卡
     bed.roots[0].mode = 'full'
-    expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(false)
+    expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.root })).toBe(false)
     bed.roots[0].mode = 'ask'
 
     bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
     expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(false)
   })
 
-  it('bash：cwd 指到工作区 → 该工作区的规则可放行；cwd 在工作区之外 → 必问（无工作区可绑定）', () => {
+  it('bash：cwd 指到工作区 → 该工作区的规则/full 可放行；cwd 在工作区之外 → 必问（无工作区可绑定）', () => {
     const second = createBed()
     try {
       bed.roots.push({ path: second.root, mode: 'ask' })
@@ -228,33 +230,57 @@ describe('needsApproval：能力类工具（round28：bash / fetch / git）', ()
 
       // cwd 明确落在 second → 命中规则
       expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: second.root })).toBe(false)
-      // cwd 落在 first（没有规则）→ 问
+      // cwd 落在 first（没有规则、ask）→ 问
       expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.root })).toBe(true)
       // cwd 在工作区之外：bash 允许在任意路径跑（带审批的主通道）→ 必问，规则绑不上
       expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.outside })).toBe(true)
+
+      // 显式 cwd 落在 full 的那个工作区 → 免审（哪怕没规则）
+      bed.roots[0].mode = 'full'
+      expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.root })).toBe(false)
+      bed.roots[0].mode = 'ask'
     } finally {
       bed.roots.pop()
       second.dispose()
     }
   })
 
-  it('bash：多个工作区且没给 cwd → 绑不上工作区，问', () => {
+  it('bash 没给 cwd：单工作区 full 免审；多工作区全 full 免审、混合则问', () => {
     const second = createBed()
     try {
-      bed.roots.push({ path: second.root, mode: 'ask' })
+      // 单工作区 full
+      bed.roots[0].mode = 'full'
+      expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(false)
+      bed.roots[0].mode = 'ask'
+
+      // 多工作区：全 full → 免审
+      bed.roots[0].mode = 'full'
+      bed.roots.push({ path: second.root, mode: 'full' })
+      expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(false)
+
+      // 混合档（一个 full 一个 ask）→ 说不清执行会落哪，问
+      bed.roots[1].mode = 'ask'
+      expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
+
+      // 两个都 ask 且带规则也不行（多工作区没显式目标绑不上）——保守方向
+      bed.roots[0].mode = 'ask'
       bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
       expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
     } finally {
       bed.roots.pop()
+      bed.roots[0].mode = 'ask'
       second.dispose()
     }
   })
 
-  it('fetch：默认问；规则放行；full 不豁免；save_to 越界不问（执行 fail closed）', () => {
+  it('fetch：默认问；full 免审；规则放行；save_to 越界不问（执行 fail closed）', () => {
     expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(true)
 
     bed.roots[0].mode = 'full'
-    expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(false)
+    expect(
+      needsApproval(bed.ctx, 'fetch', { url: 'https://example.com', save_to: 'out.bin' })
+    ).toBe(false)
     bed.roots[0].mode = 'ask'
 
     bed.rules.push({ tool: 'fetch', workspace: bed.root, mode: 'allow' })

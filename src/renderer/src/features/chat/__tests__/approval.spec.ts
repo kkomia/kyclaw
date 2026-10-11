@@ -321,7 +321,8 @@ describe('canResumeAfterApproval（审批续跑就绪判定，T13×T14）', () =
     expect(canResumeAfterApproval(assistant([responded('c1')]))).toBe(true)
   })
 
-  it('还停在 approval-requested / 普通工具没收束 → false（不替用户往前跑）', () => {
+  it('还没回应的审批 → false；兄弟工具停在 input-available → true（round28 挂起形状放行）', () => {
+    // 还有审批没回应：不替用户往前跑
     expect(
       canResumeAfterApproval(
         assistant([
@@ -335,11 +336,37 @@ describe('canResumeAfterApproval（审批续跑就绪判定，T13×T14）', () =
         ])
       )
     ).toBe(false)
+    // 一条已回应、另一条还没回应：等用户把决策都做完
     expect(
       canResumeAfterApproval(
         assistant([
           responded('c1'),
-          { type: 'tool-read', toolCallId: 'r1', state: 'input-available' }
+          {
+            type: 'tool-write',
+            toolCallId: 'c2',
+            state: 'approval-requested',
+            input: {},
+            approval: { id: 'run::c2' }
+          }
+        ])
+      )
+    ).toBe(false)
+    // round28 定位的真 bug：挂起时同一步"已经执行完"的兄弟工具结果面不会发出来，
+    // part 停在 input-available —— 这正是要放行续跑的形状（服务端续跑那轮会把结果补上）
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          responded('c1'),
+          { type: 'tool-glob', toolCallId: 'r1', state: 'input-available' }
+        ])
+      )
+    ).toBe(true)
+    // 参数都还没流完（input-streaming）不算可续跑
+    expect(
+      canResumeAfterApproval(
+        assistant([
+          responded('c1'),
+          { type: 'tool-glob', toolCallId: 'r2', state: 'input-streaming' }
         ])
       )
     ).toBe(false)

@@ -256,9 +256,9 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *         —— 我们的工具马上会 fail closed 拒掉，弹一张"批了也不会执行"的卡只会误导用户。
  *       · **能力类工具**（round28：bash / fetch / git_add / git_commit）：按它们的"显式目标"
  *         字段（bash=cwd、fetch=save_to、git=path）解析；没给目标时执行层的根 = 会话根，
- *         审批层拿不到会话 —— 只有授权列表**恰好一条**时能绑定。规则命中放行；
- *         **full 只对 git 生效**（git 是工作区受限工具），bash/fetch 能碰工作区之外的东西
- *         （bash 能 cd 出去、fetch 能请求任意地址），Full access 管不了它们，只有显式规则能豁免。
+ *         审批层拿不到会话 —— 单工作区就绑它，多工作区只有**全部 full** 才免审（有一条 ask
+ *         就说不清执行会落哪）。**full 对四种能力都生效**（round28 用户口径修正：开着
+ *         「完全访问」的文件夹里跑 bash / 发 fetch 不该再弹卡），规则照旧可豁免。
  *         目标给了解析不出去：bash 的执行层**允许**在工作区外跑（这正是它的用途）→ 问；
  *         fetch/git 的目标过引擎、执行层会 fail closed → 不问（批了也不执行，弹卡是噪音）。
  *       · **其它写类**（MCP 外部工具、未知工具）：执行不走我们的引擎，无法证明"只碰这个工作区"
@@ -275,7 +275,7 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *
  * 能力类工具（bash/fetch/git_*）按**整名**识别：`mcp__shell__bash` 不会被认成内置 bash，
  * 走的是外部工具那一档（一律问，全名规则才放行）。"问一次后可永久允许"的出口对它们是
- * (工具, 工作区) 规则；多工作区且没给显式目标时绑不上工作区，只能每次问（保守方向）。
+ * (工具, 工作区) 规则；没给显式目标时单工作区可绑、多工作区全部 full 才免审，混合档问。
  *
  * T18（会话根）与这一层的关系：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)`
  * 不传 session）。执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts
@@ -342,7 +342,8 @@ function capabilityNeedsApproval(
   if (target !== null) {
     const resolved = resolveTarget(ctx, target)
     if (resolved.ok) {
-      if (capability === 'git' && resolved.workspace.mode === 'full') return false
+      // round28 口径：显式目标落在 full 工作区 → 免审（bash / fetch / git 四种能力一视同仁）
+      if (resolved.workspace.mode === 'full') return false
       return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
     }
     // 目标解析不出去：bash 的执行层允许在工作区外跑（带审批的主通道）→ 必须问；
@@ -350,12 +351,15 @@ function capabilityNeedsApproval(
     return capability === 'shell'
   }
 
-  // 没给显式目标：执行层的根 = 会话根，审批层拿不到会话 —— 授权列表恰好一条时可绑定
+  // 没给显式目标：执行层的根 = 会话根，审批层拿不到会话 —— 单工作区绑它；多工作区只有
+  // **全部 full** 才免审（有一条 ask 就说不清执行会落哪 → 问，保守方向）
   const roots = workspaceRoots(ctx)
-  if (roots.length !== 1) return true
-  const workspace = roots[0]
-  if (capability === 'git' && workspace.mode === 'full') return false
-  return !isAllowedByRules(ctx.permissionRules(), tool, workspace.path)
+  if (roots.length === 1) {
+    if (roots[0].mode === 'full') return false
+    return !isAllowedByRules(ctx.permissionRules(), tool, roots[0].path)
+  }
+  if (roots.length > 1 && roots.every((workspace) => workspace.mode === 'full')) return false
+  return true
 }
 
 function inputPath(input: unknown): string | null {

@@ -288,7 +288,7 @@ describe('mapStoredMessages：工具调用回放', () => {
     })
   })
 
-  it('还停在等审批的调用（call）仍按"进行中"回放：重启后那次挂起已经作废，不冒充可审批', () => {
+  it('没带挂起登记（metadata.pendingToolApprovals）的 call：仍按"进行中"回放，不冒充可审批', () => {
     const [message] = mapStoredMessages([
       stored('assistant', [
         {
@@ -301,6 +301,98 @@ describe('mapStoredMessages：工具调用回放', () => {
           }
         }
       ])
+    ])
+
+    expect(message.parts[0]).toMatchObject({ state: 'input-available' })
+  })
+
+  it('挂起等审批（call + metadata.pendingToolApprovals）：回放成 approval-requested，审批 id 按服务端口径复原', () => {
+    const [message] = mapStoredMessages([
+      {
+        id: 'assistant-hang',
+        role: 'assistant',
+        content: {
+          format: 2,
+          parts: [
+            { type: 'reasoning', reasoning: '先看看环境' },
+            {
+              type: 'tool-invocation',
+              toolInvocation: {
+                state: 'call',
+                toolCallId: 'call_01_bash',
+                toolName: 'bash',
+                args: { command: 'pwd && ls -la' }
+              }
+            }
+          ],
+          metadata: {
+            pendingToolApprovals: {
+              call_01_bash: {
+                toolCallId: 'call_01_bash',
+                toolName: 'bash',
+                args: { command: 'pwd && ls -la' },
+                type: 'approval',
+                runId: '8fa31d12-7f0f-45af-8d9b-4c93acc04ee3',
+                resumeSchema: '{"type":"object"}'
+              }
+            }
+          }
+        }
+      } as StoredMessage
+    ])
+
+    expect(message.parts[1]).toEqual({
+      type: 'tool-bash',
+      toolCallId: 'call_01_bash',
+      state: 'approval-requested',
+      input: { command: 'pwd && ls -la' },
+      approval: { id: '8fa31d12-7f0f-45af-8d9b-4c93acc04ee3::call_01_bash' }
+    })
+  })
+
+  it('同一步多个挂起审批：各自复原（两个 bash 都要用户决策）', () => {
+    const [message] = mapStoredMessages([
+      {
+        id: 'assistant-hang-2',
+        role: 'assistant',
+        content: {
+          format: 2,
+          parts: ['call_a', 'call_b'].map((toolCallId) => ({
+            type: 'tool-invocation',
+            toolInvocation: { state: 'call', toolCallId, toolName: 'bash', args: { command: 'ls' } }
+          })),
+          metadata: {
+            pendingToolApprovals: {
+              call_a: { toolCallId: 'call_a', runId: 'run-9', type: 'approval' },
+              call_b: { toolCallId: 'call_b', runId: 'run-9', type: 'approval' }
+            }
+          }
+        }
+      } as StoredMessage
+    ])
+
+    expect(message.parts.map((part) => (part as { state?: string }).state)).toEqual([
+      'approval-requested',
+      'approval-requested'
+    ])
+  })
+
+  it('挂起登记是脏数据（缺 runId / 不是对象）：落回"进行中"，不抛、不冒充可审批', () => {
+    const [message] = mapStoredMessages([
+      {
+        id: 'assistant-dirty',
+        role: 'assistant',
+        content: {
+          format: 2,
+          parts: [
+            {
+              type: 'tool-invocation',
+              toolInvocation: { state: 'call', toolCallId: 'call_x', toolName: 'bash', args: {} }
+            }
+          ],
+          metadata: { pendingToolApprovals: { call_x: { toolCallId: 'call_x' } } as unknown }
+        }
+      } as StoredMessage
     ])
 
     expect(message.parts[0]).toMatchObject({ state: 'input-available' })

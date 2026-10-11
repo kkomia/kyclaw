@@ -14,10 +14,11 @@
  *   - 删除会话时 dropThreadChat 丢掉内存态。
  *
  * 审批（T13）：Chat 挂 `sendAutomaticallyWhen = canResumeAfterApproval`（approval.ts 里的自判，
- * 相对 AI SDK 内置版滤掉了 providerExecuted 与 Mastra 记忆工具这两类"永不在 UI 消息里收束"的
- * part——否则同一步里既写记忆又发待审批写工具时不会自动续跑，T18 复核 concern②）；用户做完决策
- * （addToolApprovalResponse）后自动把消息发回服务端续跑；onFinish 里把"还停在等审批"的轮次标出来
- * （awaitingApproval），渲染端据此不把它当完成轮。
+ * 相对 AI SDK 内置版放宽了三类"永不在 UI 消息里收束"的 part：providerExecuted、Mastra 记忆工具、
+ * 以及挂起时兄弟工具停在 input-available 的那档（round28 实测：不同步放宽会导致批准后永不续跑，
+ * 见 approval.ts 头注）；用户做完决策（addToolApprovalResponse）后自动把消息发回服务端续跑；
+ * onFinish 里把"还停在等审批"的轮次标出来（awaitingApproval），渲染端据此不把它当完成轮。
+ * 重开会话时挂起的审批由 message-map 从存储 metadata 恢复成 approval-requested（round28）。
  */
 import { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'

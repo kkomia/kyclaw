@@ -182,15 +182,20 @@ export function hasPendingApproval(message: { parts?: unknown } | undefined): bo
 /**
  * 审批续跑的就绪判定（替代 AI SDK 的 `lastAssistantMessageIsCompleteWithApprovalResponses`）。
  *
- * 规则与 AI SDK 内置那份逐字对齐：只看**最后一条助手消息**、只从最后一个 `step-start` 切**最后一步**、
- * 要求这一步里**至少一条 approval-responded**、且每个工具 part 都已收束（output-available 非
- * preliminary / output-error / output-denied / approval-responded）。
+ * 规则与 AI SDK 内置那份对齐（只看**最后一条助手消息**、只从最后一个 `step-start` 切**最后一步**、
+ * 要求这一步里**至少一条 approval-responded**），但"每个 part 都已收束"这条按本应用的实际形状放宽：
  *
- * 与内置判定的唯一差别：**先滤掉两类"永远不会在 UI 消息里收束"的 part**——
- *   1. `providerExecuted`：提供方执行的工具，结果不进 UI 消息，客户端本来就不该等它；
+ *   1. `providerExecuted`：提供方执行的工具，结果不进 UI 消息，客户端本来就不该等它（滤掉）；
  *   2. Mastra 记忆工具（`updateWorkingMemory`）：服务端执行完把结果吞进记忆，UI part 永远
- *      停在 `input-available`。同一步里模型既写记忆又发待审批写工具时，内置判定会因此恒 false，
- *      用户做完决策不会自动续跑（T18 复核 concern② 实测）。
+ *      停在 `input-available`（滤掉，T18 复核 concern② 实测）；
+ *   3. **`input-available` 的兄弟工具**（round28 定位到的真 bug）：同一步里有工具要审批时，
+ *      Mastra 挂起前**只发审批请求**——同一步其它"已经执行完"的工具，结果面不会随挂起流发出来
+ *      （wire 实测：`tool-input-available(glob)` 之后直接 `tool-approval-request(bash)`，
+ *      没有 `tool-output-available(glob)`）。内置判定要求所有 part 收束，于是恒 false、
+ *      批准后永不自动续跑（现场：15:42/15:51 两条会话卡死）。这里把 `input-available`
+ *      当作"服务端待续跑补上"的状态放行 —— 本应用没有客户端执行的工具，`input-available`
+ *      只可能是"服务端还没补结果"，不会出现"等客户端 addToolOutput"的语义；
+ *      `input-streaming` / `approval-requested`（还有没回应的审批）仍然不放行。
  * 滤完没有任何可等待的调用 → false：没有"该续跑的审批"，不替用户往前跑。
  */
 const MEMORY_TOOL_NAMES = new Set(['updateWorkingMemory'])
@@ -245,6 +250,9 @@ export function canResumeAfterApproval(
 
   return toolParts.every(
     (part) =>
+      // input-available：挂起时兄弟工具的结果面没发出来（见上面头注第 3 条）——
+      // 续跑那轮服务端会把结果补上；本应用没有客户端工具，不会有"等客户端输出"的语义
+      part.state === 'input-available' ||
       (part.state === 'output-available' && part.preliminary !== true) ||
       part.state === 'output-error' ||
       part.state === 'output-denied' ||

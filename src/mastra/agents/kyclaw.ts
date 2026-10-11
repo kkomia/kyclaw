@@ -4,8 +4,9 @@
  * 工具集（T11 + round28 模块 1）：文件工具五件套（read/write/edit/glob/grep）+
  * bash / fetch / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit），
  * 全部经 guard 装配——文件工具路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
- * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问、(工具×工作区) 规则可豁免；
- * bash/fetch 不吃 Full access，git 吃）；写类按 spec §5.2 挂审批（requireApproval）。
+ * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问；(工具×工作区) 规则与
+ * mode='full' 工作区都可豁免 —— round28 用户口径：开了「完全访问」就不再为 bash/fetch 弹卡）；
+ * 写类按 spec §5.2 挂审批（requireApproval）。
  * 工作区列表与"永久允许"规则（T13）都用**取值函数**传（现读设置）：用户中途加工作区、
  * 批准一条永久规则，下一轮工具就能用，不必重启服务。
  *
@@ -84,7 +85,7 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
 - bash 工具执行 shell 命令：环境是 Git Bash，写 bash 语法（不是 PowerShell）。默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请重定向输出到文件并用 & 放到后台，不要前台常驻。
 - 联网用 fetch 工具（GET/POST、自定义请求头）；要保存响应就带 save_to（落进工作区）。
 - git 用 git_status / git_diff / git_log 查看（只读）；git_add / git_commit 提交改动；不做 push，需要推远端时请用户自己操作。
-- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit）执行前都会弹给用户审批，也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
+- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit）执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
 export async function createKyclawAgent(
