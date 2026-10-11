@@ -10,6 +10,7 @@
  * 同一套 containment 口径（渲染端传不了任意绝对路径）。zod schema 与类型同源，preload 双向都用它。
  */
 import { z } from './zod'
+import { IMAGE_MAX_BYTES } from './attachments'
 
 /** 会话根解析不出来 / 不唯一时给渲染端的人话（工作台各工具的空态与错误行共用） */
 export const WORKBENCH_NO_WORKSPACE = '这个会话还没有工作区：先在设置里添加一个文件夹'
@@ -59,6 +60,51 @@ export type FilePreview = z.infer<typeof filePreviewSchema>
 
 /** workbench:reveal 的回包：真正交给系统的那条绝对路径（测试与排障都看得到） */
 export const revealResultSchema = z.strictObject({ path: z.string().min(1) })
+
+/* ── 文件字节（按格式渲染的那条通道） ────────────────────────────────────── */
+
+/**
+ * 带类型字节通道认得的格式：扩展名与文件头**双重**判定，两者对不上就按不支持处理。
+ * 只列渲染端真能画出来的几种（图片走 data URL、PDF 走 pdfjs）；office 三件在 round40b。
+ */
+export const fileByteFormatSchema = z.enum([
+  'image-png',
+  'image-jpeg',
+  'image-gif',
+  'image-webp',
+  'image-bmp',
+  'pdf'
+])
+export type FileByteFormat = z.infer<typeof fileByteFormatSchema>
+
+/** 图片预览上限：与附件口径一致（8MB），超过就给人话 */
+export const PREVIEW_IMAGE_MAX_BYTES = IMAGE_MAX_BYTES
+
+/**
+ * PDF 预览上限（自定）：文本档的 5MB 对带图 PDF 偏紧，这里放宽到 32MB
+ * （整份过 IPC，是内存护栏而不是业务口径；超了给人话，不做"截一半去解析"）。
+ */
+export const PREVIEW_PDF_MAX_BYTES = 32 * 1024 * 1024
+
+/**
+ * workbench:read-bytes 的回包（判别联合）：
+ *   - `bytes`：认得出的格式 + 原始字节（Uint8Array 过结构化克隆，不转 base64）；
+ *   - `too-large`：超过该格式的上限（`limit` 是上限本身，渲染端如实说）；
+ *   - `unsupported`：扩展名不认得，或文件头与扩展名对不上（渲染端回落二进制占位）；
+ *   - `missing`：文件不在磁盘上了（可能刚被删除或改名）。
+ */
+export const fileBytesResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('bytes'),
+    format: fileByteFormatSchema,
+    bytes: z.instanceof(Uint8Array),
+    size: z.number()
+  }),
+  z.strictObject({ kind: z.literal('too-large'), size: z.number(), limit: z.number() }),
+  z.strictObject({ kind: z.literal('unsupported'), size: z.number() }),
+  z.strictObject({ kind: z.literal('missing') })
+])
+export type FileBytesResult = z.infer<typeof fileBytesResultSchema>
 
 /* ── Git ───────────────────────────────────────────────────────────────── */
 

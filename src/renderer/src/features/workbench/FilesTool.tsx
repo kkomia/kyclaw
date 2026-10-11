@@ -17,12 +17,16 @@ import {
   FolderSearch
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import type { DirEntry, FilePreview } from '@shared/workbench'
+import type { DirEntry, FileBytesResult, FilePreview } from '@shared/workbench'
 import { cn } from '@renderer/components/ui/cn'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
 import { ContextMenu, type ContextMenuState } from './ContextMenu'
+import { ImagePreview } from './preview/ImagePreview'
+import { MarkdownPreview } from './preview/MarkdownPreview'
+import { PdfPreview } from './preview/PdfPreview'
+import { previewModeOf, type PreviewMode } from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 import { formatBytes } from './format'
 
@@ -38,12 +42,18 @@ function failedDir(error: string): DirState {
   return { status: 'error', entries: [], truncated: false, error }
 }
 
+/** 预览拿到的值：文本通道（`FilePreview`）与字节通道（`FileBytesResult`）各一路 */
+type PreviewValue =
+  { channel: 'text'; preview: FilePreview } | { channel: 'bytes'; bytes: FileBytesResult }
+
 interface PreviewState {
   /** 属于哪个线程（晚到的响应据此丢弃） */
   threadId: string
   relative: string
+  /** 按后缀定下来的渲染方式（决定走哪条通道、哪个组件） */
+  mode: PreviewMode
   status: 'loading' | 'ready' | 'error'
-  value?: FilePreview
+  value?: PreviewValue
   error?: string
 }
 
@@ -90,11 +100,21 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
   const chooseFile = useCallback(
     (relative: string): void => {
       if (workbench === null || threadId === null) return
-      setPreview({ threadId, relative, status: 'loading' })
-      void workbench.readFile(threadId, relative).then(
-        (value) => setPreview({ threadId, relative, status: 'ready', value }),
+      const mode = previewModeOf(relative)
+      setPreview({ threadId, relative, mode, status: 'loading' })
+      // 图片 / PDF 走字节通道（文本通道 64KB 且只给字符串，承载不了真渲染）
+      const request =
+        mode === 'image' || mode === 'pdf'
+          ? workbench
+              .readBytes(threadId, relative)
+              .then((bytes): PreviewValue => ({ channel: 'bytes', bytes }))
+          : workbench
+              .readFile(threadId, relative)
+              .then((preview): PreviewValue => ({ channel: 'text', preview }))
+      void request.then(
+        (value) => setPreview({ threadId, relative, mode, status: 'ready', value }),
         (error: unknown) =>
-          setPreview({ threadId, relative, status: 'error', error: unwrapIpcError(error) })
+          setPreview({ threadId, relative, mode, status: 'error', error: unwrapIpcError(error) })
       )
     },
     [threadId, workbench]
@@ -119,6 +139,7 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
           setPreview({
             threadId,
             relative,
+            mode: previewModeOf(relative),
             status: 'error',
             error: unwrapIpcError(error)
           })
@@ -351,7 +372,12 @@ function Row({
   )
 }
 
-/** 预览体：文本档原样（monospace、换行保留）；二进制/过大给人话 */
+/**
+ * 预览体：按格式分派 ——
+ *   - `.md` / `.markdown`：走 markdown 渲染器（内容仍来自文本通道）；
+ *   - 图片 / `.pdf`：走字节通道，渲染端真画（data URL / pdfjs canvas）；
+ *   - 其余：文本档原样（monospace、换行保留）；二进制/过大给人话。
+ */
 function PreviewBody({ state }: { state: PreviewState }): React.JSX.Element {
   if (state.status === 'loading') {
     return (
@@ -366,29 +392,90 @@ function PreviewBody({ state }: { state: PreviewState }): React.JSX.Element {
 
   const value = state.value
   if (value === undefined) return <div />
-  if (value.kind === 'binary') {
+  if (value.channel === 'bytes') {
+    // key 绑文件名：换文件即重挂，免得上一个文件的状态（坏图标记 / 已画页数）跟过来
+    return <BytesBody key={state.relative} mode={state.mode} result={value.bytes} />
+  }
+  return <TextBody mode={state.mode} preview={value.preview} />
+}
+
+/** 文本通道的那三种结果（markdown 只是把它们里的 `text` 过一遍渲染器） */
+function TextBody({
+  mode,
+  preview
+}: {
+  mode: PreviewMode
+  preview: FilePreview
+}): React.JSX.Element {
+  if (preview.kind === 'binary') {
     return (
       <p data-testid="file-preview-binary" className="px-3 py-2 text-b2 text-ink-secondary">
-        这是二进制文件（{formatBytes(value.size)}）
+        这是二进制文件（{formatBytes(preview.size)}）
       </p>
     )
   }
-  if (value.kind === 'too-large') {
+  if (preview.kind === 'too-large') {
     return (
       <p data-testid="file-preview-large" className="px-3 py-2 text-b2 text-ink-secondary">
-        文件太大（{formatBytes(value.size)}），不适合在这里预览
+        文件太大（{formatBytes(preview.size)}），不适合在这里预览
       </p>
     )
   }
 
   return (
-    <div data-testid="file-preview-text" className="px-3 py-2">
-      <pre className="font-mono text-b2 whitespace-pre-wrap break-all text-ink">{value.text}</pre>
-      {value.truncated ? (
-        <p className="pt-2 text-b2 text-ink-tertiary">
-          只显示前面一部分（共 {formatBytes(value.size)}）
+    <div className="py-2">
+      {mode === 'markdown' ? (
+        <MarkdownPreview text={preview.text} />
+      ) : (
+        <div data-testid="file-preview-text" className="px-3">
+          <pre className="font-mono text-b2 whitespace-pre-wrap break-all text-ink">
+            {preview.text}
+          </pre>
+        </div>
+      )}
+      {preview.truncated ? (
+        <p className="px-3 pt-2 text-b2 text-ink-tertiary">
+          只显示前面一部分（共 {formatBytes(preview.size)}）
         </p>
       ) : null}
     </div>
+  )
+}
+
+/** 字节通道：认得出的格式交给对应的渲染器；其余三种给人话（与文本档同口径） */
+function BytesBody({
+  mode,
+  result
+}: {
+  mode: PreviewMode
+  result: FileBytesResult
+}): React.JSX.Element {
+  if (result.kind === 'missing') {
+    return (
+      <p data-testid="file-preview-missing" className="px-3 py-2 text-b2 text-ink-secondary">
+        这个文件不在磁盘上了（可能刚被删除或改名）
+      </p>
+    )
+  }
+  if (result.kind === 'too-large') {
+    return (
+      <p data-testid="file-preview-large" className="px-3 py-2 text-b2 text-ink-secondary">
+        文件太大（{formatBytes(result.size)}），不适合在这里预览
+      </p>
+    )
+  }
+  if (result.kind === 'unsupported') {
+    // 后缀认得、内容对不上暗号（或后缀不认得）：按二进制占位，不猜、不硬画
+    return (
+      <p data-testid="file-preview-binary" className="px-3 py-2 text-b2 text-ink-secondary">
+        这是二进制文件（{formatBytes(result.size)}）
+      </p>
+    )
+  }
+
+  return mode === 'pdf' ? (
+    <PdfPreview bytes={result.bytes} />
+  ) : (
+    <ImagePreview format={result.format} bytes={result.bytes} />
   )
 }

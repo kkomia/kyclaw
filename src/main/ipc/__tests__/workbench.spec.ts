@@ -120,7 +120,7 @@ afterEach(() => {
 })
 
 describe('通道注册与入参闸门', () => {
-  it('十条通道都注册了', () => {
+  it('十一条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'terminal:dispose',
       'terminal:resize',
@@ -130,20 +130,22 @@ describe('通道注册与入参闸门', () => {
       'workbench:git-overview',
       'workbench:git-show',
       'workbench:list-dir',
+      'workbench:read-bytes',
       'workbench:read-file',
       'workbench:reveal'
     ])
   })
 
-  it('相对路径族（list-dir / read-file / reveal）：缺参、空 threadId、走样一律拒', async () => {
+  it('相对路径族（list-dir / read-file / read-bytes / reveal）：缺参、空 threadId、走样一律拒', async () => {
     const cases: Array<[string, unknown[][]]> = [
       [IPC_CHANNELS.workbench.listDir, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]],
-      [IPC_CHANNELS.workbench.readFile, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]]
+      [IPC_CHANNELS.workbench.readFile, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]],
+      [IPC_CHANNELS.workbench.readBytes, [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]]
     ]
     for (const [channel, argSets] of cases) {
       const handler = handlerOf(channel)
       for (const args of argSets) {
-        // list-dir / read-file 的 handler 是同步的（读类动作立刻给人话）
+        // 读类动作的 handler 是同步的（立刻给人话）
         expect(() => handler(EVENT, ...args), `${channel} ${JSON.stringify(args)}`).toThrow(
           IpcInputError
         )
@@ -215,6 +217,30 @@ describe('文件族', () => {
     })
 
     expect(() => handlerOf(IPC_CHANNELS.workbench.readFile)(EVENT, 't', '../别的')).toThrow(
+      /路径不可用/
+    )
+  })
+
+  it('read-bytes：认得的后缀回字节（Uint8Array），认不出回 unsupported；越权路径给人话', async () => {
+    writeFileSync(
+      join(project, '图片.png'),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    )
+    const result = (await handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '图片.png')) as {
+      kind: string
+      format: string
+      bytes: Uint8Array
+      size: number
+    }
+    expect(result.kind).toBe('bytes')
+    expect(result.format).toBe('image-png')
+    expect(result.size).toBe(8)
+    expect(Array.from(result.bytes)).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+    const unsupported = await handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', 'README.md')
+    expect(unsupported).toEqual({ kind: 'unsupported', size: Buffer.byteLength('# 标题\n') })
+
+    expect(() => handlerOf(IPC_CHANNELS.workbench.readBytes)(EVENT, 't', '../别的')).toThrow(
       /路径不可用/
     )
   })

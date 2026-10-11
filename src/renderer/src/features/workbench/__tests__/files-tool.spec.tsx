@@ -100,6 +100,10 @@ describe('FilesTool：目录树', () => {
 
 describe('FilesTool：单击预览', () => {
   it('单击文件读回文本并内联显示（含截断提示）', async () => {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [{ name: 'notes.txt', kind: 'file', size: 4096 }],
+      truncated: false
+    })
     bed.bridge.workbench.readFile.mockResolvedValue({
       kind: 'text',
       text: 'export {}\n',
@@ -108,11 +112,11 @@ describe('FilesTool：单击预览', () => {
     })
     render(<FilesTool root={rootOf()} />)
 
-    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('README.md'))
+    await waitFor(() => expect(screen.getByText('notes.txt')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('notes.txt'))
 
     await waitFor(() =>
-      expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'README.md')
+      expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'notes.txt')
     )
     const preview = await screen.findByTestId('file-preview')
     expect(within(preview).getByTestId('file-preview-text')).toHaveTextContent('export {}')
@@ -122,16 +126,16 @@ describe('FilesTool：单击预览', () => {
   it('二进制 / 超大文件给人话，不吐乱码', async () => {
     bed.bridge.workbench.listDir.mockResolvedValue({
       entries: [
-        { name: 'logo.png', kind: 'file', size: 2048 },
+        { name: 'logo.ico', kind: 'file', size: 2048 },
         { name: 'huge.bin', kind: 'file', size: 104857600 }
       ],
       truncated: false
     })
     render(<FilesTool root={rootOf()} />)
-    await waitFor(() => expect(screen.getByText('logo.png')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('logo.ico')).toBeInTheDocument())
 
     bed.bridge.workbench.readFile.mockResolvedValueOnce({ kind: 'binary', size: 2048 })
-    fireEvent.click(screen.getByText('logo.png'))
+    fireEvent.click(screen.getByText('logo.ico'))
     expect(await screen.findByTestId('file-preview-binary')).toHaveTextContent('二进制')
 
     bed.bridge.workbench.readFile.mockResolvedValueOnce({ kind: 'too-large', size: 104857600 })
@@ -148,6 +152,99 @@ describe('FilesTool：单击预览', () => {
     expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
       '这个文件不在磁盘上了'
     )
+  })
+})
+
+describe('FilesTool：按格式路由', () => {
+  it('.md 走 markdown 渲染器（内容仍来自文本通道）', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '# 一级标题\n\n- 第一项\n',
+      size: 24,
+      truncated: false
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('README.md'))
+    const body = await screen.findByTestId('file-preview-markdown')
+    expect(body.querySelector('h1')?.textContent).toBe('一级标题')
+    expect(body.querySelectorAll('li')).toHaveLength(1)
+    // markdown 走的是文本通道，不该去拉字节
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('图片走字节通道并画成 data URL', async () => {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [{ name: '图片.png', kind: 'file', size: 4 }],
+      truncated: false
+    })
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'image-png',
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      size: 4
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('图片.png')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('图片.png'))
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '图片.png')
+    )
+    const image = (await screen.findByTestId('file-preview-image')).querySelector('img')
+    expect(image?.getAttribute('src')).toBe('data:image/png;base64,iVBORw==')
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+  })
+
+  it('PDF 走字节通道（渲染交给 PdfPreview）', async () => {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [{ name: '报告.pdf', kind: 'file', size: 5 }],
+      truncated: false
+    })
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'pdf',
+      bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]),
+      size: 5
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('报告.pdf')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('报告.pdf'))
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '报告.pdf')
+    )
+    expect(await screen.findByTestId('file-preview-pdf')).toBeInTheDocument()
+  })
+
+  it('字节通道的三个人话态：没了 / 太大 / 认不出', async () => {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [
+        { name: 'a.png', kind: 'file', size: 1 },
+        { name: 'b.jpg', kind: 'file', size: 1 },
+        { name: 'c.gif', kind: 'file', size: 1 }
+      ],
+      truncated: false
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('a.png')).toBeInTheDocument())
+
+    bed.bridge.workbench.readBytes.mockResolvedValueOnce({ kind: 'missing' })
+    fireEvent.click(screen.getByText('a.png'))
+    expect(await screen.findByTestId('file-preview-missing')).toHaveTextContent('不在磁盘上')
+
+    bed.bridge.workbench.readBytes.mockResolvedValueOnce({
+      kind: 'too-large',
+      size: 40 * 1024 * 1024,
+      limit: 8 * 1024 * 1024
+    })
+    fireEvent.click(screen.getByText('b.jpg'))
+    expect(await screen.findByTestId('file-preview-large')).toHaveTextContent('文件太大')
+
+    bed.bridge.workbench.readBytes.mockResolvedValueOnce({ kind: 'unsupported', size: 9 })
+    fireEvent.click(screen.getByText('c.gif'))
+    expect(await screen.findByTestId('file-preview-binary')).toHaveTextContent('二进制')
   })
 })
 

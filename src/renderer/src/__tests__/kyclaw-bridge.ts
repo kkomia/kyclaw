@@ -19,6 +19,7 @@ import type { TranslateResult } from '@shared/translate'
 import type { PdfExtractResult } from '@shared/attachments'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
 import type {
+  FileBytesResult,
   FilePreview,
   GitCommit,
   GitCommitDetail,
@@ -335,6 +336,8 @@ export function telemetryApiStub(endpointOf: () => string = () => ''): Telemetry
 export interface WorkbenchApiStub {
   listDir: Mock<(threadId: string, relative: string) => Promise<ListDirResult>>
   readFile: Mock<(threadId: string, relative: string) => Promise<FilePreview>>
+  /** round 40：字节通道（图片 / PDF 的按格式预览）；默认回"不支持" */
+  readBytes: Mock<(threadId: string, relative: string) => Promise<FileBytesResult>>
   reveal: Mock<(threadId: string, relative: string) => Promise<{ path: string }>>
   gitOverview: Mock<(threadId: string) => Promise<GitOverview>>
   gitLog: Mock<(threadId: string, limit: number) => Promise<{ commits: GitCommit[] }>>
@@ -345,6 +348,7 @@ export function workbenchApiStub(): WorkbenchApiStub {
   return {
     listDir: vi.fn(async () => ({ entries: [], truncated: false })),
     readFile: vi.fn(async () => ({ kind: 'text' as const, text: '', size: 0, truncated: false })),
+    readBytes: vi.fn(async () => ({ kind: 'unsupported' as const, size: 0 })),
     reveal: vi.fn(async () => ({ path: '' })),
     gitOverview: vi.fn(async () => ({ isRepo: false, empty: false, branch: null, changes: [] })),
     gitLog: vi.fn(async () => ({ commits: [] })),

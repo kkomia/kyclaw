@@ -21,7 +21,14 @@ import {
   type Stats
 } from 'node:fs'
 import { join } from 'node:path'
-import type { DirEntry, FilePreview, ListDirResult } from '../shared/workbench'
+import type {
+  DirEntry,
+  FileBytesResult,
+  FileByteFormat,
+  FilePreview,
+  ListDirResult
+} from '../shared/workbench'
+import { PREVIEW_IMAGE_MAX_BYTES, PREVIEW_PDF_MAX_BYTES } from '../shared/workbench'
 import { resolveInsideWorkspace } from './permission/realpath'
 
 /** 一层目录最多回多少条（超大目录如实截断） */
@@ -172,4 +179,94 @@ export function revealTarget(root: string, relative: string): string {
   const target = resolveInside(root, relative)
   statPresent(target, FILE_GONE) // 不存在就在这里抛，别让 shell 那边给一个含糊的失败
   return target
+}
+
+/* ── 带类型的字节读取（按格式渲染用） ────────────────────────────────────── */
+
+/** 渲染端认得（画得出）的扩展名 → 格式。不在这里的都算不支持。 */
+const EXTENSION_FORMATS: Readonly<Record<string, FileByteFormat>> = {
+  '.png': 'image-png',
+  '.jpg': 'image-jpeg',
+  '.jpeg': 'image-jpeg',
+  '.gif': 'image-gif',
+  '.webp': 'image-webp',
+  '.bmp': 'image-bmp',
+  '.pdf': 'pdf'
+}
+
+/** 取小写扩展名（正反斜杠都认；没有扩展名给空串） */
+function extensionOf(relative: string): string {
+  const base = relative.slice(Math.max(relative.lastIndexOf('/'), relative.lastIndexOf('\\')) + 1)
+  const dot = base.lastIndexOf('.')
+  return dot <= 0 ? '' : base.slice(dot).toLowerCase()
+}
+
+/** 文件头判定（magic bytes）：认不出给 null —— 调用方据此判"扩展名与内容对不上" */
+export function sniffFormat(bytes: Buffer): FileByteFormat | null {
+  const head = (length: number): string => bytes.subarray(0, length).toString('latin1')
+  if (head(5) === '%PDF-') return 'pdf'
+  if (
+    bytes.length >= 8 &&
+    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return 'image-png'
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image-jpeg'
+  }
+  const gif = head(6)
+  if (gif === 'GIF87a' || gif === 'GIF89a') return 'image-gif'
+  if (head(4) === 'RIFF' && head(12).slice(8) === 'WEBP') return 'image-webp'
+  if (head(2) === 'BM') return 'image-bmp'
+  return null
+}
+
+/** 读满整个文件（调用方已按上限拦过；短读按实际读到的算） */
+function readWhole(path: string, size: number): Buffer {
+  const buffer = Buffer.alloc(size)
+  const fd = openSync(path, 'r')
+  try {
+    let read = 0
+    while (read < size) {
+      const chunk = readSync(fd, buffer, read, size - read, read)
+      if (chunk <= 0) break
+      read += chunk
+    }
+    return buffer.subarray(0, read)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * 读一个文件的字节（给"按格式渲染"的预览用）：扩展名认路 + 文件头对暗号，两者都对上才回字节。
+ *   - 越界路径：**抛**（fail closed，与其余工作台通道同口径）；
+ *   - 文件没了：回 `missing`（这是常态：树是旧的，点下去文件已经被删了），不抛；
+ *   - 目录：抛人话（调用方按扩展名路由，正常到不了这里）；
+ *   - 超过该格式上限：回 `too-large`（连字节都不传）；
+ *   - 扩展名不认得 / 头与扩展名对不上：回 `unsupported`（渲染端回落二进制占位）。
+ */
+export function readFileBytes(root: string, relative: string): FileBytesResult {
+  const target = resolveInside(root, relative)
+
+  let stat: Stats
+  try {
+    stat = statSync(target)
+  } catch {
+    return { kind: 'missing' }
+  }
+  if (stat.isDirectory()) throw new Error('这是一个文件夹：展开它，或单击一个文件预览')
+
+  const expected = EXTENSION_FORMATS[extensionOf(relative)]
+  if (expected === undefined) return { kind: 'unsupported', size: stat.size }
+
+  const limit = expected === 'pdf' ? PREVIEW_PDF_MAX_BYTES : PREVIEW_IMAGE_MAX_BYTES
+  if (stat.size > limit) return { kind: 'too-large', size: stat.size, limit }
+
+  const bytes = readWhole(target, stat.size)
+  // 头与扩展名对不上（改名的可执行文件之类）：不猜、不画，按不支持走
+  if (sniffFormat(bytes) !== expected) return { kind: 'unsupported', size: stat.size }
+
+  // 复制成普通 Uint8Array：Buffer 是 Uint8Array 的子类，但过 IPC 的应该是干净的那一种
+  return { kind: 'bytes', format: expected, bytes: new Uint8Array(bytes), size: stat.size }
 }

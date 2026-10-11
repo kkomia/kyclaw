@@ -580,7 +580,7 @@ describe('preload：window.kyclaw.translate（思考翻译，round 32）', () =>
 })
 
 describe('preload：window.kyclaw.workbench / terminal（工作台四工具）', () => {
-  it('暴露 workbench 一族（listDir / readFile / reveal / gitOverview / gitLog / gitShow）', async () => {
+  it('暴露 workbench 一族（listDir / readFile / readBytes / reveal / gitOverview / gitLog / gitShow）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.workbench).sort()).toEqual([
@@ -588,6 +588,7 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
       'gitOverview',
       'gitShow',
       'listDir',
+      'readBytes',
       'readFile',
       'reveal'
     ])

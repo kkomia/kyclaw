@@ -28,6 +28,7 @@ import {
 import {
   WORKBENCH_NO_WORKSPACE,
   WORKBENCH_ROOT_NOT_UNIQUE,
+  type FileBytesResult,
   type FilePreview,
   type GitCommit,
   type GitCommitDetail,
@@ -37,7 +38,7 @@ import {
 } from '../../shared/workbench'
 import { settingsPath } from '../settings'
 import { gitLog, gitOverview, gitShow, type GitRunner } from '../workbench-git'
-import { listDir, readFilePreview, revealTarget } from '../workbench-files'
+import { listDir, readFileBytes, readFilePreview, revealTarget } from '../workbench-files'
 import {
   createTerminalService,
   type TerminalService,
@@ -119,6 +120,16 @@ export function registerWorkbenchIpc(
     )
     const preview: FilePreview = readFilePreview(rootOf(threadId), relative)
     return preview
+  })
+
+  ipcMain.handle(IPC_CHANNELS.workbench.readBytes, (_event, ...args) => {
+    const [threadId, relative] = parseIpcArgs(
+      workbenchRelativeArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.readBytes
+    )
+    const result: FileBytesResult = readFileBytes(rootOf(threadId), relative)
+    return result
   })
 
   ipcMain.handle(IPC_CHANNELS.workbench.reveal, async (_event, ...args) => {

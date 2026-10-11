@@ -50,6 +50,7 @@ import {
   type PluginsOverview
 } from '../shared/plugins'
 import {
+  fileBytesResultSchema,
   filePreviewSchema,
   gitCommitDetailSchema,
   gitLogResultSchema,
@@ -59,6 +60,7 @@ import {
   terminalDataSchema,
   terminalExitSchema,
   terminalSessionSchema,
+  type FileBytesResult,
   type FilePreview,
   type GitCommit,
   type GitCommitDetail,
@@ -433,6 +435,13 @@ const workbenchApi: KyclawWorkbenchApi = {
     )
     if (!parsed.success) throw new Error('[kyclaw] 文件预览响应结构不合法')
     return parsed.data satisfies FilePreview
+  },
+  readBytes: async (threadId, relative) => {
+    const parsed = fileBytesResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.readBytes, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 文件字节响应结构不合法')
+    return parsed.data satisfies FileBytesResult
   },
   reveal: async (threadId, relative) => {
     const parsed = revealResultSchema.safeParse(

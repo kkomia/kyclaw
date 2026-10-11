@@ -14,6 +14,7 @@ import type { PluginIconResponse, PluginsOverview } from './plugins'
 import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
 import type { PdfExtractResult } from './attachments'
 import {
+  type FileBytesResult,
   type FilePreview,
   type GitCommit,
   type GitCommitDetail,
@@ -100,6 +101,12 @@ export const IPC_CHANNELS = {
      * 文本档有界读取（64KB），二进制与超大文件各自给判别结果。
      */
     readFile: 'workbench:read-file',
+    /**
+     * round 40：读一个文件的**原始字节**（入参 [threadId, relative]；返回 FileBytesResult）——
+     * 图片 / PDF 这类要"按格式真渲染"的预览走它（文本通道 64KB 且只给字符串，承载不了）。
+     * 扩展名 + 文件头双重判定；越界路径照旧拒；大小上限按格式分桶。
+     */
+    readBytes: 'workbench:read-bytes',
     /**
      * 在系统文件资源管理器里定位会话根下的某个路径（入参 [threadId, relative]；返回 { path }）——
      * 目录直接打开，文件用 showItemInFolder 选中。绝对路径只活在主进程。
@@ -670,6 +677,11 @@ export interface KyclawWorkbenchApi {
   listDir(threadId: string, relative: string): Promise<ListDirResult>
   /** 读一个文件做预览（文本有界 64KB；二进制/超大给判别结果，不吐乱码） */
   readFile(threadId: string, relative: string): Promise<FilePreview>
+  /**
+   * round 40：读一个文件的原始字节（图片 / PDF 的按格式预览）。
+   * 扩展名与文件头双重判定；认不出、超上限、文件没了各自给判别结果（不抛）。
+   */
+  readBytes(threadId: string, relative: string): Promise<FileBytesResult>
   /** 在系统文件资源管理器里打开（目录）或定位（文件）；返回真正给的绝对路径 */
   reveal(threadId: string, relative: string): Promise<{ path: string }>
   /** 仓库总览：分支 + 未提交变更；不是仓库/空仓库由 isRepo / empty 表达（不抛） */
