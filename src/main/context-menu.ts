@@ -12,9 +12,10 @@
  */
 import {
   Menu,
-  type BrowserWindow,
+  BrowserWindow,
   type ContextMenuParams,
-  type MenuItemConstructorOptions
+  type MenuItemConstructorOptions,
+  type WebContents
 } from 'electron'
 
 /** 菜单动作落点：webContents 的那几个原生编辑命令（签名照抄 electron 的 WebContents） */
@@ -54,14 +55,24 @@ export function contextMenuTemplate(
 
 /** 把右键菜单挂到一个窗口上（模板为空就不弹，等于该位置没有右键菜单） */
 export function attachContextMenu(win: BrowserWindow): void {
-  win.webContents.on('context-menu', (_event, params) => {
+  attachWebContentsContextMenu(win.webContents)
+}
+
+/**
+ * 把右键菜单挂到任意 webContents 上（round 工作台：webview 客人也要同一口径）。
+ * 口径与 attachContextMenu 完全一致 —— 只是目标从 BrowserWindow 换成了它内部的 webContents。
+ */
+export function attachWebContentsContextMenu(contents: WebContents): void {
+  contents.on('context-menu', (_event, params) => {
     const template = contextMenuTemplate(params, {
-      cut: () => win.webContents.cut(),
-      copy: () => win.webContents.copy(),
-      paste: () => win.webContents.paste(),
-      selectAll: () => win.webContents.selectAll()
+      cut: () => contents.cut(),
+      copy: () => contents.copy(),
+      paste: () => contents.paste(),
+      selectAll: () => contents.selectAll()
     })
     if (template.length === 0) return
-    Menu.buildFromTemplate(template).popup({ window: win })
+    Menu.buildFromTemplate(template).popup({
+      window: BrowserWindow.fromWebContents(contents) ?? undefined
+    })
   })
 }

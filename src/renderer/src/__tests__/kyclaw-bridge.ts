@@ -16,6 +16,15 @@ import {
 import type { PluginsOverview } from '@shared/plugins'
 import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
 import type { ProviderConfig, ProviderKeyState } from '@shared/providers'
+import type {
+  FilePreview,
+  GitCommit,
+  GitCommitDetail,
+  GitOverview,
+  ListDirResult,
+  TerminalExit,
+  TerminalSession
+} from '@shared/workbench'
 
 /**
  * jsdom 里没有真的 preload，`window.kyclaw` 默认不存在。
@@ -317,6 +326,79 @@ export function telemetryApiStub(endpointOf: () => string = () => ''): Telemetry
   return stub
 }
 
+/**
+ * 工作台面（右侧边栏的文件 / Git 两项）：默认给"不是仓库 + 空目录"的安全桩，
+ * 用例自己用 `mockResolvedValue` 喂每个动作的返回值。
+ */
+export interface WorkbenchApiStub {
+  listDir: Mock<(threadId: string, relative: string) => Promise<ListDirResult>>
+  readFile: Mock<(threadId: string, relative: string) => Promise<FilePreview>>
+  reveal: Mock<(threadId: string, relative: string) => Promise<{ path: string }>>
+  gitOverview: Mock<(threadId: string) => Promise<GitOverview>>
+  gitLog: Mock<(threadId: string, limit: number) => Promise<{ commits: GitCommit[] }>>
+  gitShow: Mock<(threadId: string, sha: string) => Promise<GitCommitDetail>>
+}
+
+export function workbenchApiStub(): WorkbenchApiStub {
+  return {
+    listDir: vi.fn(async () => ({ entries: [], truncated: false })),
+    readFile: vi.fn(async () => ({ kind: 'text' as const, text: '', size: 0, truncated: false })),
+    reveal: vi.fn(async () => ({ path: '' })),
+    gitOverview: vi.fn(async () => ({ isRepo: false, empty: false, branch: null, changes: [] })),
+    gitLog: vi.fn(async () => ({ commits: [] })),
+    gitShow: vi.fn(async (_threadId: string, sha: string) => ({
+      sha,
+      short: sha.slice(0, 7),
+      author: '',
+      email: '',
+      date: '',
+      message: '',
+      files: []
+    }))
+  }
+}
+
+/** 终端面：默认起一个固定 id 的会话；`push` / `exit` 模拟主进程的两条推送 */
+export interface TerminalApiStub {
+  start: Mock<(threadId: string, cols: number, rows: number) => Promise<TerminalSession>>
+  write: Mock<(id: string, data: string) => Promise<void>>
+  resize: Mock<(id: string, cols: number, rows: number) => Promise<void>>
+  dispose: Mock<(id: string) => Promise<void>>
+  onData: Mock<(listener: (payload: { id: string; data: string }) => void) => () => void>
+  onExit: Mock<(listener: (payload: TerminalExit) => void) => () => void>
+  /** 模拟主进程推一段输出 */
+  push: (id: string, data: string) => void
+  /** 模拟终端进程结束 */
+  exit: (id: string, exitCode: number | null) => void
+}
+
+export function terminalApiStub(
+  session: TerminalSession = { id: 'term-1', shell: 'D:\\Git\\bin\\bash.exe', cwd: 'D:\\工作区' }
+): TerminalApiStub {
+  const dataListeners = new Set<(payload: { id: string; data: string }) => void>()
+  const exitListeners = new Set<(payload: TerminalExit) => void>()
+  return {
+    start: vi.fn(async () => session),
+    write: vi.fn(async () => undefined),
+    resize: vi.fn(async () => undefined),
+    dispose: vi.fn(async () => undefined),
+    onData: vi.fn((listener: (payload: { id: string; data: string }) => void) => {
+      dataListeners.add(listener)
+      return () => dataListeners.delete(listener)
+    }),
+    onExit: vi.fn((listener: (payload: TerminalExit) => void) => {
+      exitListeners.add(listener)
+      return () => exitListeners.delete(listener)
+    }),
+    push: (id, data) => {
+      for (const listener of dataListeners) listener({ id, data })
+    },
+    exit: (id, exitCode) => {
+      for (const listener of exitListeners) listener({ id, exitCode })
+    }
+  }
+}
+
 /** 插件面：默认回一个空总览（用例自己替换单个方法/改 mock 值） */
 export interface PluginsApiStub {
   overview: Mock<() => Promise<PluginsOverview>>
@@ -410,6 +492,8 @@ export function localModelsApiStub(
 /** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
+  workbench: WorkbenchApiStub
+  terminal: TerminalApiStub
   projects: ProjectsApiStub
   updates: UpdatesApiStub
   telemetry: TelemetryApiStub
@@ -423,6 +507,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const state: BridgeState = { current: initial }
   const settings = settingsApi(state)
   const workspace = workspaceApi(state)
+  const workbench = workbenchApiStub()
+  const terminal = terminalApiStub()
   const projects = projectsApi(state)
   const updates = updatesApiStub()
   const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
@@ -433,6 +519,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     window: windowApiStub(),
     settings,
     workspace,
+    workbench,
+    terminal,
     projects,
     agent: agentApiStub(),
     updates,
@@ -443,7 +531,18 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
-  return { ...settings, workspace, projects, updates, telemetry, plugins, memory, localModels }
+  return {
+    ...settings,
+    workspace,
+    workbench,
+    terminal,
+    projects,
+    updates,
+    telemetry,
+    plugins,
+    memory,
+    localModels
+  }
 }
 
 export function clearKyclawBridge(): void {

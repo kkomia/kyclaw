@@ -1,6 +1,7 @@
 allowBuilds:
   electron-winstaller: true
   esbuild: true
+  node-pty: true
   protobufjs: false
 overrides:
   'app-builder-lib>@electron/get': 5.1.0

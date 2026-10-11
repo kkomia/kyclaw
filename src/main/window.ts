@@ -18,6 +18,7 @@ import {
   writeWindowState,
   type PersistedWindowState
 } from './store'
+import { hardenWebviewPreferences } from './webview'
 import icon from '../../resources/icon.png?asset'
 
 /** 与 token 的 --Bg-GroundPC 同值：窗口底色先于渲染端第一帧生效 */
@@ -70,7 +71,9 @@ export function createMainWindow(): BrowserWindow {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      // 工作台「浏览器」tab 用内嵌 <webview>（隔离分区 + 无 node/preload 见 main/webview.ts）
+      webviewTag: true
     }
   })
 
@@ -78,6 +81,12 @@ export function createMainWindow(): BrowserWindow {
 
   // 客户端内右键菜单：只放编辑类有用项，浏览器自带项一律没有入口（见 main/context-menu.ts）
   attachContextMenu(win)
+
+  // 客人（webview）的偏好**每次挂载时钉死**：不吃我们的 preload、不开 node、分区固定成
+  // persist:kyclaw-browser —— 渲染端写什么 partition 都进不来（安全面只在主进程这一处）。
+  win.webContents.on('will-attach-webview', (_event, webPreferences) => {
+    hardenWebviewPreferences(webPreferences)
+  })
 
   // 还原上次的最大化态要在 loadURL 之前：窗口还藏着，先定好尺寸再让渲染端按最终尺寸布局
   if (saved.maximized) win.maximize()

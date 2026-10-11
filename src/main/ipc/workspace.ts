@@ -120,6 +120,23 @@ function rootsForThread(
 }
 
 /**
+ * 会话根 → **唯一**的那个根目录（绝对路径）。
+ * 判不出（没有工作区 / 多条并列）时抛人话 —— 文案由调用方给，各入口的说法不同
+ * （@ 清单说"再用 @"，工作台说"再用工作台"）。工作台各工具、@ 清单、资源管理器打开共用这一份。
+ */
+export function sessionRootForThread(
+  file: string,
+  threadId: string,
+  projectIdOf: ProjectIdOf | undefined,
+  messages: { empty: string; multiple: string }
+): string {
+  const roots = rootsForThread(file, threadId, projectIdOf)
+  if (roots.length === 0) throw new Error(messages.empty)
+  if (roots.length > 1) throw new Error(messages.multiple)
+  return roots[0].path
+}
+
+/**
  * 会话根 → 文件清单（round 15）：解析口径与文件工具一致（`sessionRoots`：项目 → 默认工作区 →
  * 唯一的授权目录）。**会话根不唯一**（多条授权且没指认默认）时抛人话——@ 的相对路径得有唯一基准；
  * 渲染端只给 threadId，路径解析全在主进程。读不了/不存在由 `listWorkspaceFiles` 的人话兜底。
@@ -129,14 +146,11 @@ export function listFilesForThread(
   threadId: string,
   projectIdOf?: ProjectIdOf
 ): { files: string[] } {
-  const roots = rootsForThread(file, threadId, projectIdOf)
-  if (roots.length === 0) {
-    throw new Error('这个会话还没有工作区：先在设置里添加一个文件夹，再用 @ 引用文件')
-  }
-  if (roots.length > 1) {
-    throw new Error('这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再用 @')
-  }
-  return { files: listWorkspaceFiles(roots[0].path) }
+  const root = sessionRootForThread(file, threadId, projectIdOf, {
+    empty: '这个会话还没有工作区：先在设置里添加一个文件夹，再用 @ 引用文件',
+    multiple: '这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再用 @'
+  })
+  return { files: listWorkspaceFiles(root) }
 }
 
 /**
@@ -151,14 +165,10 @@ export async function openInExplorerForThread(
   projectIdOf?: ProjectIdOf,
   openPath: (path: string) => Promise<string> = (path) => shell.openPath(path)
 ): Promise<{ path: string }> {
-  const roots = rootsForThread(file, threadId, projectIdOf)
-  if (roots.length === 0) {
-    throw new Error('这个会话还没有工作区：先在设置里添加一个文件夹')
-  }
-  if (roots.length > 1) {
-    throw new Error('这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再试')
-  }
-  const target = roots[0].path
+  const target = sessionRootForThread(file, threadId, projectIdOf, {
+    empty: '这个会话还没有工作区：先在设置里添加一个文件夹',
+    multiple: '这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再试'
+  })
   const problem = await openPath(target)
   if (problem !== '') {
     throw new Error(`打不开这个文件夹：${problem}`)

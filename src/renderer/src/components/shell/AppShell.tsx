@@ -4,6 +4,7 @@ import { Outlet, useLocation } from 'react-router'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { SettingsNav } from '@renderer/features/settings/SettingsNav'
 import { SessionsController } from '@renderer/features/sessions/SessionsController'
+import { Workbench } from '@renderer/features/workbench/Workbench'
 import { IconButton } from '../ui/icon-button'
 import { ContentRegion } from './ContentRegion'
 import { MainColumn } from './MainColumn'
@@ -11,7 +12,6 @@ import { Sidebar } from './Sidebar'
 import { SidebarFooter } from './SidebarFooter'
 import { TitleBar } from './TitleBar'
 import { WorkPanel } from './WorkPanel'
-import { WorkPanelEmpty } from './WorkPanelEmpty'
 
 /** 窄窗自动收工作台的阈值：语义层 token --work-panel-collapse-width（= 侧栏 240 + 内容列最小可读宽 480 + 工作台 400）。 */
 const COLLAPSE_WIDTH_FALLBACK = 1120
@@ -87,7 +87,7 @@ export function AppShell(): React.JSX.Element {
             <Outlet />
           </MainColumn>
           <WorkPanel open={workPanelOpen}>
-            <WorkPanelEmpty />
+            <Workbench />
           </WorkPanel>
           {/* 工作台开关（round 4：从顶栏搬到这里 —— 用户裁决 R2 concern ①"右侧边栏属于 chat 的内容"，
               位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。面板开时同一位就是

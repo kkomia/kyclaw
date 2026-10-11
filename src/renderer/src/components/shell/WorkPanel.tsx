@@ -7,6 +7,9 @@ import { cn } from '../ui/cn'
  * 与消息区之间只有一条分隔线（雷点 7：不出现双层框线），归属同一块面。
  * 可收起：收起时不占宽（w-0 + overflow-hidden），展开才有 400 —— 主列因此拿回空间。
  * `is-open` 是给测试/E2E 认的状态类；内层固定 400 宽，收放动画时文字不重排。
+ *
+ * 内容层是 flex 列、**自己不滚动**（工作台四工具各自管自己的滚动区）：
+ * 终端与内嵌浏览器都要一块能真正撑满的容器，外层给它 overflow-y-auto 会把高度算崩。
  */
 export interface WorkPanelProps {
   open: boolean
@@ -22,7 +25,7 @@ export function WorkPanel({ open, children }: WorkPanelProps): React.JSX.Element
         open ? 'is-open w-(--work-panel-width) border-l' : 'w-0'
       )}
     >
-      <div className="flex w-(--work-panel-width) shrink-0 flex-col overflow-y-auto">
+      <div className="flex w-(--work-panel-width) shrink-0 flex-col overflow-hidden">
         {children}
       </div>
     </aside>

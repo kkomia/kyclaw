@@ -13,12 +13,9 @@
  *   - `core.quotepath=false`：中文文件名在 status/log 里不转义成 \344\270\255。
  *   - **v1 明确不做 push**（远程写）：远程交互面（凭据、冲突策略）不在本轮契约里。
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
-import { findGitOnPath, findGitBash } from './bash'
 import { formatSeconds, runProcess, type RunResult } from './exec'
 import {
   needsApproval,
@@ -29,14 +26,24 @@ import {
   type ToolContext
 } from './guard'
 
+// git 可执行文件的探测链住在 main/git-bash.ts（工作台的 Git 工具同一套）；这里 re-export，
+// 既有的 `from './git'` 导入（git.spec.ts 等）一字不改。
+export {
+  findGit,
+  GIT_MISSING,
+  gitExecutable,
+  resetGitExecutableCache,
+  type GitProbe
+} from '../../main/git-bash'
+
+// re-export 不会把名字带进本模块的作用域，工具执行处还要用它们，所以再 import 一次
+import { GIT_MISSING, gitExecutable } from '../../main/git-bash'
+
 /** 单次 git 命令的超时（毫秒）：提交钩子/大 diff 也够用 */
 export const GIT_TIMEOUT_MS = 60_000
 
 /** git 提交历史的条数上限 */
 export const GIT_LOG_MAX = 100
-
-export const GIT_MISSING =
-  '找不到 git 可执行文件：请安装 Git for Windows 并确保 git 在 PATH 里（或把 Git 装到默认位置）。'
 
 const repoSchema = z
   .string()
@@ -85,54 +92,6 @@ export interface GitToolset {
   git_log: Tool<GitLogInput, string>
   git_add: Tool<GitAddInput, string>
   git_commit: Tool<GitCommitInput, string>
-}
-
-/** git 可执行文件探测的可注入面（测试用假件打探测链） */
-export interface GitProbe {
-  platform: NodeJS.Platform
-  env: NodeJS.ProcessEnv
-  exists(path: string): boolean
-}
-
-/**
- * git 可执行文件解析：PATH 扫描 → Git Bash 安装位推导；找不到回 null（调用方给中文错误）。
- * 推导时把 findGit 置空，避免与 findGitBash 的推导互相递归。
- */
-export function findGit(probe: Partial<GitProbe> = {}): string | null {
-  const platform = probe.platform ?? process.platform
-  const env = probe.env ?? process.env
-  const exists = probe.exists ?? existsSync
-
-  const fromPath = findGitOnPath(env.PATH, platform, exists)
-  if (fromPath !== null) return fromPath
-
-  const bash = findGitBash({ platform, env, exists, findGit: () => null })
-  if (bash === null) return null
-  const dir = dirname(bash)
-  const exe = platform === 'win32' ? 'git.exe' : 'git'
-  const candidates = [
-    join(dir, exe),
-    join(dir, '..', 'cmd', exe),
-    join(dir, '..', 'mingw64', 'bin', exe),
-    join(dir, '..', 'usr', 'bin', exe)
-  ]
-  for (const candidate of candidates) {
-    if (exists(candidate)) return candidate
-  }
-  return null
-}
-
-/** 探测结果的缓存（只缓存成功；失败每次重探） */
-let cachedGit: string | null = null
-
-export function gitExecutable(probe: Partial<GitProbe> = {}): string | null {
-  cachedGit ??= findGit(probe)
-  return cachedGit
-}
-
-/** 测试用：清掉探测缓存 */
-export function resetGitExecutableCache(): void {
-  cachedGit = null
 }
 
 export interface GitToolOptions {

@@ -120,7 +120,7 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
   })
 
-  it('T5 装配：侧栏 = 新建会话 + 会话列表 + 底部单一入口；右栏 = 工作台空态', () => {
+  it('T5 装配：侧栏 = 新建会话 + 会话列表 + 底部单一入口；右栏 = 工作台（四工具 tab 栏）', () => {
     renderShell()
 
     const sidebar = screen.getByTestId('sidebar')
@@ -132,9 +132,7 @@ describe('AppShell 三栏骨架', () => {
     expect(sidebar).toContainElement(screen.getByTestId('new-session'))
     expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
 
-    expect(screen.getByTestId('work-panel')).toContainElement(
-      screen.getByTestId('work-panel-empty')
-    )
+    expect(screen.getByTestId('work-panel')).toContainElement(screen.getByTestId('workbench'))
   })
 
   it('设置页：侧栏换成设置菜单（返回 + 栏目），会话视图让位', () => {

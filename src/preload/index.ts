@@ -32,6 +32,8 @@ import {
   type KyclawTelemetryApi,
   type KyclawUpdatesApi,
   type KyclawWindowApi,
+  type KyclawWorkbenchApi,
+  type KyclawTerminalApi,
   type KyclawWorkspaceApi,
   type UpdateState
 } from '../shared/ipc'
@@ -43,6 +45,24 @@ import {
   pluginIconResponseSchema,
   type PluginsOverview
 } from '../shared/plugins'
+import {
+  filePreviewSchema,
+  gitCommitDetailSchema,
+  gitLogResultSchema,
+  gitOverviewSchema,
+  listDirResultSchema,
+  revealResultSchema,
+  terminalDataSchema,
+  terminalExitSchema,
+  terminalSessionSchema,
+  type FilePreview,
+  type GitCommit,
+  type GitCommitDetail,
+  type GitOverview,
+  type ListDirResult,
+  type TerminalExit,
+  type TerminalSession
+} from '../shared/workbench'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -341,10 +361,104 @@ function parseOverview(payload: unknown): PluginsOverview {
   return parsed.data
 }
 
+/**
+ * 工作台面（右侧边栏的文件 / Git 两项）：逐条动作都过 schema，结构不对就抛 ——
+ * 半截目录树 / 半截提交没法显示（与 workspace.listFiles 同一口径）。
+ */
+const workbenchApi: KyclawWorkbenchApi = {
+  listDir: async (threadId, relative) => {
+    const parsed = listDirResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.listDir, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 目录内容响应结构不合法')
+    return parsed.data satisfies ListDirResult
+  },
+  readFile: async (threadId, relative) => {
+    const parsed = filePreviewSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.readFile, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 文件预览响应结构不合法')
+    return parsed.data satisfies FilePreview
+  },
+  reveal: async (threadId, relative) => {
+    const parsed = revealResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.reveal, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 打开路径响应结构不合法')
+    return parsed.data
+  },
+  gitOverview: async (threadId) => {
+    const parsed = gitOverviewSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.gitOverview, threadId)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 仓库总览响应结构不合法')
+    return parsed.data satisfies GitOverview
+  },
+  gitLog: async (threadId, limit) => {
+    const parsed = gitLogResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.gitLog, threadId, limit)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 提交历史响应结构不合法')
+    return parsed.data satisfies { commits: GitCommit[] }
+  },
+  gitShow: async (threadId, sha) => {
+    const parsed = gitCommitDetailSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.gitShow, threadId, sha)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 提交详情响应结构不合法')
+    return parsed.data satisfies GitCommitDetail
+  }
+}
+
+/**
+ * 终端面（右侧边栏的「终端」）：一个 id 对一条 PTY。写/改尺寸/关闭都是 fire-and-forget
+ * （界面不等回包）；两条推送（输出/退出）在这里过同一份 schema。
+ */
+const terminalApi: KyclawTerminalApi = {
+  start: async (threadId, cols, rows) => {
+    const parsed = terminalSessionSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.terminal.start, threadId, cols, rows)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 终端会话响应结构不合法')
+    return parsed.data satisfies TerminalSession
+  },
+  write: async (id, data) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.terminal.write, id, data)
+  },
+  resize: async (id, cols, rows) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.terminal.resize, id, cols, rows)
+  },
+  dispose: async (id) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.terminal.dispose, id)
+  },
+  onData: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = terminalDataSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.terminal.data, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.terminal.data, handler)
+    }
+  },
+  onExit: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = terminalExitSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data satisfies TerminalExit)
+    }
+    ipcRenderer.on(IPC_CHANNELS.terminal.exit, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.terminal.exit, handler)
+    }
+  }
+}
+
 export const kyclawApi: KyclawApi = {
   window: windowApi,
   settings: settingsApi,
   workspace: workspaceApi,
+  workbench: workbenchApi,
+  terminal: terminalApi,
   projects: projectsApi,
   agent: agentApi,
   updates: updatesApi,

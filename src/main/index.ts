@@ -19,6 +19,7 @@ import { registerTelemetryIpc } from './ipc/telemetry'
 import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
+import { registerWorkbenchIpc } from './ipc/workbench'
 import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
@@ -33,6 +34,7 @@ import {
 } from './updater'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
+import { installWebviewGuard } from './webview'
 import { resolveModel } from '../mastra/model'
 import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
 import type { AgentEndpoint } from '../shared/ipc'
@@ -110,6 +112,16 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
     registerWorkspaceIpc(userDataDir, (threadId) => agentProjectIdOf?.(threadId) ?? null)
+    // 工作台（右侧边栏四项工具）：文件树 / Git 用只读通道，终端是长会话（由一个服务持有 PTY）
+    const workbench = registerWorkbenchIpc(userDataDir, {
+      projectIdOf: (threadId) => agentProjectIdOf?.(threadId) ?? null
+    })
+    app.on('will-quit', () => {
+      // 一个终端都不留（node-pty 不随主进程退出自动收：前台 shell 死了，它拉起的子进程还在）
+      workbench.terminals.disposeAll()
+    })
+    // 内嵌浏览器的护栏（webview 的分区/window.open/右键菜单口径，进程级挂一次）
+    installWebviewGuard()
     registerProjectsIpc(userDataDir)
     registerPluginIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)

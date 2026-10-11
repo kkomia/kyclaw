@@ -12,6 +12,15 @@ import type { LocalModelsOverview } from './local-models'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
 import {
+  type FilePreview,
+  type GitCommit,
+  type GitCommitDetail,
+  type GitOverview,
+  type ListDirResult,
+  type TerminalExit,
+  type TerminalSession
+} from './workbench'
+import {
   appSettingsPatchSchema,
   workspaceModeSchema,
   type AppSettings,
@@ -76,6 +85,44 @@ export const IPC_CHANNELS = {
      * 判不出唯一根（没有工作区 / 多条并列）时回人话错误。
      */
     openInExplorer: 'workspace:open-in-explorer'
+  },
+  workbench: {
+    /**
+     * 列会话根下**一层**目录的内容（入参 [threadId, relative]；返回 { entries }）——
+     * 「文件」工具的懒加载树。会话根在主进程按 sessionRoots 同口径解析，渲染端只给相对路径
+     * （`''` = 根本身），越权/穿出的路径被拒。
+     */
+    listDir: 'workbench:list-dir',
+    /**
+     * 读一个文件做预览（入参 [threadId, relative]；返回 FilePreview 判别联合）——
+     * 文本档有界读取（64KB），二进制与超大文件各自给判别结果。
+     */
+    readFile: 'workbench:read-file',
+    /**
+     * 在系统文件资源管理器里定位会话根下的某个路径（入参 [threadId, relative]；返回 { path }）——
+     * 目录直接打开，文件用 showItemInFolder 选中。绝对路径只活在主进程。
+     */
+    reveal: 'workbench:reveal',
+    /** git 总览（入参 [threadId]；返回分支 + 未提交变更；不是仓库/空仓库由 empty/isRepo 表达） */
+    gitOverview: 'workbench:git-overview',
+    /** 提交历史树（入参 [threadId, limit]；`git log --graph` 解析成结构化行） */
+    gitLog: 'workbench:git-log',
+    /** 单提交详情（入参 [threadId, sha]；作者/时间/完整 message + 变更文件统计） */
+    gitShow: 'workbench:git-show'
+  },
+  terminal: {
+    /** 起一个交互式终端（入参 [threadId, cols, rows]；返回 { id, shell, cwd }） */
+    start: 'terminal:start',
+    /** 往终端写输入（入参 [id, data]） */
+    write: 'terminal:write',
+    /** 终端尺寸变化（入参 [id, cols, rows]；FitAddon 算出来后同步） */
+    resize: 'terminal:resize',
+    /** 关掉一个终端（入参 [id]；幂等） */
+    dispose: 'terminal:dispose',
+    /** 主进程 → 渲染端：一段输出 */
+    data: 'terminal:data',
+    /** 主进程 → 渲染端：进程结束（应用退出时也会推一次，让界面收干净） */
+    exit: 'terminal:exit'
   },
   projects: {
     /** T18：空白项目的默认基底目录（无入参，返回 { base }；创建对话框的默认路径用） */
@@ -213,6 +260,46 @@ export const workspaceOpenInExplorerArgsSchema = z.tuple([z.string().min(1)])
 
 /** workspace:open-in-explorer 的回包：实际打开的目录（绝对路径；测试与排障都看得到） */
 export const workspaceOpenInExplorerResultSchema = z.strictObject({ path: z.string().min(1) })
+
+/**
+ * 工作台（右侧边栏四项工具）的入参。
+ * 文件/git 两族的第一个入参一律是 threadId、第二个是**相对会话根**的路径 —— 绝对路径
+ * 只由主进程按 sessionRoots 解析，渲染端传不进来（与 workspace:list-files 同一套纪律）。
+ */
+export const workbenchRelativeArgsSchema = z.tuple([z.string().min(1), z.string()])
+
+/** 只收 [threadId] 的工作台通道（git 总览） */
+export const workbenchThreadArgsSchema = z.tuple([z.string().min(1)])
+
+/** 提交历史条数上限（与 main/workbench-git.ts 的 GIT_LOG_MAX 一致） */
+export const WORKBENCH_LOG_LIMIT = 200
+
+export const workbenchGitLogArgsSchema = z.tuple([
+  z.string().min(1),
+  z.number().int().min(1).max(WORKBENCH_LOG_LIMIT)
+])
+
+export const workbenchGitShowArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
+
+/** terminal:start 的入参：[threadId, cols, rows]（尺寸来自渲染端 FitAddon；主进程按 [1,1000] 收） */
+export const terminalStartArgsSchema = z.tuple([
+  z.string().min(1),
+  z.number().int().min(1).max(1000),
+  z.number().int().min(1).max(1000)
+])
+
+/** terminal:write 的入参：[id, data]（data 可以是空串——键盘事件里的修饰键单独到达） */
+export const terminalWriteArgsSchema = z.tuple([z.string().min(1), z.string()])
+
+/** terminal:resize 的入参：[id, cols, rows] */
+export const terminalResizeArgsSchema = z.tuple([
+  z.string().min(1),
+  z.number().int().min(1).max(1000),
+  z.number().int().min(1).max(1000)
+])
+
+/** terminal:dispose 的入参：[id] */
+export const terminalDisposeArgsSchema = z.tuple([z.string().min(1)])
 
 /**
  * projects:create 的入参：单元素对象 { name, path }。
@@ -516,11 +603,55 @@ export interface KyclawProjectsApi {
   openInExplorer(id: string): Promise<{ path: string }>
 }
 
+/**
+ * preload 暴露给渲染端的工作台面（右侧边栏四项工具里的文件 / Git 两项）。
+ * 三个共同纪律：
+ *   1. 第一个入参是 threadId —— 会话根在主进程按 sessionRoots 同口径解析（渲染端传不了绝对路径）；
+ *   2. 第二个入参是**相对会话根**的路径/提交 sha，形状过闸门、containment 在主进程判；
+ *   3. 回包结构不对就抛（半截目录/半截提交没法显示），不静默回退。
+ */
+export interface KyclawWorkbenchApi {
+  /** 列会话根下一层目录（`relative = ''` 就是根本身）；越权路径与不存在的目录都抛人话 */
+  listDir(threadId: string, relative: string): Promise<ListDirResult>
+  /** 读一个文件做预览（文本有界 64KB；二进制/超大给判别结果，不吐乱码） */
+  readFile(threadId: string, relative: string): Promise<FilePreview>
+  /** 在系统文件资源管理器里打开（目录）或定位（文件）；返回真正给的绝对路径 */
+  reveal(threadId: string, relative: string): Promise<{ path: string }>
+  /** 仓库总览：分支 + 未提交变更；不是仓库/空仓库由 isRepo / empty 表达（不抛） */
+  gitOverview(threadId: string): Promise<GitOverview>
+  /** 提交历史（`--graph` 解析后的结构化行，上限 200） */
+  gitLog(threadId: string, limit: number): Promise<{ commits: GitCommit[] }>
+  /** 单提交详情：作者/时间/完整 message + 变更文件统计 */
+  gitShow(threadId: string, sha: string): Promise<GitCommitDetail>
+}
+
+/**
+ * preload 暴露给渲染端的终端面（右侧边栏「终端」工具）：
+ * 一个渲染端 id ↔ 一个主进程 PTY。数据与退出都走推送（`onData` / `onExit`），
+ * 应用退出时主进程会杀干净并推一次 exit（界面据此收尾，不留假终端）。
+ */
+export interface KyclawTerminalApi {
+  /** 起一个交互式终端（cwd = 会话根，shell = Git Bash）；会话根判不出时抛人话 */
+  start(threadId: string, cols: number, rows: number): Promise<TerminalSession>
+  /** 写输入（键盘直接透传） */
+  write(id: string, data: string): Promise<void>
+  /** 窗口/面板尺寸变化后同步 cols/rows */
+  resize(id: string, cols: number, rows: number): Promise<void>
+  /** 关掉这个终端（幂等；再写就是空操作） */
+  dispose(id: string): Promise<void>
+  /** 订阅输出，返回退订函数 */
+  onData(listener: (payload: { id: string; data: string }) => void): () => void
+  /** 订阅进程结束，返回退订函数 */
+  onExit(listener: (payload: TerminalExit) => void): () => void
+}
+
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
 export interface KyclawApi {
   window: KyclawWindowApi
   settings: KyclawSettingsApi
   workspace: KyclawWorkspaceApi
+  workbench: KyclawWorkbenchApi
+  terminal: KyclawTerminalApi
   projects: KyclawProjectsApi
   agent: KyclawAgentApi
   updates: KyclawUpdatesApi

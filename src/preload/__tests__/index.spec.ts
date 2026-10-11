@@ -507,3 +507,168 @@ describe('preload：window.kyclaw.telemetry（T17）', () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith('telemetry:clear-langfuse-keys')
   })
 })
+
+describe('preload：window.kyclaw.workbench / terminal（工作台四工具）', () => {
+  it('暴露 workbench 一族（listDir / readFile / reveal / gitOverview / gitLog / gitShow）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    expect(Object.keys(kyclawApi.workbench).sort()).toEqual([
+      'gitLog',
+      'gitOverview',
+      'gitShow',
+      'listDir',
+      'readFile',
+      'reveal'
+    ])
+    expect(Object.keys(kyclawApi.terminal).sort()).toEqual([
+      'dispose',
+      'onData',
+      'onExit',
+      'resize',
+      'start',
+      'write'
+    ])
+  })
+
+  it('listDir / readFile / reveal 都把 [threadId, 相对路径] 发出去', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      entries: [{ name: 'src', kind: 'dir', size: 0 }],
+      truncated: false
+    })
+    await expect(kyclawApi.workbench.listDir('t1', 'src')).resolves.toEqual({
+      entries: [{ name: 'src', kind: 'dir', size: 0 }],
+      truncated: false
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:list-dir', 't1', 'src')
+
+    mocks.invoke.mockResolvedValueOnce({ kind: 'text', text: 'x', size: 1, truncated: false })
+    await expect(kyclawApi.workbench.readFile('t1', 'a.txt')).resolves.toEqual({
+      kind: 'text',
+      text: 'x',
+      size: 1,
+      truncated: false
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:read-file', 't1', 'a.txt')
+
+    mocks.invoke.mockResolvedValueOnce({ path: 'D:\\项目\\a.txt' })
+    await expect(kyclawApi.workbench.reveal('t1', 'a.txt')).resolves.toEqual({
+      path: 'D:\\项目\\a.txt'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:reveal', 't1', 'a.txt')
+  })
+
+  it('文件预览是按 kind 判别的联合：判别字段不对/多带字段都当结构不合法', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({ kind: 'binary', size: 1 })
+    await expect(kyclawApi.workbench.readFile('t1', 'a')).resolves.toEqual({
+      kind: 'binary',
+      size: 1
+    })
+
+    mocks.invoke.mockResolvedValueOnce({ kind: 'text', text: 'x' })
+    await expect(kyclawApi.workbench.readFile('t1', 'a')).rejects.toThrow(/结构不合法/)
+
+    mocks.invoke.mockResolvedValueOnce({
+      kind: 'text',
+      text: 'x',
+      size: 1,
+      truncated: false,
+      额外: 1
+    })
+    await expect(kyclawApi.workbench.readFile('t1', 'a')).rejects.toThrow(/结构不合法/)
+  })
+
+  it('git 三件：总览按 isRepo 形态解析、历史与详情各自的 schema', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({ isRepo: false, empty: false, branch: null, changes: [] })
+    await expect(kyclawApi.workbench.gitOverview('t1')).resolves.toEqual({
+      isRepo: false,
+      empty: false,
+      branch: null,
+      changes: []
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:git-overview', 't1')
+
+    mocks.invoke.mockResolvedValueOnce({ commits: [] })
+    await expect(kyclawApi.workbench.gitLog('t1', 200)).resolves.toEqual({ commits: [] })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:git-log', 't1', 200)
+
+    const detail = {
+      sha: 'a'.repeat(40),
+      short: 'aaaaaaa',
+      author: '张三',
+      email: 'z@example.com',
+      date: '2026-10-11T10:00:00+08:00',
+      message: '标题',
+      files: [{ path: 'a.ts', additions: 1, deletions: null }]
+    }
+    mocks.invoke.mockResolvedValueOnce(detail)
+    await expect(kyclawApi.workbench.gitShow('t1', detail.sha)).resolves.toEqual(detail)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:git-show', 't1', detail.sha)
+
+    mocks.invoke.mockResolvedValueOnce({ commits: [{ sha: 'x' }] })
+    await expect(kyclawApi.workbench.gitLog('t1', 1)).rejects.toThrow(/结构不合法/)
+  })
+
+  it('terminal：start 发 [threadId, cols, rows]；write / resize / dispose 各走各的通道', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      id: 'term-1',
+      shell: 'D:\\Git\\bin\\bash.exe',
+      cwd: 'D:\\项目'
+    })
+    await expect(kyclawApi.terminal.start('t1', 120, 40)).resolves.toEqual({
+      id: 'term-1',
+      shell: 'D:\\Git\\bin\\bash.exe',
+      cwd: 'D:\\项目'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('terminal:start', 't1', 120, 40)
+
+    await kyclawApi.terminal.write('term-1', 'ls\n')
+    expect(mocks.invoke).toHaveBeenLastCalledWith('terminal:write', 'term-1', 'ls\n')
+
+    await kyclawApi.terminal.resize('term-1', 100, 30)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('terminal:resize', 'term-1', 100, 30)
+
+    await kyclawApi.terminal.dispose('term-1')
+    expect(mocks.invoke).toHaveBeenLastCalledWith('terminal:dispose', 'term-1')
+
+    // 结构不对就抛（半截会话没法定位进程）
+    mocks.invoke.mockResolvedValueOnce({ id: 'term-2' })
+    await expect(kyclawApi.terminal.start('t1', 80, 24)).rejects.toThrow(/结构不合法/)
+  })
+
+  it('terminal 的两条推送：合法 payload 转给监听方，脏 payload 丢掉，退订摘同一个监听器', async () => {
+    const { kyclawApi } = await loadPreload()
+    /** 最近一次注册的监听器（本文件前面的 pushedListener 取的是第一条，这里要按顺序取） */
+    const lastListener = (): ((event: unknown, payload: unknown) => void) => {
+      const call = mocks.on.mock.calls.at(-1)
+      if (!call) throw new Error('没有订阅任何通道')
+      return call[1] as (event: unknown, payload: unknown) => void
+    }
+
+    const onData = vi.fn()
+    const off = kyclawApi.terminal.onData(onData)
+
+    expect(mocks.on).toHaveBeenLastCalledWith('terminal:data', expect.any(Function))
+    lastListener()({}, { id: 'term-1', data: 'hi' })
+    expect(onData).toHaveBeenCalledWith({ id: 'term-1', data: 'hi' })
+    lastListener()({}, { id: 'term-1' })
+    expect(onData).toHaveBeenCalledTimes(1)
+    off()
+    expect(mocks.removeListener).toHaveBeenLastCalledWith('terminal:data', expect.any(Function))
+
+    const onExit = vi.fn()
+    kyclawApi.terminal.onExit(onExit)
+    expect(mocks.on).toHaveBeenLastCalledWith('terminal:exit', expect.any(Function))
+    lastListener()({}, { id: 'term-1', exitCode: 3 })
+    expect(onExit).toHaveBeenCalledWith({ id: 'term-1', exitCode: 3 })
+    lastListener()({}, { id: 'term-1', exitCode: 'x' })
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+})

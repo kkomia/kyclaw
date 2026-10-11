@@ -1,15 +1,8 @@
 /**
  * bash 工具：经 **Git Bash** 执行 shell 命令（round28 模块 1；用户口径：AI 用 PowerShell 不顺手）。
  *
- * Git Bash 解析（探测顺序，成功结果缓存；不做静默回落 —— 找不到 cmd/PowerShell 的替代品，
- * 直接给中文错误让用户装 Git）：
- *   1. 环境变量 `KYCLAW_GIT_BASH`（显式指定，给自定义安装位留的口子）；
- *   2. Windows 常见安装位：`%ProgramFiles%\Git\bin\bash.exe`、`%ProgramFiles(x86)%\...`、
- *      `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`；
- *   3. PATH 上的 `git` 推导：`<git 所在目录>\bash.exe`、`..\bin\bash.exe`、`..\..\bin\bash.exe`、
- *      `..\..\..\bin\bash.exe` —— 覆盖 `<root>\cmd\git.exe`、`<root>\mingw64\bin\git.exe`、
- *      `<root>\usr\bin\git.exe` 三种 Git for Windows 布局（本机的 D:\Git 走这条）；
- *   4. 非 Windows：`/bin/bash`。
+ * Git Bash 的探测链已提取到 `main/git-bash.ts`（工作台的终端工具也要用同一套），
+ * 这里 re-export 保持既有导入路径不变。执行口径如下：
  *
  * 执行：`bash -c '<wrapper>' bash <command>`。wrapper 做三件事：先把 `$$:pgid` 写到输出第一行
  * （随机 token 前缀，命令猜不到，超时时用它做 MSYS 进程组杀），把 stderr 并进 stdout
@@ -26,13 +19,14 @@
  * 输出超 64KB 首尾保留（见 exec.MAX_OUTPUT_BYTES）；默认超时 120s、上限 600s。
  * cd 到工作区之外、以及跑任意命令本身都允许 —— 这正是「工作区之外」的主通道，审批兜底。
  */
-import { existsSync, realpathSync, statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, isAbsolute, join } from 'node:path'
+import { isAbsolute } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
+import { gitBashPath, GIT_BASH_MISSING } from '../../main/git-bash'
 import { formatSeconds, MAX_OUTPUT_BYTES, runProcess } from './exec'
 import {
   needsApproval,
@@ -41,6 +35,18 @@ import {
   workspaceRoots,
   type ToolContext
 } from './guard'
+
+// 探测链住在 main/git-bash.ts（工作台终端与 git 工具共用同一份）；这里 re-export，
+// 既有的 `from './bash'` 导入（git.ts / bash.spec.ts）一字不改。
+export {
+  defaultBashProbe,
+  findGitBash,
+  findGitOnPath,
+  gitBashPath,
+  GIT_BASH_MISSING,
+  resetGitBashCache,
+  type BashProbe
+} from '../../main/git-bash'
 
 /** 默认超时（毫秒） */
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000
@@ -66,103 +72,6 @@ export const bashInputSchema = z.object({
 })
 
 export type BashInput = z.infer<typeof bashInputSchema>
-
-/** Git Bash 探测的可注入面（缺省全部走真实系统；测试用假件打探测链） */
-export interface BashProbe {
-  platform: NodeJS.Platform
-  env: NodeJS.ProcessEnv
-  exists(path: string): boolean
-  /** PATH 上 git 可执行文件的完整路径（找不到回 null） */
-  findGit(): string | null
-}
-
-export function defaultBashProbe(): BashProbe {
-  return {
-    platform: process.platform,
-    env: process.env,
-    exists: (path) => existsSync(path),
-    findGit: () => findGitOnPath(process.env.PATH, process.platform)
-  }
-}
-
-/**
- * 解析 Git Bash 的可执行文件路径；找不到回 null（调用方给中文错误，不回落其它 shell）。
- * 探测链见文件头注；成功结果缓存（用户现装 Git 的话，重启应用后生效）。
- */
-export function findGitBash(probe: Partial<BashProbe> = {}): string | null {
-  const { platform, env, exists, findGit } = { ...defaultBashProbe(), ...probe }
-  const exe = platform === 'win32' ? 'bash.exe' : 'bash'
-
-  const explicit = env.KYCLAW_GIT_BASH?.trim()
-  if (explicit !== undefined && explicit !== '' && exists(explicit)) return explicit
-
-  if (platform === 'win32') {
-    const roots = [
-      env.ProgramFiles,
-      env['ProgramFiles(x86)'],
-      env.LOCALAPPDATA === undefined ? undefined : join(env.LOCALAPPDATA, 'Programs')
-    ]
-    for (const root of roots) {
-      if (root === undefined || root === '') continue
-      const candidate = join(root, 'Git', 'bin', exe)
-      if (exists(candidate)) return candidate
-    }
-  } else if (exists('/bin/bash')) {
-    return '/bin/bash'
-  }
-
-  // PATH 上的 git → 推导同安装的 bash（Git for Windows 的几种 bin 布局）
-  const git = findGit()
-  if (git !== null) {
-    const dir = dirname(git)
-    const candidates = [
-      join(dir, exe),
-      join(dir, '..', 'bin', exe),
-      join(dir, '..', '..', 'bin', exe),
-      join(dir, '..', '..', '..', 'bin', exe)
-    ]
-    for (const candidate of candidates) {
-      if (exists(candidate)) return candidate
-    }
-  }
-
-  return null
-}
-
-/** 探测结果的缓存（只缓存成功；失败每次重探 —— 几次 existsSync，可忽略） */
-let cachedBash: string | null = null
-
-export function gitBashPath(probe: Partial<BashProbe> = {}): string | null {
-  cachedBash ??= findGitBash(probe)
-  return cachedBash
-}
-
-/** 测试用：清掉探测缓存 */
-export function resetGitBashCache(): void {
-  cachedBash = null
-}
-
-export const GIT_BASH_MISSING =
-  '找不到 Git Bash（未检测到 Git for Windows）：请安装 Git（https://git-scm.com/download/win）后重试；' +
-  '自定义安装位置可以用环境变量 KYCLAW_GIT_BASH 指向 bash.exe。'
-
-/** PATH 扫描：Windows 用 `;` 分隔（不能按 `:` 切，盘符里就有冒号）；exists 可注入（测试） */
-export function findGitOnPath(
-  pathValue: string | undefined,
-  platform: NodeJS.Platform,
-  exists: (path: string) => boolean = existsSync
-): string | null {
-  if (pathValue === undefined) return null
-  const exe = platform === 'win32' ? 'git.exe' : 'git'
-  const separator = platform === 'win32' ? ';' : ':'
-  for (const raw of pathValue.split(separator)) {
-    const dir = raw.trim().replace(/^"|"$/g, '')
-    if (dir === '') continue
-    const candidate = join(dir, exe)
-    if (exists(candidate)) return candidate
-  }
-  return null
-}
 
 export interface BashToolOptions {
   /** 覆盖 Git Bash 解析（测试注入用；缺省走真实探测 + 缓存） */
