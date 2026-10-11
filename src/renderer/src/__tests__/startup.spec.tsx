@@ -30,5 +30,6 @@ describe('渲染端启动接线', () => {
     })
     expect(bridge.get).toHaveBeenCalledTimes(1)
     expect(document.getElementById('root')?.childElementCount).toBeGreaterThan(0)
-  })
+    // 真引入入口模块 + 真渲染，整仓并行跑时给足余量（round 37 去抖：5s 在满载机上会偶发超时）
+  }, 15_000)
 })

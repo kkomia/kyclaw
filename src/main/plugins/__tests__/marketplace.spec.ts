@@ -48,8 +48,18 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'kyclaw-plugins-'))
 })
 
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true })
+afterEach(async () => {
+  // Windows 上 git 克隆的句柄/杀毒扫描可能还没放开临时目录：重试几次（round 37 去抖——
+  // 之前整仓并行跑时这里偶发 EPERM，把环境抖动冒充成了用例失败）
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      rmSync(root, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 4) throw error
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)))
+    }
+  }
 })
 
 function writeFile(path: string, content: string): void {
