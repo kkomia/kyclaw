@@ -20,7 +20,7 @@ import { recordToRows, rowsToRecord, type KeyValueRow } from './mcp-form'
 
 /**
  * 插件页「MCP」面板（R2 round 5；原设置页「工具与 MCP」改版迁入）：
- * **行式**管理列表（照 ChatGPT MCPs 页 / 用户实拍 #9 与图3）——名称 + 测试连接 + 齿轮（编辑对话框）+ 开关。
+ * **行式**管理列表（照 ChatGPT MCPs 页 / 用户实拍 #9 与图3）——名称 + 齿轮（编辑对话框）+ 开关。
  *
  * 口径（round 5）：
  *   - 启停是**一个开关**（Switch，Kimi 图5 形态），不再做"启用/停用"两个 chip；
@@ -32,6 +32,8 @@ import { recordToRows, rowsToRecord, type KeyValueRow } from './mcp-form'
  *     测试连接真连一次；单工具「只读」= 勾了免审批（写类逐次询问）——落盘状态的一部分。
  *   - round 9：编辑对话框补 Headers（http）/ 环境变量（stdio）键值编辑器（复用 McpKeyValueEditor）；
  *     删掉标题下那句解释性小字（雷点 2.1/2.2：流程靠控件本身表达）。
+ *   - round 11（用户实拍）：**测试连接搬进编辑对话框**（行 = 名称 + 传输徽标 + problems + 齿轮 + 开关），
+ *     结果行与工具清单就地展示；「保存」成功即关对话框（失败留在原地行内报错），测试的内部自动保存不关。
  */
 interface Draft {
   name: string
@@ -70,6 +72,12 @@ function withDraft(server: McpServerConfig, draft: Draft): McpServerConfig {
 
 function toolLabel(tool: McpToolInfo): string {
   return tool.description === '' ? tool.name : `${tool.name} — ${tool.description}`
+}
+
+function resultText(result: McpTestResult): string {
+  return result.ok
+    ? `连接正常，发现 ${result.tools.length} 个工具，延迟 ${result.latencyMs} ms`
+    : `连接失败：${result.message}`
 }
 
 export interface PluginsMcpPanelProps {
@@ -226,6 +234,14 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
   const editingIndex = editingServer === null ? -1 : servers.indexOf(editingServer)
   const editingDraft =
     editingServer === null ? null : (drafts[editingServer.id] ?? draftOf(editingServer))
+  const editingResult = editingServer === null ? undefined : results[editingServer.id]
+
+  /** 「保存」按钮专用的收口（round 11：成功就关对话框）；「测试连接」的内部保存不走这里，不关 */
+  const saveAndClose = useCallback(async (): Promise<void> => {
+    if (editingServer === null) return
+    const id = editingServer.id
+    if (await save(editingServer)) setEditing((current) => (current === id ? null : current))
+  }, [editingServer, save])
 
   return (
     <div data-testid="mcp-settings" className="flex flex-col gap-3">
@@ -237,7 +253,6 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
         servers.map((server, index) => {
           const draft = drafts[server.id] ?? draftOf(server)
           const problems = mcpServerProblems(withDraft(server, draft))
-          const result = results[server.id]
           const busy = pending[server.id]
 
           return (
@@ -263,16 +278,6 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
                     {problems.join('；')}
                   </span>
                 ) : null}
-                {result ? (
-                  <span
-                    data-testid={`mcp-server-${index}-test-result`}
-                    className="text-c1 text-ink-secondary"
-                  >
-                    {result.ok
-                      ? `连接正常，发现 ${result.tools.length} 个工具，延迟 ${result.latencyMs} ms`
-                      : `连接失败：${result.message}`}
-                  </span>
-                ) : null}
                 {errors[server.id] ? (
                   <span data-testid={`mcp-server-${index}-error`} className="text-c1 text-danger">
                     {errors[server.id]}
@@ -281,16 +286,6 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
               </div>
 
               <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid={`mcp-server-${index}-test`}
-                  loading={busy === 'testing'}
-                  disabled={busy !== undefined}
-                  onClick={() => void test(server)}
-                >
-                  测试连接
-                </Button>
                 <IconButton
                   data-testid={`mcp-server-${index}-edit`}
                   label="编辑"
@@ -348,7 +343,7 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
               <Button
                 data-testid={`mcp-server-${editingIndex}-save`}
                 loading={pending[editingServer.id] === 'saving'}
-                onClick={() => void save(editingServer)}
+                onClick={() => void saveAndClose()}
               >
                 保存
               </Button>
@@ -425,6 +420,30 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
                 </div>
               </>
             )}
+
+            {/* 测试连接（round 11：从行内搬进对话框）——脏草稿先存再测，「保存」的关闭逻辑不在这条路上 */}
+            <div className="flex flex-col gap-2">
+              <div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid={`mcp-server-${editingIndex}-test`}
+                  loading={pending[editingServer.id] === 'testing'}
+                  disabled={pending[editingServer.id] !== undefined}
+                  onClick={() => void test(editingServer)}
+                >
+                  测试连接
+                </Button>
+              </div>
+              {editingResult === undefined ? null : (
+                <span
+                  data-testid={`mcp-server-${editingIndex}-test-result`}
+                  className="text-c1 text-ink-secondary"
+                >
+                  {resultText(editingResult)}
+                </span>
+              )}
+            </div>
 
             {tools[editingServer.id] === undefined ? null : (
               <div data-testid={`mcp-server-${editingIndex}-tools`} className="flex flex-col gap-2">

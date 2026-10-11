@@ -5,13 +5,14 @@
  *
  * 覆盖：
  *   1. mcp.ts：命名、分级（未标只读按写类问）、连接（stdio + Streamable HTTP）、错误分类、测试连接；
+ *      round 11 加：Windows 裸命令名解析回归（PATH 前置的 .cmd shim，两种形态真连成功）；
  *   2. 装配：collectMcpTools 只取启用的 server、命名 mcp__<server>__<tool>、挂同一权限 gate；
  *   3. lifecycle：真子进程崩溃（fixture 的 crash 工具 + 状态文件）→ 重启 ≤2 次、记日志、暂停；
  *   4. 路由：GET/PUT /api/mcp/servers（校验 + 落盘）、POST /:id/test；
  *   5. agent 集成（mock 模型 + 真服务）：未标只读 → approval-requested → 批准执行回显；
  *      标了只读不弹；外部工具带工作区外 path 也**必须**弹（T12 必查项①）；全名规则才放行（必查项②）。
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -113,6 +114,40 @@ describe('mcp.ts：命名与分级', () => {
     ).toBe('spawn')
     expect(classifyMcpFailure({ code: -32603, message: 'boom' }).kind).toBe('protocol')
     expect(classifyMcpFailure(new Error('随便什么错')).kind).toBe('protocol')
+  })
+
+  it('失败分类（round 11）：ENOENT 给人话 + 命令名；stdio「连不上」带上 PATH 下一步', () => {
+    // raw 里就有 ENOENT：命令名从 raw 提取，kind 维持 spawn
+    const enoent = classifyMcpFailure({ code: 'ENOENT', message: 'spawn npx ENOENT' })
+    expect(enoent.kind).toBe('spawn')
+    expect(enoent.message).toBe('没找到启动命令「npx」——确认它已安装并在 PATH 里，或改用完整路径')
+
+    // raw 没有 ENOENT（库折成 Connection closed）：命令名从调用方带来的配置里取
+    const closed = classifyMcpFailure(
+      {
+        code: 'CONNECTION_CLOSED',
+        message: 'Failed to connect to MCP server echo: SdkError: Connection closed'
+      },
+      undefined,
+      { command: 'npx' }
+    )
+    expect(closed.kind).toBe('spawn')
+    expect(closed.message).toContain('Connection closed')
+    expect(closed.message).toContain('「npx」')
+    expect(closed.message).toContain('PATH')
+
+    // 没有命令上下文（http / 未知）：保持原句，不凭空加提示
+    expect(
+      classifyMcpFailure({ code: 'CONNECTION_CLOSED', message: 'Connection closed' }).message
+    ).toBe('服务没能启动或立刻退出：Connection closed')
+
+    // 路径形态的命令：劝"存在且能运行"，不劝"改用完整路径"
+    const pathLike = classifyMcpFailure(
+      { code: 'CONNECTION_CLOSED', message: 'Connection closed' },
+      undefined,
+      { command: 'C:\\tools\\ghost.exe' }
+    )
+    expect(pathLike.message).toContain('「C:\\tools\\ghost.exe」存在且能运行')
   })
 
   it('serverDefinition：stdio 带命令与参数；http 解析 URL 并拒绝非 http(s)', () => {
@@ -241,7 +276,7 @@ describe('mcp.ts：真 stdio 子进程', () => {
     }
   }, 30_000)
 
-  it('错误分类是真的：命令不存在 → 启动失败；--hang → 握手超时；--fail-list → 服务没正常响应', async () => {
+  it('错误分类是真的：命令不存在 → 启动失败（人话带命令名）；--hang → 握手超时；--fail-list → 服务没正常响应', async () => {
     const ghost = await testMcpServer(
       stdioConfig({ command: 'definitely-not-a-real-command-xyz' }),
       {
@@ -249,6 +284,9 @@ describe('mcp.ts：真 stdio 子进程', () => {
       }
     )
     expect(ghost).toMatchObject({ ok: false, kind: 'spawn' })
+    // round 11：库把 spawn ENOENT 折成通用的 Connection closed，人话靠配置里的命令名补出来
+    if (!ghost.ok) expect(ghost.message).toContain('definitely-not-a-real-command-xyz')
+    if (!ghost.ok) expect(ghost.message).toContain('PATH')
 
     const hang = await testMcpServer(stdioConfig({ args: [FIXTURE, '--hang'] }), { timeoutMs: 600 })
     expect(hang).toMatchObject({ ok: false, kind: 'handshake-timeout' })
@@ -259,6 +297,49 @@ describe('mcp.ts：真 stdio 子进程', () => {
     expect(failList).toMatchObject({ ok: false, kind: 'protocol' })
     if (!failList.ok) expect(failList.message).toContain('没有正常响应')
   }, 30_000)
+})
+
+describe.skipIf(process.platform !== 'win32')('Windows 裸命令名解析（回归，round 11）', () => {
+  it('PATH 前置的 .cmd shim：裸命令名与 cmd /c 两种形态都连得上 fixture 并列出工具', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kyclaw-mcp-shim-'))
+    const shimName = 'kyclaw-echo-shim'
+    // .cmd shim：内部用 node 跑已有 fixture server —— 与用户填 `npx` 时同一条链路
+    // （裸命令名 → PATH/PATHEXT 解析 → .cmd → cmd 包装 → 真进程；cross-spawn 干的活）
+    writeFileSync(
+      join(dir, `${shimName}.cmd`),
+      `@echo off\r\n"${process.execPath}" "${FIXTURE}" %*\r\n`,
+      'utf8'
+    )
+    const originalPath = process.env.PATH
+    process.env.PATH = `${dir};${originalPath ?? ''}`
+
+    const { MCPClient } = await import('@mastra/mcp')
+    try {
+      for (const config of [
+        stdioConfig({ command: shimName }),
+        stdioConfig({ command: 'cmd', args: ['/c', shimName] })
+      ]) {
+        const client = new MCPClient({
+          id: `kyclaw-mcp-shim-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+          servers: { shim: serverDefinition(config, 10_000) }
+        })
+        try {
+          const toolsets = await client.listToolsets()
+          expect(Object.keys(toolsets.shim ?? {}).sort(), config.command).toContain('echo')
+        } finally {
+          await client.disconnect()
+        }
+      }
+
+      // 产品的「测试连接」路径在这条链路上同样通
+      const result = await testMcpServer(stdioConfig({ command: shimName }), { timeoutMs: 10_000 })
+      expect(result).toMatchObject({ ok: true })
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    }
+  }, 60_000)
 })
 
 describe('mcp.ts：真 Streamable HTTP（fixture 的 --http 模式）', () => {

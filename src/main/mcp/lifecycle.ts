@@ -228,7 +228,9 @@ export class McpLifecycle {
       missing = []
       for (const server of stillMissing) {
         const detail = result.errorDetails[server.id]
-        const { message } = classifyMcpFailure(detail, result.errors[server.id] ?? '连接失败')
+        const { message } = classifyMcpFailure(detail, result.errors[server.id] ?? '连接失败', {
+          command: server.command
+        })
         const prior = this.restarts.get(server.id) ?? 0
 
         if (prior >= this.maxRestarts) {

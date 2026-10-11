@@ -48,6 +48,13 @@ const TABS: Array<{ id: PluginsTab; label: string; testId: string }> = [
   { id: 'skills', label: '技能', testId: 'plugins-tab-skills' }
 ]
 
+/** 标题区随分区走（round 11，用户实拍：切 tab 时标题区不变）：h1 + 一句短副标题，不解释后端 */
+const HEADINGS: Record<PluginsTab, { title: string; subtitle: string }> = {
+  plugins: { title: '插件', subtitle: '从插件市场安装与管理插件' },
+  mcp: { title: 'MCP', subtitle: '连接外部工具服务' },
+  skills: { title: '技能', subtitle: '查看可用与已安装的技能' }
+}
+
 /** 导入框里的示例（placeholder 就是口径说明，不写解释性小字） */
 const IMPORT_PLACEHOLDER =
   '{"mcpServers": {"perfsight": {"type": "http", "url": "https://api.perfsight.qq.com/mcp", "headers": {"Authorization": "Bearer YOUR_API_KEY"}}}}'
@@ -250,8 +257,12 @@ export function PluginsPage(): React.JSX.Element {
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-t1 font-medium text-ink">插件</h1>
-          <p className="text-b2 text-ink-secondary">管理插件、MCP 与技能</p>
+          <h1 data-testid="plugins-title" className="text-t1 font-medium text-ink">
+            {HEADINGS[tab].title}
+          </h1>
+          <p data-testid="plugins-subtitle" className="text-b2 text-ink-secondary">
+            {HEADINGS[tab].subtitle}
+          </p>
         </div>
         {tab === 'plugins' ? (
           <Menu

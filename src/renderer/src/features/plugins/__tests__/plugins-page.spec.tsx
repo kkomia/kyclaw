@@ -14,7 +14,8 @@ import { PluginsPage } from '../PluginsPage'
 /**
  * 插件页（round 5 起，round 10 三分区）：**插件｜MCP｜技能**（默认「插件」）。
  * 「插件」分区 = 插件市场（添加/刷新/移除）+ 跨市场插件汇总（安装/卸载），数据走 `plugins:overview` 桥；
- * 「MCP」分区沿用 round 9 的行式列表（开关启停 + 齿轮编辑 + 测试连接 + ＋新增菜单，fetch 面）；
+ * 「MCP」分区沿用 round 9 的行式列表（开关启停 + 齿轮编辑 + ＋新增菜单，fetch 面；round 11 起
+ * 「测试连接」在编辑对话框里，保存成功即关框）；
  * 「技能」分区 = 已安装（来自插件）+ 内置技能只读清单。
  *
  * 服务端（PUT /api/mcp/servers）的校验用 shared/mcp 的同一份实现模拟：启用的 server 配置不完整
@@ -175,7 +176,9 @@ describe('插件页 · 三个分区（round 10）', () => {
     render(<PluginsPage />)
 
     expect(screen.getByTestId('plugins-page')).toBeInTheDocument()
-    expect(screen.getByText('管理插件、MCP 与技能')).toBeInTheDocument()
+    // round 11：标题区随 tab（h1 + 副标题）
+    expect(screen.getByTestId('plugins-title')).toHaveTextContent('插件')
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('从插件市场安装与管理插件')
     expect(screen.getByTestId('plugins-tab-plugins')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'false')
     expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'false')
@@ -194,11 +197,15 @@ describe('插件页 · 三个分区（round 10）', () => {
 
     openMcpTab()
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('plugins-title')).toHaveTextContent('MCP')
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('连接外部工具服务')
     expect(screen.getByTestId('mcp-add')).toHaveTextContent('新增')
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
 
     // 技能区：已安装空态 + 内置能力只读清单（克制口吻、没有开关）；没有新增按钮
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    expect(screen.getByTestId('plugins-title')).toHaveTextContent('技能')
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看可用与已安装的技能')
     expect(screen.getByTestId('skills-installed-empty')).toHaveTextContent(
       '还没有从插件装进来的技能'
     )
@@ -405,7 +412,7 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
     expect(screen.getByTestId('mcp-server-0-enable')).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('齿轮编辑：对话框里改名称/命令 → 保存落盘；取消不写', async () => {
+  it('齿轮编辑：保存落盘并关对话框；重开改字段再取消 → 不写（round 11：保存要有返回）', async () => {
     const api = installMockApi([serverConfig({ enabled: false })])
     render(<PluginsPage />)
     openMcpTab()
@@ -419,12 +426,32 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
 
     await waitFor(() => expect(api.state.servers[0].name).toBe('我的回显'))
     expect(api.state.servers[0].command).toBe('node')
+    // round 11 用户实拍：保存成功 → 关闭对话框（这就是点保存的"返回"）
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
-    // 取消：改了字段但点取消，不落盘
+    // 重开：改了字段但点取消，不落盘
+    openEditor()
     fireEvent.change(screen.getByTestId('mcp-server-0-name'), { target: { value: '不保存' } })
     fireEvent.click(screen.getByTestId('mcp-edit-cancel'))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(api.state.servers[0].name).toBe('我的回显')
+  })
+
+  it('保存失败：行内报原因、对话框留在原地（round 11）', async () => {
+    const api = installMockApi([serverConfig()])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    openEditor()
+    // 清掉命令：启用中的 server 保存会被服务端拦下（400）
+    fireEvent.change(screen.getByTestId('mcp-server-0-command'), { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('mcp-server-0-save'))
+
+    expect(await screen.findByTestId('mcp-server-0-error')).toHaveTextContent('启动命令')
+    expect(screen.getByTestId('mcp-server-0-save')).toBeInTheDocument()
+    // 没落盘：磁盘上仍是原命令
+    expect(api.state.servers[0].command).toBe('node')
   })
 
   it('编辑对话框（http）：Headers 键值行编辑器——填一行保存落盘（round 9）', async () => {
@@ -480,16 +507,21 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
     expect(api.state.servers[0].env).toEqual({ API_KEY: 'old' })
   })
 
-  it('测试连接：行内出结果；打开对话框能看到工具清单 + 免审批开关', async () => {
+  it('测试连接搬进编辑对话框：行内没有；开框测试出结果 + 工具清单 + 免审批开关（round 11）', async () => {
     const api = installMockApi([serverConfig({ enabled: false })])
     render(<PluginsPage />)
     openMcpTab()
     await screen.findByTestId('mcp-server-0')
 
-    fireEvent.click(screen.getByTestId('mcp-server-0-test'))
-    expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent('连接正常')
+    // 行内不再有「测试连接」（按钮搬进对话框）
+    expect(screen.queryByTestId('mcp-server-0-test')).not.toBeInTheDocument()
 
     openEditor()
+    fireEvent.click(screen.getByTestId('mcp-server-0-test'))
+    expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent('连接正常')
+    // 对话框没被内部保存/测试的流转关掉
+    expect(screen.getByTestId('mcp-server-0-save')).toBeInTheDocument()
+
     const readonly = await screen.findByTestId('mcp-server-0-tool-echo-readonly')
     expect(readonly).toHaveAttribute('aria-checked', 'false')
 
@@ -544,7 +576,7 @@ describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行
     expect(screen.queryByTestId('mcp-server-0')).not.toBeInTheDocument()
   })
 
-  it('dirty 先存再测：对话框里改了没保存的字段，点「测试连接」先落盘再真连（顺序 PUT → 测试）', async () => {
+  it('dirty 先存再测：对话框里改了没保存的字段，点「测试连接」先落盘再真连（PUT → 测试），内部保存不关框', async () => {
     const api = installMockApi([serverConfig({ enabled: false })])
     render(<PluginsPage />)
     openMcpTab()
@@ -552,8 +584,6 @@ describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行
 
     openEditor()
     fireEvent.change(screen.getByTestId('mcp-server-0-name'), { target: { value: '改过的名字' } })
-    fireEvent.click(screen.getByTestId('mcp-edit-cancel'))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
     api.calls.length = 0
     fireEvent.click(screen.getByTestId('mcp-server-0-test'))
@@ -561,22 +591,26 @@ describe('插件页 · 边界（round 7 台账 minors①：补覆盖，不改行
 
     expect(api.calls).toEqual(['PUT', 'POST-test'])
     expect(api.state.servers[0].name).toBe('改过的名字')
+    // 「关对话框」只属于「保存」按钮：测试触发的内部自动保存不关
+    expect(screen.getByTestId('mcp-server-0-save')).toBeInTheDocument()
   })
 
-  it('测试连接失败（结果 ok:false）：行内显示失败原因，工具清单不出', async () => {
+  it('测试连接失败（结果 ok:false）：对话框里显示失败原因，工具清单不出', async () => {
     const api = installMockApi([serverConfig({ enabled: false })])
     api.testResults.set('echo', { ok: false, kind: 'spawn', message: '启动命令找不到' })
     render(<PluginsPage />)
     openMcpTab()
     await screen.findByTestId('mcp-server-0')
 
+    openEditor()
     fireEvent.click(screen.getByTestId('mcp-server-0-test'))
 
     expect(await screen.findByTestId('mcp-server-0-test-result')).toHaveTextContent(
       '连接失败：启动命令找不到'
     )
-    // 失败是"测试结果"不是"保存错误"：行内错误位不亮
+    // 失败是"测试结果"不是"保存错误"：错误位不亮、工具清单不出
     expect(screen.queryByTestId('mcp-server-0-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-server-0-tools')).not.toBeInTheDocument()
   })
 
   it('半截地址（http://）：行内 problems 当场说出来；启用被服务端拦下，开关不变', async () => {

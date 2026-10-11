@@ -30,11 +30,16 @@ import type { MastraMCPServerDefinition } from '@mastra/mcp'
 /** 工具名前缀；`mcp__<serverId>__<toolName>` */
 export const MCP_TOOL_PREFIX = 'mcp__'
 
-/** 运行期请求超时（握手/列工具/调用共用；MCP 工具的慢调用也受这一档约束） */
+/** 运行期请求超时（stdio 的**连接握手与每次请求共用一个旋钮**——见 serverDefinition；
+ *  库没有给 stdio 单独的 connectTimeout（类型里是 never），所以这一档同时是慢调用上限） */
 export const MCP_TIMEOUT_MS = 30_000
 
-/** "测试连接"的超时：用户在设置页等着看结果，短一些 */
-export const MCP_TEST_TIMEOUT_MS = 15_000
+/**
+ * "测试连接"的超时（round 11：15s → 60s）：首次冷启动实测 ~26s（npx 现下载包 + 建缓存），
+ * 15s 会在缓存冷的时候误报「连接超时」（用户实拍：App 里失败、脚本直连同一命令成功）。
+ * 60s 覆盖冷启动；成功一次后缓存就热了，之后的连接都在 10s 内。
+ */
+export const MCP_TEST_TIMEOUT_MS = 60_000
 
 /** 工具名拼装：`mcp__echo__echo` */
 export function mcpToolName(serverId: string, toolName: string): string {
@@ -82,7 +87,13 @@ export function createMcpClassify(servers: () => readonly McpServerConfig[]): To
   return (tool, input) => classifyMcpToolCall(tool, input, servers())
 }
 
-/** 配置 → @mastra/mcp 的 server 定义（transport 自动按 command/url 识别） */
+/**
+ * 配置 → @mastra/mcp 的 server 定义（transport 自动按 command/url 识别）。
+ * `timeoutMs` 进 server 配置的 `timeout`：stdio 与 HTTP 都**约束连接握手**；
+ * 运行期每次请求（listTools / callTool）也复用它。stdio 没有独立的 connectTimeout
+ * （`StdioServerDefinition.connectTimeout` 是 never），所以 stdio 的连接容忍与调用上限
+ * 只能同增同减 —— 运行期保持 30s 的理由见 `MCP_TIMEOUT_MS` 的注释。
+ */
 export function serverDefinition(
   config: McpServerConfig,
   timeoutMs: number = MCP_TIMEOUT_MS
@@ -192,23 +203,58 @@ function kindOfMessage(message: string): McpFailureKind {
   return /timed out|timeout/i.test(message) ? 'handshake-timeout' : 'protocol'
 }
 
+/** 命令的下一步提示（`withName` = 句子里还没出现过命令名时带上「」） */
+function pathAdvice(command: string, withName: boolean): string {
+  const target = withName ? `「${command}」` : '它'
+  return command.includes('/') || command.includes('\\')
+    ? `确认${target}存在且能运行`
+    : `确认${target}已安装并在 PATH 里，或改用完整路径`
+}
+
 /**
  * 连接/列工具失败 → 分类 + 一句人话。`detail` 可以是 @mastra/mcp 的 errorDetails
  * （带机器可读的 code），也可以是任意 Error。
+ *
+ * `context.command` 是 stdio 的启动命令（调用方从配置带来）：缺命令时库会把 Node 的
+ * `spawn xxx ENOENT` 折成通用的 `SdkError: Connection closed`（实测两条路都一样，ENOENT
+ * 到不了这里）——那类「连不上」的错误也裹上"确认命令在 PATH 里 / 用完整路径"的下一步。
  */
 export function classifyMcpFailure(
   detail: unknown,
-  fallbackMessage?: string
+  fallbackMessage?: string,
+  context?: { command?: string }
 ): {
   kind: McpFailureKind
   message: string
 } {
   const code = errorCode(detail) ?? errorCode(asErrorShape(detail)?.cause)
   const raw = firstLine(errorMessage(detail), 300) || fallbackMessage || '未知原因'
+  const configured = context?.command?.trim() ?? ''
+
+  // 命令找不到（Node spawn / cross-spawn 的 ENOENT）：直接给人话 + 怎么办
+  if (code === 'ENOENT' || /\bENOENT\b/.test(raw)) {
+    const command = /spawn\s+(\S+?)\s+ENOENT/i.exec(raw)?.[1] ?? configured
+    return {
+      kind: 'spawn',
+      message:
+        command === ''
+          ? '没找到启动命令——确认它已安装并在 PATH 里，或改用完整路径'
+          : `没找到启动命令「${command}」——${pathAdvice(command, false)}`
+    }
+  }
+
   const kind = code === undefined ? kindOfMessage(raw) : kindOfCode(code)
 
   if (kind === 'handshake-timeout') return { kind, message: `连接超时：${raw}` }
-  if (kind === 'spawn') return { kind, message: `服务没能启动或立刻退出：${raw}` }
+  if (kind === 'spawn') {
+    return {
+      kind,
+      message:
+        configured === ''
+          ? `服务没能启动或立刻退出：${raw}`
+          : `服务没能启动或立刻退出——${pathAdvice(configured, true)}（原始信息：${raw}）`
+    }
+  }
   return { kind, message: `服务没有正常响应：${raw}` }
 }
 
@@ -241,7 +287,7 @@ export async function testMcpServer(
 
     const detail = errorDetails[config.id]
     if (detail !== undefined) {
-      return { ok: false, ...classifyMcpFailure(detail) }
+      return { ok: false, ...classifyMcpFailure(detail, undefined, { command: config.command }) }
     }
 
     const tools: McpToolInfo[] = Object.entries(toolsets[config.id] ?? {}).map(([name, tool]) => ({
@@ -250,7 +296,7 @@ export async function testMcpServer(
     }))
     return { ok: true, latencyMs: Date.now() - startedAt, tools }
   } catch (error) {
-    return { ok: false, ...classifyMcpFailure(error) }
+    return { ok: false, ...classifyMcpFailure(error, undefined, { command: config.command }) }
   } finally {
     await client?.disconnect().catch(() => {})
   }
