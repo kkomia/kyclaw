@@ -8,15 +8,21 @@
  *   - 一轮结束后（handleTurnEnd）：生成标题（服务端调模型 + 降级）→ 刷新列表；
  *     如果结束时人不在这个会话上，记一个完成点并发系统通知（spec §7.2 的"完成通知"）。
  *
+ * round 26（可用性收口）：草稿也是"完整会话"——`materialize` 把它先落成真实线程
+ * （POST /api/threads，与首条消息建线程同一条存储路径），置顶/归档/移至项目先物化再执行；
+ * 重命名/删除就地做（本地标题 `draftTitles` / 本地丢弃），不必把每个动作都变成建线程。
+ *
  * 失败一律落 `error` 字段（侧栏显示 + 重试），不抛给调用方：侧栏不该把整个应用带崩。
- * 界面文案是产品口径（不写后端原文），**原始 error 一律 `console.error` 留底**，
- * 生产排障有落点（T9 之后复核指出过：只落文案、原文丢了）。
+ * 例外：`materialize` 与 provider 同族——失败抛给调用方（动作等它成功才继续，
+ * 静默吞掉会让"点了没反应"复现）。界面文案是产品口径（不写后端原文），
+ * **原始 error 一律 `console.error` 留底**，生产排障有落点（T9 之后复核指出过：只落文案、原文丢了）。
  */
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { create } from 'zustand'
 import type { ThreadSummary } from '@shared/threads'
 import { notifyTurnDone } from '../../lib/notify'
 import {
+  createThread,
   deleteThread,
   fetchThreads,
   generateThreadTitle,
@@ -41,6 +47,8 @@ export interface SessionsState {
   error: string | null
   /** 后台完成、人不在那个会话上：`{ [threadId]: true }`（切回去时清掉） */
   notices: Record<string, true>
+  /** round 26：草稿的本地标题（"就地重命名"写这里；物化时带给服务端，物化后由服务端标题接管） */
+  draftTitles: Record<string, string>
 
   ensureLoaded: () => Promise<void>
   refresh: () => Promise<void>
@@ -52,6 +60,14 @@ export interface SessionsState {
    * 返回新草稿的 id（调用方要拿它做后续动作）。
    */
   startNew: (projectId?: string | null) => string
+  /** round 26：就地改草稿标题（服务端还没有它，不落盘；物化时把这份标题带过去） */
+  setDraftTitle: (threadId: string, title: string) => void
+  /**
+   * round 26：把草稿**物化**成真实线程（round 26 可用性收口：置顶/归档/移至项目先物化再执行）。
+   * 走"首条消息建线程"同一条服务端路径（POST /api/threads → memory.createThread，只是不带消息）；
+   * 已在 threads 里 = 空操作；成功把新线程并进镜像，失败**抛给调用方**（由它露错误）。
+   */
+  materialize: (threadId: string) => Promise<void>
   remove: (threadId: string) => Promise<void>
   rename: (threadId: string, title: string) => Promise<void>
   /** 一轮结束（isError/isAbort 由调用方先过滤）：标题 + 刷新 + 完成通知 */
@@ -72,6 +88,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
   loaded: false,
   error: null,
   notices: {},
+  draftTitles: {},
 
   ensureLoaded: () => {
     if (get().loaded) return Promise.resolve()
@@ -128,27 +145,59 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     return threadId
   },
 
+  setDraftTitle: (threadId, title) => {
+    set((state) => ({ draftTitles: { ...state.draftTitles, [threadId]: title } }))
+  },
+
+  /**
+   * round 26：草稿物化（置顶/归档/移至项目先走这一步）。与"首条消息建线程"同一条服务端路径；
+   * 已在镜像里 = 空操作；本地草稿标题随创建带过去（物化后由服务端标题接管）。
+   * 失败抛给调用方（它负责露错误）；成功把新线程并进镜像（时间最近，排最前）。
+   */
+  materialize: async (threadId) => {
+    if (get().threads.some((thread) => thread.id === threadId)) return
+    const created = await createThread(threadId, get().draftTitles[threadId])
+    set((state) => ({
+      threads: state.threads.some((thread) => thread.id === threadId)
+        ? state.threads
+        : [created, ...state.threads],
+      draftTitles: withoutKey(state.draftTitles, threadId)
+    }))
+  },
+
   remove: async (threadId) => {
-    try {
-      await deleteThread(threadId)
-    } catch (error) {
-      console.error('[kyclaw] 删除会话失败', error)
-      set({ error: messageOf(error) })
-      return
+    // round 26：草稿（服务端还没有它）就地删——不发 DELETE（那边本来就没有东西），
+    // 只收本地账：丢掉内存态、移出镜像、选中接力。
+    const listed = get().threads.some((thread) => thread.id === threadId)
+    if (listed) {
+      try {
+        await deleteThread(threadId)
+      } catch (error) {
+        console.error('[kyclaw] 删除会话失败', error)
+        set({ error: messageOf(error) })
+        return
+      }
     }
     // 被删会话的内存态一起丢掉（连同还在跑的流）：它不会再被渲染，留着只会泄漏消息与请求
     dropThreadChat(threadId, { stop: true })
     const remaining = get().threads.filter((thread) => thread.id !== threadId)
     set((state) => ({
       threads: remaining,
+      draftTitles: withoutKey(state.draftTitles, threadId),
       notices: withoutKey(state.notices, threadId),
       activeId: state.activeId === threadId ? (remaining[0]?.id ?? newThreadId()) : state.activeId
     }))
-    // 与服务端对齐排序/时间
-    void get().refresh()
+    // 与服务端对齐排序/时间（草稿没有服务端那一半，不用刷）
+    if (listed) void get().refresh()
   },
 
   rename: async (threadId, title) => {
+    // round 26：草稿（服务端还没有它）就地改本地标题——不 PATCH（那边 404），
+    // 物化（首个动作/首轮消息）时把这份本地标题带过去。
+    if (!get().threads.some((thread) => thread.id === threadId)) {
+      get().setDraftTitle(threadId, title)
+      return
+    }
     try {
       const updated = await renameThread(threadId, title)
       set((state) => ({
@@ -169,7 +218,9 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
         threads: [
           { id: threadId, title: null, updatedAt: new Date().toISOString() },
           ...state.threads
-        ]
+        ],
+        // 本地草稿标题到此交棒：真标题由服务端生成（round 26 的就地重命名是"落成前"的显示口径）
+        draftTitles: withoutKey(state.draftTitles, threadId)
       })
     }
 
@@ -198,9 +249,9 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
   }
 }))
 
-function withoutKey(notices: Record<string, true>, key: string): Record<string, true> {
-  if (!(key in notices)) return notices
-  const next = { ...notices }
+function withoutKey<T>(map: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in map)) return map
+  const next = { ...map }
   delete next[key]
   return next
 }
@@ -213,6 +264,7 @@ export function resetSessionsStore(): void {
     activeId: null,
     loaded: false,
     error: null,
-    notices: {}
+    notices: {},
+    draftTitles: {}
   })
 }

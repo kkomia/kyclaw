@@ -21,6 +21,11 @@ import { defaultSettings } from '@shared/settings'
 vi.mock('@renderer/lib/threads-api', () => ({
   fetchThreads: vi.fn(async () => []),
   fetchThreadMessages: vi.fn(async () => []),
+  createThread: vi.fn(async (id: string, title?: string) => ({
+    id,
+    title: title ?? null,
+    updatedAt: new Date().toISOString()
+  })),
   renameThread: vi.fn(async (id: string, title: string) => ({
     id,
     title,
@@ -38,7 +43,7 @@ vi.mock('@renderer/lib/projects-api', () => ({
   putSessionProject: vi.fn(async () => undefined)
 }))
 
-import { renameThread, deleteThread } from '@renderer/lib/threads-api'
+import { renameThread, deleteThread, createThread } from '@renderer/lib/threads-api'
 import { putSessionProject } from '@renderer/lib/projects-api'
 
 const THREAD_ID = 't1'
@@ -60,6 +65,8 @@ function mount(
     projectId?: string | null
     pinned?: string[]
     workspaces?: Array<{ path: string; mode: 'ask' | 'full' }>
+    /** round 26：把这轮渲染的会话做成"草稿"（镜像里没有它，还没物化） */
+    draft?: boolean
   } = {}
 ): Harness {
   const initial = {
@@ -79,7 +86,10 @@ function mount(
     error: null
   })
   useSessionsStore.setState({
-    threads: [{ id: THREAD_ID, title: '会话甲', updatedAt: '2026-10-11T00:00:00.000Z' }],
+    threads:
+      options.draft === true
+        ? []
+        : [{ id: THREAD_ID, title: '会话甲', updatedAt: '2026-10-11T00:00:00.000Z' }],
     activeId: THREAD_ID,
     loaded: true,
     error: null,
@@ -120,6 +130,7 @@ beforeEach(() => {
   resetProjectsStore()
   vi.mocked(renameThread).mockClear()
   vi.mocked(deleteThread).mockClear()
+  vi.mocked(createThread).mockClear()
   vi.mocked(putSessionProject).mockClear()
 })
 
@@ -267,5 +278,141 @@ describe('SessionActionsMenu · 动作', () => {
     fireEvent.keyDown(screen.getByTestId('session-pin-t1'), { key: 'Enter' })
 
     await waitFor(() => expect(onError).toHaveBeenCalledWith('设置落盘失败'))
+  })
+})
+
+describe('SessionActionsMenu · round 26 可用性收口（不许"灰着不让用"）', () => {
+  it('无项目 + 无工作区：只有「在文件资源管理器中打开」禁用（确实判不出工作区），其余都可点', () => {
+    mount()
+    openMenu()
+
+    for (const id of [
+      'session-pin-t1',
+      'session-move-t1',
+      'session-rename-t1',
+      'session-archive-t1',
+      'session-delete-t1'
+    ]) {
+      expect(screen.getByTestId(id), id).not.toHaveAttribute('data-disabled')
+    }
+    expect(screen.getByTestId('session-open-t1')).toHaveAttribute('data-disabled')
+  })
+
+  it('无项目 + 有工作区：连「打开」也可点（全菜单零禁用）', () => {
+    mount({ workspaces: [{ path: 'D:\\ws', mode: 'ask' }] })
+    openMenu()
+
+    for (const id of [
+      'session-pin-t1',
+      'session-move-t1',
+      'session-open-t1',
+      'session-rename-t1',
+      'session-archive-t1',
+      'session-delete-t1'
+    ]) {
+      expect(screen.getByTestId(id), id).not.toHaveAttribute('data-disabled')
+    }
+  })
+
+  it('已置顶：置顶项变「取消置顶」且可点', () => {
+    mount({ pinned: [THREAD_ID] })
+    openMenu()
+
+    const pin = screen.getByTestId('session-pin-t1')
+    expect(pin).toHaveTextContent('取消置顶')
+    expect(pin).not.toHaveAttribute('data-disabled')
+  })
+
+  it('已在项目：多出的「从「项目一」中移除」可点', () => {
+    mount({ projectId: 'p1' })
+    openMenu()
+
+    expect(screen.getByTestId('session-leave-project-t1')).not.toHaveAttribute('data-disabled')
+  })
+})
+
+describe('SessionActionsMenu · 草稿会话（round 26：同一份可用性）', () => {
+  it('草稿的菜单条目齐全（置顶/移至项目/打开/重命名/归档/删除都在）', () => {
+    mount({ draft: true })
+    openMenu()
+
+    for (const id of [
+      'session-pin-t1',
+      'session-move-t1',
+      'session-open-t1',
+      'session-rename-t1',
+      'session-archive-t1',
+      'session-delete-t1'
+    ]) {
+      expect(screen.getByTestId(id), id).toBeInTheDocument()
+    }
+  })
+
+  it('草稿置顶：先物化（POST /api/threads）成功后才写 pinnedThreads', async () => {
+    const { bridge } = mount({ draft: true })
+    openMenu()
+    fireEvent.keyDown(screen.getByTestId('session-pin-t1'), { key: 'Enter' })
+
+    await waitFor(() => expect(vi.mocked(createThread)).toHaveBeenCalledWith(THREAD_ID, undefined))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ pinnedThreads: [THREAD_ID] }))
+    // 物化后进了镜像：这条不再是草稿
+    expect(useSessionsStore.getState().threads.some((thread) => thread.id === THREAD_ID)).toBe(true)
+  })
+
+  it('草稿移至项目：先物化，再走 T18 映射通道（PUT）', async () => {
+    mount({ draft: true })
+    openMenu()
+    await openSubmenu('session-move-t1')
+    fireEvent.click(screen.getByTestId('session-move-t1-p1'))
+
+    await waitFor(() => expect(vi.mocked(createThread)).toHaveBeenCalledWith(THREAD_ID, undefined))
+    await waitFor(() => expect(putSessionProject).toHaveBeenCalledWith(THREAD_ID, 'p1'))
+  })
+
+  it('草稿归档：先物化，再写快照（标题/时间进 settings.archivedThreads）', async () => {
+    const { bridge } = mount({ draft: true })
+    openMenu()
+    fireEvent.keyDown(screen.getByTestId('session-archive-t1'), { key: 'Enter' })
+
+    await waitFor(() => {
+      const patch = bridge.update.mock.calls.at(-1)?.[0] as {
+        archivedThreads?: Array<Record<string, unknown>>
+      }
+      expect(patch.archivedThreads?.[0]).toMatchObject({ threadId: THREAD_ID, title: '会话甲' })
+    })
+    expect(vi.mocked(createThread)).toHaveBeenCalledTimes(1)
+  })
+
+  it('草稿重命名：就地改本地标题（draftTitles），不发 PATCH', async () => {
+    mount({ draft: true })
+    openMenu()
+    fireEvent.keyDown(screen.getByTestId('session-rename-t1'), { key: 'Enter' })
+
+    const input = await screen.findByTestId('session-rename-input')
+    fireEvent.change(input, { target: { value: '草稿名' } })
+    fireEvent.click(screen.getByTestId('session-rename-save'))
+
+    await waitFor(() => expect(useSessionsStore.getState().draftTitles[THREAD_ID]).toBe('草稿名'))
+    expect(vi.mocked(renameThread)).not.toHaveBeenCalled()
+  })
+
+  it('草稿删除：就地丢弃（不发 DELETE），选中接力到新的草稿', async () => {
+    mount({ draft: true })
+    openMenu()
+    fireEvent.keyDown(screen.getByTestId('session-delete-t1'), { key: 'Enter' })
+    fireEvent.click(await screen.findByTestId('session-delete-confirm'))
+
+    await waitFor(() => expect(useSessionsStore.getState().activeId).not.toBe(THREAD_ID))
+    expect(vi.mocked(deleteThread)).not.toHaveBeenCalled()
+  })
+
+  it('草稿物化失败：动作不做（没写置顶）、原因露给 onError', async () => {
+    const { bridge, onError } = mount({ draft: true })
+    vi.mocked(createThread).mockRejectedValueOnce(new Error('线程服务返回 500'))
+    openMenu()
+    fireEvent.keyDown(screen.getByTestId('session-pin-t1'), { key: 'Enter' })
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('线程服务返回 500'))
+    expect(bridge.update).not.toHaveBeenCalled()
   })
 })

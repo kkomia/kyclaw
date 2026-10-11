@@ -1,8 +1,10 @@
 /**
  * 线程 API（T9）：挂在 agent 服务（service.ts）上的 Hono 子路由，路径前缀 /api/threads。
  *
- * 八条：
+ * 九条：
  *   GET    /api/threads                 会话列表（只认 local-user 资源；id/标题/更新时间）
+ *   POST   /api/threads                 建线程（round 26：草稿"物化"成真实线程，不带消息；
+ *                                       已在的线程幂等回现况——与"首条消息建线程"同一条存储路径）
  *   GET    /api/threads/:id/messages    历史回灌的来源（存储消息 JSON，渲染端用 message-map 映射）
  *   PATCH  /api/threads/:id             重命名
  *   DELETE /api/threads/:id             删除（连消息一起；幂等）
@@ -18,7 +20,8 @@
  *   2. 入参（路由参数 + JSON body）全部过 zod（shared/threads.ts），非法即 400；
  *      回包结构也定义在同一处，渲染端 parse。
  *   3. 缺失的线程：GET messages / truncate 走"空结果"（幂等），PATCH / title / compact 走 404
- *      （改一个不存在的东西是错误，不是空操作）；GET compaction 是读，跟 messages 同口径（空结果）。
+ *      （改一个不存在的东西是错误，不是空操作）；GET compaction 是读，跟 messages 同口径（空结果）；
+ *      POST /（建）相反：它本来就是把"不存在的线程"变成存在，所以是幂等创建。
  */
 import { Hono } from 'hono'
 import type { MastraMemory } from '@mastra/core/memory'
@@ -26,6 +29,7 @@ import type { StorageThreadType } from '@mastra/core/memory'
 import {
   compactThreadRequestSchema,
   compactThreadResponseSchema,
+  createThreadRequestSchema,
   LOCAL_USER_RESOURCE_ID,
   renameThreadRequestSchema,
   threadCompactionResponseSchema,
@@ -124,6 +128,25 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       orderBy: { field: 'updatedAt', direction: 'DESC' }
     })
     return context.json({ threads: result.threads.map(toSummary) })
+  })
+
+  // round 26：建线程（草稿会话"物化"）。走的正是"首条消息建线程"的存储路径
+  // （memory.createThread → saveThread），只是不带任何消息；已经在的线程幂等回现况
+  // （重复物化不该报错——两个入口同时点、或动作重试时都会遇到）。
+  router.post('/', async (context) => {
+    const body = createThreadRequestSchema.safeParse(await context.req.json().catch(() => null))
+    if (!body.success) return context.json(badRequest('线程 id'), 400)
+
+    const existing = await findThread(memory, body.data.threadId)
+    if (existing !== null) return context.json(toSummary(existing))
+
+    const created = await memory.createThread({
+      threadId: body.data.threadId,
+      resourceId: LOCAL_USER_RESOURCE_ID,
+      ...(body.data.title === undefined ? {} : { title: body.data.title }),
+      saveThread: true
+    })
+    return context.json(toSummary(created))
   })
 
   router.get('/:id/messages', async (context) => {

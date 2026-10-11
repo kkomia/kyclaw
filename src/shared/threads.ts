@@ -64,6 +64,17 @@ export const renameThreadRequestSchema = z.strictObject({
   title: z.string().trim().min(1).max(120)
 })
 
+/**
+ * POST /api/threads 的入参（round 26）：把草稿会话**物化**成真实线程——与"首条消息建线程"
+ * 同一条存储路径（`memory.createThread`），只是不带消息。置顶/归档/移至项目这类
+ * "给会话记归属"的动作要求服务端认识它，所以先物化再执行；已在的线程幂等回现况。
+ */
+export const createThreadRequestSchema = z.strictObject({
+  threadId: z.string().min(1).max(200),
+  /** 创建时就带标题（草稿被就地重命名过时把本地标题带过来；不传 = 无标题） */
+  title: z.string().trim().min(1).max(120).optional()
+})
+
 /** POST /api/threads/:id/truncate 的入参（R2：编辑重发的服务端半边，从这条消息起截掉） */
 export const truncateThreadRequestSchema = z.strictObject({
   messageId: z.string().min(1)

@@ -55,6 +55,18 @@ function installFakeServer(initial: ThreadRow[] = []): FakeServer {
       if (url.pathname === '/api/threads' && method === 'GET') {
         return respond({ threads: server.threads })
       }
+      if (url.pathname === '/api/threads' && method === 'POST') {
+        const { threadId, title } = body as { threadId: string; title?: string }
+        const row: ThreadRow = {
+          id: threadId,
+          title: title ?? null,
+          updatedAt: new Date().toISOString()
+        }
+        if (!server.threads.some((thread) => thread.id === threadId)) {
+          server.threads = [row, ...server.threads]
+        }
+        return respond(row)
+      }
       const renameMatch = /^\/api\/threads\/([^/]+)$/.exec(url.pathname)
       if (renameMatch && method === 'PATCH') {
         const id = decodeURIComponent(renameMatch[1])
@@ -344,5 +356,95 @@ describe('handleTurnEnd：标题 + 完成通知', () => {
     const state = useSessionsStore.getState()
     expect(state.threads.map((thread) => thread.id)).toEqual([draftId])
     expect(state.threads[0].title).toBeNull()
+  })
+})
+
+describe('round 26：草稿物化（materialize）与就地编辑', () => {
+  it('materialize：创建线程（POST）并并进镜像；本地草稿标题带过去、随后交棒', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    useSessionsStore.getState().setDraftTitle(draftId, '草稿名')
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId, title: '草稿名' }
+    })
+    const state = useSessionsStore.getState()
+    expect(state.threads.map((thread) => thread.id)).toEqual([draftId])
+    expect(state.threads[0]?.title).toBe('草稿名')
+    // 本地草稿标题到此交棒（物化后由服务端标题接管）
+    expect(state.draftTitles[draftId]).toBeUndefined()
+  })
+
+  it('materialize：没有本地标题时不带 title 字段（服务端建"无标题"线程）', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId }
+    })
+    expect(useSessionsStore.getState().threads[0]?.title).toBeNull()
+  })
+
+  it('materialize：已在镜像里的会话是空操作（不发请求）；重复物化幂等', async () => {
+    const server = installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    server.calls.length = 0
+
+    await useSessionsStore.getState().materialize('t-new')
+
+    expect(server.calls).toEqual([])
+    expect(useSessionsStore.getState().threads).toHaveLength(2)
+  })
+
+  it('materialize 失败：抛给调用方（不吞），镜像与草稿标题都不动', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    useSessionsStore.getState().setDraftTitle(draftId, '草稿名')
+    server.failNext(new Error('线程服务返回 500'))
+
+    await expect(useSessionsStore.getState().materialize(draftId)).rejects.toThrow(
+      '线程服务返回 500'
+    )
+
+    const state = useSessionsStore.getState()
+    expect(state.threads).toEqual([])
+    expect(state.draftTitles[draftId]).toBe('草稿名')
+  })
+
+  it('草稿重命名：就地改本地标题（不发 PATCH）', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    server.calls.length = 0
+
+    await useSessionsStore.getState().rename(draftId, '草稿名')
+
+    expect(server.calls).toEqual([])
+    expect(useSessionsStore.getState().draftTitles[draftId]).toBe('草稿名')
+  })
+
+  it('草稿删除：就地丢弃（不发 DELETE），选中接力到新草稿', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    server.calls.length = 0
+
+    await useSessionsStore.getState().remove(draftId)
+
+    expect(server.calls).toEqual([])
+    const state = useSessionsStore.getState()
+    expect(state.activeId).not.toBe(draftId)
+    expect(state.threads).toEqual([])
   })
 })

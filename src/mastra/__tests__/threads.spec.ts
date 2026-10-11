@@ -179,11 +179,16 @@ async function turn(
 }
 
 describe('线程 API：token 闸门与 zod 入参', () => {
-  it('五个路由没 token 一律 401（token 是唯一闸门）', async () => {
+  it('线程 API 的七条路由没 token 一律 401（token 是唯一闸门）', async () => {
     const server = await start()
 
     const requests = [
       fetch(`${server.baseUrl}/api/threads`),
+      fetch(`${server.baseUrl}/api/threads`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ threadId: 't1' })
+      }),
       fetch(`${server.baseUrl}/api/threads/t1`, { method: 'DELETE' }),
       fetch(`${server.baseUrl}/api/threads/t1`, {
         method: 'PATCH',
@@ -199,7 +204,9 @@ describe('线程 API：token 闸门与 zod 入参', () => {
       fetch(`${server.baseUrl}/api/threads/t1/title`, { method: 'POST' })
     ]
     const responses = await Promise.all(requests)
-    expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401, 401])
+    expect(responses.map((response) => response.status)).toEqual([
+      401, 401, 401, 401, 401, 401, 401
+    ])
   }, 60_000)
 
   it('重命名/截断的坏入参被 zod 挡住（400），不进业务逻辑', async () => {
@@ -267,6 +274,57 @@ describe('GET /api/threads：列表', () => {
     const server = await start()
 
     expect(await threadMessages(server, 'thread-missing')).toEqual([])
+  }, 60_000)
+})
+
+describe('POST /api/threads：建线程（round 26 草稿物化）', () => {
+  it('建出的线程进列表（无标题、时间有效）；重复物化同一 id 幂等', async () => {
+    const server = await start()
+
+    const created = await fetch(
+      `${server.baseUrl}/api/threads`,
+      authed(server, { method: 'POST', body: JSON.stringify({ threadId: 'thread-draft-1' }) })
+    )
+    expect(created.status).toBe(200)
+    expect(await created.json()).toMatchObject({ id: 'thread-draft-1', title: null })
+
+    const threads = await listThreads(server)
+    expect(threads.map((thread) => thread.id)).toEqual(['thread-draft-1'])
+    expect(new Date(threads[0].updatedAt).toString()).not.toBe('Invalid Date')
+
+    // 重复物化：幂等（同 id 不报错、不重复），这是"两个入口同时点/动作重试"的防线
+    const again = await fetch(
+      `${server.baseUrl}/api/threads`,
+      authed(server, { method: 'POST', body: JSON.stringify({ threadId: 'thread-draft-1' }) })
+    )
+    expect(again.status).toBe(200)
+    expect((await listThreads(server)).map((thread) => thread.id)).toEqual(['thread-draft-1'])
+  }, 60_000)
+
+  it('带标题创建：标题落库（草稿被就地重命名过时携带）；坏入参 400', async () => {
+    const server = await start()
+
+    const created = await fetch(
+      `${server.baseUrl}/api/threads`,
+      authed(server, {
+        method: 'POST',
+        body: JSON.stringify({ threadId: 'thread-draft-2', title: '草稿名' })
+      })
+    )
+    expect(created.status).toBe(200)
+    expect(await created.json()).toMatchObject({ id: 'thread-draft-2', title: '草稿名' })
+
+    const bad = await fetch(
+      `${server.baseUrl}/api/threads`,
+      authed(server, { method: 'POST', body: JSON.stringify({}) })
+    )
+    expect(bad.status).toBe(400)
+
+    const notJson = await fetch(
+      `${server.baseUrl}/api/threads`,
+      authed(server, { method: 'POST', body: '不是 json' })
+    )
+    expect(notJson.status).toBe(400)
   }, 60_000)
 })
 

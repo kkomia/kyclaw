@@ -12,6 +12,7 @@
  *     把它们单独提在最上面（时间分组之上），项目桶里则是桶内前缀。
  *
  * 排序沿用服务端给的顺序（updatedAt DESC）；草稿永远排在自己那个桶的最前（置顶的排草稿后面）。
+ * round 26：草稿的显示标题从 `draftTitle` 进来（就地重命名改的是它；服务端物化后由服务端标题接管）。
  */
 import type { ThreadSummary } from '@shared/threads'
 import type { SessionListEntry } from '../sessions/SessionList'
@@ -28,6 +29,8 @@ export interface SidebarSessionsInput {
   archivedIds?: ReadonlySet<string>
   /** round 20：置顶的会话 id（桶内排最前；缺省 = 没有置顶） */
   pinnedIds?: ReadonlySet<string>
+  /** round 26：草稿的本地标题（"就地重命名"改的就是它；缺省 = 列表回落"新会话"占位） */
+  draftTitle?: string | null
 }
 
 export interface SidebarSessions {
@@ -44,7 +47,13 @@ export function composeSidebarSessions(input: SidebarSessionsInput): SidebarSess
 
   const draft: SessionListEntry | null =
     activeId !== null && !threads.some((thread) => thread.id === activeId)
-      ? { id: activeId, title: null, updatedAt: new Date().toISOString(), draft: true }
+      ? {
+          id: activeId,
+          // round 26：草稿被就地重命名过就显示本地标题（draftTitle），否则回落"新会话"占位
+          title: input.draftTitle ?? null,
+          updatedAt: new Date().toISOString(),
+          draft: true
+        }
       : null
 
   const entries: SessionListEntry[] = draft === null ? [...threads] : [draft, ...threads]

@@ -9,6 +9,11 @@
  *   - 在文件资源管理器里打开：workspace:open-in-explorer（路径解析在主进程）；
  *   - 归档：写快照进 settings.archivedThreads，归档的是当前会话时把选中让给下一条可见会话；
  *   - 重命名 / 删除：sessions-store 的现成动作（删当前会话会连带切走）。
+ *
+ * round 26（可用性收口）：**草稿会话同一份口径，不灰**——置顶/归档/移至项目先经 `ensureThread`
+ * 物化（sessions-store.materialize → POST /api/threads，与首条消息建线程同一条路）再执行；
+ * 重命名/删除由 sessions-store 就地处理（草稿标题本地改 / 草稿本地丢弃）。
+ * 唯一仍禁用的项：确实判不出任何工作区时的「在文件资源管理器里打开」（无从打开）。
  */
 import { useCallback, useMemo } from 'react'
 import { useSettingsStore } from '@renderer/lib/settings-store'
@@ -76,26 +81,49 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
     [threadId, settings, mappings]
   )
 
+  /**
+   * round 26：动作前的"草稿物化"——已在服务端的会话直接放行；草稿先物化成真实线程
+   * （置顶/归档/移至项目都是"给服务端认识的东西记一笔"，把草稿 id 记上去等于悬空）。
+   * 失败报一行并返回 false（动作就此不做，不静默）。
+   */
+  const ensureThread = useCallback(async (): Promise<boolean> => {
+    const sessions = useSessionsStore.getState()
+    if (sessions.threads.some((thread) => thread.id === threadId)) return true
+    try {
+      await sessions.materialize(threadId)
+      return true
+    } catch (cause) {
+      report('[kyclaw] 创建会话失败', cause)
+      return false
+    }
+  }, [threadId, report])
+
   const togglePin = useCallback(
     (pinned: boolean): void => {
-      const current = useSettingsStore.getState().settings.pinnedThreads
-      const next = pinned
-        ? [...current.filter((id) => id !== threadId), threadId]
-        : current.filter((id) => id !== threadId)
-      useSettingsStore
-        .getState()
-        .setPinnedThreads(next)
-        .catch((cause: unknown) => report('[kyclaw] 置顶会话失败', cause))
+      void ensureThread().then((ready) => {
+        if (!ready) return
+        const current = useSettingsStore.getState().settings.pinnedThreads
+        const next = pinned
+          ? [...current.filter((id) => id !== threadId), threadId]
+          : current.filter((id) => id !== threadId)
+        useSettingsStore
+          .getState()
+          .setPinnedThreads(next)
+          .catch((cause: unknown) => report('[kyclaw] 置顶会话失败', cause))
+      })
     },
-    [threadId, report]
+    [threadId, report, ensureThread]
   )
 
   const moveToProject = useCallback(
     (nextProjectId: string | null): void => {
-      // 失败由 projects-store 回滚 + 落 error（项目区那行）——与侧栏既有口径一致
-      void useProjectsStore.getState().assignSession(threadId, nextProjectId)
+      void ensureThread().then((ready) => {
+        if (!ready) return
+        // 失败由 projects-store 回滚 + 落 error（项目区那行）——与侧栏既有口径一致
+        void useProjectsStore.getState().assignSession(threadId, nextProjectId)
+      })
     },
-    [threadId]
+    [threadId, ensureThread]
   )
 
   const openInExplorer = useCallback((): void => {
@@ -107,31 +135,34 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
   }, [threadId, report])
 
   const archive = useCallback((): void => {
-    const snapshot = {
-      threadId,
-      title,
-      projectId: useProjectsStore.getState().projectOf(threadId),
-      archivedAt: new Date().toISOString()
-    }
-    useSettingsStore
-      .getState()
-      .archiveThread(snapshot)
-      .then(
-        () => {
-          // 归档的是当前会话：选中让给下一条可见会话（没有就开新草稿）
-          const sessions = useSessionsStore.getState()
-          if (sessions.activeId !== threadId) return
-          const nowArchived = new Set(
-            useSettingsStore.getState().settings.archivedThreads.map((entry) => entry.threadId)
-          )
-          const remaining = sessions.threads.filter((thread) => !nowArchived.has(thread.id))
-          const next = remaining[0]
-          if (next === undefined) sessions.startNew()
-          else sessions.select(next.id)
-        },
-        (cause: unknown) => report('[kyclaw] 归档会话失败', cause)
-      )
-  }, [threadId, title, report])
+    void ensureThread().then((ready) => {
+      if (!ready) return
+      const snapshot = {
+        threadId,
+        title,
+        projectId: useProjectsStore.getState().projectOf(threadId),
+        archivedAt: new Date().toISOString()
+      }
+      useSettingsStore
+        .getState()
+        .archiveThread(snapshot)
+        .then(
+          () => {
+            // 归档的是当前会话：选中让给下一条可见会话（没有就开新草稿）
+            const sessions = useSessionsStore.getState()
+            if (sessions.activeId !== threadId) return
+            const nowArchived = new Set(
+              useSettingsStore.getState().settings.archivedThreads.map((entry) => entry.threadId)
+            )
+            const remaining = sessions.threads.filter((thread) => !nowArchived.has(thread.id))
+            const next = remaining[0]
+            if (next === undefined) sessions.startNew()
+            else sessions.select(next.id)
+          },
+          (cause: unknown) => report('[kyclaw] 归档会话失败', cause)
+        )
+    })
+  }, [threadId, title, report, ensureThread])
 
   const rename = useCallback(
     (nextTitle: string): void => {

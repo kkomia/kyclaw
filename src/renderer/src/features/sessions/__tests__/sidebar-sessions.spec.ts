@@ -49,6 +49,25 @@ describe('composeSidebarSessions', () => {
     expect(result.ungrouped.map((entry) => entry.id)).toEqual(['draft-1', 't1', 't2', 't3'])
   })
 
+  it('round 26：草稿的显示标题从 draftTitle 进来（就地重命名的结果）；不给就是 null 占位', () => {
+    const withTitle = composeSidebarSessions({
+      threads,
+      activeId: 'draft-1',
+      projectOf: () => null,
+      projectIds: new Set(),
+      draftTitle: '草稿改过的名'
+    })
+    expect(withTitle.ungrouped[0]).toMatchObject({ id: 'draft-1', title: '草稿改过的名' })
+
+    const withoutTitle = composeSidebarSessions({
+      threads,
+      activeId: 'draft-1',
+      projectOf: () => null,
+      projectIds: new Set()
+    })
+    expect(withoutTitle.ungrouped[0]?.title).toBeNull()
+  })
+
   it('映射指向已删项目：当"没有项目"处理（回平铺区）', () => {
     const result = composeSidebarSessions({
       threads,

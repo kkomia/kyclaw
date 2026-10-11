@@ -13,8 +13,9 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
  *     所以本栏 pr-14 让出走廊，标题不钻到按钮底下）；
  *   - 不参与滚动（在消息滚动区之外）、不遮导览轨（轨道在消息区垂直居中，碰不到顶部这条）。
  *
- * 草稿（还没落成线程）时只显示静态标题：动作菜单对"服务端还没有的会话"没有意义
- * （与侧栏"草稿行不给 ⋯"同口径）。
+ * round 26（可用性收口）：草稿（还没落成线程）与真实会话**同一份菜单与可用性**——
+ * 置顶/归档/移至项目先物化（sessions-store.materialize）再执行，重命名/删除就地做；
+ * 草稿名显示本地标题（draftTitles）或"新会话"占位。不再有"草稿只给静态标题"。
  */
 export interface ChatHeaderProps {
   threadId: string
@@ -25,38 +26,32 @@ const UNTITLED = '新会话'
 
 export function ChatHeader({ threadId }: ChatHeaderProps): React.JSX.Element {
   const listed = useSessionsStore((state) => state.threads.find((thread) => thread.id === threadId))
-  const title = listed?.title ?? null
+  // round 26：草稿的本地标题（就地重命名改的是它；此时服务端还没有这条线程）
+  const draftTitle = useSessionsStore((state) => state.draftTitles[threadId])
+  const title = listed?.title ?? draftTitle ?? null
   const [error, setError] = useState<string | null>(null)
 
   return (
     <>
       <header data-testid="chat-header" className="flex h-10 shrink-0 items-center pr-14 pl-2">
-        {listed === undefined ? (
-          <span
-            data-testid="chat-title-static"
-            className="inline-flex h-8 items-center px-2 text-b2 text-ink"
-          >
-            {title ?? UNTITLED}
-          </span>
-        ) : (
-          <SessionActionsMenu
-            threadId={threadId}
-            title={title}
-            align="start"
-            onError={setError}
-            trigger={
-              // 图2：名称 + chevron 的文字按钮（hover / 展开铺灰底，**无描边**）
-              <button
-                type="button"
-                data-testid="chat-title"
-                className="inline-flex h-8 max-w-96 items-center gap-1 rounded-control px-2 text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover data-[state=open]:bg-hover motion-reduce:transition-none"
-              >
-                <span className="truncate">{title ?? UNTITLED}</span>
-                <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
-              </button>
-            }
-          />
-        )}
+        {/* round 26：草稿与真实会话一样给动作菜单（置顶/归档/移至项目先物化，重命名/删除就地做） */}
+        <SessionActionsMenu
+          threadId={threadId}
+          title={title}
+          align="start"
+          onError={setError}
+          trigger={
+            // 图2：名称 + chevron 的文字按钮（hover / 展开铺灰底，**无描边**）
+            <button
+              type="button"
+              data-testid="chat-title"
+              className="inline-flex h-8 max-w-96 items-center gap-1 rounded-control px-2 text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover data-[state=open]:bg-hover motion-reduce:transition-none"
+            >
+              <span className="truncate">{title ?? UNTITLED}</span>
+              <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+            </button>
+          }
+        />
       </header>
       {error === null ? null : (
         <p data-testid="chat-header-error" className="px-4 pb-1 text-c1 text-danger">

@@ -20,6 +20,11 @@ import { ChatHeader } from '../ChatHeader'
 vi.mock('@renderer/lib/threads-api', () => ({
   fetchThreads: vi.fn(async () => []),
   fetchThreadMessages: vi.fn(async () => []),
+  createThread: vi.fn(async (id: string, title?: string) => ({
+    id,
+    title: title ?? null,
+    updatedAt: new Date().toISOString()
+  })),
   renameThread: vi.fn(async (id: string, title: string) => ({
     id,
     title,
@@ -37,7 +42,7 @@ vi.mock('@renderer/lib/projects-api', () => ({
   putSessionProject: vi.fn(async () => undefined)
 }))
 
-import { renameThread } from '@renderer/lib/threads-api'
+import { renameThread, createThread } from '@renderer/lib/threads-api'
 
 const THREAD_ID = 't1'
 
@@ -67,6 +72,7 @@ beforeEach(() => {
   resetSessionsStore()
   resetProjectsStore()
   vi.mocked(renameThread).mockClear()
+  vi.mocked(createThread).mockClear()
 })
 
 afterEach(() => {
@@ -98,11 +104,17 @@ describe('ChatHeader · 结构', () => {
     expect(trigger.querySelector('svg')).not.toBeNull() // chevron
   })
 
-  it('草稿（还没落成线程）：只显示静态标题（新会话），没有动作菜单', () => {
+  it('草稿（还没落成线程）：名称按钮照常在（新会话），动作菜单可用（round 26）', () => {
     mount({ listed: false })
 
-    expect(screen.getByTestId('chat-title-static')).toHaveTextContent('新会话')
-    expect(screen.queryByTestId('chat-title')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-title')).toHaveTextContent('新会话')
+    fireEvent.keyDown(screen.getByTestId('chat-title'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('session-pin-t1')).toBeInTheDocument()
+    expect(screen.getByTestId('session-move-t1')).toBeInTheDocument()
+    expect(screen.getByTestId('session-rename-t1')).toBeInTheDocument()
+    expect(screen.getByTestId('session-archive-t1')).toBeInTheDocument()
+    expect(screen.getByTestId('session-delete-t1')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-title-static')).not.toBeInTheDocument()
   })
 })
 
@@ -152,5 +164,28 @@ describe('ChatHeader · 名称菜单（与侧栏同款实现）', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-header-error')).toHaveTextContent('设置落盘失败')
     })
+  })
+
+  it('草稿置顶（round 26）：先物化成真实线程（POST），再写 pinnedThreads', async () => {
+    const bridge = mount({ listed: false })
+    fireEvent.keyDown(screen.getByTestId('chat-title'), { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByTestId('session-pin-t1'), { key: 'Enter' })
+
+    await waitFor(() => expect(vi.mocked(createThread)).toHaveBeenCalledWith(THREAD_ID, undefined))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ pinnedThreads: [THREAD_ID] }))
+  })
+
+  it('草稿重命名（round 26 就地）：本地标题即时改、不发 PATCH', async () => {
+    mount({ listed: false })
+    fireEvent.keyDown(screen.getByTestId('chat-title'), { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByTestId('session-rename-t1'), { key: 'Enter' })
+
+    const input = await screen.findByTestId('session-rename-input')
+    expect(input).toHaveValue('')
+    fireEvent.change(input, { target: { value: '草稿名' } })
+    fireEvent.click(screen.getByTestId('session-rename-save'))
+
+    await waitFor(() => expect(screen.getByTestId('chat-title')).toHaveTextContent('草稿名'))
+    expect(vi.mocked(renameThread)).not.toHaveBeenCalled()
   })
 })

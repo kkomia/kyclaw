@@ -71,6 +71,21 @@ function installFakeServer(
       if (url.pathname === '/api/threads' && method === 'GET') {
         return respond({ threads: server.threads })
       }
+      if (url.pathname === '/api/threads' && method === 'POST') {
+        const { threadId, title } = JSON.parse(String(init.body)) as {
+          threadId: string
+          title?: string
+        }
+        const row: ThreadRow = {
+          id: threadId,
+          title: title ?? null,
+          updatedAt: new Date().toISOString()
+        }
+        if (!server.threads.some((thread) => thread.id === threadId)) {
+          server.threads = [row, ...server.threads]
+        }
+        return respond(row)
+      }
       if (url.pathname === '/api/projects/mappings' && method === 'GET') {
         return respond({ sessions: server.mappings })
       }
@@ -201,8 +216,8 @@ describe('SessionsController：新建', () => {
       expect(draftId).not.toBe(before)
       expect(screen.getByTestId(`session-item-${draftId}`)).toHaveTextContent('新会话')
       expect(screen.getByTestId(`session-row-${draftId}`)).toHaveClass('bg-selected')
-      // 草稿还没落库：不给重命名/删除（服务端没有它）
-      expect(screen.queryByTestId(`session-more-${draftId}`)).not.toBeInTheDocument()
+      // round 26：草稿也有 ⋯（不再"灰着不让用"；置顶/归档/移至项目会先物化）
+      expect(screen.getByTestId(`session-more-${draftId}`)).toBeInTheDocument()
     })
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
   })
@@ -703,5 +718,104 @@ describe('SessionsController·round 25：置顶项目 / ⊕ 新建会话 / 重�
       expect(screen.getByTestId('project-error')).toHaveTextContent('设置通道不可用')
     })
     expect(screen.getByTestId('project-item-p2')).toBeInTheDocument()
+  })
+})
+
+describe('SessionsController·round 26：草稿会话的动作（侧栏）', () => {
+  async function draftAfterNewSession(): Promise<string> {
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('new-session'))
+    return useSessionsStore.getState().activeId!
+  }
+
+  it('草稿置顶：先物化（POST /api/threads）再写 pinnedThreads，行移到置顶分组', async () => {
+    const server = installFakeServer(THREADS)
+    const draftId = await draftAfterNewSession()
+
+    pick(`session-more-${draftId}`, `session-pin-${draftId}`)
+
+    await waitFor(() => {
+      expect(server.calls).toContainEqual({
+        method: 'POST',
+        path: '/api/threads',
+        body: { threadId: draftId }
+      })
+    })
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.pinnedThreads).toEqual([draftId])
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('session-group-pinned')).toContainElement(
+        screen.getByTestId(`session-row-${draftId}`)
+      )
+    })
+  })
+
+  it('草稿移至项目：先物化，再走映射通道（PUT）；会话进项目分组', async () => {
+    const initial = {
+      ...defaultSettings(),
+      projects: [
+        { id: 'p1', name: '项目一', path: 'D:\\p1', createdAt: '2026-10-11T00:00:00.000Z' }
+      ]
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const server = installFakeServer(THREADS)
+    const draftId = await draftAfterNewSession()
+
+    fireEvent.keyDown(screen.getByTestId(`session-more-${draftId}`), { key: 'ArrowDown' })
+    const trigger = screen.getByTestId(`session-move-${draftId}`)
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    await tick()
+    fireEvent.click(screen.getByTestId(`session-move-${draftId}-p1`))
+
+    await waitFor(() => {
+      expect(server.calls).toContainEqual({
+        method: 'POST',
+        path: '/api/threads',
+        body: { threadId: draftId }
+      })
+    })
+    await waitFor(() => {
+      expect(server.mappings).toEqual([{ threadId: draftId, projectId: 'p1' }])
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId(`session-item-${draftId}`)
+      )
+    })
+  })
+
+  it('草稿重命名（就地）：侧栏行显示本地标题、不发 PATCH', async () => {
+    const server = installFakeServer(THREADS)
+    const draftId = await draftAfterNewSession()
+
+    pick(`session-more-${draftId}`, `session-rename-${draftId}`)
+    const input = await screen.findByTestId('session-rename-input')
+    fireEvent.change(input, { target: { value: '草稿名' } })
+    fireEvent.click(screen.getByTestId('session-rename-save'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`session-item-${draftId}`)).toHaveTextContent('草稿名')
+    })
+    expect(server.calls.some((call) => call.method === 'PATCH')).toBe(false)
+  })
+
+  it('草稿删除（就地）：行消失、不发 DELETE，选中接力回最近的真实会话', async () => {
+    const server = installFakeServer(THREADS)
+    const draftId = await draftAfterNewSession()
+
+    pick(`session-more-${draftId}`, `session-delete-${draftId}`)
+    fireEvent.click(await screen.findByTestId('session-delete-confirm'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`session-item-${draftId}`)).not.toBeInTheDocument()
+    })
+    expect(server.calls.some((call) => call.method === 'DELETE')).toBe(false)
+    expect(useSessionsStore.getState().activeId).toBe('t-a')
   })
 })

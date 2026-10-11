@@ -35,6 +35,7 @@ export function SessionsController(): React.JSX.Element {
   const threads = useSessionsStore((state) => state.threads)
   const activeId = useSessionsStore((state) => state.activeId)
   const notices = useSessionsStore((state) => state.notices)
+  const draftTitles = useSessionsStore((state) => state.draftTitles)
   const error = useSessionsStore((state) => state.error)
   const select = useSessionsStore((state) => state.select)
   const startNew = useSessionsStore((state) => state.startNew)
@@ -63,9 +64,16 @@ export function SessionsController(): React.JSX.Element {
   const pinnedIds = useMemo(() => new Set(pinnedThreads), [pinnedThreads])
   const sessions = useMemo(
     () =>
-      composeSidebarSessions({ threads, activeId, projectOf, projectIds, archivedIds, pinnedIds })
-        .ungrouped,
-    [threads, activeId, projectOf, projectIds, archivedIds, pinnedIds]
+      composeSidebarSessions({
+        threads,
+        activeId,
+        projectOf,
+        projectIds,
+        archivedIds,
+        pinnedIds,
+        draftTitle: activeId === null ? null : (draftTitles[activeId] ?? null)
+      }).ungrouped,
+    [threads, activeId, projectOf, projectIds, archivedIds, pinnedIds, draftTitles]
   )
 
   return (

@@ -50,6 +50,19 @@ export async function fetchThreads(): Promise<ThreadSummary[]> {
   return threads
 }
 
+/**
+ * 建线程（round 26）：把草稿会话"物化"成真实线程——与"首条消息建线程"同一条服务端路径
+ * （memory.createThread），只是不带消息。置顶/归档/移至项目这类要给会话记归属的动作
+ * 先物化再执行；已经在的线程幂等回现况（动作重试/两个入口同时点都安全）。
+ */
+export async function createThread(threadId: string, title?: string): Promise<ThreadSummary> {
+  const response = await authorized('/api/threads', {
+    method: 'POST',
+    body: JSON.stringify(title === undefined ? { threadId } : { threadId, title })
+  })
+  return json(response, threadSummarySchema)
+}
+
 /** 一个线程的存储消息（历史回灌的原料，交给 message-map 映射成 UIMessage） */
 export async function fetchThreadMessages(threadId: string): Promise<StoredMessage[]> {
   const response = await authorized(`/api/threads/${encodeURIComponent(threadId)}/messages`)

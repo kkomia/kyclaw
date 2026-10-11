@@ -30,6 +30,7 @@ export function ProjectsSection(): React.JSX.Element {
   const threads = useSessionsStore((state) => state.threads)
   const activeId = useSessionsStore((state) => state.activeId)
   const notices = useSessionsStore((state) => state.notices)
+  const draftTitles = useSessionsStore((state) => state.draftTitles)
   const select = useSessionsStore((state) => state.select)
   const startNew = useSessionsStore((state) => state.startNew)
 
@@ -85,9 +86,10 @@ export function ProjectsSection(): React.JSX.Element {
         projectOf,
         projectIds,
         archivedIds,
-        pinnedIds
+        pinnedIds,
+        draftTitle: activeId === null ? null : (draftTitles[activeId] ?? null)
       }),
-    [threads, activeId, projectOf, projectIds, archivedIds, pinnedIds]
+    [threads, activeId, projectOf, projectIds, archivedIds, pinnedIds, draftTitles]
   )
 
   const report = (prefix: string, cause: unknown): void => {

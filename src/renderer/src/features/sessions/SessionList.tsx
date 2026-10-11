@@ -17,14 +17,15 @@ import { SessionActionsMenu } from './SessionActionsMenu'
  *   - **整行一个 hover 底（round 20）**：hover/选中的填充挂在行容器上（标题 + ⋯ 同一圆角内）；
  *     ⋯ 仍是固定宽度占位（w-7 shrink-0，round 16 口径）——出现/消失不挪动文本；
  *   - 置顶的会话行带一个**图钉小标识**（不是文字），平铺区里单独提到时间分组之上（无分组标题）；
- *   - 草稿行（还没落成线程）不给 ⋯（服务端还没有它，重命名/归档都没有意义）。
+ *   - 草稿行（还没落成线程）**也给行尾 ⋯**（round 26：置顶/归档/移至项目先物化，重命名/删除
+ *     就地做——不再"灰着不让用"）。
  */
 export interface SessionListEntry {
   id: string
   title: string | null
   /** ISO 时间串（分组用） */
   updatedAt: string
-  /** 草稿（新建了还没发过消息的本地会话 id）：不给行尾菜单 */
+  /** 草稿（新建了还没发过消息的本地会话 id）：同样有行尾菜单（round 26 起） */
   draft?: boolean
 }
 
@@ -171,26 +172,25 @@ export function SessionList({
                     ) : null}
                   </button>
                   {/* hover / 键盘聚焦时出现的行尾操作（菜单无遮罩，菜单与重命名/删除对话框见
-                      SessionActionsMenu——与对话页顶部栏共用同一份实现）；草稿没有。
-                      round 16：⋯ 用固定宽度占位（w-7 shrink-0）——出现/消失不挪动文本。 */}
-                  {session.draft === true ? null : (
-                    <div className="w-7 shrink-0 opacity-0 transition-opacity duration-(--motion-fast) group-hover/row:opacity-100 focus-within:opacity-100">
-                      <SessionActionsMenu
-                        threadId={session.id}
-                        title={session.title}
-                        align="end"
-                        onError={onActionError}
-                        trigger={
-                          <IconButton
-                            label={`会话操作：${title}`}
-                            data-testid={`session-more-${session.id}`}
-                            icon={<Ellipsis />}
-                            className="size-7 border-transparent"
-                          />
-                        }
-                      />
-                    </div>
-                  )}
+                      SessionActionsMenu——与对话页顶部栏共用同一份实现）。
+                      round 26：**草稿也有这份菜单**（置顶/归档/移至项目先物化，重命名/删除就地执行），
+                      不再"灰着不让用"；round 16：⋯ 用固定宽度占位（w-7 shrink-0）——出现/消失不挪动文本。 */}
+                  <div className="w-7 shrink-0 opacity-0 transition-opacity duration-(--motion-fast) group-hover/row:opacity-100 focus-within:opacity-100">
+                    <SessionActionsMenu
+                      threadId={session.id}
+                      title={session.title}
+                      align="end"
+                      onError={onActionError}
+                      trigger={
+                        <IconButton
+                          label={`会话操作：${title}`}
+                          data-testid={`session-more-${session.id}`}
+                          icon={<Ellipsis />}
+                          className="size-7 border-transparent"
+                        />
+                      }
+                    />
+                  </div>
                 </li>
               )
             })}

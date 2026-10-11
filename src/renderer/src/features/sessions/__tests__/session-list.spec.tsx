@@ -110,11 +110,20 @@ describe('会话列表：分组与选中', () => {
     expect(screen.getByTestId('session-list-empty')).toBeInTheDocument()
   })
 
-  it('草稿行不给行尾菜单（服务端还没有它）', () => {
+  it('草稿行也有行尾菜单（round 26：不再"灰着不让用"；置顶/归档/移至项目先物化）', () => {
     renderList([{ id: 'draft-1', title: null, updatedAt: TODAY, draft: true }, entry('t1', '甲')])
 
-    expect(screen.queryByTestId('session-more-draft-1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-more-draft-1')).toBeInTheDocument()
     expect(screen.getByTestId('session-more-t1')).toBeInTheDocument()
+  })
+
+  it('草稿行显示传入的本地标题（就地重命名的结果显示）', () => {
+    renderList([
+      { id: 'draft-1', title: '草稿改过的名', updatedAt: TODAY, draft: true },
+      entry('t1', '甲')
+    ])
+
+    expect(screen.getByTestId('session-item-draft-1')).toHaveTextContent('草稿改过的名')
   })
 
   it('后台完成的会话带一个完成点（notices）', () => {

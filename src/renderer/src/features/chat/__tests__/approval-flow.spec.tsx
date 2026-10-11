@@ -27,6 +27,11 @@ import { createMockTransport, type MockTransport } from './mock-transport'
 vi.mock('@renderer/lib/threads-api', () => ({
   fetchThreads: vi.fn(async () => []),
   fetchThreadMessages: vi.fn(async () => []),
+  createThread: vi.fn(async (id: string, title?: string) => ({
+    id,
+    title: title ?? null,
+    updatedAt: new Date().toISOString()
+  })),
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
   truncateThread: vi.fn(async () => 2),
