@@ -8,9 +8,20 @@ import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerCon
 import type { ComposerNotice } from './ComposerControls'
 import { attachmentProblem, composeOutgoingText, readTextFile } from './composer-attachments'
 import type { PendingAttachment } from './composer-attachments'
+import { ComposerSuggest } from './ComposerSuggest'
+import {
+  detectTrigger,
+  fileRows,
+  flattenGroups,
+  slashGroups,
+  type SuggestionGroup,
+  type SuggestionRow,
+  type SuggestionTriggerKind
+} from './suggestion-model'
 import {
   insertReferenceMarker,
   parseReferenceMarkers,
+  replaceRangeWithMarker,
   type ReferenceKind
 } from './reference-markers'
 import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
@@ -30,8 +41,12 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 附件最小可用（round 7）：只收文本类、≤16KB，内容在发送时内联进消息文本（模型真正能读到；
  * file part 走 provider 看不到内容，实测见 composer-attachments.ts 头注），非文本/过大明确提示不收。
  *
- * 交互：Enter 发送 / Shift+Enter 换行（输入法合成中不拦截）；流式中发送钮变停止（stop()）；
- * 流式中按下发送不丢内容 —— 交给上层排队（见 ChatPage 的队列）。组件只把组装好的文本抛上去。
+ * 引用（round 14 起=光标处内联标记 + 镜像 pill）：`＋ → 引用…` 与 round 15 的建议浮窗同一条路 ——
+ * 键入 `@`（词边界）浮出工作区文件、键入 `/` 浮出插件/技能（见 suggestion-model.ts 与
+ * ComposerSuggest.tsx），选中都把触发段替换成 `【引用】<kind>：<label>` 标记。
+ *
+ * 交互：Enter 发送 / Shift+Enter 换行（输入法合成中不拦截；**浮窗打开时** ↑/↓ 走条目、Enter 选中、
+ * Esc 关浮窗）；流式中发送钮变停止（stop()）；流式中按下发送不丢内容 —— 交给上层排队（见 ChatPage）。
  */
 export interface ComposerProps {
   /** 当前会话 id（权限 chip 判"会话的工作区根"用；判不出就不渲染权限入口） */
@@ -94,6 +109,92 @@ export function Composer({
     refreshSkills()
   }, [refreshSkills])
 
+  /**
+   * 建议浮窗（round 15）：`@` 文件 / `/` 插件·技能。`suggest` = 当前触发（含要替换的区间）；
+   * 文件清单按 threadId 缓存一次（换会话重拉），取不到就把人话显示在浮窗里。
+   */
+  const [suggest, setSuggest] = useState<{
+    kind: SuggestionTriggerKind
+    start: number
+    end: number
+    query: string
+  } | null>(null)
+  const [activeSuggestion, setActiveSuggestion] = useState(0)
+  const [files, setFiles] = useState<{ threadId: string; list: readonly string[] } | null>(null)
+  const [filesError, setFilesError] = useState<string | undefined>(undefined)
+
+  const refreshTrigger = (value: string, caret: number | null): void => {
+    const trigger = detectTrigger(value, caret ?? value.length)
+    if (trigger === null) {
+      setSuggest(null)
+      return
+    }
+    setSuggest({
+      kind: trigger.kind,
+      start: trigger.start,
+      end: caret ?? value.length,
+      query: trigger.query
+    })
+    setActiveSuggestion(0)
+  }
+
+  const suggestOpen = suggest !== null
+  const fileReady = files !== null && files.threadId === threadId
+  // 通道缺失是"环境事实"，在渲染期判定（不在 effect 里 setState——避免级联渲染）
+  const workspaceApi = window.kyclaw?.workspace
+  const fileNotice =
+    threadId === null
+      ? '当前没有会话：开始对话后用 @ 引用文件'
+      : workspaceApi === undefined
+        ? '工作区通道不可用（window.kyclaw 缺失）'
+        : filesError
+  const suggestionGroups: SuggestionGroup[] =
+    suggest === null
+      ? []
+      : suggest.kind === 'file'
+        ? [{ title: '', rows: fileRows(fileReady ? files.list : [], suggest.query) }]
+        : slashGroups({ plugins: enabledPlugins, skills: installedSkills }, suggest.query)
+  const suggestionRows = flattenGroups(suggestionGroups)
+  const activeIndex =
+    suggestionRows.length === 0 ? 0 : Math.min(activeSuggestion, suggestionRows.length - 1)
+  const activeRow: SuggestionRow | null = suggestionRows[activeIndex] ?? null
+
+  /** 打开 `@` 时拉一次文件清单（按会话缓存；换会话会重拉） */
+  useEffect(() => {
+    if (suggest?.kind !== 'file' || threadId === null) return
+    if (files !== null && files.threadId === threadId) return
+    if (workspaceApi === undefined) return // 渲染期的 fileNotice 已说明
+    let alive = true
+    void workspaceApi.listFiles(threadId).then(
+      (result) => {
+        if (!alive) return
+        setFiles({ threadId, list: result.files })
+        setFilesError(undefined)
+      },
+      (error: unknown) => {
+        if (alive) setFilesError(error instanceof Error ? error.message : String(error))
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [suggest?.kind, threadId, files, workspaceApi])
+
+  /** 选中一条建议：把触发段 [start, end) 换成引用标记，光标落后面、关浮窗 */
+  const pickSuggestion = (row: SuggestionRow): void => {
+    if (suggest === null) return
+    const inserted = replaceRangeWithMarker(
+      draft,
+      suggest.start,
+      suggest.end,
+      row.reference.kind,
+      row.reference.label
+    )
+    pendingCaret.current = inserted.caret
+    setDraft(inserted.text)
+    setSuggest(null)
+  }
+
   const canSend = draft.trim() !== '' || attachments.length > 0
 
   const submit = (): void => {
@@ -152,8 +253,25 @@ export function Composer({
   return (
     <div
       data-testid="composer"
-      className="focus-ring-container mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
+      className="focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input)"
     >
+      {/* 建议浮窗（@ 文件 / 插件·技能）：浮在输入卡上方，非模态 */}
+      <ComposerSuggest
+        open={suggestOpen}
+        groups={suggestionGroups}
+        rowCount={suggestionRows.length}
+        activeIndex={activeIndex}
+        emptyText={
+          suggest?.kind === 'file'
+            ? '没有匹配的文件'
+            : suggestionRows.length === 0 && (suggest?.query ?? '') === ''
+              ? '还没有可引用的插件或技能'
+              : '没有匹配的项'
+        }
+        notice={suggest?.kind === 'file' ? fileNotice : undefined}
+        onPick={pickSuggestion}
+        onHover={setActiveSuggestion}
+      />
       <PendingChips
         attachments={attachments}
         onRemoveAttachment={(id) =>
@@ -207,12 +325,45 @@ export function Composer({
           aria-label="输入消息"
           rows={1}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            refreshTrigger(event.target.value, event.target.selectionStart)
+          }}
+          onSelect={(event) => {
+            // 光标移动（点击 / 方向键）也可能让触发出现或消失
+            refreshTrigger(event.currentTarget.value, event.currentTarget.selectionStart)
+          }}
+          onBlur={() => setSuggest(null)}
           onScroll={(event) => {
             const mirror = mirrorRef.current
             if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop
           }}
           onKeyDown={(event) => {
+            // 浮窗打开时有键盘优先级（输入法合成中不抢：方向键在选词）
+            if (suggestOpen && !event.nativeEvent.isComposing) {
+              if (event.key === 'ArrowDown' && suggestionRows.length > 0) {
+                event.preventDefault()
+                setActiveSuggestion((activeIndex + 1) % suggestionRows.length)
+                return
+              }
+              if (event.key === 'ArrowUp' && suggestionRows.length > 0) {
+                event.preventDefault()
+                setActiveSuggestion(
+                  (activeIndex - 1 + suggestionRows.length) % suggestionRows.length
+                )
+                return
+              }
+              if (event.key === 'Enter' && activeRow !== null) {
+                event.preventDefault()
+                pickSuggestion(activeRow)
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setSuggest(null)
+                return
+              }
+            }
             if (event.key !== 'Enter' || event.shiftKey) return
             // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
             if (event.nativeEvent.isComposing) return

@@ -51,6 +51,13 @@ if (!app.requestSingleInstanceLock()) {
   /** 内嵌服务的追踪状态（T17）：服务没起来 = 没挂上导出 */
   let agentTelemetry: { langfuse: boolean } | null = null
 
+  /**
+   * round 15：会话 → 项目 id（`@` 文件列表的会话根解析用）。映射在 agent 服务的
+   * session_projects 内存镜像里、服务是异步装好的 —— 所以先给晚绑定的取值器，装好后顶上；
+   * 服务没起来时按"没有映射"回落（sessionRoots 的默认工作区/唯一目录兜底照常生效）。
+   */
+  let agentProjectIdOf: ((threadId: string) => string | null) | undefined
+
   app.whenReady().then(() => {
     // Windows 任务栏归组/通知：AUMID 与 electron-builder.yml 的 appId 一致
     electronApp.setAppUserModelId(APP_USER_MODEL_ID)
@@ -65,7 +72,7 @@ if (!app.requestSingleInstanceLock()) {
 
     registerWindowIpc()
     registerSettingsIpc(userDataDir)
-    registerWorkspaceIpc(userDataDir)
+    registerWorkspaceIpc(userDataDir, (threadId) => agentProjectIdOf?.(threadId) ?? null)
     registerProjectsIpc(userDataDir)
     registerPluginIpc(userDataDir)
     registerAgentIpc(() => agentEndpoint)
@@ -113,6 +120,7 @@ if (!app.requestSingleInstanceLock()) {
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
         agentTelemetry = handle.telemetry
+        agentProjectIdOf = handle.projectIdOf
         console.log(`[kyclaw] agent 服务已启动：${handle.baseUrl}`)
         if (is.dev) {
           console.log(`[kyclaw] agent token（仅开发期打印，便于 curl 本地联调）：${handle.token}`)

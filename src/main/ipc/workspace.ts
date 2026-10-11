@@ -21,15 +21,20 @@ import {
   noArgsSchema,
   parseIpcArgs,
   workspaceAddArgsSchema,
+  workspaceListFilesArgsSchema,
   workspaceRemoveArgsSchema,
   workspaceSetModeArgsSchema
 } from '../../shared/ipc'
 import type { AppSettings, WorkspaceMode } from '../../shared/settings'
-import { defaultWorkspaceAfterRemoval, defaultWorkspacePatch } from '../projects'
+import { defaultWorkspaceAfterRemoval, defaultWorkspacePatch, sessionRoots } from '../projects'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { addWorkspace, checkWorkspacePath, removeWorkspace, setWorkspaceMode } from '../workspace'
+import { listWorkspaceFiles } from '../workspace-files'
 
-export function registerWorkspaceIpc(userDataDir: string): void {
+/** round 15：threadId → 项目 id（agent 服务的 session_projects 内存镜像；缺省 = 没有映射） */
+export type ProjectIdOf = (threadId: string) => string | null
+
+export function registerWorkspaceIpc(userDataDir: string, projectIdOf?: ProjectIdOf): void {
   const file = settingsPath(userDataDir)
 
   ipcMain.handle(IPC_CHANNELS.workspace.pick, async (event, ...args) => {
@@ -75,6 +80,41 @@ export function registerWorkspaceIpc(userDataDir: string): void {
       defaultWorkspace: defaultWorkspaceAfterRemoval(current, path)
     })
   })
+
+  ipcMain.handle(IPC_CHANNELS.workspace.listFiles, (_event, ...args) => {
+    const [threadId] = parseIpcArgs(
+      workspaceListFilesArgsSchema,
+      args,
+      IPC_CHANNELS.workspace.listFiles
+    )
+    return listFilesForThread(file, threadId, projectIdOf)
+  })
+}
+
+/**
+ * 会话根 → 文件清单（round 15）：解析口径与文件工具一致（`sessionRoots`：项目 → 默认工作区 →
+ * 唯一的授权目录）。**会话根不唯一**（多条授权且没指认默认）时抛人话——@ 的相对路径得有唯一基准；
+ * 渲染端只给 threadId，路径解析全在主进程。读不了/不存在由 `listWorkspaceFiles` 的人话兜底。
+ */
+export function listFilesForThread(
+  file: string,
+  threadId: string,
+  projectIdOf?: ProjectIdOf
+): { files: string[] } {
+  const current = readSettings(file)
+  const roots = sessionRoots({
+    workspaces: current.workspaces,
+    defaultWorkspace: current.defaultWorkspace,
+    projects: current.projects,
+    projectId: projectIdOf?.(threadId) ?? null
+  })
+  if (roots.length === 0) {
+    throw new Error('这个会话还没有工作区：先在设置里添加一个文件夹，再用 @ 引用文件')
+  }
+  if (roots.length > 1) {
+    throw new Error('这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再用 @')
+  }
+  return { files: listWorkspaceFiles(roots[0].path) }
 }
 
 /** 原生选择器（有父窗口走模态，没有也能开）；取消回 undefined */

@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 import { cn } from './cn'
 import { OVERLAY_SURFACE_CLASS } from './surface'
+import { Tooltip } from './tooltip'
 
 export interface MenuActionItem {
   id: string
@@ -49,6 +50,11 @@ export interface MenuProps {
   className?: string
   /** 面板开合回调（round 13：引用技能菜单借它做"打开时刷新"；缺省不关心） */
   onOpenChange?: (open: boolean) => void
+  /**
+   * 触发元素的 hover 提示（round 15，用户实拍：＋ / 权限按钮要有 tooltip）。
+   * 两层 asChild 嵌套：Tooltip.Trigger > DropdownMenu.Trigger > 你的按钮，互相不打架。
+   */
+  tooltip?: string
 }
 
 /** 条目行（普通条目与子菜单触发器共用；键盘高亮只铺填充，不叠全局焦点环） */
@@ -133,11 +139,22 @@ export function Menu({
   side = 'bottom',
   sideOffset = 4,
   className,
-  onOpenChange
+  onOpenChange,
+  tooltip
 }: MenuProps): React.JSX.Element {
+  const triggerNode =
+    tooltip === undefined ? (
+      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+    ) : (
+      // Tooltip.Trigger 与 DropdownMenu.Trigger 两层 asChild 叠在同一个按钮上：
+      // 键盘聚焦弹提示、点击/ArrowDown 开菜单，互不干扰
+      <Tooltip label={tooltip}>
+        <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+      </Tooltip>
+    )
   return (
     <DropdownMenu.Root onOpenChange={onOpenChange}>
-      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+      {triggerNode}
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align={align}

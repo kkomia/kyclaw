@@ -23,6 +23,7 @@ import {
   updateStatusSchema,
   windowStateSchema,
   workspaceAddArgsSchema,
+  workspaceListFilesArgsSchema,
   workspaceRemoveArgsSchema,
   workspaceSetModeArgsSchema
 } from '../ipc'
@@ -200,8 +201,20 @@ describe('IPC 契约：workspace 通道', () => {
       add: 'workspace:add',
       setMode: 'workspace:set-mode',
       remove: 'workspace:remove',
-      pickDefault: 'workspace:pick-default'
+      pickDefault: 'workspace:pick-default',
+      listFiles: 'workspace:list-files'
     })
+  })
+
+  it('workspace:list-files 的入参 [threadId]：空串 / 缺参 / 多参都拦下', () => {
+    expect(
+      parseIpcArgs(workspaceListFilesArgsSchema, ['thread-1'], 'workspace:list-files')
+    ).toEqual(['thread-1'])
+    for (const bad of [[], [''], [1], ['a', 'b']]) {
+      expect(() => parseIpcArgs(workspaceListFilesArgsSchema, bad, 'workspace:list-files')).toThrow(
+        IpcInputError
+      )
+    }
   })
 
   it('workspace:add 只收 [path]（T13：不收入参 mode，一律 ask 落盘）', () => {

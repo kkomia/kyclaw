@@ -58,7 +58,12 @@ export const IPC_CHANNELS = {
      * T18：打开原生选择器指认**默认工作区**（无入参，取消=不改动；返回合并后的 AppSettings）。
      * 选中目录会以 ask 并进授权列表，再写 settings.defaultWorkspace —— 未指定项目的会话用它当根。
      */
-    pickDefault: 'workspace:pick-default'
+    pickDefault: 'workspace:pick-default',
+    /**
+     * round 15：列会话根下的文件（入参 [threadId]，返回 { files: 相对路径[] }）——
+     * 输入框 `@` 引用工作区文件用。只读不写；会话根的解析与文件工具同口径（sessionRoots）。
+     */
+    listFiles: 'workspace:list-files'
   },
   projects: {
     /** T18：空白项目的默认基底目录（无入参，返回 { base }；创建对话框的默认路径用） */
@@ -142,6 +147,15 @@ export const workspaceSetModeArgsSchema = z.tuple([z.string().min(1), workspaceM
 
 /** workspace:remove 的入参：[path] */
 export const workspaceRemoveArgsSchema = z.tuple([z.string().min(1)])
+
+/**
+ * workspace:list-files 的入参：[threadId] —— 主进程按会话根（sessionRoots 同口径）解析出根目录，
+ * 渲染端**看不到、也传不了**任意路径；回包是相对该根的路径（正斜杠）。
+ */
+export const workspaceListFilesArgsSchema = z.tuple([z.string().min(1)])
+
+/** workspace:list-files 的回包：{ files: 相对路径[] }（有界列表，见 main/workspace-files.ts） */
+export const workspaceListFilesResultSchema = z.strictObject({ files: z.array(z.string()) })
 
 /**
  * projects:create 的入参：单元素对象 { name, path }。
@@ -379,6 +393,11 @@ export interface KyclawWorkspaceApi {
   remove(path: string): Promise<AppSettings>
   /** 指认默认工作区（原生选择器；取消 = 不改动）——未指定项目的会话用它当根 */
   pickDefault(): Promise<AppSettings>
+  /**
+   * round 15：列这个会话根下的文件（相对路径、正斜杠；有界 1500 条 / 深度 8 / 常见构建目录跳过）。
+   * 会话根的解析在**主进程**（sessionRoots 同口径）——渲染端传不了任意路径。
+   */
+  listFiles(threadId: string): Promise<{ files: string[] }>
 }
 
 /**

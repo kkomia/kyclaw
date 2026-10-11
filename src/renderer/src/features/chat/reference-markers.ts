@@ -1,5 +1,5 @@
 /**
- * 引用标记（round 14）：`【引用】<kind>：<label>`（kind ∈ 技能 | 插件 | 上下文）。
+ * 引用标记（round 14）：`【引用】<kind>：<label>`（kind ∈ 技能 | 插件 | 上下文 | 文件）。
  *
  * 输入侧在**光标处内联插入**标记（用户口径："不要单独取顶格，会失去在输入文本中的位置"），
  * 发送后就是普通文本（模型看到的是原始标记，无额外协议）；气泡与输入框镜像层用**同一份解析**
@@ -9,7 +9,7 @@
  * label 以空白 / `；` / 文末为界：标记插入时自带尾随空格，光标后面继续打的正文不会被吞进 pill
  * （代价：label 里含空格时尾段只按普通文本渲染，内容不变、复制不变）。
  */
-export const REFERENCE_KINDS = ['技能', '插件', '上下文'] as const
+export const REFERENCE_KINDS = ['技能', '插件', '上下文', '文件'] as const
 export type ReferenceKind = (typeof REFERENCE_KINDS)[number]
 
 export interface ReferenceItem {
@@ -21,7 +21,8 @@ export type MessageSegment =
   { kind: 'text'; text: string } | { kind: 'reference'; refs: ReferenceItem[] }
 
 /** 一段标记 = 【引用】 前缀 + 一条或多条 `kind：label`（旧合并格式用 `；` 串联） */
-const MARKER = /【引用】((?:技能|插件|上下文)：[^\s；]+(?:；(?:技能|插件|上下文)：[^\s；]+)*)/g
+const MARKER =
+  /【引用】((?:技能|插件|上下文|文件)：[^\s；]+(?:；(?:技能|插件|上下文|文件)：[^\s；]+)*)/g
 
 /** 文本 → 文本 / 引用段（没有标记时就回一段纯文本） */
 export function parseReferenceMarkers(text: string): MessageSegment[] {
@@ -48,7 +49,25 @@ export function insertReferenceMarker(
   kind: ReferenceKind,
   label: string
 ): { text: string; caret: number } {
+  return replaceRangeWithMarker(text, caret, caret, kind, label)
+}
+
+/**
+ * 用标记替换 `[start, end)`（浮窗选中：把触发符+过滤词整段换掉）；返回新文本与新光标位。
+ * 越界自动夹回 [0, 长度]，不抛。
+ */
+export function replaceRangeWithMarker(
+  text: string,
+  start: number,
+  end: number,
+  kind: ReferenceKind,
+  label: string
+): { text: string; caret: number } {
+  const safeStart = Math.max(0, Math.min(start, text.length))
+  const safeEnd = Math.max(safeStart, Math.min(end, text.length))
   const marker = `【引用】${kind}：${label} `
-  const at = Math.max(0, Math.min(caret, text.length))
-  return { text: text.slice(0, at) + marker + text.slice(at), caret: at + marker.length }
+  return {
+    text: text.slice(0, safeStart) + marker + text.slice(safeEnd),
+    caret: safeStart + marker.length
+  }
 }

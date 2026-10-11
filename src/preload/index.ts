@@ -19,6 +19,7 @@ import {
   setProviderKeyResultSchema,
   updateStateSchema,
   windowStateSchema,
+  workspaceListFilesResultSchema,
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawPluginsApi,
@@ -113,7 +114,15 @@ const workspaceApi: KyclawWorkspaceApi = {
   remove: async (path) =>
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.remove, path)),
   pickDefault: async () =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.pickDefault))
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.workspace.pickDefault)),
+  // round 15：@ 文件列表（相对会话根；结构不对就抛——半截清单没法显示）
+  listFiles: async (threadId) => {
+    const parsed = workspaceListFilesResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workspace.listFiles, threadId)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 文件列表响应结构不合法')
+    return parsed.data
+  }
 }
 
 /**

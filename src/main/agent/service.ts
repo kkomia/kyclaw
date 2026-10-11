@@ -107,6 +107,12 @@ export interface AgentServerHandle extends AgentEndpoint {
   port: number
   /** T17：本次装配的追踪状态（设置页「追踪」栏用它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
+  /**
+   * round 15：会话 → 项目 id（session_projects 内存镜像，同步）。
+   * `workspace:list-files` 借它把 threadId 解析成会话根（与文件工具同口径）；
+   * 没有映射（或镜像没载入）回 null —— 上游按"无项目"回落。
+   */
+  projectIdOf(threadId: string): string | null
   /** 断开监听、收掉 Mastra 与 storage；重复调用是空操作 */
   stop(): Promise<void>
 }
@@ -357,6 +363,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     token,
     port,
     telemetry,
+    projectIdOf: (threadId) => sessionProjects.get(threadId),
     stop: async () => {
       if (stopped) return
       stopped = true

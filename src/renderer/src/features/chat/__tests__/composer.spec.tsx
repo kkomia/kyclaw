@@ -33,6 +33,15 @@ function type(text: string): void {
   fireEvent.change(screen.getByTestId('composer-input'), { target: { value: text } })
 }
 
+/** 真实键盘的"在末尾输入"：改值 + 把光标放到末尾 + 派发 select（onSelect 会重算触发） */
+function typeAt(value: string): HTMLTextAreaElement {
+  const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+  fireEvent.change(input, { target: { value } })
+  input.setSelectionRange(value.length, value.length)
+  fireEvent.select(input)
+  return input
+}
+
 describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', () => {
   it('max 768 / 圆角 24 / 输入区自适应（48–170）/ 工具条 48 / 发送钮 36', () => {
     setup()
@@ -176,17 +185,36 @@ describe('round 7 · ＋菜单与引用', () => {
     useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
   })
 
-  it('工具条左端是 ＋ 按钮（hover 灰底 = 图10）；菜单四项齐全', () => {
+  it('工具条左端是 ＋ 按钮（hover 灰底 = 图10；round 15 起是圆形）；菜单四项齐全', () => {
     setup()
 
     const plus = screen.getByTestId('composer-plus')
     expect(plus).toHaveClass('hover:bg-hover')
+    expect(plus).toHaveClass('rounded-full')
+    expect(plus).not.toHaveClass('rounded-control')
     fireEvent.keyDown(plus, { key: 'ArrowDown' })
 
     expect(screen.getByTestId('composer-add-file')).toBeInTheDocument()
     expect(screen.getByTestId('composer-ref-skills')).toBeInTheDocument()
     expect(screen.getByTestId('composer-ref-plugins')).toBeInTheDocument()
     expect(screen.getByTestId('composer-ref-context')).toBeInTheDocument()
+  })
+
+  it('hover 提示（round 15）：＋ =「上传文件和更多工具」；权限 chip = 动作文案', () => {
+    const initial = {
+      ...defaultSettings(),
+      workspaces: [{ path: 'D:\\ws', mode: 'ask' as const }]
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    setup({ threadId: 't1' })
+
+    fireEvent.focus(screen.getByTestId('composer-plus'))
+    expect(screen.getByText('上传文件和更多工具')).toBeInTheDocument()
+
+    fireEvent.blur(screen.getByTestId('composer-plus'))
+    fireEvent.focus(screen.getByTestId('composer-permission'))
+    expect(screen.getByText('切换权限模式')).toBeInTheDocument()
   })
 
   it('引用技能：选一条 → **在光标处内联插入标记**（round 14），不顶上挂 chip', async () => {
@@ -281,6 +309,150 @@ describe('round 7 · ＋菜单与引用', () => {
     fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
 
     expect(screen.getByTestId('composer-ref-context')).toHaveAttribute('data-disabled')
+  })
+})
+
+describe('round 15 · @ 文件浮窗', () => {
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  function setupWithFiles(files: string[]): KyclawBridgeStubs {
+    const bridge = installKyclawBridge()
+    bridge.workspace.listFiles.mockResolvedValue({ files })
+    setup({ threadId: 't1' })
+    return bridge
+  }
+
+  it('键入 @：浮窗列出工作区文件（主行文件名 + 次要相对路径）；继续输入过滤', async () => {
+    const bridge = setupWithFiles(['src/App.tsx', 'src/main.ts', 'README.md'])
+
+    typeAt('@')
+    expect(screen.getByTestId('composer-suggest')).toHaveAttribute('data-open', 'true')
+    await screen.findByTestId('suggest-file:README.md')
+    expect(bridge.workspace.listFiles).toHaveBeenCalledWith('t1')
+
+    expect(screen.getByTestId('suggest-file:src/App.tsx')).toHaveTextContent('App.tsx')
+    expect(screen.getByTestId('suggest-file:src/App.tsx')).toHaveTextContent('src/App.tsx')
+
+    typeAt('@main')
+    expect(screen.queryByTestId('suggest-file:README.md')).not.toBeInTheDocument()
+    expect(screen.getByTestId('suggest-file:src/main.ts')).toBeInTheDocument()
+  })
+
+  it('↑/↓ 走条目；Enter 选中（插标记、光标落后面、关浮窗、不发送）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.workspace.listFiles.mockResolvedValue({
+      files: ['src/App.tsx', 'src/main.ts', 'README.md']
+    })
+    const { onSend } = setup({ threadId: 't1' })
+    const input = typeAt('看 @re')
+
+    // 过滤到 README.md 一条
+    await screen.findByTestId('suggest-file:README.md')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(input).toHaveValue('看 【引用】文件：README.md ')
+    expect(input.selectionStart).toBe('看 【引用】文件：README.md '.length)
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+
+    // ↑/↓：两条时下键切到第二条、上键回第一条
+    typeAt('@src')
+    await screen.findByTestId('suggest-file:src/App.tsx')
+    expect(screen.getByTestId('suggest-file:src/App.tsx')).toHaveAttribute('data-active', 'true')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(screen.getByTestId('suggest-file:src/main.ts')).toHaveAttribute('data-active', 'true')
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(screen.getByTestId('suggest-file:src/App.tsx')).toHaveAttribute('data-active', 'true')
+  })
+
+  it('Esc 关浮窗（文本保留）；词中的 @（邮箱）不触发', async () => {
+    setupWithFiles(['README.md'])
+    const input = typeAt('@re')
+    await screen.findByTestId('suggest-file:README.md')
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+    expect(input).toHaveValue('@re')
+
+    typeAt('邮箱 a@b')
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+  })
+
+  it('取不到文件：浮窗里给人话（不炸页面）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.workspace.listFiles.mockRejectedValue(new Error('这个会话的工作区不唯一'))
+    setup({ threadId: 't1' })
+
+    typeAt('@')
+    expect(await screen.findByTestId('composer-suggest-notice')).toHaveTextContent('工作区不唯一')
+  })
+})
+
+describe('round 15 · / 插件与技能浮窗', () => {
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  function setupSlash(): KyclawBridgeStubs {
+    const bridge = installKyclawBridge()
+    bridge.plugins.overview.mockResolvedValue({
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'demo-p1-s1', name: '整理笔记', pluginId: 'demo-p1', pluginName: 'p1' }
+      ]
+    })
+    const initial = {
+      ...defaultSettings(),
+      mcpServers: [
+        {
+          id: 'mcp-1',
+          name: '知识库',
+          transport: 'http' as const,
+          url: 'http://127.0.0.1:8765/mcp',
+          enabled: true,
+          readOnlyTools: []
+        }
+      ]
+    }
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    setup()
+    return bridge
+  }
+
+  it('键入 /：分区列出启用中的插件与已安装技能；过滤可只剩一组', async () => {
+    setupSlash()
+    const input = typeAt('/')
+
+    expect(screen.getByTestId('composer-suggest')).toHaveAttribute('data-open', 'true')
+    expect(await screen.findByTestId('suggest-plugin:mcp-1')).toHaveTextContent('知识库')
+    expect(screen.getByTestId('suggest-skill:demo-p1-s1')).toHaveTextContent('整理笔记')
+    expect(screen.getByText('插件')).toBeInTheDocument()
+    expect(screen.getByText('技能')).toBeInTheDocument()
+
+    typeAt('/笔记')
+    expect(screen.queryByTestId('suggest-plugin:mcp-1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('suggest-skill:demo-p1-s1')).toBeInTheDocument()
+    expect(screen.queryByText('插件')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(input).toHaveValue('【引用】技能：整理笔记 ')
+  })
+
+  it('选中插件行：插入「插件」标记；词组中的 /（路径）不触发', async () => {
+    setupSlash()
+    const input = typeAt('/知')
+    await screen.findByTestId('suggest-plugin:mcp-1')
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(input).toHaveValue('【引用】插件：知识库 ')
+
+    typeAt('src/main')
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
   })
 })
 

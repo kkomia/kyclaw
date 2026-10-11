@@ -37,9 +37,9 @@ export interface ComposerNotice {
   text: string
 }
 
-/** 图标按钮（composer 内统一形态：32px、圆角 10、hover 灰底） */
+/** 图标按钮（composer 内统一形态：32px、**圆形** hover 底 —— round 15 用户实拍：不要圆角方框） */
 const ICON_TRIGGER_CLASS =
-  'inline-flex size-8 shrink-0 items-center justify-center rounded-control text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none'
+  'inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none'
 
 export interface PlusMenuProps {
   onAddFile: () => void
@@ -131,6 +131,7 @@ export function PlusMenu({
           <Plus aria-hidden="true" className="size-4" />
         </button>
       }
+      tooltip="上传文件和更多工具"
       items={items}
       side="top"
       align="start"
@@ -218,6 +219,7 @@ export function PermissionChip({ workspace, onNotice }: PermissionChipProps): Re
         items={items}
         side="top"
         align="start"
+        tooltip="切换权限模式"
       />
       <Dialog
         open={confirming}

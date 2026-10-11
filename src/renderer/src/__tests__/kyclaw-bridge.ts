@@ -39,6 +39,8 @@ export interface WorkspaceApiStub {
   setMode: Mock<(path: string, mode: WorkspaceMode) => Promise<AppSettings>>
   remove: Mock<(path: string) => Promise<AppSettings>>
   pickDefault: Mock<() => Promise<AppSettings>>
+  /** round 15：@ 文件列表（默认空表；用例用 mockResolvedValue 喂文件） */
+  listFiles: Mock<(threadId: string) => Promise<{ files: string[] }>>
 }
 
 export interface ProjectsApiStub {
@@ -172,7 +174,9 @@ function workspaceApi(state: BridgeState): WorkspaceApiStub {
         defaultWorkspace: PICKED_WORKSPACE
       }
       return state.current
-    })
+    }),
+    // @ 文件列表：默认空表（用例自己 mockResolvedValue 喂文件；不模拟主进程的会话根解析）
+    listFiles: vi.fn(async () => ({ files: [] }))
   }
 }
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * workspace 通道 handler：pick 走原生选择器（mock 掉 electron 的 dialog），
  * add / remove 读写这个 userData 目录下的 settings.json。
  * 重点看两件事：① 只有**校验过的目录**能进授权列表；② 入参先过闸门。
+ * round 15：list-files（@ 引用文件）——会话根解析（sessionRoots 口径）+ 有界清单。
  */
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -29,9 +30,9 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
-import { DEFAULT_SETTINGS, type Workspace } from '../../../shared/settings'
-import { readSettings, settingsPath } from '../../settings'
-import { registerWorkspaceIpc } from '../workspace'
+import { DEFAULT_SETTINGS, defaultSettings, type Workspace } from '../../../shared/settings'
+import { readSettings, settingsPath, writeSettings } from '../../settings'
+import { registerWorkspaceIpc, type ProjectIdOf } from '../workspace'
 
 const EVENT = { sender: { id: 1 } }
 
@@ -71,9 +72,10 @@ afterEach(() => {
 const workspaces = (): Workspace[] => readSettings(settingsPath(dir)).workspaces
 
 describe('workspace 通道 handler：注册与入参闸门', () => {
-  it('四条通道都注册了', () => {
+  it('六条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'workspace:add',
+      'workspace:list-files',
       'workspace:pick',
       'workspace:pick-default',
       'workspace:remove',
@@ -284,5 +286,91 @@ describe('workspace:remove', () => {
     rmSync(project, { recursive: true, force: true })
 
     expect(handlerOf(IPC_CHANNELS.workspace.remove)(EVENT, project)).toEqual(DEFAULT_SETTINGS)
+  })
+})
+
+describe('workspace:list-files（round 15：@ 引用工作区文件）', () => {
+  /** 一棵小树：两个真文件 + 两个该被跳过的黑名单目录 */
+  function plantTree(): void {
+    writeFileSync(join(project, 'a.txt'), 'a')
+    writeFileSync(join(project, '子目录', 'b.md'), 'b')
+    mkdirSync(join(project, 'node_modules'), { recursive: true })
+    writeFileSync(join(project, 'node_modules', 'skip.js'), 'x')
+    mkdirSync(join(project, '.git'), { recursive: true })
+    writeFileSync(join(project, '.git', 'config'), 'x')
+  }
+
+  it('单工作区：列出相对路径（黑名单目录跳过、正斜杠、排序稳定）；入参先过闸门', () => {
+    plantTree()
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+
+    const result = handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 'thread-1') as {
+      files: string[]
+    }
+    expect(result.files).toEqual(['a.txt', '子目录/b.md'])
+
+    for (const args of [[], [''], [1], ['a', 'b']]) {
+      expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, ...args)).toThrow(
+        IpcInputError
+      )
+    }
+  })
+
+  it('会话属于项目：项目目录优先（projectIdOf 提供映射）；映射缺省按无项目回落', () => {
+    plantTree()
+    const other = join(dir, '别的')
+    mkdirSync(other, { recursive: true })
+    writeFileSync(join(other, 'only-in-other.txt'), 'x')
+
+    const provider: ProjectIdOf = (threadId) => (threadId === 't-project' ? 'proj-1' : null)
+    mocks.handlers.clear()
+    registerWorkspaceIpc(dir, provider)
+    writeSettings(settingsPath(dir), {
+      ...defaultSettings(),
+      workspaces: [
+        { path: project, mode: 'ask' },
+        { path: other, mode: 'ask' }
+      ],
+      projects: [
+        {
+          id: 'proj-1',
+          name: '项目一',
+          path: project,
+          createdAt: '2026-10-11T00:00:00.000Z'
+        }
+      ]
+    })
+
+    const inProject = handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't-project') as {
+      files: string[]
+    }
+    expect(inProject.files).toEqual(['a.txt', '子目录/b.md'])
+
+    // 没有映射、也没有默认工作区、且有两条授权目录 → 根不唯一，人话拒绝
+    expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't-other')).toThrow(/不唯一/)
+  })
+
+  it('还没有工作区 / 根目录不存在：都是人话错误（不静默空表）', () => {
+    expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't')).toThrow(/还没有工作区/)
+
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+    rmSync(project, { recursive: true, force: true })
+    expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't')).toThrow(/不存在/)
+  })
+
+  it('符号链接不进清单（避免穿出根 / 成环）', () => {
+    plantTree()
+    const outside = join(dir, '外面')
+    mkdirSync(outside, { recursive: true })
+    writeFileSync(join(outside, 'secret.txt'), 'x')
+    try {
+      symlinkSync(outside, join(project, '带毒链接'), 'junction')
+    } catch {
+      return // 造不出链接的环境（无权限）跳过这条
+    }
+    handlerOf(IPC_CHANNELS.workspace.add)(EVENT, project)
+
+    const result = handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't') as { files: string[] }
+    expect(result.files).toEqual(['a.txt', '子目录/b.md'])
   })
 })

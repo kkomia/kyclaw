@@ -242,11 +242,12 @@ describe('preload：window.kyclaw.workspace', () => {
     workspaces: [{ path: 'D:\\项目', mode: 'ask' as const }]
   }
 
-  it('暴露 workspace 一族（pick / pickDefault / add / setMode / remove）', async () => {
+  it('暴露 workspace 一族（pick / pickDefault / add / setMode / remove / listFiles）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.workspace).sort()).toEqual([
       'add',
+      'listFiles',
       'pick',
       'pickDefault',
       'remove',
