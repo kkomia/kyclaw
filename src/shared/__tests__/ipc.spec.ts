@@ -81,7 +81,8 @@ describe('IPC 契约：settings 通道', () => {
       setProviderKey: 'settings:set-provider-key',
       providerKeyStates: 'settings:provider-key-states',
       testProvider: 'settings:test-provider',
-      removeProvider: 'settings:remove-provider'
+      removeProvider: 'settings:remove-provider',
+      probeModels: 'settings:probe-models'
     })
   })
 

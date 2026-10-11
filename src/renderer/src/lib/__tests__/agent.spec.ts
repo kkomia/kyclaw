@@ -132,4 +132,71 @@ describe('threadRequestOptions（round 18：思考挡位真透传进请求体）
       body: { memory: { thread: 't1', resource: expect.any(String) } }
     })
   })
+
+  it('round 22：没显式选过挡位时用 probed 的 default_level（deepseek-flash 实测 = high）', () => {
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        providers: [
+          {
+            id: 'ds',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.deepseek.com',
+            model: 'deepseek-flash',
+            isDefault: true
+          }
+        ],
+        probedModels: {
+          'ds:deepseek-flash': {
+            contextWindow: 1_048_576,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+            fetchedAt: '2026-10-11T00:00:00.000Z'
+          }
+        }
+      },
+      loaded: true
+    })
+
+    expect(threadRequestOptions('t1')).toEqual({
+      body: {
+        memory: { thread: 't1', resource: expect.any(String) },
+        providerOptions: { deepseek: { reasoningEffort: 'high' } }
+      }
+    })
+  })
+
+  it('round 22：显式选的挡位优先于 probed 默认档（probed.defaultEffort 只当初始档）', () => {
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        providers: [
+          {
+            id: 'ds',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.deepseek.com',
+            model: 'deepseek-flash',
+            isDefault: true
+          }
+        ],
+        modelPrefs: { 'ds/deepseek-flash': { thinkingEffort: 'max' } },
+        probedModels: {
+          'ds:deepseek-flash': {
+            contextWindow: 1_048_576,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+            fetchedAt: '2026-10-11T00:00:00.000Z'
+          }
+        }
+      },
+      loaded: true
+    })
+
+    expect(threadRequestOptions('t1')).toEqual({
+      body: {
+        memory: { thread: 't1', resource: expect.any(String) },
+        providerOptions: { deepseek: { reasoningEffort: 'max' } }
+      }
+    })
+  })
 })

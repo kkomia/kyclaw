@@ -126,11 +126,12 @@ describe('preload：window.kyclaw 白名单', () => {
 })
 
 describe('preload：window.kyclaw.settings', () => {
-  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除）', async () => {
+  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除 / 元数据探测）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.settings).sort()).toEqual([
       'get',
+      'probeModels',
       'providerKeyStates',
       'removeProvider',
       'setProviderKey',

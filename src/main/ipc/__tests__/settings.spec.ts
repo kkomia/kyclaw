@@ -97,9 +97,10 @@ afterEach(() => {
 })
 
 describe('settings 通道 handler', () => {
-  it('六条 invoke 通道都注册了', () => {
+  it('七条 invoke 通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'settings:get',
+      'settings:probe-models',
       'settings:provider-key-states',
       'settings:remove-provider',
       'settings:set-provider-key',

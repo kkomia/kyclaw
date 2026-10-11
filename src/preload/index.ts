@@ -98,7 +98,10 @@ const settingsApi: KyclawSettingsApi = {
     return parsed.data
   },
   removeProvider: async (id) =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.removeProvider, id))
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.removeProvider, id)),
+  // round 22：模型元数据探测（静默失败，回合并后的设置——半截不用防，parseSettings 兜底）
+  probeModels: async (id) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.probeModels, id))
 }
 
 /**

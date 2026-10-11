@@ -30,6 +30,8 @@ export interface SettingsApiStub {
   setProviderKey: Mock<(id: string, key: string) => Promise<{ hasKey: true }>>
   providerKeyStates: Mock<() => Promise<Record<string, ProviderKeyState>>>
   testProvider: Mock<(id: string) => Promise<ConnectionTestResult>>
+  /** round 22：模型元数据探测（默认回当前设置；用例喂 probedModels） */
+  probeModels: Mock<(id: string) => Promise<AppSettings>>
   removeProvider: Mock<(id: string) => Promise<AppSettings>>
 }
 
@@ -108,6 +110,8 @@ function settingsApi(state: BridgeState): SettingsApiStub {
       return states
     }),
     testProvider: vi.fn(async () => ({ ok: true as const, latencyMs: 128 })),
+    // round 22：模型元数据探测（默认空操作回当前设置；用例用 mockResolvedValue 喂 probedModels）
+    probeModels: vi.fn(async () => state.current),
     removeProvider: vi.fn(async (id: string) => {
       state.current = {
         ...state.current,

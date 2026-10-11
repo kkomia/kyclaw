@@ -72,6 +72,11 @@ export interface SettingsState {
   archiveThread: (snapshot: ArchivedThread) => Promise<void>
   /** round 20：取消归档（把这条快照去掉，会话回侧栏；没归档过是幂等空操作） */
   unarchiveThread: (threadId: string) => Promise<void>
+  /**
+   * round 22：触发一次模型元数据探测（GET /models，主进程跑）并把结果并入设置副本。
+   * **静默**：失败只记日志（探测是尽力拿真实值，不打断用户在看的东西）。
+   */
+  probeModels: (providerId: string) => Promise<void>
   /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
   saveLangfuseEndpoint: (endpoint: string) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
@@ -170,6 +175,17 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   unarchiveThread: async (threadId) => {
     const next = get().settings.archivedThreads.filter((entry) => entry.threadId !== threadId)
     set({ settings: await settingsApi().update({ archivedThreads: next }) })
+  },
+
+  /** round 22：模型元数据探测（主进程 GET /models；静默失败，成功即以回吐的设置为准） */
+  probeModels: async (providerId) => {
+    const api = window.kyclaw?.settings
+    if (api === undefined) return
+    try {
+      set({ settings: await api.probeModels(providerId) })
+    } catch (error) {
+      console.warn('[kyclaw] 模型元数据探测失败（沿用现有元数据）', error)
+    }
   },
 
   saveLangfuseEndpoint: async (endpoint) => {

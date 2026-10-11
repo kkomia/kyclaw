@@ -5,12 +5,13 @@ import { useShellStore } from '@renderer/lib/shell-store'
 import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
 
 /**
- * 消息导览轨（round 7；round 17 按用户实拍重做）：
- *   每个用户消息 = **一行** `[摘要文本 … 右端横线]`；**收起态只显横线列**（文本收成 0 宽），
+ * 消息导览轨（round 7；round 17 按用户实拍重做；round 22 行文字左对齐）：
+ *   每个用户消息 = **一行** `[摘要文本 flex-1 … 右端横线]`；**收起态只显横线列**（文本收成 0 宽），
  *   hover/聚焦展开——**整块**圆角底把全部横线一起包住（横线是行的子元素，永远在背景里：
  *   不超出、不被圆角裁、不上下露头）。浮窗行内**没有前导横条**；当前项用文字色/字重 +
- *   更长的横线区分。超高时整块一起滚（横线始终在被滚动的同一背景里）。
- *   位置：聊天区右缘 `right-2`（8px 呼吸位）。
+ *   更长的横线区分。**文本左对齐**（round 22 用户口径："文字做左对齐，不要右对齐"）——
+ *   文本容器 flex-1、溢出自带省略号；横线仍固定贴行右端。超高时整块一起滚。
+ *   位置：chat 页根右缘 `right-2`（round 21：定位基准是 chat-page 整幅，8px 呼吸位）。
  *   工作台（`useShellStore.workPanelOpen`）打开时**整条轨不渲染**（展开右侧边栏就隐藏摘要条）。
  *
  * 驻留（round 8 用户实拍"鼠标移过去就消失了"）：鼠标移出后延迟关闭（宽限 300ms），
@@ -153,29 +154,31 @@ export function MessageRail({
               aria-current={active ? 'true' : undefined}
               onClick={() => jump(message.id)}
               className={cn(
-                'flex h-7 w-full cursor-pointer items-center justify-end rounded-(--menu-item-radius) pr-1 pl-3 transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                'flex h-7 w-full cursor-pointer items-center gap-3 rounded-(--menu-item-radius) pr-1 pl-3 transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
                 open && 'hover:bg-hover'
               )}
             >
-              {/* 摘要文本（行首是文本，没有前导横条）：收起时收成 0 宽，展开时从左侧长出（不硬切）；
-                  当前项用文字色 + 字重区分 */}
-              <span
-                data-testid={`rail-item-${message.id}`}
-                aria-hidden="true"
-                className={cn(
-                  'overflow-hidden text-left text-b2 whitespace-nowrap transition-[max-width,opacity] duration-(--motion-fast) ease-main motion-reduce:transition-none',
-                  open ? 'max-w-56 opacity-100' : 'max-w-0 opacity-0',
-                  active ? 'font-medium text-ink' : 'text-ink-secondary'
-                )}
-              >
-                {summary}
+              {/* 文本容器（flex-1）：占满剩余宽度、**左对齐**（round 22 用户口径"文字做左对齐"）——
+                  横线因此固定贴行右端；摘要文本挂在内层 span 上做 0↔满宽的开合过渡 */}
+              <span className="flex min-w-0 flex-1 items-center justify-start">
+                <span
+                  data-testid={`rail-item-${message.id}`}
+                  aria-hidden="true"
+                  className={cn(
+                    'truncate text-left text-b2 transition-[max-width,opacity] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                    open ? 'max-w-56 opacity-100' : 'max-w-0 opacity-0',
+                    active ? 'font-medium text-ink' : 'text-ink-secondary'
+                  )}
+                >
+                  {summary}
+                </span>
               </span>
-              {/* 行右端的横线：当前项加长加实；所有行靠右对齐成一列 */}
+              {/* 行右端的横线（固定位置）：当前项加长加实；所有行靠右对齐成一列 */}
               <span
                 aria-hidden="true"
+                data-testid={`rail-line-${message.id}`}
                 className={cn(
                   'h-0.5 shrink-0 rounded-pill transition-[width,background-color] duration-(--motion-fast) ease-main motion-reduce:transition-none',
-                  open ? 'ml-3' : 'ml-0',
                   active ? 'w-4 bg-ink' : 'w-2 bg-ink-tertiary opacity-60'
                 )}
               />

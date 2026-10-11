@@ -22,8 +22,11 @@ import {
   contextWindowOf,
   effectiveEffortId,
   formatTokens,
+  isProbedFresh,
+  probedKeyOf,
   thinkingEffortsOf
 } from '@shared/models'
+import type { ProbedModelSpec } from '@shared/models'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
 import type { UsageThreadContext } from '@shared/usage'
 import { withDefaultProvider } from '@shared/providers'
@@ -312,10 +315,13 @@ function ContextRing({
 /** 对话长度滑块（二级浮层里的自定义条目）：拖动时只改草稿，松手（或键盘抬手）才落盘 */
 function ContextSlider({
   model,
+  probed,
   pct,
   onCommit
 }: {
   model: string
+  /** round 22：该模型的实测元数据（probed 优先；没有就注册表） */
+  probed?: ProbedModelSpec
   pct: number
   onCommit: (pct: number) => void
 }): React.JSX.Element {
@@ -326,7 +332,7 @@ function ContextSlider({
     setLastPct(pct)
     setDraft(pct)
   }
-  const window = contextWindowOf(model)
+  const window = contextWindowOf(model, probed)
   return (
     <div data-testid="model-context-slider" className="flex w-56 flex-col gap-2">
       <div className="flex items-baseline justify-between text-c1">
@@ -334,7 +340,7 @@ function ContextSlider({
           {draft}%
         </span>
         <span className="text-ink-tertiary tabular-nums">
-          ≈ {formatTokens(contextTokensFor(model, draft))} / {formatTokens(window)}
+          ≈ {formatTokens(contextTokensFor(model, draft, probed))} / {formatTokens(window)}
         </span>
       </div>
       <input
@@ -371,6 +377,7 @@ function ContextSlider({
 export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
+  const probedModels = useSettingsStore((state) => state.settings.probedModels)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
   const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
@@ -379,9 +386,12 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
   const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
   const pref = modelPrefs[prefKey]
-  const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort)
+  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）
+  const probed =
+    current === undefined ? undefined : probedModels[probedKeyOf(current.id, current.model)]
+  const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort, probed)
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
-  const windowTokens = contextTokensFor(current?.model, pct)
+  const windowTokens = contextTokensFor(current?.model, pct, probed)
 
   const refreshContext = useCallback((): void => {
     if (threadId === null || threadId === '') return
@@ -392,6 +402,13 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
   useEffect(() => {
     refreshContext()
   }, [refreshContext])
+
+  /** round 22：菜单打开且实测缓存缺失/过期（>24h）→ 后台重抓一次（不闪、不阻塞菜单） */
+  const refreshModelMeta = useCallback((): void => {
+    if (current === undefined) return
+    if (isProbedFresh(probedModels[probedKeyOf(current.id, current.model)])) return
+    void useSettingsStore.getState().probeModels(current.id)
+  }, [current, probedModels])
 
   // 只认"这条会话自己"的数据（换会话后旧数据立即失效，不闪现到新会话上）
   const threadContext = context !== null && context.threadId === threadId ? context : null
@@ -435,7 +452,7 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
     )
   }
 
-  const efforts = thinkingEffortsOf(current?.model)
+  const efforts = thinkingEffortsOf(current?.model, probed)
   const effortLabel = efforts.find((effort) => effort.id === effortId)?.label ?? '默认'
 
   const items: MenuEntry[] = [
@@ -474,6 +491,7 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
           content: (
             <ContextSlider
               model={current?.model ?? ''}
+              probed={probed}
               pct={pct}
               onCommit={(nextPct) => savePrefs({ contextPct: nextPct })}
             />
@@ -555,7 +573,11 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
       side="top"
       align="start"
       onOpenChange={(open) => {
-        if (open) refreshContext()
+        if (open) {
+          refreshContext()
+          // round 22：顺带看一眼实测元数据是不是缺/过期（后台抓，不挡菜单）
+          refreshModelMeta()
+        }
       }}
     />
   )

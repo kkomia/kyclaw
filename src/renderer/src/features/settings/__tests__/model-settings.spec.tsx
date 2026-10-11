@@ -267,6 +267,42 @@ describe('模型组 · 测试连接', () => {
     )
   })
 
+  it('round 22：成功之后顺带触发一次模型元数据探测（真实上下文/挡位；后台、静默）', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+
+    // 探测回包带实测值：存储跟着更新（probeModels 的动作把回吐设置为准）
+    bridge.probeModels.mockResolvedValueOnce({
+      ...withProviders(DEEPSEEK),
+      probedModels: {
+        'deepseek:deepseek-flash': {
+          contextWindow: 1_048_576,
+          efforts: ['low', 'high', 'max'],
+          defaultEffort: 'high',
+          fetchedAt: '2026-10-11T00:00:00.000Z'
+        }
+      }
+    })
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-test'))
+
+    await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
+    await waitFor(() =>
+      expect(
+        useSettingsStore.getState().settings.probedModels['deepseek:deepseek-flash']?.contextWindow
+      ).toBe(1_048_576)
+    )
+  })
+
+  it('round 22：连接失败不触发探测（没连上就不去抓）', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+    bridge.testProvider.mockResolvedValueOnce({ ok: false, message: '认证失败（401）' })
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-test'))
+
+    await screen.findByTestId('provider-deepseek-test-result')
+    expect(bridge.probeModels).not.toHaveBeenCalled()
+  })
+
   it('失败：原样显示主进程翻译的错误文案', async () => {
     const bridge = await mount(withProviders(DEEPSEEK))
     bridge.testProvider.mockResolvedValueOnce({

@@ -20,6 +20,7 @@ import {
 } from '../../shared/ipc'
 import { providerConfigProblems, type ProviderKeyState } from '../../shared/providers'
 import { testConnection } from '../connection-test'
+import { probeProviderModelsQuietly } from '../model-probe'
 import {
   clearProviderKey,
   getProviderKey,
@@ -32,6 +33,8 @@ import { readSettings, settingsPath, updateSettings } from '../settings'
 export function registerSettingsIpc(userDataDir: string): void {
   const file = settingsPath(userDataDir)
   const secrets = secretsPath(userDataDir)
+  /** 密钥读取器（主进程内唯一的口子：safeStorage 解出来只进内存，不回渲染端、不进日志） */
+  const readKey = (providerId: string): string | null => getProviderKey(secrets, providerId)
 
   ipcMain.handle(IPC_CHANNELS.settings.get, (_event, ...args) => {
     parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.settings.get)
@@ -41,7 +44,14 @@ export function registerSettingsIpc(userDataDir: string): void {
   ipcMain.handle(IPC_CHANNELS.settings.update, (_event, ...args) => {
     const [patch] = parseIpcArgs(settingsUpdateArgsSchema, args, IPC_CHANNELS.settings.update)
     // 落盘失败会把错误抛回渲染端（updateSettings 不吞写失败）
-    return updateSettings(file, patch)
+    const next = updateSettings(file, patch)
+    // round 22：provider 保存后**后台**探一轮元数据（不 await、不挡保存；失败静默）
+    if (patch.providers !== undefined) {
+      for (const provider of next.providers) {
+        void probeProviderModelsQuietly({ file, readKey, providerId: provider.id })
+      }
+    }
+    return next
   })
 
   // 写密钥：明文只活在这个局部变量里（不打印、不回包、不落明文）
@@ -71,12 +81,19 @@ export function registerSettingsIpc(userDataDir: string): void {
     const provider = readSettings(file).providers.find((candidate) => candidate.id === id)
     if (!provider) return { ok: false, message: `找不到 provider：${id}` }
 
-    const apiKey = getProviderKey(secrets, id)
+    const apiKey = readKey(id)
     const problems = providerConfigProblems(provider, apiKey !== null)
     if (apiKey === null || problems.length > 0) {
       return { ok: false, message: problems.join('；') }
     }
     return testConnection(provider, apiKey)
+  })
+
+  // round 22：探测模型元数据（GET /models）。连接测试成功 / 模型菜单打开且过期时由渲染端触发；
+  // 静默失败（回当前设置）——探测是"尽力拿真实值"，不该挡用户在看的东西
+  ipcMain.handle(IPC_CHANNELS.settings.probeModels, (_event, ...args) => {
+    const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.probeModels)
+    return probeProviderModelsQuietly({ file, readKey, providerId: id })
   })
 
   // 删配置连带清密钥：先落盘配置（写失败要抛给用户），再清密钥（事后写失败只留无害孤儿密文）

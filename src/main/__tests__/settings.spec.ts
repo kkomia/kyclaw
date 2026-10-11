@@ -30,6 +30,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
+      probedModels: {},
       pinnedThreads: [],
       archivedThreads: [],
       langfuse: { endpoint: 'https://cloud.langfuse.com' }
@@ -105,6 +106,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
+      probedModels: {},
       pinnedThreads: [],
       archivedThreads: [],
       langfuse: { endpoint: '' }

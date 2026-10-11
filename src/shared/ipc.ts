@@ -43,7 +43,12 @@ export const IPC_CHANNELS = {
     /** 测试连接（入参 [id]，主进程发一条最小请求，返回延迟或错误文案） */
     testProvider: 'settings:test-provider',
     /** 删除一条 provider 配置（连同它的密钥；入参 [id]，返回合并后的 AppSettings） */
-    removeProvider: 'settings:remove-provider'
+    removeProvider: 'settings:remove-provider',
+    /**
+     * round 22：探测一个 provider 的模型元数据（GET /models，入参 [id]，返回合并后的 AppSettings）。
+     * 尽力而为：源不可达/端点不支持时静默回当前设置（模型菜单打开、连接测试成功、过期重抓都走它）。
+     */
+    probeModels: 'settings:probe-models'
   },
   workspace: {
     /** 打开原生选择器添加一个授权目录（无入参，取消=不改动；返回合并后的 AppSettings） */
@@ -352,6 +357,11 @@ export interface KyclawSettingsApi {
   testProvider(id: string): Promise<ConnectionTestResult>
   /** 删除一条 provider 配置（连同它的密钥），返回合并后的完整设置 */
   removeProvider(id: string): Promise<AppSettings>
+  /**
+   * round 22：探测该 provider 的模型元数据（GET /models → 真实上下文长度/思考挡位），
+   * 返回合并后的完整设置；源不可达/端点不支持时**静默回当前设置**（不抛、不打扰用户）。
+   */
+  probeModels(id: string): Promise<AppSettings>
 }
 
 /** preload 暴露给渲染端的 agent 服务面（服务未起时 endpoint() 会 reject） */

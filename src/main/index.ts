@@ -16,6 +16,7 @@ import { registerTelemetryIpc } from './ipc/telemetry'
 import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
+import { probeConfiguredProvidersQuietly } from './model-probe'
 import { getProviderKey, secretsPath } from './secrets'
 import { readSettings, settingsPath } from './settings'
 import { readLangfuseConfig } from './telemetry'
@@ -72,6 +73,11 @@ if (!app.requestSingleInstanceLock()) {
 
     registerWindowIpc()
     registerSettingsIpc(userDataDir)
+    // round 22：启动时后台探一轮模型元数据（真实上下文长度/思考挡位；串行、静默、不挡窗口）
+    void probeConfiguredProvidersQuietly({
+      file: settingsPath(userDataDir),
+      readKey: (providerId) => getProviderKey(secretsFile, providerId)
+    })
     registerWorkspaceIpc(userDataDir, (threadId) => agentProjectIdOf?.(threadId) ?? null)
     registerProjectsIpc(userDataDir)
     registerPluginIpc(userDataDir)

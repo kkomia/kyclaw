@@ -5,10 +5,13 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   effectiveEffortId,
   formatTokens,
+  isProbedFresh,
   modelSpecOf,
+  probedKeyOf,
   requestProviderOptions,
   thinkingEffortsOf
 } from '../models'
+import type { ProbedModelSpec } from '../models'
 import type { ProviderConfig } from '../providers'
 
 /**
@@ -102,5 +105,93 @@ describe('思考挡位透传（requestProviderOptions）', () => {
     expect(
       requestProviderOptions({ ...deepseekProvider, model: 'deepseek-reasoner' }, 'high')
     ).toBeNull()
+  })
+})
+
+describe('round 22 · probed 实测优先（GET /models 的真实元数据盖过注册表）', () => {
+  /** 实测样本：deepseek-flash = 1M、low|high|max、默认 high（主控在官方端点上抓到的形状） */
+  const PROBED: ProbedModelSpec = {
+    contextWindow: 1_048_576,
+    maxOutputTokens: 393_216,
+    efforts: ['low', 'high', 'max'],
+    defaultEffort: 'high',
+    fetchedAt: '2026-10-11T00:00:00.000Z'
+  }
+
+  it('上下文长度：probed 盖过注册表的 128K（用户点名的纠错）；没 probed 仍走注册表', () => {
+    expect(contextWindowOf('deepseek-flash', PROBED)).toBe(1_048_576)
+    expect(contextTokensFor('deepseek-flash', 100, PROBED)).toBe(1_048_576)
+    expect(contextTokensFor('deepseek-flash', 25, PROBED)).toBe(262_144)
+    expect(contextWindowOf('deepseek-flash')).toBe(128_000)
+  })
+
+  it('思考挡位：probed 的 supported_levels 原样成列（标签用既有映射），default_level 回落初始档', () => {
+    expect(
+      thinkingEffortsOf('deepseek-flash', PROBED).map((effort) => [effort.id, effort.label])
+    ).toEqual([
+      ['default', '默认'],
+      ['low', '低'],
+      ['high', '高'],
+      ['max', '最高']
+    ])
+    expect(effectiveEffortId('deepseek-flash', undefined, PROBED)).toBe('high')
+    expect(effectiveEffortId('deepseek-flash', 'low', PROBED)).toBe('low')
+    // 显式选了不存在的挡 → 回落端点默认档（不是硬编码 default）
+    expect(effectiveEffortId('deepseek-flash', 'bogus', PROBED)).toBe('high')
+  })
+
+  it('未知挡位原样显示（标签 = 值，如实）；default_level 不在列表里不采信', () => {
+    const odd: ProbedModelSpec = { ...PROBED, efforts: ['medium'], defaultEffort: 'high' }
+    expect(thinkingEffortsOf('deepseek-flash', odd).map((effort) => effort.id)).toEqual([
+      'default',
+      'medium'
+    ])
+    expect(thinkingEffortsOf('deepseek-flash', odd).map((effort) => effort.label)).toEqual([
+      '默认',
+      'medium'
+    ])
+    expect(effectiveEffortId('deepseek-flash', undefined, odd)).toBe('default')
+  })
+
+  it('probed 只给了上下文长度 → 挡位回落注册表；probed 值非法（0）→ 该字段回落', () => {
+    const partial: ProbedModelSpec = { contextWindow: 1_048_576, fetchedAt: PROBED.fetchedAt }
+    expect(contextWindowOf('deepseek-flash', partial)).toBe(1_048_576)
+    expect(thinkingEffortsOf('deepseek-flash', partial).map((effort) => effort.id)).toEqual([
+      'default',
+      'low',
+      'high',
+      'max'
+    ])
+
+    const broken: ProbedModelSpec = { ...PROBED, contextWindow: 0 }
+    expect(contextWindowOf('deepseek-flash', broken)).toBe(128_000)
+  })
+
+  it('透传：probed 的默认档照常进 providerOptions（显示与发送同值）', () => {
+    const provider: ProviderConfig = {
+      id: 'ds',
+      type: 'openai-compatible',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-flash',
+      isDefault: true
+    }
+    expect(requestProviderOptions(provider, undefined, PROBED)).toEqual({
+      deepseek: { reasoningEffort: 'high' }
+    })
+    expect(requestProviderOptions(provider, 'default', PROBED)).toBeNull()
+  })
+
+  it('过期判定（isProbedFresh）：24h 内新鲜；没有记录 / 时间戳坏了 / 超期 → 过期', () => {
+    const now = Date.parse('2026-10-11T12:00:00.000Z')
+    expect(isProbedFresh(PROBED, now)).toBe(true)
+    expect(isProbedFresh({ ...PROBED, fetchedAt: '2026-10-11T11:00:00.000Z' }, now)).toBe(true)
+    expect(isProbedFresh({ ...PROBED, fetchedAt: '2026-10-09T00:00:00.000Z' }, now)).toBe(false)
+    expect(isProbedFresh(undefined, now)).toBe(false)
+    expect(isProbedFresh({ ...PROBED, fetchedAt: '坏时间' }, now)).toBe(false)
+  })
+
+  it('探测键：`<providerId>:<modelId>`（模型名原文，不归一）', () => {
+    expect(probedKeyOf('deepseek', 'deepseek-flash')).toBe('deepseek:deepseek-flash')
+    expect(probedKeyOf('p1', 'DeepSeek-V4-Pro')).toBe('p1:DeepSeek-V4-Pro')
   })
 })

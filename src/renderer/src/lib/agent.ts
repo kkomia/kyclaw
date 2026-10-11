@@ -1,7 +1,7 @@
 import { DefaultChatTransport } from 'ai'
 import type { ChatTransport, UIMessage } from 'ai'
 import { threadMemoryBody } from '@shared/threads'
-import { requestProviderOptions } from '@shared/models'
+import { probedKeyOf, requestProviderOptions } from '@shared/models'
 import { useSettingsStore } from './settings-store'
 
 /**
@@ -46,12 +46,18 @@ export function threadRequestOptions(threadId: string): {
 } {
   const settings = useSettingsStore.getState().settings
   const provider = settings.providers.find((item) => item.isDefault) ?? settings.providers[0]
+  // round 22：挡位取值同样 probed 实测优先（default_level 当初始档；没探测过回落注册表）
+  const probed =
+    provider === undefined
+      ? undefined
+      : settings.probedModels[probedKeyOf(provider.id, provider.model)]
   const providerOptions =
     provider === undefined
       ? null
       : requestProviderOptions(
           provider,
-          settings.modelPrefs[`${provider.id}/${provider.model}`]?.thinkingEffort
+          settings.modelPrefs[`${provider.id}/${provider.model}`]?.thinkingEffort,
+          probed
         )
   return {
     body: {

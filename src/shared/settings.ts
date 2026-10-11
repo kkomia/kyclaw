@@ -79,6 +79,26 @@ export const modelPrefsSchema = z.strictObject({
 export type ModelPrefs = z.infer<typeof modelPrefsSchema>
 
 /**
+ * 探测到的模型元数据（round 22）：`GET {baseUrl}/models` 的实测值，键 = `<providerId>:<modelId>`
+ * （provider 的模型名原文，不归一——探测和消费两边同一个键函数 `probedKeyOf`）。
+ * 取值优先级 = probed → 注册表 → 默认（见 shared/models.ts）；`fetchedAt` 用于 >24h 过期重抓。
+ */
+export const probedModelSchema = z.strictObject({
+  /** 实测上下文长度（正整数） */
+  contextWindow: z.number().int().positive(),
+  /** 实测最大输出（存档；暂未参与 UI） */
+  maxOutputTokens: z.number().int().positive().optional(),
+  /** 实测思考挡位（原样值；空/没有 = 回落注册表） */
+  efforts: z.array(z.string().min(1)).optional(),
+  /** 实测默认挡位（如 'high'；无效/没有 = `default`） */
+  defaultEffort: z.string().min(1).optional(),
+  /** ISO 时间串（抓取时刻） */
+  fetchedAt: z.string()
+})
+
+export type ProbedModel = z.infer<typeof probedModelSchema>
+
+/**
  * MCP server 的传输（T12）：stdio 起子进程走 stdio 上的 JSON-RPC；http 连 Streamable HTTP 端点。
  */
 export const mcpTransportSchema = z.enum(['stdio', 'http'])
@@ -204,6 +224,8 @@ export const appSettingsSchema = z.strictObject({
   installedPlugins: z.array(installedPluginSchema),
   /** round 18 的模型级偏好（`${providerId}/${model}` → 思考挡位 / 对话长度百分比；走 settings:update 补丁） */
   modelPrefs: z.record(z.string(), modelPrefsSchema),
+  /** round 22 的模型元数据实测缓存（`${providerId}:${model}` → 上下文/挡位；主进程探测，见 main/model-probe.ts） */
+  probedModels: z.record(z.string(), probedModelSchema),
   /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
   pinnedThreads: z.array(z.string().min(1)),
   /** round 20 的归档快照列表（从侧栏移出、数据不删；设置页「归档」栏查看/搜索/取消归档） */
@@ -255,6 +277,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pluginMarketplaces: [],
   installedPlugins: [],
   modelPrefs: {},
+  probedModels: {},
   pinnedThreads: [],
   archivedThreads: [],
   langfuse: { endpoint: '' }
@@ -272,6 +295,7 @@ export function defaultSettings(): AppSettings {
     pluginMarketplaces: [],
     installedPlugins: [],
     modelPrefs: {},
+    probedModels: {},
     pinnedThreads: [],
     archivedThreads: [],
     langfuse: { endpoint: '' }

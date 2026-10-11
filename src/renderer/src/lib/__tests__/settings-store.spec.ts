@@ -313,3 +313,36 @@ describe('settings store · round 20 置顶与归档', () => {
     await expect(store().unarchiveThread('t1')).rejects.toThrow(/设置通道不可用/)
   })
 })
+
+describe('settings store · round 22 模型元数据探测', () => {
+  it('probeModels：以主进程回吐的设置为准（probedModels 进 store）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.probeModels.mockResolvedValueOnce({
+      ...defaultSettings(),
+      probedModels: {
+        'ds:m': { contextWindow: 1_048_576, fetchedAt: '2026-10-11T00:00:00.000Z' }
+      }
+    })
+
+    await store().probeModels('ds')
+
+    expect(bridge.probeModels).toHaveBeenCalledWith('ds')
+    expect(store().settings.probedModels['ds:m']?.contextWindow).toBe(1_048_576)
+  })
+
+  it('probeModels：失败静默（只记日志，不抛、不动现有元数据）', async () => {
+    const bridge = installKyclawBridge()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    bridge.probeModels.mockRejectedValueOnce(new Error('ipc 断了'))
+
+    await expect(store().probeModels('ds')).resolves.toBeUndefined()
+    expect(store().settings.probedModels).toEqual({})
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('probeModels：没有 preload 桥（浏览器 / 单测环境）→ 空操作不抛', async () => {
+    clearKyclawBridge()
+    await expect(store().probeModels('ds')).resolves.toBeUndefined()
+  })
+})

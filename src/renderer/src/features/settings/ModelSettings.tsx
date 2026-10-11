@@ -152,6 +152,8 @@ export function ModelSettings(): React.JSX.Element {
         if (!api) throw new Error('设置通道不可用（window.kyclaw 缺失），没法测试连接')
         const result = await api.testProvider(provider.id)
         setResults((previous) => ({ ...previous, [provider.id]: result }))
+        // round 22：连通了就把真实模型元数据抓回来（上下文长度/思考挡位；后台、静默）
+        if (result.ok) void useSettingsStore.getState().probeModels(provider.id)
       } catch (error) {
         setErrors((previous) => ({ ...previous, [provider.id]: messageOf(error) }))
       } finally {

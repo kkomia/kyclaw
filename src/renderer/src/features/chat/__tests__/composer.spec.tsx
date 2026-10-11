@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 import {
@@ -7,7 +7,7 @@ import {
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { defaultSettings } from '@shared/settings'
+import { defaultSettings, type AppSettings } from '@shared/settings'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 
 /**
@@ -923,5 +923,93 @@ describe('round 19 · / 命令分区（压缩上下文）与压缩 notice', () =
   it('外部 notice（压缩结果）由上层给：照常显示', () => {
     setup({ externalNotice: { tone: 'success', text: '已压缩历史上下文（保留最近 10 条）' } })
     expect(screen.getByTestId('composer-notice')).toHaveTextContent('已压缩历史上下文')
+  })
+})
+
+describe('round 22 · probed 实测优先（菜单值来自真实元数据）', () => {
+  const FLASH = {
+    id: 'deepseek',
+    type: 'openai-compatible' as const,
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-flash',
+    isDefault: true
+  }
+
+  /** 实测样本（主控在官方端点上抓到的形状）：1M / low|high|max / 默认 high */
+  function probedNow(): AppSettings['probedModels'] {
+    return {
+      'deepseek:deepseek-flash': {
+        contextWindow: 1_048_576,
+        maxOutputTokens: 393_216,
+        efforts: ['low', 'high', 'max'],
+        defaultEffort: 'high',
+        fetchedAt: new Date().toISOString()
+      }
+    }
+  }
+
+  function mountChip(
+    probedModels: AppSettings['probedModels']
+  ): ReturnType<typeof installKyclawBridge> {
+    const initial = { ...defaultSettings(), providers: [FLASH], probedModels }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    setup()
+    return bridge
+  }
+
+  async function openSubmenu(testId: string): Promise<void> {
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    const trigger = screen.getByTestId(testId)
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
+    await tick()
+  }
+
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  it('滑块与换算用实测 1M——注册表按名字猜的 128K 被盖过（用户点名的纠错）', async () => {
+    // 先确认注册表口径确实是 128K（对照），再证明 probed 盖过它
+    mountChip({})
+    await openSubmenu('model-context')
+    expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 128K / 128K')
+
+    cleanup()
+    mountChip(probedNow())
+    await openSubmenu('model-context')
+    expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 1M / 1M')
+  })
+
+  it('思考挡位用实测 supported_levels，初始档 = default_level（high 选中）', async () => {
+    mountChip(probedNow())
+    await openSubmenu('model-efforts')
+
+    expect(screen.getByTestId('model-effort-default')).toHaveTextContent('默认')
+    expect(screen.getByTestId('model-effort-low')).toHaveTextContent('低')
+    expect(screen.getByTestId('model-effort-high')).toHaveTextContent('高')
+    expect(screen.getByTestId('model-effort-max')).toHaveTextContent('最高')
+    // 没存过偏好 + 端点 default_level=high → 初始档就是 high（显示与透传同值）
+    expect(screen.getByTestId('model-effort-high')).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByTestId('model-efforts')).toHaveTextContent('高')
+  })
+
+  it('菜单打开且实测缓存缺失 → 后台触发一次探测（不挡菜单）', async () => {
+    const bridge = mountChip({})
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+
+    await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
+  })
+
+  it('缓存新鲜（24h 内）→ 打开菜单不重复探测', async () => {
+    const bridge = mountChip(probedNow())
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+
+    await tick()
+    expect(bridge.probeModels).not.toHaveBeenCalled()
   })
 })

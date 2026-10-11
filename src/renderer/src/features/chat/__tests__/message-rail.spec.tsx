@@ -102,7 +102,7 @@ describe('消息导览轨 · 结构', () => {
     expect(column).not.toHaveClass('px-4')
   })
 
-  it('round 17 结构：一行 = [摘要文本 … 右端横线]，行内无前导横条；横线全在面板容器内', () => {
+  it('round 17 结构 + round 22 对齐：一行 = [文本容器(flex-1，左对齐) … 右端横线]；横线全在面板容器内', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
     const panel = screen.getByTestId('rail-panel')
@@ -113,17 +113,22 @@ describe('消息导览轨 · 结构', () => {
 
     const row = screen.getByTestId('rail-node-u1')
     const children = Array.from(row.children)
-    // 行首是文本（没有前导横条），横线在行右端（最后一个子元素）
-    expect(children[0]).toHaveAttribute('data-testid', 'rail-item-u1')
-    expect(children[children.length - 1].className).toContain('h-0.5')
+    // 行内顺序 = [文本容器, 横线]：没有前导横条；文本容器 flex-1 撑满 → 横线固定贴行右端
+    expect(children).toHaveLength(2)
+    expect(children[0]).toHaveClass('flex-1', 'min-w-0', 'justify-start')
+    expect(children[0]).toContainElement(screen.getByTestId('rail-item-u1'))
+    expect(children[children.length - 1]).toHaveAttribute('data-testid', 'rail-line-u1')
 
-    // 收起态：文本 0 宽、横线不带左间距（窄条）；展开态：文本长出、横线让出间距
+    // round 22（用户口径"文字做左对齐，不要右对齐"）：行不再 justify-end；文本左对齐、右侧截断省略号
+    expect(row).not.toHaveClass('justify-end')
+    expect(screen.getByTestId('rail-item-u1')).toHaveClass('text-left', 'truncate')
+
+    // 收起态：文本 0 宽；横线位置固定（不靠 ml 让位）
     expect(screen.getByTestId('rail-item-u1')).toHaveClass('max-w-0')
-    expect(children[children.length - 1]).toHaveClass('ml-0')
+    expect(screen.getByTestId('rail-line-u1').className).not.toMatch(/\bml-/)
 
     fireEvent.mouseEnter(screen.getByTestId('message-rail'))
     expect(screen.getByTestId('rail-item-u1')).toHaveClass('max-w-56')
-    expect(Array.from(screen.getByTestId('rail-node-u1').children)[1]).toHaveClass('ml-3')
   })
 
   it('工作台打开：整条轨不渲染（round 17 用户口径）；收起后恢复', () => {
