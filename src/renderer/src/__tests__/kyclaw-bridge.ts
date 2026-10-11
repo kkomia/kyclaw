@@ -344,6 +344,29 @@ export function pluginsApiStub(
   }
 }
 
+/** 记忆面（round 28）：只有远程嵌入密钥的状态（默认没配过） */
+export interface MemoryApiStub {
+  embeddingKeyState: Mock<() => Promise<ProviderKeyState>>
+  setEmbeddingKey: Mock<(key: string) => Promise<{ hasKey: true }>>
+  clearEmbeddingKey: Mock<() => Promise<ProviderKeyState>>
+}
+
+export function memoryApiStub(): MemoryApiStub {
+  let hasKey = false
+  const stub: MemoryApiStub = {
+    embeddingKeyState: vi.fn(async () => ({ hasKey, needsReentry: false })),
+    setEmbeddingKey: vi.fn(async () => {
+      hasKey = true
+      return { hasKey: true as const }
+    }),
+    clearEmbeddingKey: vi.fn(async () => {
+      hasKey = false
+      return { hasKey: false, needsReentry: false }
+    })
+  }
+  return stub
+}
+
 /** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
@@ -351,6 +374,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   updates: UpdatesApiStub
   telemetry: TelemetryApiStub
   plugins: PluginsApiStub
+  memory: MemoryApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -362,6 +386,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const updates = updatesApiStub()
   const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
   const plugins = pluginsApiStub()
+  const memory = memoryApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -370,11 +395,12 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     agent: agentApiStub(),
     updates,
     telemetry,
-    plugins
+    plugins,
+    memory
   }
 
   Object.defineProperty(window, 'kyclaw', { value: api, configurable: true })
-  return { ...settings, workspace, projects, updates, telemetry, plugins }
+  return { ...settings, workspace, projects, updates, telemetry, plugins, memory }
 }
 
 export function clearKyclawBridge(): void {

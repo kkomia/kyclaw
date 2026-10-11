@@ -65,6 +65,39 @@ export const langfuseSettingsSchema = z.strictObject({
 })
 
 /**
+ * 语义召回（长期记忆，round 28 模块 3）：跨会话的向量召回——新会话问起旧会话聊过的内容，
+ * 助手能把那几轮找回来（Mastra Memory 的 semanticRecall，resource 作用域，见 mastra/index.ts）。
+ *
+ * 嵌入接口统一为 **OpenAI 兼容 `/embeddings`**：baseURL + model（+ key）。命名刻意不带 "remote"
+ * —— 将来「本机引擎」（llama.cpp 子进程，模块 3B）就长这个样子，接进来时只做两件事：
+ *   - 给 `SEMANTIC_RECALL_SOURCES` 加一项 `localEngine`；
+ *   - 在 `mastra/embedding.ts` 的工厂里加一个分支（本文件形状不动）。
+ *
+ * key 与 provider 密钥同待遇：safeStorage 密文落 secrets.json，只回"有没有 / 要不要重录"。
+ * 生效时机与 Langfuse 同口径：**装配在服务启动时做**，改这一栏要重启应用才生效
+ * （状态行会说清"本次运行开了没有"，见 shared/memory.ts 的 RecallStatus）。
+ * 半截配置（缺 baseURL / 模型名 / key）＝ 起不来这一路：照常启动，只是没有召回。
+ *
+ * 缺省是"开着但没配地址"：状态行会显示未就绪，对话不受影响；用户填好地址保存、重启后生效。
+ */
+export const SEMANTIC_RECALL_SOURCES = ['remote'] as const
+
+export const semanticRecallSettingsSchema = z.strictObject({
+  /** 总开关（缺省开：长期记忆是这个产品的核心能力；起不来只是没有召回，不拦对话） */
+  enabled: z.boolean(),
+  /** 嵌入来源；3B 会加 `localEngine`（本机引擎） */
+  source: z.enum(SEMANTIC_RECALL_SOURCES),
+  /** OpenAI 兼容 baseURL（形如 `https://api.openai.com/v1`；本机引擎将来给 `http://127.0.0.1:<port>/v1`） */
+  baseUrl: z.string(),
+  /** 嵌入模型名（形如 `text-embedding-3-small`） */
+  model: z.string()
+})
+
+export type SemanticRecallSettings = z.infer<typeof semanticRecallSettingsSchema>
+
+export type SemanticRecallSource = SemanticRecallSettings['source']
+
+/**
  * 模型级偏好（round 18）：按 `${providerId}/${model}` 存「思考挡位」与「对话长度百分比」。
  * 缺省 = 默认挡 + 100%；挡位 id 只有注册表（shared/models.ts）里列出的才有意义
  * （无效值在读取侧回落默认，不在这里抛——用户改了模型名，旧偏好不该让整份设置读不出来）。
@@ -251,7 +284,9 @@ export const appSettingsSchema = z.strictObject({
   /** round 25 的归档项目快照（侧栏隐藏该项目及其会话；取消归档一并恢复） */
   archivedProjects: z.array(archivedProjectSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
-  langfuse: langfuseSettingsSchema
+  langfuse: langfuseSettingsSchema,
+  /** round 28 模块 3 的语义召回（长期记忆；开关 + 嵌入来源，远程 key 走 secrets.json） */
+  semanticRecall: semanticRecallSettingsSchema
 })
 
 /**
@@ -285,6 +320,14 @@ export type LangfuseSettings = z.infer<typeof langfuseSettingsSchema>
 export type AppSettings = z.infer<typeof appSettingsSchema>
 export type AppSettingsPatch = z.infer<typeof appSettingsPatchSchema>
 
+/** 语义召回缺省：开着、走 OpenAI 兼容嵌入服务（地址与模型留空 = 没配 → 这一路起不来） */
+export const DEFAULT_SEMANTIC_RECALL: SemanticRecallSettings = {
+  enabled: true,
+  source: 'remote',
+  baseUrl: '',
+  model: ''
+}
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   fontTier: 'default',
@@ -302,7 +345,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pinnedProjects: [],
   archivedThreads: [],
   archivedProjects: [],
-  langfuse: { endpoint: '' }
+  langfuse: { endpoint: '' },
+  semanticRecall: DEFAULT_SEMANTIC_RECALL
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -322,6 +366,7 @@ export function defaultSettings(): AppSettings {
     pinnedProjects: [],
     archivedThreads: [],
     archivedProjects: [],
-    langfuse: { endpoint: '' }
+    langfuse: { endpoint: '' },
+    semanticRecall: { ...DEFAULT_SEMANTIC_RECALL }
   }
 }

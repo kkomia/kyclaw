@@ -9,6 +9,7 @@ import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
+import { RecallSettings } from './RecallSettings'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
@@ -139,9 +140,11 @@ export function SettingsPage(): React.JSX.Element {
             </SettingsGroup>
           ) : null}
           {/* 记忆 / 用量（round 5 去重）：设置是唯一导航源——面板直接复用独立页的实现（MemoryPanel /
-            UsagePanel），不再套一层分组卡（面板自带 round 5 的 ≤2 层口径），版式与其他组同一内容列。 */}
+            UsagePanel），不再套一层分组卡（面板自带 round 5 的 ≤2 层口径），版式与其他组同一内容列。
+            round 28：语义召回（长期记忆）的设置面在面板前面一行（状态 + 开关 + 来源）。 */}
           {meta.id === 'memory' ? (
             <div data-testid="settings-group-memory" className="flex flex-col gap-3">
+              <RecallSettings />
               <MemoryPanel />
             </div>
           ) : null}

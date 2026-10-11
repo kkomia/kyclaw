@@ -115,6 +115,17 @@ export const IPC_CHANNELS = {
     /** 清除 Langfuse 公私钥（无入参，返回清除后的 LangfuseState） */
     clearLangfuseKeys: 'telemetry:clear-langfuse-keys'
   },
+  memory: {
+    /**
+     * round 28：语义召回（长期记忆）里"远程嵌入"的 API Key 状态（无入参，返回 ProviderKeyState——
+     * 与 provider 密钥同形状：只有"有没有 / 要不要重录"，没有明文）。
+     */
+    embeddingKeyState: 'memory:embedding-key-state',
+    /** 写远程嵌入的 API Key（入参 [key]，返回 {hasKey:true}——永远不回明文） */
+    setEmbeddingKey: 'memory:set-embedding-key',
+    /** 清除远程嵌入的 API Key（无入参，返回清除后的状态） */
+    clearEmbeddingKey: 'memory:clear-embedding-key'
+  },
   plugins: {
     /** 插件总览（无入参：市场 + 插件清单 + 安装记录 + 已装技能） */
     overview: 'plugins:overview',
@@ -305,6 +316,13 @@ export const langfuseKeysArgsSchema = z.tuple([z.string().min(1), z.string().min
 export const setLangfuseKeysResultSchema = z.strictObject({ hasKeys: z.literal(true) })
 
 /**
+ * round 28：写远程嵌入 API Key 的入参/回包。
+ * 入参是单个非空字符串（明文只在主进程内存里短暂存在，落盘走 safeStorage）；回包只有"有没有"，
+ * 形状与 provider 密钥完全一致（复用 providerKeyStateSchema / setProviderKeyResultSchema）。
+ */
+export const embeddingKeyArgsSchema = z.tuple([z.string().min(1)])
+
+/**
  * 插件通道（round 10）的入参与回包：
  *   - 添加市场：{ source, ref?, sparsePaths? }（三态来源判定与克隆在主进程）；
  *   - 安装/卸载/刷新/移除：id / { marketplaceId, name }（市场清单是主进程读的，渲染端只给标识）。
@@ -483,6 +501,21 @@ export interface KyclawApi {
   updates: KyclawUpdatesApi
   telemetry: KyclawTelemetryApi
   plugins: KyclawPluginsApi
+  memory: KyclawMemoryApi
+}
+
+/**
+ * preload 暴露给渲染端的记忆面（round 28，只有语义召回的远程嵌入密钥）：
+ * 开关与来源是普通设置（settings:update 的补丁里就有），这里只管密钥的写/清/状态——
+ * 与 provider / Langfuse 同一套纪律：写方向见明文一次，读方向永远只有"有没有 / 要不要重录"。
+ */
+export interface KyclawMemoryApi {
+  /** 远程嵌入的 API Key 状态（没有 = 没配过） */
+  embeddingKeyState(): Promise<ProviderKeyState>
+  /** 写密钥：成功只回 {hasKey:true}（明文永不回渲染端） */
+  setEmbeddingKey(key: string): Promise<{ hasKey: true }>
+  /** 清除密钥（幂等；返回清除后的状态） */
+  clearEmbeddingKey(): Promise<ProviderKeyState>
 }
 
 /**

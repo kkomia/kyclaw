@@ -1,4 +1,5 @@
 import type { LangfuseState, UpdateState } from '@shared/ipc'
+import type { RecallStatus } from '@shared/memory'
 
 /**
  * 设置页两处状态行的文案（T17）：纯函数单独放一份 —— 组件文件只导出组件（react-refresh 口径），
@@ -46,4 +47,16 @@ export function langfuseStatusText(state: LangfuseState | null): string {
   if (state === null) return '正在读取…'
   if (langfuseConfigured(state)) return state.active ? '已开启' : '已配置，重启应用后开启'
   return state.active ? '本次运行已开启，重启应用后停止' : '未开启'
+}
+
+/**
+ * 「记忆」栏的语义召回状态行（round 28）：同一套纪律——`enabled` 是用户现在的选择，
+ * `active` 是本次运行的事实（装配只在启动时做一次），两者不一致时由**设置值**说话，
+ * 一致时用服务端那句现成人话（`detail`：已开启（本地模型）/ 正在准备 / 不可用的原因）。
+ */
+export function recallStatusText(recall: RecallStatus | null, enabled: boolean): string {
+  if (recall === null) return '正在读取…'
+  if (recall.active && !enabled) return '本次运行已开启，重启应用后停止'
+  if (!recall.active && !enabled) return '未开启'
+  return recall.detail
 }

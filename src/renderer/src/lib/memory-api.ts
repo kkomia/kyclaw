@@ -6,7 +6,12 @@
  *   由页面落到错误态，不把半截数据往 UI 里塞。
  */
 import type { z } from 'zod'
-import { clearMemoryResponseSchema, workingMemoryResponseSchema } from '@shared/memory'
+import {
+  clearMemoryResponseSchema,
+  recallStatusResponseSchema,
+  workingMemoryResponseSchema,
+  type RecallStatus
+} from '@shared/memory'
 
 async function authorized(path: string, init: RequestInit = {}): Promise<Response> {
   const { baseUrl, token } = await window.kyclaw.agent.endpoint()
@@ -55,4 +60,14 @@ export async function saveMemory(content: string): Promise<string | null> {
 export async function clearMemory(): Promise<void> {
   const response = await authorized('/api/memory', { method: 'DELETE' })
   await json(response, clearMemoryResponseSchema)
+}
+
+/**
+ * 语义召回（长期记忆）的本次运行状态（round 28）：开关在设置里、状态在服务里——
+ * 状态行必须说清"这次启动到底有没有召回"，所以这里读的是服务端的现读值，不是设置的期望值。
+ */
+export async function fetchRecallStatus(): Promise<RecallStatus> {
+  const response = await authorized('/api/memory/recall')
+  const { recall } = await json(response, recallStatusResponseSchema)
+  return recall
 }

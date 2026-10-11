@@ -9,6 +9,7 @@ import { app } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
+import { registerMemoryIpc } from './ipc/memory'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
 import { registerSettingsIpc } from './ipc/settings'
@@ -30,6 +31,7 @@ import {
 import { createTray } from './tray'
 import { showMainWindow } from './window'
 import { resolveModel } from '../mastra/model'
+import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
 import type { AgentEndpoint } from '../shared/ipc'
 
 // R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
@@ -102,6 +104,8 @@ if (!app.requestSingleInstanceLock()) {
       secretsFile,
       langfuseActive: () => agentTelemetry?.langfuse ?? false
     })
+    // round 28：语义召回的远程嵌入密钥（写/清/状态；开关与来源走 settings:update）
+    registerMemoryIpc({ secretsFile })
     showMainWindow()
     createTray()
 
@@ -135,7 +139,11 @@ if (!app.requestSingleInstanceLock()) {
         return resolved.model
       },
       // 追踪（T17）：启动时读一次——配齐了就挂 Langfuse 导出，改配置要重启应用才生效
-      langfuse: () => readLangfuseConfig(userDataDir, secretsFile)
+      langfuse: () => readLangfuseConfig(userDataDir, secretsFile),
+      // 语义召回（round 28）：设置现读、装配只做一次（改设置要重启生效）；远程 API Key 在
+      // secrets.json 的保留槽位里，解出来的明文只进内存（不进日志、不回渲染端）
+      semanticRecall: () => readSettings(settingsPath(userDataDir)).semanticRecall,
+      embeddingKey: () => getProviderKey(secretsFile, EMBEDDING_KEY_SECRET_ID)
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }

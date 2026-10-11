@@ -36,6 +36,13 @@ function installFakeMemory(initial: string | null = null): FakeMemoryServer {
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = new URL(String(input))
       const method = init.method ?? 'GET'
+      // round 28：记忆页还会读一次语义召回状态（状态行）。它不进 calls（下面的断言按"记忆接口"
+      // 的最后一次调用看方法/入参），也不参与 failNext 的排队——那是给记忆接口准备的一次性失败。
+      if (url.pathname === '/api/memory/recall') {
+        return json({
+          recall: { state: 'off', active: false, enabled: false, source: 'local', detail: '未开启' }
+        })
+      }
       server.calls.push({
         method,
         path: url.pathname,

@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   appSettingsSchema,
+  DEFAULT_SEMANTIC_RECALL,
   defaultSettings,
   SETTINGS_FILE,
   type AppSettings
@@ -22,7 +23,8 @@ export function settingsPath(userDataDir: string): string {
  * 读盘兼容：这一版之前的 settings.json 缺后来追加的字段——
  * T13 的 permissions、T12 的 mcpServers、T18 的 defaultWorkspace / projects、T17 的 langfuse、
  * round 10 的 pluginMarketplaces / installedPlugins、round 18 的 modelPrefs、
- * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels。
+ * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels、
+ * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  */
@@ -43,7 +45,28 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.pinnedProjects === undefined) next.pinnedProjects = []
   if (next.archivedThreads === undefined) next.archivedThreads = []
   if (next.archivedProjects === undefined) next.archivedProjects = []
+  next.semanticRecall = migrateSemanticRecall(next.semanticRecall)
   return next
+}
+
+/**
+ * 语义召回设置的形状迁移（模块 3 v1 → v2）：v1 是「本地 fastembed / 远程」两路
+ * （`source: 'local' | 'remote'` + `remoteBaseUrl` / `remoteModel`），v2 统一成
+ * OpenAI 兼容嵌入服务（`source: 'remote'` + `baseUrl` / `model`）。v1 从未发布过，
+ * 但开发机上可能落过盘——不迁移的话，strict schema 会把整份设置当坏文件（主题/密钥全丢）。
+ */
+function migrateSemanticRecall(raw: unknown): unknown {
+  if (raw === undefined) return { ...DEFAULT_SEMANTIC_RECALL }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    return { ...DEFAULT_SEMANTIC_RECALL }
+  const record = raw as Record<string, unknown>
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+  return {
+    enabled: record.enabled !== false,
+    source: 'remote',
+    baseUrl: text(record.baseUrl) === '' ? text(record.remoteBaseUrl) : text(record.baseUrl),
+    model: text(record.model) === '' ? text(record.remoteModel) : text(record.model)
+  }
 }
 
 /** 读：拿不到一份完整合法的设置就回默认值（新对象，调用方随便改） */

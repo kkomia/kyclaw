@@ -3,6 +3,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Textarea } from '@renderer/components/ui/input'
 import { Skeleton } from '@renderer/components/ui/skeleton'
+import { RecallStatusLine } from '@renderer/features/settings/RecallSettings'
 import { TextPart } from '@renderer/features/chat/parts/TextPart'
 import { clearMemory, fetchMemory, saveMemory } from '@renderer/lib/memory-api'
 
@@ -251,6 +252,8 @@ export function MemoryPage(): React.JSX.Element {
     >
       <div data-testid="memory-page-column" className="content-column flex flex-col gap-6 p-6">
         <h1 className="text-t1 font-medium text-ink">记忆</h1>
+        {/* round 28：跨会话语义召回的本次运行状态（开关与嵌入来源在「设置 → 记忆」里） */}
+        <RecallStatusLine />
         <MemoryPanel />
       </div>
     </section>

@@ -24,6 +24,7 @@ import {
   workspaceOpenInExplorerResultSchema,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawMemoryApi,
   type KyclawPluginsApi,
   type KyclawProjectsApi,
   type KyclawSettingsApi,
@@ -34,6 +35,7 @@ import {
   type UpdateState
 } from '../shared/ipc'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
+import { providerKeyStateSchema } from '../shared/providers'
 import {
   pluginsOverviewSchema,
   pluginIconResponseSchema,
@@ -245,6 +247,34 @@ const telemetryApi: KyclawTelemetryApi = {
 }
 
 /**
+ * 记忆面（round 28）：语义召回的远程嵌入密钥——与 provider / Langfuse 同一套纪律
+ * （写方向见一次明文，读方向只有"有没有 / 要不要重录"）。
+ */
+const memoryApi: KyclawMemoryApi = {
+  embeddingKeyState: async () => {
+    const parsed = providerKeyStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.memory.embeddingKeyState)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 嵌入密钥状态响应结构不合法')
+    return parsed.data
+  },
+  setEmbeddingKey: async (key) => {
+    const parsed = setProviderKeyResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.memory.setEmbeddingKey, key)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 嵌入密钥保存响应结构不合法')
+    return parsed.data
+  },
+  clearEmbeddingKey: async () => {
+    const parsed = providerKeyStateSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.memory.clearEmbeddingKey)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 嵌入密钥状态响应结构不合法')
+    return parsed.data
+  }
+}
+
+/**
  * 插件面（round 10）：市场与插件的动作都回**新的总览**；结构不对就抛（半截总览没法显示）。
  */
 const pluginsApi: KyclawPluginsApi = {
@@ -283,7 +313,8 @@ export const kyclawApi: KyclawApi = {
   agent: agentApi,
   updates: updatesApi,
   telemetry: telemetryApi,
-  plugins: pluginsApi
+  plugins: pluginsApi,
+  memory: memoryApi
 }
 
 // contextIsolation 默认开（窗口配置没有关它）；关掉时退回直接挂到 window。

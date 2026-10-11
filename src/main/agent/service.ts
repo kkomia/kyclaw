@@ -26,11 +26,19 @@ import { readSettings, settingsPath, updateSettings } from '../settings'
 import { McpLifecycle } from '../mcp/lifecycle'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
 import type { Project } from '../../shared/projects'
-import type { AppSettings, McpServerConfig, PermissionRule, Workspace } from '../../shared/settings'
+import type {
+  AppSettings,
+  McpServerConfig,
+  PermissionRule,
+  SemanticRecallSettings,
+  Workspace
+} from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
+import type { MastraEmbeddingModel } from '@mastra/core/vector'
+import type { RecallRuntime } from '../../mastra/embedding'
 
 const HOST = '127.0.0.1'
 
@@ -97,6 +105,18 @@ export interface AgentServerOptions {
    * 缺省 = null（不导出）——本模块刻意不 import electron，读不到 safeStorage 里的密钥。
    */
   langfuse?: () => LangfuseExportConfig | null
+  /**
+   * round 28：语义召回设置（现读；**装配只在启动时做一次**，改设置要重启应用才生效）。
+   * 缺省 = 从 dataDir/settings.json 的 semanticRecall 读（与设置页写的是同一份）。
+   */
+  semanticRecall?: () => SemanticRecallSettings
+  /**
+   * round 28：嵌入服务的 API Key（safeStorage 明文；缺省 = null——本模块不 import electron）。
+   * 生产由 main/index.ts 注入"读 secrets.json"的实现。
+   */
+  embeddingKey?: () => string | null
+  /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
+  recallEmbedder?: MastraEmbeddingModel<string>
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -107,6 +127,11 @@ export interface AgentServerHandle extends AgentEndpoint {
   port: number
   /** T17：本次装配的追踪状态（设置页「追踪」栏用它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
+  /**
+   * round 28：本次装配的语义召回状态（设置页/记忆页用它说"已开启 / 重启后开启 / 准备中"）。
+   * 现读（本地模型的后台准备会改它）；`settled()` 等后台活干完（测试与收尾用，不抛）。
+   */
+  recall: RecallRuntime
   /**
    * round 15：会话 → 项目 id（session_projects 内存镜像，同步）。
    * `workspace:list-files` 借它把 threadId 解析成会话根（与文件工具同口径）；
@@ -236,9 +261,12 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
   // 追踪（T17）：缺省不导出（密钥在 safeStorage 里，本模块读不到；生产由 main/index.ts 注入）
   const langfuseFor = options.langfuse ?? ((): LangfuseExportConfig | null => null)
+  // 语义召回（round 28）：设置现读（装配只做一次，改设置要重启生效）；密钥同样在 safeStorage 里
+  const semanticRecallFor = options.semanticRecall ?? (() => settingsFor().semanticRecall)
+  const embeddingKeyFor = options.embeddingKey ?? ((): string | null => null)
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory, usage, sessionProjects, compaction, telemetry } =
+  const { mastra, storage, memory, usage, sessionProjects, compaction, telemetry, recall } =
     await createKyclawMastra({
       dataDir: options.dataDir,
       resolveModel: resolveModelFor,
@@ -248,7 +276,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       permissionRules: permissionRulesFor,
       mcpServers: mcpServersFor,
       mcpTools: (gate) => mcpLifecycle.tools(gate),
-      langfuse: langfuseFor
+      langfuse: langfuseFor,
+      semanticRecall: semanticRecallFor,
+      embeddingKey: embeddingKeyFor,
+      ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder })
     })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
@@ -333,8 +364,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     })
   )
 
-  // 记忆 API（T14）：working memory 的查看/编辑/清空——读写的就是 agent 每轮用的那份记忆
-  app.route(MEMORY_ROUTE_PREFIX, createMemoryRouter({ memory }))
+  // 记忆 API（T14）：working memory 的查看/编辑/清空 + 语义召回的运行状态（round 28）
+  app.route(MEMORY_ROUTE_PREFIX, createMemoryRouter({ memory, recall }))
 
   // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
   app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage }))
@@ -373,6 +404,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     token,
     port,
     telemetry,
+    recall,
     projectIdOf: (threadId) => sessionProjects.get(threadId),
     stop: async () => {
       if (stopped) return

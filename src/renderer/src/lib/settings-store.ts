@@ -6,6 +6,7 @@ import {
   type ArchivedProject,
   type ArchivedThread,
   type ModelPrefs,
+  type SemanticRecallSettings,
   type WorkspaceMode
 } from '@shared/settings'
 import type { Project } from '@shared/projects'
@@ -86,6 +87,11 @@ export interface SettingsState {
   unarchiveProject: (projectId: string) => Promise<void>
   /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
   saveLangfuseEndpoint: (endpoint: string) => Promise<void>
+  /**
+   * round 28：保存语义召回设置（记忆栏；给谁就改谁，缺省保持原值）。
+   * 远程嵌入的 API Key 不在设置里，走 memory 通道（与 provider 密钥同一套）。
+   */
+  saveSemanticRecall: (patch: Partial<SemanticRecallSettings>) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
   removeProvider: (id: string) => Promise<void>
   /** 审批卡"永久允许"：追加一条规则并落盘；以落盘结果为准，失败抛给调用方 */
@@ -224,6 +230,12 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   saveLangfuseEndpoint: async (endpoint) => {
     // 与 provider 同族：失败抛给调用方，界面上要能看见"没存进去"
     set({ settings: await settingsApi().update({ langfuse: { endpoint } }) })
+  },
+
+  /** round 28：语义召回设置——合并写（给谁改谁），失败抛给调用方（同模型/追踪栏口径） */
+  saveSemanticRecall: async (patch) => {
+    const current = get().settings.semanticRecall
+    set({ settings: await settingsApi().update({ semanticRecall: { ...current, ...patch } }) })
   },
 
   removeProvider: async (id) => {

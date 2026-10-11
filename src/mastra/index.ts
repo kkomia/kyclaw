@@ -6,6 +6,13 @@
  * - agent 级 Memory（T9）：线程/消息持久化的本体；`lastMessages` 决定每轮给模型多少历史。
  * - working memory（T14）：resource 作用域的一份长期画像——记忆页读写的、助手在对话里更新的，
  *   都是它（`GET/PUT/DELETE /api/memory`）。
+ * - **语义召回（round 28 模块 3）**：跨会话的长期记忆（新会话能想起旧会话聊过的相关内容）。
+ *   `LibSQLVector` 与 storage **同库同文件**（`kyclaw.db`，@mastra/libsql 自带 vector 能力，
+ *   不必引 LanceDB），embedder 由 mastra/embedding.ts 解析（OpenAI 兼容 `/embeddings`：baseURL +
+ *   model + key；将来的本机引擎按同一形状接进来）。
+ *   作用域固定 **resource**（单用户单 resource = 跨会话召回，这是"长期记忆"的定义；thread 口径
+ *   只在本会话里找相似消息，不是这个需求）。起不来（服务不通 / 配置半截 / 启动自检不过）＝
+ *   这一路没有召回，Memory 照常装配——失败只做加法（硬口径，见 embedding.ts 头注）。
  * - 用量记账（T14）：chat 路由的 `defaultOptions.onFinish` 从 run 收尾事件里取 usage，
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
  * - 会话↔项目映射（T18）：同一份 libsql 里的 `session_projects` 表（见 session-projects.ts），
@@ -28,8 +35,15 @@ import type { Tool } from '@mastra/core/tools'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
+import type { MastraEmbeddingModel } from '@mastra/core/vector'
 import type { Project } from '../shared/projects'
-import type { McpServerConfig, PermissionRule, Workspace } from '../shared/settings'
+import {
+  DEFAULT_SEMANTIC_RECALL,
+  type McpServerConfig,
+  type PermissionRule,
+  type SemanticRecallSettings,
+  type Workspace
+} from '../shared/settings'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import {
   compactionSqlClient,
@@ -38,6 +52,13 @@ import {
   createCompactionStore,
   type CompactionService
 } from './compaction'
+import {
+  resolveRecall,
+  SEMANTIC_RECALL_MESSAGE_RANGE,
+  SEMANTIC_RECALL_TOP_K,
+  validateRecallEmbedder,
+  type RecallRuntime
+} from './embedding'
 import type { McpToolGate } from './mcp'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
@@ -91,6 +112,8 @@ export interface KyclawMastra {
   compaction: CompactionService
   /** T17：本次装配有没有挂上 Langfuse 导出（设置页拿它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
+  /** round 28：本次装配的语义召回状态（/api/memory/recall 与设置页状态行读它） */
+  recall: RecallRuntime
 }
 
 /** libsql 的 file: URL 只认正斜杠（Windows 的反斜杠会被当转义字符） */
@@ -140,28 +163,79 @@ export async function createKyclawMastra(options: {
    * 缺省 = 不导出；返回 null（没配齐）同样不导出——见 telemetry.ts 的口径。
    */
   langfuse?: () => LangfuseExportConfig | null
+  /**
+   * round 28：语义召回设置（现读；装配只在启动时做一次——改设置要重启生效，与 langfuse 同口径）。
+   * 缺省 = shared/settings 的缺省（开着；嵌入服务地址留空 = 这一路起不来）。
+   */
+  semanticRecall?: () => SemanticRecallSettings
+  /** round 28：嵌入服务的 API Key（safeStorage 明文，只在主进程内存里；缺省 = null） */
+  embeddingKey?: () => string | null
+  /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
+  recallEmbedder?: MastraEmbeddingModel<string>
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
-  const { LibSQLStore: LibSQLStoreClass } = await import('@mastra/libsql')
+  const { LibSQLStore: LibSQLStoreClass, LibSQLVector: LibSQLVectorClass } =
+    await import('@mastra/libsql')
   const { Memory: MemoryClass } = await import('@mastra/memory')
   const { chatRoute } = await import('@mastra/ai-sdk')
 
   const storage = new LibSQLStoreClass({ id: 'kyclaw-storage', url: libsqlUrl(options.dataDir) })
+  // 语义召回（round 28）：起不来就没有 embedder（这次运行不召回），Memory 装法完全不变。
+  // 密钥取值函数就地调一次（跟 langfuse 的取值函数同口径：设置与密钥都现读，装配只做一次）
+  const recall = await resolveRecall({
+    settings: options.semanticRecall?.() ?? DEFAULT_SEMANTIC_RECALL,
+    ...(options.embeddingKey === undefined ? {} : { embeddingKey: options.embeddingKey() }),
+    ...(options.recallEmbedder === undefined ? {} : { embedder: options.recallEmbedder })
+  })
   // storage 直接给 Memory（而不是只挂 Mastra 实例）：线程 API 在 agent 跑起来之前就会
   // 读存储（列会话/回灌），依赖"跑过一轮才被注册上"的隐式接线会在这一步炸
-  const memory = new MemoryClass({
-    storage,
-    options: {
-      lastMessages: MEMORY_LAST_MESSAGES,
-      // working memory（T14）：resource 作用域（缺省档）= 跨会话共享的一份长期画像，
-      // 记忆页读写的与助手每轮系统提示里看到的是同一份（thread 档按会话隔离，不符合这个语义）
-      workingMemory: {
-        enabled: true,
-        scope: 'resource',
-        template: KYCLAW_WORKING_MEMORY_TEMPLATE
+  const buildMemory = (embedder: MastraEmbeddingModel<string> | undefined): MastraMemory =>
+    new MemoryClass({
+      storage,
+      // vector 与 storage 同库同文件：记忆的向量表（memory_messages*）就落在 kyclaw.db 里。
+      // 没有 embedder 时不挂 vector —— 半截的"有库没模型"只会让每轮多绕一圈
+      ...(embedder === undefined
+        ? {}
+        : {
+            vector: new LibSQLVectorClass({ id: 'kyclaw-vector', url: libsqlUrl(options.dataDir) }),
+            embedder
+          }),
+      options: {
+        lastMessages: MEMORY_LAST_MESSAGES,
+        // working memory（T14）：resource 作用域（缺省档）= 跨会话共享的一份长期画像，
+        // 记忆页读写的与助手每轮系统提示里看到的是同一份（thread 档按会话隔离，不符合这个语义）
+        workingMemory: {
+          enabled: true,
+          scope: 'resource',
+          template: KYCLAW_WORKING_MEMORY_TEMPLATE
+        },
+        // 语义召回（round 28）：**resource 作用域 = 跨会话召回**（这是"长期记忆"的定义）。
+        // 实测该版本（@mastra/memory 1.36.0 + @mastra/libsql 1.25.1）resource 档受支持：
+        // 查询过滤 `{ resource_id }`，索引建表时按维度命名（如 memory_messages_1024）
+        ...(embedder === undefined
+          ? {}
+          : {
+              semanticRecall: {
+                topK: SEMANTIC_RECALL_TOP_K,
+                messageRange: SEMANTIC_RECALL_MESSAGE_RANGE,
+                scope: 'resource' as const
+              }
+            })
       }
+    })
+
+  let memory = buildMemory(recall.embedder)
+  if (recall.embedder !== undefined) {
+    // 启动自检（实测过的硬边界）：Memory 每轮装配输入处理器时会先问 embedder 要维度，
+    // 那一步抛错 = 整轮对话 500 —— 所以这里先把这条路跑通（跑通后它记忆化，之后 embedder
+    // 再挂也只是"没有召回"）。不通过就用一份没有语义召回的 Memory 顶上：失败只做加法。
+    const problem = await validateRecallEmbedder(memory)
+    if (problem !== null) {
+      console.warn(`[kyclaw] 语义召回：${problem}（这次运行不挂 embedder，对话不受影响）`)
+      recall.markUnavailable(problem)
+      memory = buildMemory(undefined)
     }
-  })
+  }
   // 用量表与既有 Mastra 表同库：建表在这里（服务起来就建好），记账/查询共用这一个 store
   const usage = createUsageStore(usageSqlClient(storage))
   await usage.ensureTable()
@@ -225,6 +299,7 @@ export async function createKyclawMastra(options: {
     usage,
     sessionProjects,
     compaction,
-    telemetry: { langfuse: observability !== null }
+    telemetry: { langfuse: observability !== null },
+    recall
   }
 }
