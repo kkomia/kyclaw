@@ -1,5 +1,6 @@
 /**
- * 「文件」工具的读侧（右侧边栏的文件树 + 快速预览）：**一层一层**列目录、有界读文本。
+ * 「文件」工具的读侧（右侧边栏的文件树 + 快速预览 + 搜索）：**一层一层**列目录、有界读文本、
+ * 按文件名 / 按文件内容搜索。
  *
  * 与 `workspace-files.ts`（@ 引用的扁平清单）是一对，口径上的区别：
  *   - 这里是**懒加载**：只列调用方点名的那一层（根 = `''`），子目录等展开时再列 ——
@@ -7,6 +8,9 @@
  *   - 仍然只收真文件与真目录：符号链接 / 设备 / 管道一律不进（避免穿出根、成环）——
  *     与 @ 清单同一条纪律（判据是 `Dirent.isFile/isDirectory`，链接两者都为 false）；
  *   - 条目数有上限（`DIR_ENTRY_LIMIT`），到量即停并如实回 `truncated`。
+ *
+ * 搜索（`searchWorkspace`）与列目录不同：它**递归**，于是反过来跳过 node_modules / .git，
+ * 并且有三重上限（条数 / 单文件扫描量 / 总时长）——见下面那一段的说明。
  *
  * containment 全部经 `resolveInsideWorkspace`：调用方给的是**相对会话根**的路径，
  * 越权（`..` 逃逸、UNC、绝对路径指向根外）一律拒绝并给一句人话。
@@ -26,7 +30,10 @@ import type {
   FileBytesResult,
   FileByteFormat,
   FilePreview,
-  ListDirResult
+  ListDirResult,
+  WorkbenchSearchHit,
+  WorkbenchSearchMode,
+  WorkbenchSearchResult
 } from '../shared/workbench'
 import {
   PREVIEW_IMAGE_MAX_BYTES,
@@ -190,6 +197,158 @@ export function revealTarget(root: string, relative: string): string {
   const target = resolveInside(root, relative)
   statPresent(target, FILE_GONE) // 不存在就在这里抛，别让 shell 那边给一个含糊的失败
   return target
+}
+
+/* ── 搜索（按文件名 / 按文件内容） ────────────────────────────────────────── */
+
+/**
+ * 搜索跳过的重型目录（本轮固定口径，不给开关）：版本库与依赖树。
+ * 与 listDir 的懒加载口径刻意不同 —— 那里用户明确展开就该看到真内容，这里没人点名，
+ * 递归进去只会把时间预算烧在依赖树上。
+ */
+export const SEARCH_SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git'])
+
+/** 结果总条数上限（到量即停，如实标 `truncated`） */
+export const SEARCH_RESULT_LIMIT = 200
+
+/** 单个文件的内容扫描上限（字节）：只看前 1MB，更大的文件按"没扫全"标 `truncated` */
+export const SEARCH_FILE_MAX_BYTES = 1024 * 1024
+
+/** 单个文件最多记几条内容命中 */
+export const SEARCH_MATCHES_PER_FILE = 20
+
+/** 内容命中的行预览截到多少个字符 */
+export const SEARCH_PREVIEW_CHARS = 200
+
+/** 总时长预算（毫秒）：到点就回已收结果（`truncated: true`），不把界面吊死 */
+export const SEARCH_TIME_BUDGET_MS = 3000
+
+export interface SearchOptions {
+  query: string
+  mode: WorkbenchSearchMode
+  /** 计时器注入面（测试超时路径用假表；缺省 Date.now） */
+  now?: () => number
+}
+
+/**
+ * 搜索会话根下的文件：
+ *   - 递归遍历（只收真文件/真目录，链接不进 —— 与 listDir 同一口径）；读不了的目录/文件跳过不炸；
+ *   - `mode='name'` 只看文件名，`mode='content'` 逐行扫文本（读不出来 / 有 NUL 二进制 / 空文件跳过）；
+ *   - 大小写不敏感；条数、单文件扫描量、总时长三处都有上限，触到哪一处都如实标 `truncated`。
+ */
+export function searchWorkspace(root: string, options: SearchOptions): WorkbenchSearchResult {
+  const base = resolveInside(root, '')
+  const now = options.now ?? Date.now
+  const needle = options.query.trim().toLowerCase()
+  const deadline = now() + SEARCH_TIME_BUDGET_MS
+
+  const results: WorkbenchSearchHit[] = []
+  let scanned = 0
+  let truncated = false
+
+  /** 满了 / 超时了：如实标记并停下（结果已经拿到的部分照回） */
+  const exhausted = (): boolean => {
+    if (results.length >= SEARCH_RESULT_LIMIT || now() > deadline) {
+      truncated = true
+      return true
+    }
+    return false
+  }
+
+  /** 一个文件的内容命中：读不出来 / 二进制 / 空文件都当"没命中" */
+  const collectContent = (path: string, relative: string, name: string): void => {
+    const scannedText = textLinesOf(path)
+    if (scannedText === null) return
+    // 只扫了前 1MB 的大文件：结果不完整，如实标
+    if (scannedText.partial) truncated = true
+
+    let recorded = 0
+    for (let index = 0; index < scannedText.lines.length; index += 1) {
+      if ((index & 0x7f) === 0 && exhausted()) return
+      if (recorded >= SEARCH_MATCHES_PER_FILE) {
+        truncated = true // 这个文件还有没记下的命中
+        return
+      }
+      const line = scannedText.lines[index] ?? ''
+      if (!line.toLowerCase().includes(needle)) continue
+      recorded += 1
+      results.push({ path: relative, name, line: index + 1, preview: previewOf(line) })
+    }
+  }
+
+  const walk = (dir: string, relative: string): void => {
+    if (exhausted()) return
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return // 读不了这一层（权限/竞态）：跳过，不给整轮扣死
+    }
+    entries.sort(compareDirents)
+    for (const entry of entries) {
+      if (exhausted()) return
+      const child = relative === '' ? entry.name : `${relative}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (SEARCH_SKIP_DIRS.has(entry.name)) continue
+        walk(join(dir, entry.name), child)
+        continue
+      }
+      if (!entry.isFile()) continue
+      scanned += 1
+      if (options.mode === 'name') {
+        if (entry.name.toLowerCase().includes(needle)) {
+          results.push({ path: child, name: entry.name })
+        }
+        continue
+      }
+      collectContent(join(dir, entry.name), child, entry.name)
+    }
+  }
+
+  walk(base, '')
+  return { results, truncated, scanned }
+}
+
+/** 名字升序（大小写不敏感，与 listDir 的 `compareEntries` 同一口径） */
+function compareDirents(a: Dirent, b: Dirent): number {
+  const left = a.name.toLowerCase()
+  const right = b.name.toLowerCase()
+  if (left !== right) return left < right ? -1 : 1
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+}
+
+/** 内容命中的行预览：去掉首尾空白，超长截到 SEARCH_PREVIEW_CHARS 个字符 */
+function previewOf(line: string): string {
+  const text = line.trim()
+  return text.length > SEARCH_PREVIEW_CHARS ? `${text.slice(0, SEARCH_PREVIEW_CHARS)}…` : text
+}
+
+/** 一个文件扫出来的文本：`partial` = 文件比扫描上限大（只看了前一段） */
+interface ScannedText {
+  lines: string[]
+  partial: boolean
+}
+
+/** 内容扫描用：把这个文件读成文本行（读不了 / 二进制 / 空文件给 null） */
+function textLinesOf(path: string): ScannedText | null {
+  let stat: Stats
+  try {
+    stat = statSync(path)
+  } catch {
+    return null
+  }
+  const want = Math.min(stat.size, SEARCH_FILE_MAX_BYTES)
+  if (want === 0) return null
+
+  let bytes: Buffer
+  try {
+    bytes = readWhole(path, want)
+  } catch {
+    return null
+  }
+  if (bytes.includes(0)) return null // 二进制：不吐乱码，也不假装扫过
+
+  return { lines: decodeText(bytes).split(/\r?\n/), partial: stat.size > want }
 }
 
 /* ── 带类型的字节读取（按格式渲染用） ────────────────────────────────────── */

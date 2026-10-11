@@ -23,6 +23,7 @@ import {
   workbenchGitLogArgsSchema,
   workbenchGitShowArgsSchema,
   workbenchRelativeArgsSchema,
+  workbenchSearchArgsSchema,
   workbenchThreadArgsSchema
 } from '../../shared/ipc'
 import {
@@ -34,11 +35,18 @@ import {
   type GitCommitDetail,
   type GitOverview,
   type ListDirResult,
-  type TerminalSession
+  type TerminalSession,
+  type WorkbenchSearchResult
 } from '../../shared/workbench'
 import { settingsPath } from '../settings'
 import { gitLog, gitOverview, gitShow, type GitRunner } from '../workbench-git'
-import { listDir, readFileBytes, readFilePreview, revealTarget } from '../workbench-files'
+import {
+  listDir,
+  readFileBytes,
+  readFilePreview,
+  revealTarget,
+  searchWorkspace
+} from '../workbench-files'
 import {
   createTerminalService,
   type TerminalService,
@@ -130,6 +138,16 @@ export function registerWorkbenchIpc(
     )
     // 办公档（docx/xlsx/pptx）的解包是异步的，这条通道整体走 await
     const result: FileBytesResult = await readFileBytes(rootOf(threadId), relative)
+    return result
+  })
+
+  ipcMain.handle(IPC_CHANNELS.workbench.search, (_event, ...args) => {
+    const [threadId, query, mode] = parseIpcArgs(
+      workbenchSearchArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.search
+    )
+    const result: WorkbenchSearchResult = searchWorkspace(rootOf(threadId), { query, mode })
     return result
   })
 

@@ -15,6 +15,8 @@ import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
 import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from './search'
 import type { PdfExtractResult } from './attachments'
 import {
+  SEARCH_QUERY_MIN,
+  workbenchSearchModeSchema,
   type FileBytesResult,
   type FilePreview,
   type GitCommit,
@@ -22,7 +24,9 @@ import {
   type GitOverview,
   type ListDirResult,
   type TerminalExit,
-  type TerminalSession
+  type TerminalSession,
+  type WorkbenchSearchMode,
+  type WorkbenchSearchResult
 } from './workbench'
 import {
   appSettingsPatchSchema,
@@ -108,6 +112,12 @@ export const IPC_CHANNELS = {
      * 扩展名 + 文件头双重判定；越界路径照旧拒；大小上限按格式分桶。
      */
     readBytes: 'workbench:read-bytes',
+    /**
+     * round 44：在会话根下搜索（入参 [threadId, query, mode]；返回 WorkbenchSearchResult）——
+     * `mode='name'` 按文件名、`mode='content'` 按文件内容（都是大小写不敏感、只回相对路径）。
+     * query 太短（trim 后 < SEARCH_QUERY_MIN）由闸门拒；递归与重活都在主进程，渲染端只拿结果。
+     */
+    search: 'workbench:search',
     /**
      * 在系统文件资源管理器里定位会话根下的某个路径（入参 [threadId, relative]；返回 { path }）——
      * 目录直接打开，文件用 showItemInFolder 选中。绝对路径只活在主进程。
@@ -331,6 +341,19 @@ export const workbenchGitLogArgsSchema = z.tuple([
 ])
 
 export const workbenchGitShowArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
+
+/**
+ * round 44：workbench:search 的入参：[threadId, query, mode]。
+ * query 的**长度是业务口径**（trim 后至少 SEARCH_QUERY_MIN 个字），所以在这里就拦下来：
+ * 一个字（比如 "a"）的搜索会把整个工作区翻一遍，不值得。
+ */
+export const workbenchSearchArgsSchema = z.tuple([
+  z.string().min(1),
+  z.string().refine((value) => value.trim().length >= SEARCH_QUERY_MIN, {
+    message: `查询至少 ${SEARCH_QUERY_MIN} 个字符`
+  }),
+  workbenchSearchModeSchema
+])
 
 /** terminal:start 的入参：[threadId, cols, rows]（尺寸来自渲染端 FitAddon；主进程按 [1,1000] 收） */
 export const terminalStartArgsSchema = z.tuple([
@@ -708,6 +731,11 @@ export interface KyclawWorkbenchApi {
    * 扩展名与文件头双重判定；认不出、超上限、文件没了各自给判别结果（不抛）。
    */
   readBytes(threadId: string, relative: string): Promise<FileBytesResult>
+  /**
+   * round 44：在会话根下搜索。`mode='name'` 按文件名、`mode='content'` 按文件内容；
+   * query trim 后不足 SEARCH_QUERY_MIN 个字符不发（发出去也会被闸门拒）。
+   */
+  search(threadId: string, query: string, mode: WorkbenchSearchMode): Promise<WorkbenchSearchResult>
   /** 在系统文件资源管理器里打开（目录）或定位（文件）；返回真正给的绝对路径 */
   reveal(threadId: string, relative: string): Promise<{ path: string }>
   /** 仓库总览：分支 + 未提交变更；不是仓库/空仓库由 isRepo / empty 表达（不抛） */

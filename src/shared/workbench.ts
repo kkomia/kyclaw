@@ -158,6 +158,46 @@ export const fileBytesResultSchema = z.discriminatedUnion('kind', [
 ])
 export type FileBytesResult = z.infer<typeof fileBytesResultSchema>
 
+/* ── 文件搜索（round 44） ───────────────────────────────────────────────── */
+
+/**
+ * 搜索的两种口径（同一轮只走一种）：
+ *   - `name`：按**文件名**匹配（不看路径），递归遍历（跳过 `node_modules` / `.git`）；
+ *   - `content`：按**文件内容**匹配（文本文件逐行扫，二进制按"有没有 NUL"跳过）。
+ * 两者都不区分大小写；命中里的路径一律是**相对会话根**的写法（正斜杠）。
+ */
+export const workbenchSearchModeSchema = z.enum(['name', 'content'])
+export type WorkbenchSearchMode = z.infer<typeof workbenchSearchModeSchema>
+
+/** 查询至少要有这么多字符（trim 之后）：不够时渲染端不发，主进程闸门也拒 */
+export const SEARCH_QUERY_MIN = 2
+
+/**
+ * 一条命中：
+ *   - `path` / `name`：相对路径（正斜杠）与文件名；
+ *   - `line` / `preview`：**内容**命中才有 —— 行号（1 起）与该行预览（已去首尾空白、已截断）。
+ */
+export const workbenchSearchHitSchema = z.strictObject({
+  path: z.string().min(1),
+  name: z.string().min(1),
+  line: z.number().int().min(1).optional(),
+  preview: z.string().optional()
+})
+export type WorkbenchSearchHit = z.infer<typeof workbenchSearchHitSchema>
+
+/**
+ * workbench:search 的回包：
+ *   - `results`：命中（顺序 = 遍历顺序：目录在前、名字升序）；
+ *   - `truncated`：结果**不是全部** —— 条数到上限 / 时间到预算 / 某个文件只扫了前一段；
+ *   - `scanned`：真扫过的文件数（目录不计；跳过的目录里的文件也不计）。
+ */
+export const workbenchSearchResultSchema = z.strictObject({
+  results: z.array(workbenchSearchHitSchema),
+  truncated: z.boolean(),
+  scanned: z.number()
+})
+export type WorkbenchSearchResult = z.infer<typeof workbenchSearchResultSchema>
+
 /* ── Git ───────────────────────────────────────────────────────────────── */
 
 /** 未提交变更的归类（由 porcelain 的两字母码算出来，渲染端据此给中文标签与配色） */

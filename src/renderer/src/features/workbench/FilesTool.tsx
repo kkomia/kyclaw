@@ -12,6 +12,10 @@
  * round 42：右键菜单首项「添加到上下文」（仅文件）与预览区选中的「添加到上下文（摘选）」
  * 走 composer-inbox 的事件通道进输入卡的附件条；这里只发布"哪个会话的哪个文件 / 哪段摘选"，
  * 读文件与上限判定都在订阅方（Composer）做。
+ *
+ * round 44：工具条上的搜索钮把工具条与树之间展开一行搜索行（文件名 / 内容两种口径）。
+ * 递归遍历、上限判定、大小写口径全在主进程（`workbench:search`），这里只管防抖、渲染与打开：
+ * 查询（trim 后）不足 `SEARCH_QUERY_MIN` 个字符就回树；结果点击复用 `chooseFile` 那条预览链。
  */
 import {
   ChevronRight,
@@ -21,11 +25,23 @@ import {
   FolderOpen,
   FolderSearch,
   MessageSquarePlus,
-  TextSelect
+  Search,
+  TextSelect,
+  X
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import type { DirEntry, FileBytesResult, FilePreview } from '@shared/workbench'
+import {
+  SEARCH_QUERY_MIN,
+  type DirEntry,
+  type FileBytesResult,
+  type FilePreview,
+  type WorkbenchSearchHit,
+  type WorkbenchSearchMode,
+  type WorkbenchSearchResult
+} from '@shared/workbench'
 import { cn } from '@renderer/components/ui/cn'
+import { IconButton } from '@renderer/components/ui/icon-button'
+import { Input } from '@renderer/components/ui/input'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { linesOfSelection, publishContextItem } from '@renderer/features/chat/composer-inbox'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
@@ -74,12 +90,31 @@ interface PreviewState {
   error?: string
 }
 
+/** 输入停多久才真发搜索（防抖；打字期间一个请求都不发） */
+const SEARCH_DEBOUNCE_MS = 300
+
+/**
+ * 搜索的状态。`key` 是这份结果对应的"口径 + 查询"：对不上就是还没返回（或已过期），
+ * 界面据此画 spinner —— 晚到的旧响应靠 key 失配自然作废，不需要额外的代次计数。
+ */
+interface SearchState {
+  key: string
+  status: 'loading' | 'done' | 'error'
+  result?: WorkbenchSearchResult
+  error?: string
+}
+
 export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element {
   const { threadId, rootPath, ready, notice, workbench } = root
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
   const [expanded, setExpanded] = useState<readonly string[]>([])
   const [preview, setPreview] = useState<PreviewState | null>(null)
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [mode, setMode] = useState<WorkbenchSearchMode>('name')
+  const [search, setSearch] = useState<SearchState | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   /**
    * 列一层目录。**不在请求前写"加载中"状态**：`dirs[路径]` 不存在本身就表示"还没列出来"
@@ -151,6 +186,65 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     },
     [dirs, expanded, loadDir]
   )
+
+  /* ── round 44：搜索 ─────────────────────────────────────────────────── */
+
+  const needle = query.trim()
+  /** 真在搜索（搜索行开着 + 查询够长）；否则一律回树 */
+  const searching = searchOpen && needle.length >= SEARCH_QUERY_MIN
+  const searchKey = `${mode}:${needle}`
+  /** 只看**当前这轮**的结果：晚到的旧响应（key 对不上）留在 state 里也不进界面 */
+  const current = search !== null && search.key === searchKey ? search : null
+
+  /**
+   * 防抖后发搜索。请求发出前不写任何状态：`current === null` 就是"还没结果"，
+   * 界面据此画 spinner —— 于是打字期间一个请求都不发、也没有多余的渲染。
+   */
+  useEffect(() => {
+    if (!searching || workbench === null || threadId === null) return
+    const timer = window.setTimeout(() => {
+      setSearch({ key: searchKey, status: 'loading' })
+      void workbench.search(threadId, needle, mode).then(
+        (result) => setSearch({ key: searchKey, status: 'done', result }),
+        (error: unknown) =>
+          setSearch({ key: searchKey, status: 'error', error: unwrapIpcError(error) })
+      )
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [mode, needle, searchKey, searching, threadId, workbench])
+
+  // 打开搜索行就把光标放进去（折叠容器里的输入拿到焦点才谈得上"点开即打"）
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
+
+  const closeSearch = useCallback((): void => {
+    setSearchOpen(false)
+    setQuery('')
+    setSearch(null)
+  }, [])
+
+  /** 结果行：走与单击文件同一条预览链（内容命中本轮只打开文件，不做行内定位） */
+  const openHit = useCallback(
+    (hit: WorkbenchSearchHit): void => {
+      chooseFile(hit.path)
+    },
+    [chooseFile]
+  )
+
+  /** 搜索行里的键盘：回车打开第一条命中（Esc 交给整块的容器，见下面 onToolKeyDown） */
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Enter') return
+    const first = current?.result?.results[0]
+    if (first !== undefined) openHit(first)
+  }
+
+  /** Esc 关搜索回树：挂在整块工具上，焦点在输入框**或**某条结果上都成立 */
+  const onToolKeyDown = (event: React.KeyboardEvent): void => {
+    if (searchOpen && event.key === 'Escape') closeSearch()
+  }
 
   const reveal = useCallback(
     (relative: string): void => {
@@ -266,7 +360,11 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
   const rootDir = dirs['']
 
   return (
-    <div data-testid="files-tool" className="flex min-h-0 flex-1 flex-col">
+    <div
+      data-testid="files-tool"
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={onToolKeyDown}
+    >
       <ToolBar className="justify-between">
         <span
           data-testid="files-root"
@@ -275,11 +373,55 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
         >
           {root.rootName ?? ''}
         </span>
-        <RefreshButton label="刷新目录树" testId="files-refresh" onClick={() => loadDir('')} />
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton
+            data-testid="files-search"
+            label="搜索文件"
+            icon={<Search />}
+            onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+            className="border-transparent hover:bg-hover"
+          />
+          <RefreshButton label="刷新目录树" testId="files-refresh" onClick={() => loadDir('')} />
+        </div>
       </ToolBar>
 
+      {/* 搜索行：与工具条同一条视觉带（树在它下面）；折叠走 .trace-fold 的双向过渡，不硬切 */}
+      <div
+        className="trace-fold shrink-0"
+        data-open={searchOpen ? 'true' : 'false'}
+        data-testid="files-search-panel"
+      >
+        <div className="trace-fold-in">
+          <div className="flex items-center gap-1 px-2 pb-1">
+            <Input
+              ref={searchInputRef}
+              data-testid="files-search-input"
+              aria-label="搜索文件"
+              value={query}
+              placeholder={mode === 'name' ? '搜索文件名' : '搜索文件内容'}
+              className="h-8 px-2 text-b2"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onSearchKeyDown}
+            />
+            <div className="flex shrink-0 items-center gap-0.5">
+              <SearchModeButton mode="name" current={mode} onSelect={setMode} label="文件名" />
+              <SearchModeButton mode="content" current={mode} onSelect={setMode} label="内容" />
+            </div>
+            <IconButton
+              data-testid="files-search-close"
+              label="关闭搜索"
+              icon={<X />}
+              onClick={closeSearch}
+              className="border-transparent hover:bg-hover"
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-        {rootDir === undefined ? (
+        {searching ? (
+          <SearchResults state={current} mode={mode} onOpen={openHit} />
+        ) : rootDir === undefined ? (
           <div className="flex justify-center py-3">
             <Spinner label="加载中" className="text-ink-tertiary" />
           </div>
@@ -497,6 +639,121 @@ function Row({
       <FileIcon aria-hidden="true" className="size-(--icon-size-sm) shrink-0 text-ink-tertiary" />
       <span className="truncate">{entry.name}</span>
       <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{formatBytes(entry.size)}</span>
+    </button>
+  )
+}
+
+/** 搜索口径的小按钮（选中的那枚铺个底；未选中的只是灰字，与工具条同一套观感） */
+function SearchModeButton({
+  mode,
+  current,
+  onSelect,
+  label
+}: {
+  mode: WorkbenchSearchMode
+  current: WorkbenchSearchMode
+  onSelect: (mode: WorkbenchSearchMode) => void
+  label: string
+}): React.JSX.Element {
+  const active = mode === current
+  return (
+    <button
+      type="button"
+      data-testid={`files-search-mode-${mode}`}
+      data-active={active ? 'true' : 'false'}
+      aria-pressed={active}
+      onClick={() => onSelect(mode)}
+      className={cn(
+        'h-8 shrink-0 cursor-default rounded-field px-2 text-b2 transition-colors duration-(--motion-fast) ease-main',
+        active ? 'bg-hover text-ink' : 'text-ink-secondary hover:bg-hover'
+      )}
+    >
+      {label}
+    </button>
+  )
+}
+
+/**
+ * 搜索结果（替掉树的那块内容）：`state === null` 就是"还没结果"（防抖中 / 请求在路上）→ spinner；
+ * 错误与空结果都给一句人话；`truncated` 如实说明"只显示了一部分"（上限口径见主进程）。
+ */
+function SearchResults({
+  state,
+  mode,
+  onOpen
+}: {
+  state: SearchState | null
+  mode: WorkbenchSearchMode
+  onOpen: (hit: WorkbenchSearchHit) => void
+}): React.JSX.Element {
+  if (state !== null && state.status === 'error') {
+    return <ToolError testId="files-search-error" message={state.error ?? '搜索失败'} />
+  }
+
+  const result = state?.result
+  if (result === undefined) {
+    return (
+      <div className="flex justify-center py-3">
+        <Spinner label="搜索中" className="text-ink-tertiary" />
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {result.results.length === 0 ? (
+        <p data-testid="files-search-empty" className="px-3 py-3 text-b2 text-ink-secondary">
+          {mode === 'name' ? '没有找到匹配的文件名' : '没有找到包含这段文字的文件'}
+        </p>
+      ) : (
+        result.results.map((hit, index) => (
+          <SearchHitRow key={`${hit.path}:${hit.line ?? 0}:${index}`} hit={hit} onOpen={onOpen} />
+        ))
+      )}
+      {result.truncated ? (
+        <p data-testid="files-search-truncated" className="px-3 py-2 text-b2 text-ink-tertiary">
+          结果可能不全（只搜了一部分）
+        </p>
+      ) : null}
+    </>
+  )
+}
+
+/** 一条命中：第一行是文件名（内容命中在右端带行号），第二行是相对路径，内容命中再加一行预览 */
+function SearchHitRow({
+  hit,
+  onOpen
+}: {
+  hit: WorkbenchSearchHit
+  onOpen: (hit: WorkbenchSearchHit) => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="file-search-hit"
+      data-relative={hit.path}
+      data-line={hit.line === undefined ? undefined : String(hit.line)}
+      title={hit.path}
+      onClick={() => onOpen(hit)}
+      className="flex w-full cursor-default flex-col gap-0.5 px-3 py-1.5 text-left transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+    >
+      <span className="flex w-full items-center gap-1.5">
+        <FileIcon aria-hidden="true" className="size-(--icon-size-sm) shrink-0 text-ink-tertiary" />
+        <span className="truncate text-b2 text-ink">{hit.name}</span>
+        {hit.line === undefined ? null : (
+          <span className="ml-auto shrink-0 text-c1 text-ink-tertiary tabular-nums">
+            第 {hit.line} 行
+          </span>
+        )}
+      </span>
+      <span data-testid="file-search-path" className="truncate text-c1 text-ink-tertiary">
+        {hit.path}
+      </span>
+      {hit.preview === undefined ? null : (
+        <span data-testid="file-search-preview" className="truncate text-c1 text-ink-tertiary">
+          {hit.preview}
+        </span>
+      )}
     </button>
   )
 }

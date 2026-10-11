@@ -120,7 +120,7 @@ afterEach(() => {
 })
 
 describe('通道注册与入参闸门', () => {
-  it('十一条通道都注册了', () => {
+  it('十二条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'terminal:dispose',
       'terminal:resize',
@@ -132,7 +132,8 @@ describe('通道注册与入参闸门', () => {
       'workbench:list-dir',
       'workbench:read-bytes',
       'workbench:read-file',
-      'workbench:reveal'
+      'workbench:reveal',
+      'workbench:search'
     ])
   })
 
@@ -169,6 +170,40 @@ describe('通道注册与入参闸门', () => {
     for (const args of [['t', ''], ['t']]) {
       await expect(show(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
     }
+  })
+
+  it('search 的入参闸门：缺参 / 空 query / 一个字 / 走样的 mode 一律拒', () => {
+    const search = handlerOf(IPC_CHANNELS.workbench.search)
+    for (const args of [
+      [],
+      ['t'],
+      ['t', 'ab'],
+      ['t', 'a', 'name'],
+      ['t', '  a  ', 'name'],
+      ['t', 'ab', 'filename'],
+      ['t', '', 'content']
+    ]) {
+      expect(() => search(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
+    }
+
+    // 两个字起步就放行（trim 之后够长才算）
+    expect(() => search(EVENT, 't', ' ab ', 'name')).not.toThrow()
+    expect(() => search(EVENT, 't', '中文', 'content')).not.toThrow()
+  })
+
+  it('search：会话根在主进程解析，结果只有相对路径', () => {
+    const result = handlerOf(IPC_CHANNELS.workbench.search)(EVENT, 't', 'readme', 'name') as {
+      results: { path: string; name: string }[]
+      scanned: number
+    }
+    expect(result.results).toEqual([{ path: 'README.md', name: 'README.md' }])
+    expect(result.scanned).toBeGreaterThan(0)
+
+    // 没有工作区 / 多条并列：与文件族同一句人话
+    writeSettings(settingsPath(dir), { ...defaultSettings() })
+    expect(() => handlerOf(IPC_CHANNELS.workbench.search)(EVENT, 't', 'readme', 'name')).toThrow(
+      /还没有工作区/
+    )
   })
 
   it('terminal 四条的入参闸门（尺寸必须是 1..1000 的整数）', async () => {

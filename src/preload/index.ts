@@ -64,6 +64,7 @@ import {
   terminalDataSchema,
   terminalExitSchema,
   terminalSessionSchema,
+  workbenchSearchResultSchema,
   type FileBytesResult,
   type FilePreview,
   type GitCommit,
@@ -71,7 +72,8 @@ import {
   type GitOverview,
   type ListDirResult,
   type TerminalExit,
-  type TerminalSession
+  type TerminalSession,
+  type WorkbenchSearchResult
 } from '../shared/workbench'
 
 const windowApi: KyclawWindowApi = {
@@ -473,6 +475,14 @@ const workbenchApi: KyclawWorkbenchApi = {
     )
     if (!parsed.success) throw new Error('[kyclaw] 文件字节响应结构不合法')
     return parsed.data satisfies FileBytesResult
+  },
+  // round 44：搜索（结构不对就抛——半截结果列表会让人以为"就这几条"）
+  search: async (threadId, query, mode) => {
+    const parsed = workbenchSearchResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.search, threadId, query, mode)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 搜索结果响应结构不合法')
+    return parsed.data satisfies WorkbenchSearchResult
   },
   reveal: async (threadId, relative) => {
     const parsed = revealResultSchema.safeParse(

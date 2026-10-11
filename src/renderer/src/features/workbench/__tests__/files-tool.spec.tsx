@@ -413,6 +413,171 @@ describe('round 43 · 办公与代码场景的路由', () => {
   })
 })
 
+describe('round 44 · 搜索', () => {
+  /** 点开搜索行（面板是常驻 DOM 的，靠 data-open 判开关） */
+  function openSearch(): HTMLElement {
+    fireEvent.click(screen.getByTestId('files-search'))
+    return screen.getByTestId('files-search-input')
+  }
+
+  it('搜索钮展开搜索行；查询不够长就还是树；关掉回树', async () => {
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    const panel = screen.getByTestId('files-search-panel')
+    expect(panel).toHaveAttribute('data-open', 'false')
+
+    const input = openSearch()
+    expect(panel).toHaveAttribute('data-open', 'true')
+
+    // 一个字（trim 后）不够：不发请求、内容区仍然是树
+    fireEvent.change(input, { target: { value: ' a ' } })
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+    expect(bed.bridge.workbench.search).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('files-search-close'))
+    expect(panel).toHaveAttribute('data-open', 'false')
+    expect(screen.getByText('README.md')).toBeInTheDocument()
+  })
+
+  it('防抖：打字期间一个请求都不发，停下来才用最后的词发一次', async () => {
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    const input = openSearch()
+    fireEvent.change(input, { target: { value: 'in' } })
+    fireEvent.change(input, { target: { value: 'inde' } })
+    expect(bed.bridge.workbench.search).not.toHaveBeenCalled()
+
+    await waitFor(() => expect(bed.bridge.workbench.search).toHaveBeenCalledTimes(1))
+    expect(bed.bridge.workbench.search).toHaveBeenCalledWith('thread-1', 'inde', 'name')
+  })
+
+  it('文件名命中：名字 + 相对路径；点击打开该文件的预览', async () => {
+    bed.bridge.workbench.search.mockResolvedValue({
+      results: [{ path: 'src/deep/中文名.txt', name: '中文名.txt' }],
+      truncated: false,
+      scanned: 12
+    })
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '这里有一段中文\n',
+      size: 21,
+      truncated: false
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.change(openSearch(), { target: { value: '中文' } })
+
+    const hit = await screen.findByTestId('file-search-hit')
+    expect(within(hit).getByText('中文名.txt')).toBeInTheDocument()
+    expect(within(hit).getByTestId('file-search-path')).toHaveTextContent('src/deep/中文名.txt')
+
+    fireEvent.click(hit)
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'src/deep/中文名.txt')
+    )
+    expect(await screen.findByTestId('file-preview-text')).toHaveTextContent('这里有一段中文')
+  })
+
+  it('内容命中：行号 + 该行预览 + 截断标注；回车打开第一条', async () => {
+    bed.bridge.workbench.search.mockResolvedValue({
+      results: [
+        { path: 'src/index.ts', name: 'index.ts', line: 2, preview: '// TODO 搜索我' },
+        { path: 'src/other.ts', name: 'other.ts', line: 9, preview: '// TODO 另一处' }
+      ],
+      truncated: true,
+      scanned: 30
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    const input = openSearch()
+    fireEvent.click(screen.getByTestId('files-search-mode-content'))
+    expect(screen.getByTestId('files-search-mode-content')).toHaveAttribute('data-active', 'true')
+    fireEvent.change(input, { target: { value: 'todo' } })
+    await waitFor(() =>
+      expect(bed.bridge.workbench.search).toHaveBeenCalledWith('thread-1', 'todo', 'content')
+    )
+    const hits = await screen.findAllByTestId('file-search-hit')
+    expect(hits).toHaveLength(2)
+    expect(hits[0]).toHaveAttribute('data-line', '2')
+    expect(within(hits[0] as HTMLElement).getByText('第 2 行')).toBeInTheDocument()
+    expect(within(hits[0] as HTMLElement).getByTestId('file-search-preview')).toHaveTextContent(
+      '// TODO 搜索我'
+    )
+    expect(screen.getByTestId('files-search-truncated')).toHaveTextContent('只搜了一部分')
+
+    // 回车 = 打开第一条命中
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'src/index.ts')
+    )
+
+    // Esc（焦点这时在输入框）关掉搜索回树
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.getByTestId('files-search-panel')).toHaveAttribute('data-open', 'false')
+    expect(screen.queryByTestId('file-search-hit')).not.toBeInTheDocument()
+    expect(screen.getByText('README.md')).toBeInTheDocument()
+
+    // 再来一次：这回焦点在结果行上，Esc 同样关掉
+    fireEvent.change(openSearch(), { target: { value: 'todo' } })
+    const again = await screen.findAllByTestId('file-search-hit')
+    fireEvent.keyDown(again[0] as HTMLElement, { key: 'Escape' })
+    expect(screen.getByTestId('files-search-panel')).toHaveAttribute('data-open', 'false')
+    expect(screen.queryByTestId('file-search-hit')).not.toBeInTheDocument()
+  })
+
+  it('空结果与通道失败都给人话', async () => {
+    bed.bridge.workbench.search.mockResolvedValue({ results: [], truncated: false, scanned: 8 })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.change(openSearch(), { target: { value: '没有这个' } })
+    expect(await screen.findByTestId('files-search-empty')).toHaveTextContent(
+      '没有找到匹配的文件名'
+    )
+
+    bed.bridge.workbench.search.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'workbench:search': Error: 路径不可用：目标路径在工作区之外"
+      )
+    )
+    fireEvent.change(screen.getByTestId('files-search-input'), { target: { value: '再来一次' } })
+    expect(await screen.findByTestId('files-search-error')).toHaveTextContent(
+      '路径不可用：目标路径在工作区之外'
+    )
+  })
+
+  it('搜索中给加载态；Esc 关掉搜索回树（查询也清掉）', async () => {
+    let release: (value: { results: never[]; truncated: boolean; scanned: number }) => void = () =>
+      undefined
+    bed.bridge.workbench.search.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    )
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    const input = openSearch()
+    fireEvent.change(input, { target: { value: '慢慢来' } })
+    await waitFor(() => expect(bed.bridge.workbench.search).toHaveBeenCalledTimes(1))
+    // 还没回：结果区给加载态（树不再顶上来）
+    await waitFor(() => expect(screen.queryByText('README.md')).not.toBeInTheDocument())
+
+    release({ results: [], truncated: false, scanned: 1 })
+    await screen.findByTestId('files-search-empty')
+
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.getByTestId('files-search-panel')).toHaveAttribute('data-open', 'false')
+    expect((screen.getByTestId('files-search-input') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('README.md')).toBeInTheDocument()
+  })
+})
+
 describe('FilesTool：自绘右键菜单', () => {
   it('右键出菜单：在文件资源管理器中定位 / 复制路径', async () => {
     const writeText = vi.fn(async () => undefined)

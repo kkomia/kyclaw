@@ -28,7 +28,9 @@ import type {
   GitOverview,
   ListDirResult,
   TerminalExit,
-  TerminalSession
+  TerminalSession,
+  WorkbenchSearchMode,
+  WorkbenchSearchResult
 } from '@shared/workbench'
 
 /**
@@ -340,6 +342,10 @@ export interface WorkbenchApiStub {
   readFile: Mock<(threadId: string, relative: string) => Promise<FilePreview>>
   /** round 40：字节通道（图片 / PDF 的按格式预览）；默认回"不支持" */
   readBytes: Mock<(threadId: string, relative: string) => Promise<FileBytesResult>>
+  /** round 44：搜索（默认空结果；用例自己 mockResolvedValue 喂命中） */
+  search: Mock<
+    (threadId: string, query: string, mode: WorkbenchSearchMode) => Promise<WorkbenchSearchResult>
+  >
   reveal: Mock<(threadId: string, relative: string) => Promise<{ path: string }>>
   gitOverview: Mock<(threadId: string) => Promise<GitOverview>>
   gitLog: Mock<(threadId: string, limit: number) => Promise<{ commits: GitCommit[] }>>
@@ -351,6 +357,7 @@ export function workbenchApiStub(): WorkbenchApiStub {
     listDir: vi.fn(async () => ({ entries: [], truncated: false })),
     readFile: vi.fn(async () => ({ kind: 'text' as const, text: '', size: 0, truncated: false })),
     readBytes: vi.fn(async () => ({ kind: 'unsupported' as const, size: 0 })),
+    search: vi.fn(async () => ({ results: [], truncated: false, scanned: 0 })),
     reveal: vi.fn(async () => ({ path: '' })),
     gitOverview: vi.fn(async () => ({ isRepo: false, empty: false, branch: null, changes: [] })),
     gitLog: vi.fn(async () => ({ commits: [] })),

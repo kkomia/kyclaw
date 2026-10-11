@@ -580,7 +580,7 @@ describe('preload：window.kyclaw.translate（思考翻译，round 32）', () =>
 })
 
 describe('preload：window.kyclaw.workbench / terminal（工作台四工具）', () => {
-  it('暴露 workbench 一族（listDir / readFile / readBytes / reveal / gitOverview / gitLog / gitShow）', async () => {
+  it('暴露 workbench 一族（listDir / readFile / readBytes / search / reveal / gitOverview / gitLog / gitShow）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.workbench).sort()).toEqual([
@@ -590,7 +590,8 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
       'listDir',
       'readBytes',
       'readFile',
-      'reveal'
+      'reveal',
+      'search'
     ])
     expect(Object.keys(kyclawApi.terminal).sort()).toEqual([
       'dispose',
@@ -651,6 +652,33 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
       额外: 1
     })
     await expect(kyclawApi.workbench.readFile('t1', 'a')).rejects.toThrow(/结构不合法/)
+  })
+
+  it('round 44：search 发 [threadId, query, mode]，结果按 schema 解析（对不上就抛）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    const result = {
+      results: [
+        { path: 'src/index.ts', name: 'index.ts', line: 2, preview: '// TODO' },
+        { path: 'README.md', name: 'README.md' }
+      ],
+      truncated: false,
+      scanned: 12
+    }
+    mocks.invoke.mockResolvedValueOnce(result)
+    await expect(kyclawApi.workbench.search('t1', 'todo', 'content')).resolves.toEqual(result)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:search', 't1', 'todo', 'content')
+
+    // 命中缺 path / mode 认不出 / 多带字段：都是结构不合法
+    mocks.invoke.mockResolvedValueOnce({
+      results: [{ name: 'a.ts' }],
+      truncated: false,
+      scanned: 1
+    })
+    await expect(kyclawApi.workbench.search('t1', 'a.ts', 'name')).rejects.toThrow(/结构不合法/)
+
+    mocks.invoke.mockResolvedValueOnce({ results: [], truncated: false, scanned: 0, 额外: 1 })
+    await expect(kyclawApi.workbench.search('t1', 'a.ts', 'name')).rejects.toThrow(/结构不合法/)
   })
 
   it('git 三件：总览按 isRepo 形态解析、历史与详情各自的 schema', async () => {
