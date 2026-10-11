@@ -223,7 +223,11 @@ export function PluginsPluginPanel({
         }}
         title="移除这个插件市场？"
         description={
-          removing === null ? '' : `${removing.name} 下已安装的插件会一起卸载；本机目录不会被删除。`
+          removing === null
+            ? ''
+            : removing.kind === 'git'
+              ? `${removing.name} 下已安装的插件会一起卸载；移除后，本机下载的这份市场内容会一起删除。`
+              : `${removing.name} 下已安装的插件会一起卸载；移除不会动你本机的这个目录。`
         }
         footer={
           <>
@@ -256,7 +260,9 @@ export function PluginsPluginPanel({
         }}
         title="卸载这个插件？"
         description={
-          uninstalling === null ? '' : `${uninstalling.name} 带来的 MCP 服务与技能会一起移除。`
+          uninstalling === null
+            ? ''
+            : `${uninstalling.name} 带来的 MCP 服务、技能与本机下载的文件会一起移除。`
         }
         footer={
           <>

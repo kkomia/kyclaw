@@ -12,6 +12,7 @@
  * 界面文案是产品口径（不写后端原文），**原始 error 一律 `console.error` 留底**，
  * 生产排障有落点（T9 之后复核指出过：只落文案、原文丢了）。
  */
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { create } from 'zustand'
 import type { ThreadSummary } from '@shared/threads'
 import { notifyTurnDone } from '../../lib/notify'
@@ -58,7 +59,8 @@ export interface SessionsState {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 /** ensureLoaded 的去重句柄（ChatPage 与侧栏可能同时触发；模块级，不进 store） */

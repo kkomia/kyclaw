@@ -2,13 +2,19 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { defaultSettings, type AppSettings, type ArchivedThread } from '@shared/settings'
+import {
+  defaultSettings,
+  type AppSettings,
+  type ArchivedProject,
+  type ArchivedThread
+} from '@shared/settings'
 import { ArchiveSettings } from '../ArchiveSettings'
 
 /**
- * 设置页「归档」组（round 20，RTL）：列表（标题/来源项目/时间）+ 搜索（标题过滤）+ 取消归档 + 空态。
- * 数据 = settings.archivedThreads（归档时的快照）；取消归档走 settings:update，失败行内报原因；
- * 会话数据本体一直没动过（归档只是从侧栏移出 + 快照），取消后被过滤掉的会话自然回侧栏。
+ * 设置页「归档」组（round 20 会话 / round 25 项目分区，RTL）：列表（标题/名称/路径/时间）+
+ * 搜索（会话按标题；项目按名称与路径）+ 取消归档 + 空态/无匹配。
+ * 数据 = settings.archivedThreads / archivedProjects（归档时的快照）；取消归档走 settings:update，
+ * 失败行内报原因（先剥 IPC 包装）；数据本体一直没动过——取消后回侧栏原位置。
  */
 const PROJECT = {
   id: 'p1',
@@ -27,11 +33,22 @@ function archived(overrides: Partial<ArchivedThread>): ArchivedThread {
   }
 }
 
+function archivedProject(overrides: Partial<ArchivedProject>): ArchivedProject {
+  return {
+    projectId: 'p1',
+    name: '项目一',
+    path: 'D:\\p1',
+    archivedAt: '2026-10-11T10:00:00.000Z',
+    ...overrides
+  }
+}
+
 function withArchived(
   archivedThreads: ArchivedThread[],
-  projects: AppSettings['projects'] = []
+  projects: AppSettings['projects'] = [],
+  archivedProjects: ArchivedProject[] = []
 ): AppSettings {
-  return { ...defaultSettings(), archivedThreads, projects }
+  return { ...defaultSettings(), archivedThreads, projects, archivedProjects }
 }
 
 async function mount(initial: AppSettings): Promise<ReturnType<typeof installKyclawBridge>> {
@@ -114,7 +131,7 @@ describe('归档组 · 搜索', () => {
     expect(screen.queryByTestId('archive-row-t2')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByTestId('archive-search'), { target: { value: 'zzz' } })
-    expect(screen.getByTestId('archive-no-match')).toHaveTextContent('没有匹配的归档会话')
+    expect(screen.getByTestId('archive-no-match')).toHaveTextContent('没有匹配的归档内容')
     expect(screen.queryByTestId('archive-row-t1')).not.toBeInTheDocument()
   })
 
@@ -159,5 +176,105 @@ describe('归档组 · 取消归档', () => {
       expect(screen.getByTestId('archive-error')).toHaveTextContent('设置落盘失败')
     })
     expect(screen.getByTestId('archive-row-t1')).toBeInTheDocument()
+  })
+})
+
+describe('归档组 · 项目分区（round 25）', () => {
+  it('列出项目名 + 路径 + 归档时间；时间倒序；会话区空但项目区有内容不整板空态', async () => {
+    await mount(
+      withArchived(
+        [],
+        [],
+        [
+          archivedProject({
+            projectId: 'p-old',
+            name: '旧的',
+            archivedAt: '2026-10-10T10:00:00.000Z'
+          }),
+          archivedProject({
+            projectId: 'p-new',
+            name: '新的',
+            path: 'D:\\ws\\新的',
+            archivedAt: '2026-10-11T11:00:00.000Z'
+          })
+        ]
+      )
+    )
+
+    const rows = screen.getAllByTestId(/^archive-project-row-/)
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
+      'archive-project-row-p-new',
+      'archive-project-row-p-old'
+    ])
+    expect(screen.getByTestId('archive-project-row-p-new')).toHaveTextContent('D:\\ws\\新的')
+    expect(screen.getByTestId('archive-project-row-p-new')).toHaveTextContent('归档于')
+    expect(screen.queryByTestId('archive-empty')).not.toBeInTheDocument()
+    expect(screen.getByText('还没有归档的会话。')).toBeInTheDocument()
+  })
+
+  it('搜索命中项目名或路径（大小写不敏感）；会话区消失不整板空态；都无匹配给一行提示', async () => {
+    await mount(
+      withArchived(
+        [archived({ threadId: 't1', title: '甲会话' })],
+        [],
+        [
+          archivedProject({ projectId: 'p1', name: '插件房', path: 'D:\\ws\\插件' }),
+          archivedProject({ projectId: 'p2', name: '资料库', path: 'D:\\ws\\shuju' })
+        ]
+      )
+    )
+
+    // 按项目名：项目行留下，会话行与项目 p2 都被过滤
+    fireEvent.change(screen.getByTestId('archive-search'), { target: { value: '插件' } })
+    expect(screen.getByTestId('archive-project-row-p1')).toBeInTheDocument()
+    expect(screen.queryByTestId('archive-project-row-p2')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('archive-row-t1')).not.toBeInTheDocument()
+    expect(screen.getByText('没有匹配的会话。')).toBeInTheDocument()
+
+    // 按路径（大小写不敏感）
+    fireEvent.change(screen.getByTestId('archive-search'), { target: { value: 'SHUJU' } })
+    expect(screen.getByTestId('archive-project-row-p2')).toBeInTheDocument()
+    expect(screen.queryByTestId('archive-project-row-p1')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('archive-search'), { target: { value: 'zzz' } })
+    expect(screen.getByTestId('archive-no-match')).toBeInTheDocument()
+  })
+
+  it('点「取消归档」：写 settings.archivedProjects（去掉这条），行消失', async () => {
+    const initial = withArchived(
+      [],
+      [],
+      [archivedProject({ projectId: 'p1' }), archivedProject({ projectId: 'p2', name: '项目二' })]
+    )
+    const bridge = await mount(initial)
+
+    fireEvent.click(screen.getByTestId('archive-project-restore-p1'))
+
+    await waitFor(() => {
+      expect(bridge.update).toHaveBeenCalledWith({
+        archivedProjects: [initial.archivedProjects[1]]
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByTestId('archive-project-row-p1')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('archive-project-row-p2')).toBeInTheDocument()
+  })
+
+  it('取消归档项目落盘失败：行内报原因（剥掉 IPC 包装）、行还在', async () => {
+    const bridge = await mount(withArchived([], [], [archivedProject({ projectId: 'p1' })]))
+    bridge.update.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'settings:update': Error: 设置落盘失败")
+    )
+
+    fireEvent.click(screen.getByTestId('archive-project-restore-p1'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-error')).toHaveTextContent('设置落盘失败')
+    })
+    expect(screen.getByTestId('archive-error')).not.toHaveTextContent(
+      'Error invoking remote method'
+    )
+    expect(screen.getByTestId('archive-project-row-p1')).toBeInTheDocument()
   })
 })

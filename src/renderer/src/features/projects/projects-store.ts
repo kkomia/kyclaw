@@ -12,12 +12,14 @@
  *
  * 失败一律落 `error`（侧栏显示），不抛给调用方。
  */
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { create } from 'zustand'
 import type { SessionProjectEntry } from '@shared/projects'
 import { fetchSessionProjects, putSessionProject } from '../../lib/projects-api'
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 /** ensureLoaded 的去重句柄（多个组件可能同时触发；模块级，不进 store） */

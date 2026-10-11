@@ -52,6 +52,10 @@ export interface ProjectsApiStub {
   pickFolder: Mock<() => Promise<{ path: string | null }>>
   create: Mock<(name: string, path: string) => Promise<AppSettings>>
   remove: Mock<(id: string) => Promise<AppSettings>>
+  /** round 25：重命名（只改显示名） */
+  rename: Mock<(id: string, name: string) => Promise<AppSettings>>
+  /** round 25：在文件资源管理器里打开项目目录（默认回固定路径） */
+  openInExplorer: Mock<(id: string) => Promise<{ path: string }>>
 }
 
 /** 更新面（T17）：`push` 是测试用的"模拟主进程推送"，其余都是真实 API 的形状 */
@@ -220,7 +224,19 @@ function projectsApi(state: BridgeState): ProjectsApiStub {
         projects: state.current.projects.filter((project) => project.id !== id)
       }
       return state.current
-    })
+    }),
+    // round 25：重命名（与主进程同口径：只改显示名、trim）
+    rename: vi.fn(async (id: string, name: string) => {
+      state.current = {
+        ...state.current,
+        projects: state.current.projects.map((project) =>
+          project.id === id ? { ...project, name: name.trim() } : project
+        )
+      }
+      return state.current
+    }),
+    // round 25：在文件资源管理器里打开（默认回一个固定路径；用例自己 mockRejectedValue 造失败）
+    openInExplorer: vi.fn(async () => ({ path: PICKED_WORKSPACE }))
   }
 }
 

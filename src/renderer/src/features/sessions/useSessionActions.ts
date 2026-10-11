@@ -12,6 +12,7 @@
  */
 import { useCallback, useMemo } from 'react'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useSessionsStore } from './sessions-store'
 import { useProjectsStore } from '../projects/projects-store'
 import { sessionWorkspaceOf } from '../chat/session-workspace'
@@ -54,7 +55,8 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
   const report = useCallback(
     (prefix: string, cause: unknown): void => {
       console.error(prefix, cause)
-      onError?.(cause instanceof Error ? cause.message : String(cause))
+      // 展示前剥 IPC 包装（round 25：`Error invoking remote method …` 不进横幅）
+      onError?.(unwrapIpcError(cause))
     },
     [onError]
   )

@@ -17,7 +17,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pluginsDirs, removeDirRobust, sweepPluginResidue } from '../store'
 import type { PluginMarketplace } from '../../../shared/settings'
 
@@ -94,21 +94,58 @@ describe('removeDirRobust', () => {
     expect(existsSync(trash)).toBe(false)
   })
 
-  it('连改名都失败 → 抛人话「删除被占用」，目录原样留着', () => {
+  it('连改名都失败 → 5 次退避重试后抛人话「删除被占用」，原始 detail 进日志；目录原样留着', () => {
     const target = join(dir, 'stubborn')
     mkdirSync(target, { recursive: true })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let attempts = 0
 
     expect(() =>
       removeDirRobust(target, {
         rm: () => {
-          throw new Error('EBUSY')
+          throw new Error('EBUSY（原始 detail）')
         },
         rename: () => {
-          throw new Error('EPERM')
-        }
+          attempts += 1
+          throw new Error('EPERM（原始 detail）')
+        },
+        sleep: () => {}
       })
     ).toThrow(/删除被占用/)
+    expect(attempts).toBe(5)
     expect(existsSync(target)).toBe(true)
+    // 原始错误进日志（不上横幅）：warn 的参数里带着原始 Error（EBUSY/EPERM）
+    expect(warn).toHaveBeenCalled()
+    const rawArgs = warn.mock.calls.flat() as unknown[]
+    const rawText = rawArgs
+      .map((arg) => (arg instanceof Error ? arg.message : String(arg)))
+      .join(' ')
+    expect(rawText).toContain('EBUSY')
+    expect(rawText).toContain('EPERM')
+    warn.mockRestore()
+  })
+
+  it('瞬时占用：改名第 3 次才成（退避重试生效）——原路径消失、按成功处理', () => {
+    const target = join(dir, 'flaky')
+    mkdirSync(target, { recursive: true })
+    let attempts = 0
+    const sleeps: number[] = []
+
+    removeDirRobust(target, {
+      rm: () => {
+        throw new Error('EBUSY')
+      },
+      rename: (from, to) => {
+        attempts += 1
+        if (attempts < 3) throw new Error('EPERM（瞬时）')
+        renameSync(from, to)
+      },
+      sleep: (ms) => sleeps.push(ms)
+    })
+
+    expect(attempts).toBe(3)
+    expect(sleeps).toEqual([300, 300])
+    expect(existsSync(target)).toBe(false)
   })
 })
 

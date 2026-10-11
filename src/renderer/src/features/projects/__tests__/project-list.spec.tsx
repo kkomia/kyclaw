@@ -165,3 +165,103 @@ describe('ProjectList', () => {
     expect(props.onDeleteProject).toHaveBeenCalledWith(projects[1])
   })
 })
+
+/** round 25：项目行 ⋯ 菜单（图2）+ ⊕ 新建会话 */
+describe('ProjectList（round 25：项目行菜单与 ⊕）', () => {
+  const round25Props = (): Partial<ProjectListProps> => ({
+    onTogglePinProject: vi.fn(),
+    onOpenProjectInExplorer: vi.fn(),
+    onRenameProject: vi.fn(),
+    onArchiveProject: vi.fn(),
+    onCreateSession: vi.fn()
+  })
+
+  it('⋯ 菜单条目与顺序：置顶/打开/重命名 ‖ 归档 ‖ 删除（红字收尾）', () => {
+    renderList(round25Props())
+
+    fireEvent.keyDown(screen.getByTestId('project-more-p1'), { key: 'ArrowDown' })
+    const items = screen.getAllByRole('menuitem')
+    expect(items.map((el) => el.textContent)).toEqual([
+      '置顶项目',
+      '在文件资源管理器中打开',
+      '重命名项目',
+      '归档',
+      '删除'
+    ])
+    expect(items[4].className).toContain('text-danger')
+  })
+
+  it('置顶项目：行内图钉标识 + 菜单文案随状态；toggle 回调带新状态（true=置顶）', () => {
+    const props = round25Props()
+    renderList({ ...props, pinnedProjectIds: new Set(['p1']) })
+
+    expect(screen.getByTestId('project-pin-mark-p1')).toBeInTheDocument()
+    expect(screen.queryByTestId('project-pin-mark-p2')).not.toBeInTheDocument()
+
+    // 已置顶 → 菜单是「取消置顶项目」，回调 false
+    fireEvent.keyDown(screen.getByTestId('project-more-p1'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('project-pin-p1')).toHaveTextContent('取消置顶项目')
+    fireEvent.keyDown(screen.getByTestId('project-pin-p1'), { key: 'Enter' })
+    expect(props.onTogglePinProject).toHaveBeenCalledWith('p1', false)
+
+    // 未置顶 → 「置顶项目」，回调 true
+    pick('project-more-p2', 'project-pin-p2')
+    expect(props.onTogglePinProject).toHaveBeenCalledWith('p2', true)
+  })
+
+  it('未接回调时对应菜单项禁用、⊕ 禁用（纯展示防线）', () => {
+    renderList()
+
+    fireEvent.keyDown(screen.getByTestId('project-more-p1'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('project-pin-p1')).toHaveAttribute('data-disabled')
+    expect(screen.getByTestId('project-rename-p1')).toHaveAttribute('data-disabled')
+    expect(screen.getByTestId('project-archive-p1')).toHaveAttribute('data-disabled')
+    expect(screen.getByTestId('project-new-session-p1')).toBeDisabled()
+  })
+
+  it('⊕ = 在该项目下新建会话（回调带项目 id；不在行按钮内，悬停隔离保持）', () => {
+    const props = round25Props()
+    renderList(props)
+
+    const plus = screen.getByTestId('project-new-session-p2')
+    expect(plus).toHaveAccessibleName('在「资料」里新建会话')
+    fireEvent.click(plus)
+    expect(props.onCreateSession).toHaveBeenCalledWith('p2')
+
+    expect(screen.getByTestId('project-item-p2')).not.toContainElement(plus)
+    expect(screen.getByTestId('project-more-p2')).not.toContainElement(plus)
+  })
+
+  it('在文件资源管理器中打开 / 归档：各自回调带项目 id', () => {
+    const props = round25Props()
+    renderList(props)
+
+    pick('project-more-p1', 'project-open-p1')
+    expect(props.onOpenProjectInExplorer).toHaveBeenCalledWith('p1')
+
+    pick('project-more-p2', 'project-archive-p2')
+    expect(props.onArchiveProject).toHaveBeenCalledWith('p2')
+  })
+
+  it('重命名项目：对话框初始值为当前名称；保存回调、空名禁用保存、取消不回调', () => {
+    const props = round25Props()
+    renderList(props)
+
+    pick('project-more-p1', 'project-rename-p1')
+    const input = screen.getByTestId('project-rename-input')
+    expect(input).toHaveValue('插件')
+
+    fireEvent.change(input, { target: { value: '   ' } })
+    expect(screen.getByTestId('project-rename-save')).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: '新名字' } })
+    fireEvent.click(screen.getByTestId('project-rename-save'))
+    expect(props.onRenameProject).toHaveBeenCalledWith('p1', '新名字')
+
+    // 取消：编辑后取消不触发回调
+    pick('project-more-p1', 'project-rename-p1')
+    fireEvent.change(screen.getByTestId('project-rename-input'), { target: { value: '别的' } })
+    fireEvent.click(screen.getByTestId('project-rename-cancel'))
+    expect(props.onRenameProject).toHaveBeenCalledTimes(1)
+  })
+})

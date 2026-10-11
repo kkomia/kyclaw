@@ -24,7 +24,7 @@ vi.mock('electron', () => ({
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
 import type { PluginsOverview } from '../../../shared/plugins'
-import { readSettings, settingsPath } from '../../settings'
+import { readSettings, settingsPath, updateSettings } from '../../settings'
 import { registerPluginIpc } from '../plugins'
 
 const EVENT = { sender: { id: 1 } }
@@ -272,6 +272,90 @@ describe('plugins:remove-marketplace', () => {
     expect(existsSync(join(dir, 'skills', 'market-p-relative-demo'))).toBe(false)
     // 本机目录是用户的，不动
     expect(existsSync(market)).toBe(true)
+  })
+})
+
+describe('round 25 · 卸载彻底删净（installDir / 技能 / git 克隆）', () => {
+  /** 伪造一条"从 git 装的插件"记录：克隆目录与技能目录都在盘上 */
+  function forgeGitInstalled(): { installDir: string; skillDir: string; marketClone: string } {
+    const installDir = join(dir, 'plugins', 'installed', 'gitmarket-p1')
+    writeFile(join(installDir, '.claude-plugin', 'plugin.json'), '{}')
+    const skillDir = join(dir, 'skills', 'gitmarket-p1-s1')
+    writeFile(join(skillDir, 'SKILL.md'), '# s1\n')
+    const marketClone = join(dir, 'plugins', 'marketplaces', 'gitmarket')
+    writeJson(join(marketClone, '.claude-plugin', 'marketplace.json'), {
+      name: 'git 市场',
+      plugins: []
+    })
+    updateSettings(settingsPath(dir), {
+      pluginMarketplaces: [
+        {
+          id: 'gitmarket',
+          name: 'git 市场',
+          source: 'https://github.com/a/b.git',
+          kind: 'git',
+          path: marketClone,
+          addedAt: '2026-10-11T00:00:00.000Z'
+        }
+      ],
+      installedPlugins: [
+        {
+          id: 'gitmarket-p1',
+          marketplaceId: 'gitmarket',
+          name: 'p1',
+          installedAt: '2026-10-11T00:00:00.000Z',
+          mcpServerIds: [],
+          skillDirs: ['gitmarket-p1-s1'],
+          installDir
+        }
+      ]
+    })
+    return { installDir, skillDir, marketClone }
+  }
+
+  it('卸载：插件克隆目录（installDir）与技能目录都从盘上删掉；市场本身不动', async () => {
+    const { installDir, skillDir, marketClone } = forgeGitInstalled()
+
+    const next = (await handlerOf(IPC_CHANNELS.plugins.uninstall)(
+      EVENT,
+      'gitmarket-p1'
+    )) as PluginsOverview
+
+    expect(next.installed).toEqual([])
+    expect(existsSync(installDir)).toBe(false)
+    expect(existsSync(skillDir)).toBe(false)
+    expect(settings().installedPlugins).toEqual([])
+    // 卸载插件 ≠ 移除市场：克隆目录还在（要连市场一起删走下一组用例）
+    expect(existsSync(marketClone)).toBe(true)
+  })
+
+  it('移除 git 市场：克隆目录删净；local 市场（用户自己的目录）原样保留', async () => {
+    const { marketClone } = forgeGitInstalled()
+    const localMarket = makeMarket(dir)
+    const current = settings()
+    updateSettings(settingsPath(dir), {
+      pluginMarketplaces: [
+        ...current.pluginMarketplaces,
+        {
+          id: 'market',
+          name: 'demo-market',
+          source: localMarket,
+          kind: 'local',
+          path: localMarket,
+          addedAt: '2026-10-11T00:00:00.000Z'
+        }
+      ]
+    })
+
+    const next = (await handlerOf(IPC_CHANNELS.plugins.removeMarketplace)(
+      EVENT,
+      'gitmarket'
+    )) as PluginsOverview
+
+    expect(next.marketplaces.map((marketplace) => marketplace.id)).toEqual(['market'])
+    expect(existsSync(marketClone)).toBe(false)
+    expect(existsSync(localMarket)).toBe(true)
+    expect(settings().pluginMarketplaces.map((marketplace) => marketplace.id)).toEqual(['market'])
   })
 })
 

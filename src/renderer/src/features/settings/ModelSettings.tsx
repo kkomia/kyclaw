@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
@@ -43,7 +44,8 @@ function draftOf(provider: ProviderConfig): Draft {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 /** 删掉 record 里的一条（草稿/状态/结果都是按 provider id 存的） */

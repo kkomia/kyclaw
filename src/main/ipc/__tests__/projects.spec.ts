@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
   return {
     handlers: new Map<string, Handler>(),
     dialog: vi.fn(),
+    openPath: vi.fn(async () => ''),
     window: null as unknown
   }
 })
@@ -25,7 +26,8 @@ vi.mock('electron', () => ({
     }
   },
   BrowserWindow: { fromWebContents: () => mocks.window },
-  dialog: { showOpenDialog: mocks.dialog }
+  dialog: { showOpenDialog: mocks.dialog },
+  shell: { openPath: mocks.openPath }
 }))
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
@@ -54,6 +56,8 @@ let realExisting: string
 beforeEach(() => {
   mocks.handlers.clear()
   mocks.dialog.mockReset()
+  mocks.openPath.mockReset()
+  mocks.openPath.mockResolvedValue('')
   mocks.window = null
   dir = mkdtempSync(join(tmpdir(), 'kyclaw-projects-ipc-'))
   existing = join(dir, '现有项目')
@@ -69,12 +73,14 @@ afterEach(() => {
 const settings = (): ReturnType<typeof readSettings> => readSettings(settingsPath(dir))
 
 describe('projects 通道 handler：注册与入参闸门', () => {
-  it('四条通道都注册了', () => {
+  it('六条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'projects:base',
       'projects:create',
+      'projects:open-in-explorer',
       'projects:pick-folder',
-      'projects:remove'
+      'projects:remove',
+      'projects:rename'
     ])
   })
 
@@ -96,6 +102,15 @@ describe('projects 通道 handler：注册与入参闸门', () => {
     for (const args of [[], [''], [1], ['id', 'x']]) {
       expect(() => remove(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
     }
+
+    const rename = handlerOf(IPC_CHANNELS.projects.rename)
+    for (const args of [[], [''], [{ id: 'x' }], [{ name: 'y' }], [{ id: 'x', name: '' }], [1]]) {
+      expect(() => rename(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
+    }
+
+    const openInExplorer = handlerOf(IPC_CHANNELS.projects.openInExplorer)
+    await expect(openInExplorer(EVENT)).rejects.toThrow(IpcInputError)
+    await expect(openInExplorer(EVENT, 1)).rejects.toThrow(IpcInputError)
 
     // base 是同步 handler；pickFolder 是异步（原生选择器）
     expect(() => handlerOf(IPC_CHANNELS.projects.base)(EVENT, 'x')).toThrow(IpcInputError)
@@ -252,6 +267,85 @@ describe('projects:remove', () => {
       typeof readSettings
     >
     expect(after.projects).toHaveLength(1)
+  })
+})
+
+describe('projects:rename（round 25）', () => {
+  function createOne(): string {
+    const next = handlerOf(IPC_CHANNELS.projects.create)(EVENT, {
+      name: '甲',
+      path: existing
+    }) as ReturnType<typeof readSettings>
+    return next.projects[0]?.id ?? ''
+  }
+
+  it('改名只动显示名：trim 后落盘，路径与其他项目不动', () => {
+    const id = createOne()
+    const other = join(dir, '别的')
+    mkdirSync(other)
+    handlerOf(IPC_CHANNELS.projects.create)(EVENT, { name: '乙', path: other })
+
+    const next = handlerOf(IPC_CHANNELS.projects.rename)(EVENT, {
+      id,
+      name: ' 甲甲 '
+    }) as ReturnType<typeof readSettings>
+
+    expect(next.projects[0]).toMatchObject({ id, name: '甲甲', path: realExisting })
+    expect(next.projects[1]?.name).toBe('乙')
+    expect(settings().projects[0]?.name).toBe('甲甲')
+  })
+
+  it('名字不合法（空白 / 带分隔符）：抛错且清单不变', () => {
+    const id = createOne()
+
+    for (const name of ['   ', 'a/b', 'a\\b']) {
+      expect(() => handlerOf(IPC_CHANNELS.projects.rename)(EVENT, { id, name }), name).toThrow(
+        /项目名称/
+      )
+    }
+    expect(settings().projects[0]?.name).toBe('甲')
+  })
+
+  it('id 不存在：抛「这个项目不在列表里」', () => {
+    createOne()
+    expect(() =>
+      handlerOf(IPC_CHANNELS.projects.rename)(EVENT, { id: '不存在', name: '乙' })
+    ).toThrow(/不在列表里/)
+  })
+})
+
+describe('projects:open-in-explorer（round 25）', () => {
+  function createOne(): string {
+    const next = handlerOf(IPC_CHANNELS.projects.create)(EVENT, {
+      name: '甲',
+      path: existing
+    }) as ReturnType<typeof readSettings>
+    return next.projects[0]?.id ?? ''
+  }
+
+  it('按 id 解析路径交给 shell.openPath；成功回 { path }', async () => {
+    const id = createOne()
+
+    await expect(handlerOf(IPC_CHANNELS.projects.openInExplorer)(EVENT, id)).resolves.toEqual({
+      path: realExisting
+    })
+    expect(mocks.openPath).toHaveBeenCalledWith(realExisting)
+  })
+
+  it('openPath 回非空（打不开）：抛人话「打不开这个文件夹：…」', async () => {
+    const id = createOne()
+    mocks.openPath.mockResolvedValueOnce('没有访问权限')
+
+    await expect(handlerOf(IPC_CHANNELS.projects.openInExplorer)(EVENT, id)).rejects.toThrow(
+      /打不开这个文件夹：没有访问权限/
+    )
+  })
+
+  it('id 不存在：抛「这个项目不在列表里」（不碰 shell）', async () => {
+    await expect(handlerOf(IPC_CHANNELS.projects.openInExplorer)(EVENT, '不存在')).rejects.toThrow(
+      /不在列表里/
+    )
+    expect(mocks.openPath).not.toHaveBeenCalled()
   })
 })
 

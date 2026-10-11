@@ -281,7 +281,9 @@ describe('IPC 契约：projects 通道（T18）', () => {
       base: 'projects:base',
       pickFolder: 'projects:pick-folder',
       create: 'projects:create',
-      remove: 'projects:remove'
+      remove: 'projects:remove',
+      rename: 'projects:rename',
+      openInExplorer: 'projects:open-in-explorer'
     })
   })
 

@@ -27,7 +27,9 @@ describe('AppSettings schema', () => {
       modelPrefs: {},
       probedModels: {},
       pinnedThreads: [],
+      pinnedProjects: [],
       archivedThreads: [],
+      archivedProjects: [],
       langfuse: { endpoint: '' }
     })
     expect(appSettingsSchema.parse(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS)

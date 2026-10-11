@@ -3,6 +3,7 @@ import {
   defaultSettings,
   type AppSettings,
   type AppSettingsPatch,
+  type ArchivedProject,
   type ArchivedThread,
   type ModelPrefs,
   type WorkspaceMode
@@ -77,6 +78,12 @@ export interface SettingsState {
    * **静默**：失败只记日志（探测是尽力拿真实值，不打断用户在看的东西）。
    */
   probeModels: (providerId: string) => Promise<void>
+  /** round 25：保存置顶项目 id 列表（侧栏项目区排前；以落盘结果为准，失败抛） */
+  setPinnedProjects: (projectIds: string[]) => Promise<void>
+  /** round 25：归档项目（写快照进 archivedProjects，并从置顶里摘掉；不删项目/磁盘） */
+  archiveProject: (snapshot: ArchivedProject) => Promise<void>
+  /** round 25：取消归档项目（项目与它的会话一并回侧栏；没归档过是幂等空操作） */
+  unarchiveProject: (projectId: string) => Promise<void>
   /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
   saveLangfuseEndpoint: (endpoint: string) => Promise<void>
   /** 删除一条 provider（连带清密钥）：同样以落盘结果为准 */
@@ -186,6 +193,32 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     } catch (error) {
       console.warn('[kyclaw] 模型元数据探测失败（沿用现有元数据）', error)
     }
+  },
+
+  /** round 25：置顶项目（整表替换，顺序无关）；与 provider 同族：失败抛给调用方 */
+  setPinnedProjects: async (projectIds) => {
+    set({ settings: await settingsApi().update({ pinnedProjects: projectIds }) })
+  },
+
+  /** round 25：归档项目 = 写一份快照 + 从置顶里摘掉（不删项目、不动磁盘）；重复归档是覆盖 */
+  archiveProject: async (snapshot) => {
+    const { archivedProjects, pinnedProjects } = get().settings
+    const next = [
+      ...archivedProjects.filter((entry) => entry.projectId !== snapshot.projectId),
+      snapshot
+    ]
+    set({
+      settings: await settingsApi().update({
+        archivedProjects: next,
+        pinnedProjects: pinnedProjects.filter((id) => id !== snapshot.projectId)
+      })
+    })
+  },
+
+  /** round 25：取消归档项目（过滤掉这条；没归档过是幂等空操作） */
+  unarchiveProject: async (projectId) => {
+    const next = get().settings.archivedProjects.filter((entry) => entry.projectId !== projectId)
+    set({ settings: await settingsApi().update({ archivedProjects: next }) })
   },
 
   saveLangfuseEndpoint: async (endpoint) => {

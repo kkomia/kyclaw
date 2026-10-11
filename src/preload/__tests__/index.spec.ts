@@ -332,14 +332,16 @@ describe('preload：window.kyclaw.projects', () => {
     ]
   }
 
-  it('暴露 projects 一族（base / pickFolder / create / remove）', async () => {
+  it('暴露 projects 一族（base / pickFolder / create / remove / rename / openInExplorer）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.projects).sort()).toEqual([
       'base',
       'create',
+      'openInExplorer',
       'pickFolder',
-      'remove'
+      'remove',
+      'rename'
     ])
   })
 

@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useCallback, useEffect, useState } from 'react'
 import { Folder, FolderPlus } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
@@ -31,7 +32,8 @@ export interface CreateProjectDialogProps {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 export function CreateProjectDialog({

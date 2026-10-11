@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useCallback, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
@@ -30,7 +31,8 @@ const MODE_LABELS: Record<WorkspaceMode, string> = {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 export function WorkspaceSettings(): React.JSX.Element {

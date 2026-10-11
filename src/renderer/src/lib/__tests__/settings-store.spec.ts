@@ -346,3 +346,64 @@ describe('settings store · round 22 模型元数据探测', () => {
     await expect(store().probeModels('ds')).resolves.toBeUndefined()
   })
 })
+
+describe('settings store · round 25 项目置顶与归档', () => {
+  const snapshot = {
+    projectId: 'p1',
+    name: '项目一',
+    path: 'D:\\p1',
+    archivedAt: '2026-10-11T12:00:00.000Z'
+  }
+
+  it('setPinnedProjects：整表替换 pinnedProjects，以落盘回吐为准', async () => {
+    const bridge = installKyclawBridge()
+
+    await store().setPinnedProjects(['p1', 'p2'])
+
+    expect(bridge.update).toHaveBeenCalledWith({ pinnedProjects: ['p1', 'p2'] })
+    expect(store().settings.pinnedProjects).toEqual(['p1', 'p2'])
+  })
+
+  it('archiveProject：写快照并从置顶里摘掉同一个项目；重复归档是覆盖（不留两行）', async () => {
+    const initial = { ...defaultSettings(), pinnedProjects: ['p1', 'p2'] }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+
+    await store().archiveProject(snapshot)
+
+    expect(bridge.update).toHaveBeenCalledWith({
+      archivedProjects: [snapshot],
+      pinnedProjects: ['p2']
+    })
+    expect(store().settings.archivedProjects).toEqual([snapshot])
+    expect(store().settings.pinnedProjects).toEqual(['p2'])
+
+    const second = { ...snapshot, name: '改过名字', archivedAt: '2026-10-12T08:00:00.000Z' }
+    await store().archiveProject(second)
+    expect(store().settings.archivedProjects).toEqual([second])
+  })
+
+  it('unarchiveProject：过滤掉这条（没有归档过是幂等空操作）', async () => {
+    const other = { ...snapshot, projectId: 'p9' }
+    const initial = { ...defaultSettings(), archivedProjects: [snapshot, other] }
+    const bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+
+    await store().unarchiveProject('p1')
+    expect(store().settings.archivedProjects).toEqual([other])
+
+    await store().unarchiveProject('不存在')
+    expect(store().settings.archivedProjects).toEqual([other])
+    expect(bridge.update).toHaveBeenLastCalledWith({ archivedProjects: [other] })
+  })
+
+  it('失败抛给调用方（侧栏/归档栏据此露一行），没有 preload 桥也抛', async () => {
+    const bridge = installKyclawBridge()
+    bridge.update.mockRejectedValueOnce(new Error('设置落盘失败'))
+    await expect(store().setPinnedProjects(['p1'])).rejects.toThrow('设置落盘失败')
+
+    clearKyclawBridge()
+    await expect(store().archiveProject(snapshot)).rejects.toThrow(/设置通道不可用/)
+    await expect(store().unarchiveProject('p1')).rejects.toThrow(/设置通道不可用/)
+  })
+})

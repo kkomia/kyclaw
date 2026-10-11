@@ -13,13 +13,15 @@
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
-import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron'
 import { join } from 'node:path'
 import {
   IPC_CHANNELS,
   noArgsSchema,
   parseIpcArgs,
   projectCreateArgsSchema,
+  projectOpenInExplorerArgsSchema,
+  projectRenameArgsSchema,
   projectRemoveArgsSchema
 } from '../../shared/ipc'
 import type { AppSettings } from '../../shared/settings'
@@ -110,5 +112,37 @@ export function registerProjectsIpc(userDataDir: string): void {
     const [id] = parseIpcArgs(projectRemoveArgsSchema, args, IPC_CHANNELS.projects.remove)
     const current = readSettings(file)
     return updateSettings(file, { projects: removeProject(current.projects, id) })
+  })
+
+  // round 25：重命名项目（只改显示名；名字校验与创建同一份 projectNameProblem）
+  ipcMain.handle(IPC_CHANNELS.projects.rename, (_event, ...args) => {
+    const [input] = parseIpcArgs(projectRenameArgsSchema, args, IPC_CHANNELS.projects.rename)
+    const problem = projectNameProblem(input.name)
+    if (problem !== null) throw new Error(problem)
+
+    const current = readSettings(file)
+    const target = current.projects.find((project) => project.id === input.id)
+    if (target === undefined) throw new Error('这个项目不在列表里（可能已被删除）')
+    return updateSettings(file, {
+      projects: current.projects.map((project) =>
+        project.id === input.id ? { ...project, name: input.name.trim() } : project
+      )
+    })
+  })
+
+  // round 25：在文件资源管理器里打开项目目录（路径按 id 在主进程解析；打不开给人话）
+  ipcMain.handle(IPC_CHANNELS.projects.openInExplorer, async (_event, ...args) => {
+    const [id] = parseIpcArgs(
+      projectOpenInExplorerArgsSchema,
+      args,
+      IPC_CHANNELS.projects.openInExplorer
+    )
+    const current = readSettings(file)
+    const target = current.projects.find((project) => project.id === id)
+    if (target === undefined) throw new Error('这个项目不在列表里（可能已被删除）')
+
+    const problem = await shell.openPath(target.path)
+    if (problem !== '') throw new Error(`打不开这个文件夹：${problem}`)
+    return { path: target.path }
   })
 }

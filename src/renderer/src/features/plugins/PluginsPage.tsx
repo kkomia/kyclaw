@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { Plus } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
@@ -59,7 +60,8 @@ const IMPORT_PLACEHOLDER =
   '{"mcpServers": {"perfsight": {"type": "http", "url": "https://api.perfsight.qq.com/mcp", "headers": {"Authorization": "Bearer YOUR_API_KEY"}}}}'
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 export function PluginsPage(): React.JSX.Element {

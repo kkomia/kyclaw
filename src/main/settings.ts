@@ -40,7 +40,9 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.modelPrefs === undefined) next.modelPrefs = {}
   if (next.probedModels === undefined) next.probedModels = {}
   if (next.pinnedThreads === undefined) next.pinnedThreads = []
+  if (next.pinnedProjects === undefined) next.pinnedProjects = []
   if (next.archivedThreads === undefined) next.archivedThreads = []
+  if (next.archivedProjects === undefined) next.archivedProjects = []
   return next
 }
 

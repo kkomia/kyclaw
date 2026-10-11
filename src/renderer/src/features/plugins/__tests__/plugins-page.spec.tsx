@@ -924,3 +924,65 @@ describe('round 23 · 头像 / 图标 / 错误位置', () => {
     expect(error.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
+
+describe('round 25 · 卸载彻底清理与错误人话化', () => {
+  it('移除市场确认框按 kind 分叉：git 说明本机下载的内容会一起删，local 说明不动本机目录', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [
+        marketplaceView({ id: 'g', name: 'git 市场', kind: 'git' }),
+        marketplaceView({ id: 'l', name: '本地市场', kind: 'local', source: 'D:\\插件目录' })
+      ],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+
+    await screen.findByTestId('marketplace-g')
+    fireEvent.click(screen.getByTestId('marketplace-g-remove'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('本机下载的这份市场内容会一起删除')
+    fireEvent.click(screen.getByTestId('marketplace-remove-cancel'))
+
+    fireEvent.click(screen.getByTestId('marketplace-l-remove'))
+    expect(screen.getByRole('dialog')).toHaveTextContent('移除不会动你本机的这个目录')
+  })
+
+  it('卸载确认框说明会一起移除：插件带来的 MCP 服务、技能与本机下载的文件', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [installedRecord()],
+      installedSkills: [{ dir: 'demo-p1-s1', name: 's1', pluginId: 'demo-p1', pluginName: 'p1' }]
+    })
+    render(<PluginsPage />)
+
+    await screen.findByTestId('plugin-demo-p1-uninstall')
+    fireEvent.click(screen.getByTestId('plugin-demo-p1-uninstall'))
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      '带来的 MCP 服务、技能与本机下载的文件会一起移除'
+    )
+  })
+
+  it('失败原因过了 IPC 包装也不露机器话（unwrapIpcError 展示）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.removeMarketplace.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'plugins:remove-marketplace': Error: 删除被占用：C:\\x（关掉占用它的程序后重试）"
+      )
+    )
+    render(<PluginsPage />)
+    await screen.findByTestId('marketplace-demo')
+
+    fireEvent.click(screen.getByTestId('marketplace-demo-remove'))
+    fireEvent.click(screen.getByTestId('marketplace-remove-confirm'))
+
+    const error = await screen.findByTestId('plugins-error')
+    expect(error).toHaveTextContent('删除被占用')
+    expect(error).not.toHaveTextContent('Error invoking remote method')
+  })
+})

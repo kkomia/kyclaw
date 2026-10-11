@@ -47,7 +47,25 @@ export interface RemoveDirDeps {
   rm?: (dir: string) => void
   /** 改名实现（缺省 = renameSync） */
   rename?: (from: string, to: string) => void
+  /** 改名重试之间的等待（缺省 = 同步睡 300ms；单测注入空实现） */
+  sleep?: (ms: number) => void
   now?: () => number
+}
+
+/** 改名兜底的重试次数与间隔（round 25：瞬时的杀软/索引器占用靠退避熬过去） */
+export const RENAME_ATTEMPTS = 5
+export const RENAME_RETRY_DELAY_MS = 300
+
+/** 同步睡：Atomics.wait（Node 主线程可用）；环境不允许时忙等兜底 */
+function sleepSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  } catch {
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      /* 忙等兜底（浏览器环境不该走到这） */
+    }
+  }
 }
 
 /** best-effort 清只读：文件 0o666、目录 0o777（Windows 上等价去只读属性）；单个失败跳过 */
@@ -90,32 +108,50 @@ function clearReadonly(dir: string): void {
 }
 
 /**
- * 健壮删除（round 23：用户实测"移除没反应"的根修）：
+ * 健壮删除（round 23 起；round 25 加改名退避）：
  *   ① best-effort 递归清只读（chmod 0o666 / 0o777）；
  *   ② `rmSync(recursive/force, maxRetries: 5, retryDelay: 200)`；
- *   ③ 仍失败 → **顶层改名**到 `${dir}.trash-<ts>`——Windows 上改名通常能成（占用多在深处句柄），
- *      改名成功即视为"移除成功"（原子结果），trash 目录后台尽力删，删不掉留给启动清扫；
- *   ④ 连改名都失败 → 抛人话「删除被占用：<路径>（关掉占用它的程序后重试）」。
+ *   ③ 仍失败 → **顶层改名**到 `${dir}.trash-<ts>`——5 次 × 300ms 退避重试（瞬时占用多是
+ *      杀软/索引器短暂持有；round 25 用户实测 renameSync 单独跑能成）；改名成功即视为"移除成功"
+ *      （原子结果），trash 目录后台尽力删，删不掉留给启动清扫；
+ *   ④ 连改名都失败 → **原始错误进 console**（detail 不上横幅），抛人话
+ *      「删除被占用：<路径>（关掉占用它的程序后重试）」。
  * 目录不存在 = 空操作（幂等）。
  */
 export function removeDirRobust(dir: string, deps: RemoveDirDeps = {}): void {
   if (!existsSync(dir)) return
   clearReadonly(dir)
+
+  let rmError: unknown
   try {
     if (deps.rm !== undefined) deps.rm(dir)
     else rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     return
-  } catch {
+  } catch (error) {
+    rmError = error
     // 落到改名兜底
   }
 
   const trash = `${dir}.trash-${(deps.now ?? Date.now)()}`
   const rename = deps.rename ?? renameSync
-  try {
-    rename(dir, trash)
-  } catch {
+  const sleep = deps.sleep ?? sleepSync
+  let renameError: unknown
+  for (let attempt = 1; attempt <= RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      rename(dir, trash)
+      renameError = undefined
+      break
+    } catch (error) {
+      renameError = error
+      if (attempt < RENAME_ATTEMPTS) sleep(RENAME_RETRY_DELAY_MS)
+    }
+  }
+  if (renameError !== undefined) {
+    // 原始 detail 只进日志（渲染端看到的是下一行那句人话）
+    console.warn(`[kyclaw] 删除失败（原始错误，涉事路径）${dir}`, rmError, renameError)
     throw new Error(`删除被占用：${dir}（关掉占用它的程序后重试）`)
   }
+
   // 改名成功即移除成功；trash 尽力清（失败无妨——启动清扫会收）
   try {
     rmSync(trash, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 })

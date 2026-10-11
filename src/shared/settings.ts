@@ -99,6 +99,22 @@ export const probedModelSchema = z.strictObject({
 export type ProbedModel = z.infer<typeof probedModelSchema>
 
 /**
+ * 归档项目快照（round 25）：归档 = 侧栏隐藏该项目**及其名下会话**（会话映射照旧，
+ * 取消归档项目回来时会话跟着回来）；不删项目、不删磁盘。
+ */
+export const archivedProjectSchema = z.strictObject({
+  projectId: z.string().min(1),
+  /** 归档时的显示名（快照） */
+  name: z.string().min(1),
+  /** 归档时的项目路径（快照；展示用） */
+  path: z.string().min(1),
+  /** ISO 时间串（归档时刻） */
+  archivedAt: z.string()
+})
+
+export type ArchivedProject = z.infer<typeof archivedProjectSchema>
+
+/**
  * MCP server 的传输（T12）：stdio 起子进程走 stdio 上的 JSON-RPC；http 连 Streamable HTTP 端点。
  */
 export const mcpTransportSchema = z.enum(['stdio', 'http'])
@@ -228,8 +244,12 @@ export const appSettingsSchema = z.strictObject({
   probedModels: z.record(z.string(), probedModelSchema),
   /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
   pinnedThreads: z.array(z.string().min(1)),
+  /** round 25 的置顶项目 id 列表（侧栏项目区里置顶的排前；带小图钉标识） */
+  pinnedProjects: z.array(z.string().min(1)),
   /** round 20 的归档快照列表（从侧栏移出、数据不删；设置页「归档」栏查看/搜索/取消归档） */
   archivedThreads: z.array(archivedThreadSchema),
+  /** round 25 的归档项目快照（侧栏隐藏该项目及其会话；取消归档一并恢复） */
+  archivedProjects: z.array(archivedProjectSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema
 })
@@ -279,7 +299,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelPrefs: {},
   probedModels: {},
   pinnedThreads: [],
+  pinnedProjects: [],
   archivedThreads: [],
+  archivedProjects: [],
   langfuse: { endpoint: '' }
 }
 
@@ -297,7 +319,9 @@ export function defaultSettings(): AppSettings {
     modelPrefs: {},
     probedModels: {},
     pinnedThreads: [],
+    pinnedProjects: [],
     archivedThreads: [],
+    archivedProjects: [],
     langfuse: { endpoint: '' }
   }
 }

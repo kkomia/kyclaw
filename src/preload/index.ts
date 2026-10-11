@@ -14,6 +14,7 @@ import {
   langfuseStateSchema,
   projectBaseSchema,
   projectFolderSchema,
+  projectOpenInExplorerResultSchema,
   providerKeyStatesSchema,
   setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
@@ -161,7 +162,17 @@ const projectsApi: KyclawProjectsApi = {
   },
   create: async (name, path) =>
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.create, { name, path })),
-  remove: async (id) => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.remove, id))
+  remove: async (id) => parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.remove, id)),
+  // round 25：重命名 / 在文件资源管理器里打开（路径解析在主进程）
+  rename: async (id, name) =>
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.rename, { id, name })),
+  openInExplorer: async (id) => {
+    const parsed = projectOpenInExplorerResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.projects.openInExplorer, id)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 打开项目文件夹响应结构不合法')
+    return parsed.data
+  }
 }
 
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */

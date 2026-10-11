@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { Cog } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
@@ -56,7 +57,8 @@ function draftOf(server: McpServerConfig): Draft {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 function withDraft(server: McpServerConfig, draft: Draft): McpServerConfig {

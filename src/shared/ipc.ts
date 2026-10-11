@@ -84,7 +84,14 @@ export const IPC_CHANNELS = {
     /** T18：创建项目（入参 [{ name, path }]，路径缺失就建目录；返回合并后的 AppSettings） */
     create: 'projects:create',
     /** T18：删除项目（入参 [id]；只摘清单，不动磁盘、不动授权列表） */
-    remove: 'projects:remove'
+    remove: 'projects:remove',
+    /** round 25：重命名项目（入参 [{ id, name }]；只改显示名，路径/磁盘不动） */
+    rename: 'projects:rename',
+    /**
+     * round 25：在文件资源管理器里打开**项目目录**（入参 [id]，返回 { path }）——
+     * 路径解析主进程做（按项目 id 查 settings.projects），渲染端传不了任意路径。
+     */
+    openInExplorer: 'projects:open-in-explorer'
   },
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
@@ -193,6 +200,17 @@ export const projectCreateArgsSchema = z.tuple([
 
 /** projects:remove 的入参：[id] */
 export const projectRemoveArgsSchema = z.tuple([z.string().min(1)])
+
+/** projects:rename 的入参：[{ id, name }]（名字的业务校验在主进程 projectNameProblem） */
+export const projectRenameArgsSchema = z.tuple([
+  z.strictObject({ id: z.string().min(1), name: z.string().min(1) })
+])
+
+/** projects:open-in-explorer 的入参：[id]（项目路径按 id 在主进程解析） */
+export const projectOpenInExplorerArgsSchema = z.tuple([z.string().min(1)])
+
+/** projects:open-in-explorer 的回包：实际打开的目录（绝对路径） */
+export const projectOpenInExplorerResultSchema = z.strictObject({ path: z.string().min(1) })
 
 /** projects:base 的回包：创建对话框的默认基底目录 */
 export const projectBaseSchema = z.strictObject({ base: z.string().min(1) })
@@ -449,6 +467,10 @@ export interface KyclawProjectsApi {
   create(name: string, path: string): Promise<AppSettings>
   /** 删除项目：只摘清单（会话映射由渲染端清理；磁盘与授权列表不动） */
   remove(id: string): Promise<AppSettings>
+  /** round 25：重命名项目（只改显示名；返回合并后的完整设置） */
+  rename(id: string, name: string): Promise<AppSettings>
+  /** round 25：在文件资源管理器里打开项目目录（路径按 id 在主进程解析） */
+  openInExplorer(id: string): Promise<{ path: string }>
 }
 
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */

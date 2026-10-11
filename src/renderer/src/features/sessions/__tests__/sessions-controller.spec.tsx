@@ -532,3 +532,176 @@ describe('SessionsController·round 20：置顶 / 移至项目 / 资源管理器
     expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
   })
 })
+
+describe('SessionsController·round 25：置顶项目 / ⊕ 新建会话 / 重命名 / 归档', () => {
+  const TWO_PROJECTS: AppSettings['projects'] = [
+    { id: 'p1', name: '甲项目', path: 'D:\\ws\\甲', createdAt: '2026-10-11T00:00:00.000Z' },
+    { id: 'p2', name: '乙项目', path: 'D:\\ws\\乙', createdAt: '2026-10-11T00:00:00.000Z' }
+  ]
+
+  async function mountProjects(
+    options: {
+      path?: string
+      mappings?: MappingRow[]
+      configure?: (bridge: ReturnType<typeof installKyclawBridge>) => void
+    } = {}
+  ): Promise<{
+    server: ReturnType<typeof installFakeServer>
+    bridge: ReturnType<typeof installKyclawBridge>
+  }> {
+    const server = installFakeServer(THREADS, options.mappings ?? [])
+    clearKyclawBridge()
+    const bridge = installKyclawBridge({ ...defaultSettings(), projects: TWO_PROJECTS })
+    options.configure?.(bridge)
+    await useSettingsStore.getState().load()
+    renderController(options.path ?? '/chat')
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+    })
+    return { server, bridge }
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    window.localStorage.clear()
+  })
+
+  const projectRowOrder = (): string[] =>
+    screen.getAllByTestId(/^project-item-/).map((row) => row.getAttribute('data-testid') ?? '')
+
+  it('置顶项目：写 settings.pinnedProjects，行排到最前、带图钉标识；取消置顶还原', async () => {
+    const { bridge } = await mountProjects()
+    expect(projectRowOrder()).toEqual(['project-item-p1', 'project-item-p2'])
+
+    pick('project-more-p2', 'project-pin-p2')
+
+    await waitFor(() => {
+      expect(bridge.update).toHaveBeenCalledWith({ pinnedProjects: ['p2'] })
+    })
+    await waitFor(() => {
+      expect(projectRowOrder()).toEqual(['project-item-p2', 'project-item-p1'])
+    })
+    expect(screen.getByTestId('project-pin-mark-p2')).toBeInTheDocument()
+
+    // 已置顶：菜单变「取消置顶项目」，写回空表、顺序还原
+    pick('project-more-p2', 'project-pin-p2')
+    await waitFor(() => {
+      expect(bridge.update).toHaveBeenLastCalledWith({ pinnedProjects: [] })
+    })
+    await waitFor(() => {
+      expect(projectRowOrder()).toEqual(['project-item-p1', 'project-item-p2'])
+    })
+    expect(screen.queryByTestId('project-pin-mark-p2')).not.toBeInTheDocument()
+  })
+
+  it('⊕：在该项目下开新会话（草稿挂进项目 + PUT 映射 + 回对话页）', async () => {
+    const { server } = await mountProjects({ path: '/settings' })
+    const before = useSessionsStore.getState().activeId
+
+    fireEvent.click(screen.getByTestId('project-new-session-p2'))
+
+    await waitFor(() => {
+      const draftId = useSessionsStore.getState().activeId
+      expect(draftId).not.toBe(before)
+      expect(server.mappings).toEqual([{ threadId: draftId, projectId: 'p2' }])
+      expect(screen.getByTestId('project-group-p2')).toContainElement(
+        screen.getByTestId(`session-item-${draftId}`)
+      )
+    })
+    expect(screen.getByTestId('location')).toHaveTextContent('/chat')
+  })
+
+  it('重命名项目：projects:rename(id, name)，行名换成落盘回吐', async () => {
+    const { bridge } = await mountProjects()
+
+    pick('project-more-p1', 'project-rename-p1')
+    fireEvent.change(screen.getByTestId('project-rename-input'), { target: { value: '甲甲' } })
+    fireEvent.click(screen.getByTestId('project-rename-save'))
+
+    await waitFor(() => {
+      expect(bridge.projects.rename).toHaveBeenCalledWith('p1', '甲甲')
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p1')).toHaveTextContent('甲甲')
+    })
+  })
+
+  it('在文件资源管理器中打开项目：projects:openInExplorer；失败露 project-error（剥 IPC 包装）', async () => {
+    const { bridge } = await mountProjects()
+
+    pick('project-more-p1', 'project-open-p1')
+    await waitFor(() => {
+      expect(bridge.projects.openInExplorer).toHaveBeenCalledWith('p1')
+    })
+
+    bridge.projects.openInExplorer.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'projects:open-in-explorer': Error: 打不开这个文件夹：拒绝访问"
+      )
+    )
+    pick('project-more-p1', 'project-open-p1')
+    await waitFor(() => {
+      expect(screen.getByTestId('project-error')).toHaveTextContent('拒绝访问')
+    })
+    expect(screen.getByTestId('project-error')).not.toHaveTextContent(
+      'Error invoking remote method'
+    )
+  })
+
+  it('归档项目：写快照（名称/路径/时间）进 settings.archivedProjects，行与名下会话一起消失；取消归档一并回来', async () => {
+    const { bridge } = await mountProjects({ mappings: [{ threadId: 't-b', projectId: 'p2' }] })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p2')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+
+    pick('project-more-p2', 'project-archive-p2')
+
+    await waitFor(() => {
+      const patch = bridge.update.mock.calls.at(-1)?.[0] as {
+        archivedProjects?: {
+          projectId: string
+          name: string
+          path: string
+          archivedAt: string
+        }[]
+      }
+      expect(patch.archivedProjects?.[0]).toMatchObject({
+        projectId: 'p2',
+        name: '乙项目',
+        path: 'D:\\ws\\乙'
+      })
+      expect(typeof patch.archivedProjects?.[0]?.archivedAt).toBe('string')
+    })
+    // 项目行与它名下的会话一起从侧栏消失；p1 与无项目会话不受影响
+    await waitFor(() => {
+      expect(screen.queryByTestId('project-item-p2')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('session-item-t-b')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+    expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+
+    // 取消归档（设置页走同一只 store 方法）：项目与名下会话一并回来
+    const archived = useSettingsStore.getState().settings.archivedProjects
+    await useSettingsStore.getState().unarchiveProject(archived[0].projectId)
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p2')).toBeInTheDocument()
+      expect(screen.getByTestId('project-sessions-p2')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+  })
+
+  it('归档失败：行还在、project-error 露原因', async () => {
+    const { bridge } = await mountProjects()
+    bridge.update.mockRejectedValueOnce(new Error('设置通道不可用'))
+
+    pick('project-more-p2', 'project-archive-p2')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('project-error')).toHaveTextContent('设置通道不可用')
+    })
+    expect(screen.getByTestId('project-item-p2')).toBeInTheDocument()
+  })
+})

@@ -1,3 +1,4 @@
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import type { UpdateState } from '@shared/ipc'
@@ -18,7 +19,8 @@ import { updateStatusText } from './status-text'
  * 文案规则在 status-text.ts（独立文件，顺带过 react-refresh 的"只导出组件"口径）。
  */
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
+  return unwrapIpcError(error)
 }
 
 export function AboutSettings(): React.JSX.Element {
