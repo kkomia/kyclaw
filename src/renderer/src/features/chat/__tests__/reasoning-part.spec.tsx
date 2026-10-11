@@ -45,6 +45,20 @@ describe('思考块（ReasoningPart）', () => {
     expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
     expect(screen.getByTestId('reasoning-text')).toHaveTextContent('想完了')
   })
+
+  it('round 29：live（这一轮还在跑）单独撑住展开 —— 工具行到达把 streaming 翻成 false 也不收起', () => {
+    const { rerender } = render(<ReasoningPart text="先看目录" streaming live />)
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
+
+    // 后面来了工具行：这一段不再是"正在写的那段"，但这一轮还没跑完 → 仍展开
+    rerender(<ReasoningPart text="先看目录" streaming={false} live />)
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看目录')
+
+    // 这一轮跑完：按老口径收起
+    rerender(<ReasoningPart text="先看目录" streaming={false} live={false} />)
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+  })
 })
 
 describe('助手消息的 part 组装', () => {

@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import type { UIMessage } from 'ai'
 import { Button } from '@renderer/components/ui/button'
-import type { Workspace } from '@shared/settings'
-import type { ApprovalDecision } from './ApprovalCard'
-import type { ApprovalRequest } from './approval'
 import { ReasoningPart } from './parts/ReasoningPart'
 import { TextPart } from './parts/TextPart'
 import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
@@ -16,19 +13,13 @@ import { ReferenceChip } from './reference-chip'
  * 用户消息：右侧气泡 + 悬停出现的「编辑」（编辑 = 截断重发，见 ChatPage 的 editResend）；
  * 助手消息：左对齐的 part 流 —— 正文文本单出，**连续的过程 part（思考 / 工具调用）并成
  * 一个过程块**（round 6：TraceBlock，正文把块切开、块内保持原顺序）。
+ * round 29：审批入口不在这条链上（待审批统一走输入框上方的 ApprovalDock，块内只留只读状态行）。
  */
 export interface MessageProps {
   message: UIMessage
   /** 这一条正在流式（最后一条助手消息且会话处于 streaming） */
   streaming?: boolean
   onEdit?: (messageId: string, text: string) => void
-  /** 渲染端那份授权工作区列表（审批卡判记忆粒度用） */
-  workspaces?: readonly Workspace[]
-  /**
-   * 审批决策回调（工具 part 处于 approval-requested 时出现审批卡）。
-   * 没有这个回调时不渲染审批卡、退回静态工具行 —— 没接线的位置不该给"点了没用"的按钮。
-   */
-  onApprovalDecision?: (request: ApprovalRequest, decision: ApprovalDecision) => void
 }
 
 type MessagePart = UIMessage['parts'][number]
@@ -75,13 +66,7 @@ function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[
   return chunks
 }
 
-export function Message({
-  message,
-  streaming = false,
-  onEdit,
-  workspaces,
-  onApprovalDecision
-}: MessageProps): React.JSX.Element {
+export function Message({ message, streaming = false, onEdit }: MessageProps): React.JSX.Element {
   // null = 不在编辑；string = 编辑中的草稿
   const [draft, setDraft] = useState<string | null>(null)
 
@@ -198,13 +183,7 @@ export function Message({
           )
         }
         return (
-          <TraceBlock
-            key={`process-${chunkIndex}`}
-            entries={chunk.entries}
-            running={streaming}
-            workspaces={workspaces}
-            onApprovalDecision={onApprovalDecision}
-          />
+          <TraceBlock key={`process-${chunkIndex}`} entries={chunk.entries} running={streaming} />
         )
       })}
     </article>

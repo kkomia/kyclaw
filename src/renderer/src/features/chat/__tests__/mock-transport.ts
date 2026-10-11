@@ -21,6 +21,8 @@ export interface MockTransport {
   requests: MockRequest[]
   /** 推一段文本增量（首段自动补 text-start） */
   push: (delta: string) => void
+  /** 推一段思考增量（reasoning part；服务端 chatRoute 已开 sendReasoning，v0.1 起真会到） */
+  reason: (delta: string) => void
   /**
    * 推一次"工具调用 + 服务端要求审批"（T13）：part 落到 `approval-requested`，
    * 等用户决策后由 Chat 的 sendAutomaticallyWhen 自动续跑（那次请求会记进 requests）。
@@ -59,12 +61,31 @@ export function createMockTransport(): MockTransport {
   let controller: ReadableStreamDefaultController<UIMessageChunk> | null = null
   let activeTextId = ''
   let textStarted = false
+  let activeReasoningId = ''
+  let reasoningStarted = false
+  let reasoningSeq = 0
   let nextFailure: Error | null = null
 
+  /** 思考段收尾（真 SSE 里 reasoning-end 先于随后的工具/正文到达）：一段思考 = 一个 reasoning part */
+  const endReasoning = (): void => {
+    if (!reasoningStarted || !controller) return
+    controller.enqueue({ type: 'reasoning-end', id: activeReasoningId })
+    reasoningStarted = false
+  }
+
   const startText = (): void => {
+    endReasoning()
     if (textStarted || !controller) return
     controller.enqueue({ type: 'text-start', id: activeTextId })
     textStarted = true
+  }
+
+  const startReasoning = (): void => {
+    if (reasoningStarted || !controller) return
+    reasoningSeq += 1
+    activeReasoningId = `reasoning-${requests.length}-${reasoningSeq}`
+    controller.enqueue({ type: 'reasoning-start', id: activeReasoningId })
+    reasoningStarted = true
   }
 
   const transport: ChatTransport<UIMessage> = {
@@ -85,6 +106,8 @@ export function createMockTransport(): MockTransport {
 
       activeTextId = `text-${requests.length}`
       textStarted = false
+      reasoningStarted = false
+      reasoningSeq = 0
       return new ReadableStream<UIMessageChunk>({
         start(streamController) {
           controller = streamController
@@ -116,23 +139,32 @@ export function createMockTransport(): MockTransport {
       startText()
       controller.enqueue({ type: 'text-delta', id: activeTextId, delta })
     },
+    reason(delta) {
+      if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      startReasoning()
+      controller.enqueue({ type: 'reasoning-delta', id: activeReasoningId, delta })
+    },
     requestApproval({ toolCallId, toolName, input, approvalId }) {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      endReasoning()
       controller.enqueue({ type: 'tool-input-start', toolCallId, toolName })
       controller.enqueue({ type: 'tool-input-available', toolCallId, toolName, input })
       controller.enqueue({ type: 'tool-approval-request', approvalId, toolCallId })
     },
     toolInput(toolCallId, toolName, input) {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      endReasoning()
       controller.enqueue({ type: 'tool-input-start', toolCallId, toolName })
       controller.enqueue({ type: 'tool-input-available', toolCallId, toolName, input })
     },
     toolOutput(toolCallId, output) {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      endReasoning()
       controller.enqueue({ type: 'tool-output-available', toolCallId, output })
     },
     finish() {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
+      endReasoning()
       startText()
       controller.enqueue({ type: 'text-end', id: activeTextId })
       controller.enqueue({ type: 'finish' })

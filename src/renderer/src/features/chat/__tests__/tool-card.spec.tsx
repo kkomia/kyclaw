@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { UIMessage } from 'ai'
 import { Message } from '@renderer/features/chat/Message'
 import { ToolCard } from '@renderer/features/chat/parts/ToolCard'
@@ -183,7 +183,7 @@ describe('助手消息里的工具 part（过程块包装）', () => {
     expect(card).toHaveTextContent('已完成')
   })
 
-  it('approval-requested 的 part：接了决策回调就强制展开、渲染审批卡（决策从 part 里读）', () => {
+  it('approval-requested 的 part（round 29）：只读工具行 —— 默认展开、没有审批按钮（决策在输入框上方的审批条）', () => {
     const message = {
       id: 'a2',
       role: 'assistant',
@@ -197,33 +197,24 @@ describe('助手消息里的工具 part（过程块包装）', () => {
         }
       ]
     } as unknown as UIMessage
-    const onApprovalDecision = vi.fn()
 
-    render(
-      <Message
-        message={message}
-        workspaces={[{ path: 'D:\\ws', mode: 'ask' }]}
-        onApprovalDecision={onApprovalDecision}
-      />
-    )
+    render(<Message message={message} />)
 
-    // 待审批步骤强制展开（不用先点块头），头部不画箭头
+    // 有待审批步骤：默认展开（不用先点块头），箭头照画、可收（round 29 不再锁死折叠）
     const block = screen.getByTestId('trace-block')
     expect(block).toHaveAttribute('data-open', 'true')
-    expect(screen.getByTestId('trace-toggle')).toHaveAttribute('data-forced', 'approval')
-    expect(screen.getByTestId('trace-toggle').querySelector('svg')).toBeNull()
+    expect(block).toHaveAttribute('data-pending', 'true')
+    expect(screen.getByTestId('trace-toggle').querySelector('svg')).not.toBeNull()
 
-    expect(screen.getByTestId('approval-card')).toHaveAttribute('data-tool', 'write')
-    expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId('approval-allow-forever'))
-    expect(onApprovalDecision).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalId: 'run-1::c2', toolCallId: 'c2', toolName: 'write' }),
-      'forever'
-    )
+    // 消息流里没有审批入口：只剩状态行（自己点开还能看入参）
+    expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
+    expect(screen.getByTestId('tool-state')).toHaveTextContent('等待审批')
+    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('approval-allow-once')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('approval-deny')).not.toBeInTheDocument()
   })
 
-  it('没接决策回调：审批中退回静态工具行（不给点了没用的按钮）', () => {
+  it('已回应的审批（approval-responded）：只是普通工具行，静态收束', () => {
     const message = {
       id: 'a3',
       role: 'assistant',
@@ -231,9 +222,9 @@ describe('助手消息里的工具 part（过程块包装）', () => {
         {
           type: 'tool-write',
           toolCallId: 'c3',
-          state: 'approval-requested',
+          state: 'approval-responded',
           input: { path: 'a.txt', content: '内容' },
-          approval: { id: 'run-1::c3' }
+          approval: { id: 'run-1::c3', approved: true }
         }
       ]
     } as unknown as UIMessage
@@ -241,9 +232,8 @@ describe('助手消息里的工具 part（过程块包装）', () => {
     render(<Message message={message} />)
 
     fireEvent.click(screen.getByTestId('trace-toggle'))
+    expect(screen.getByTestId('tool-state')).toHaveTextContent('审批已回应')
     expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('approval-allow-once')).not.toBeInTheDocument()
-    expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
   })
 })
 

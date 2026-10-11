@@ -21,6 +21,7 @@ import type { ApprovalDecision } from './ApprovalCard'
 import type { ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
 import type { ThreadChatRuntime } from './thread-chats'
+import { ApprovalDock } from './ApprovalDock'
 import { ChatHeader } from './ChatHeader'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
@@ -258,6 +259,19 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
+  /**
+   * 输入框上方审批条的数据（round 29）：当前挂起的审批，刨掉"本会话允许"命中的那些 ——
+   * 命中的会由下面的 effect 立刻回灌放行，先把它们画出来只会闪一下。
+   * 同一步多个挂起 → 按 part 顺序堆叠，逐个处理。
+   */
+  const dockApprovals = useMemo(
+    () =>
+      pendingApprovals(messages[messages.length - 1]).filter((request) => {
+        const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
+        return workspace === null || !isAllowedForSession(threadId, request.toolName, workspace)
+      }),
+    [messages, workspaces, threadId]
+  )
   /** "永久允许"没写进设置（只在本次对话生效）：露一行给用户，不静默当成永久生效 */
   const [permissionError, setPermissionError] = useState<string | null>(null)
 
@@ -508,8 +522,6 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
         // round 19：压缩进行中也不给（两边都动同一批消息）
         onEdit={busy || waitingApproval || compacting ? undefined : editResend}
-        workspaces={workspaces}
-        onApprovalDecision={decideApproval}
         compaction={compaction}
         compacting={compacting}
       />
@@ -529,6 +541,8 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
         </p>
       )}
       <div className="shrink-0 px-4 pt-4 pb-6">
+        {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
+        <ApprovalDock requests={dockApprovals} workspaces={workspaces} onDecide={decideApproval} />
         <Composer
           threadId={threadId}
           busy={busy}

@@ -14,7 +14,11 @@ import {
 import { approvalDiff, type DiffLine } from './approval-diff'
 
 /**
- * 审批卡（T13）：写类工具在 ask 工作区里弹出，给用户决策。
+ * 审批条上的单条（T13；round 29 位置迁移）：写类工具在 ask 工作区里要用户决策时出现。
+ *
+ * 位置（round 29，用户口径）：不再画在消息流的工具链上，由 ApprovalDock 折进**输入框正上方**
+ * 的审批条里（同一步多个挂起 → 多条堆叠）。卡片自身只管"在批什么 + 怎么决策"，停靠与退场
+ * 动效归 ApprovalDock。
  *
  * 卡的内容 = 工具名 + 目标（path；bash 加命令、fetch 加 URL、move 加目标位置）+ 行级 diff +
  * 按钮：

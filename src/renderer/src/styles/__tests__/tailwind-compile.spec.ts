@@ -73,6 +73,10 @@ describe('Tailwind 编译护栏', () => {
     ['shadow-(--shadow-overlay)', ['--tw-shadow: var(--shadow-overlay)']],
     ['backdrop-blur-(--blur-glass)', ['--tw-backdrop-blur: blur(var(--blur-glass))']],
     ['duration-(--motion-main)', ['transition-duration: var(--motion-main)']],
+    // round 29：停靠区（审批条）的开合走容器级 grid-rows 过渡 —— 0fr ↔ 1fr 与过渡属性都得真生成
+    ['grid-rows-[0fr]', ['grid-template-rows: 0fr']],
+    ['grid-rows-[1fr]', ['grid-template-rows: 1fr']],
+    ['transition-[grid-template-rows]', ['transition-property: grid-template-rows']],
     ['data-[highlighted]:bg-hover', ['background-color: var(--fill-hover)']],
     [
       'group-data-disabled:opacity-(--icon-opacity-disabled)',

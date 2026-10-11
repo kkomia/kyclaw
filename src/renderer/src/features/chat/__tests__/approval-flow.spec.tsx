@@ -13,12 +13,16 @@ import {
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { truncateThread, fetchThreadCompaction } from '@renderer/lib/threads-api'
+import { mapStoredMessages } from '@renderer/lib/message-map'
 import { defaultSettings } from '@shared/settings'
+import type { StoredMessage } from '@shared/threads'
 import { createMockTransport, type MockTransport } from './mock-transport'
 
 /**
- * 审批全流程（T13，RTL + 真实 Chat 实例）：服务端要求审批 → 审批卡 → 决策回灌 →
+ * 审批全流程（T13，RTL + 真实 Chat 实例）：服务端要求审批 → **输入框上方的审批条** → 决策回灌 →
  * 自动续跑（AI SDK 的 sendAutomaticallyWhen）→ 完成语义与队列门控。
+ * round 29：审批卡从消息流里的工具链上搬到了 composer 停靠区（`approval-dock`），本文件同时钉住
+ * "消息流里不再有审批按钮""重开会话从存储恢复的审批也停在输入框上方"。
  *
  * 底层是注入的假 transport：approval / tool-output chunk 由用例逐段推，形状与 chatRoute
  * 的 v7 协议一致；threads-api 整体 mock 掉（这些用例不碰网络，服务端的真往返由 mastra 侧
@@ -60,7 +64,9 @@ interface Session {
 async function renderSession(
   control: MockTransport,
   injectRuntime = true,
-  threadId = THREAD_ID
+  threadId = THREAD_ID,
+  /** 回灌的历史（重开会话的场景：审批从存储 metadata 恢复） */
+  history: UIMessage[] = []
 ): Promise<Session> {
   const onTurnEnd = vi.fn()
   const view = render(
@@ -69,7 +75,13 @@ async function renderSession(
         transport={control.transport}
         threadId={threadId}
         {...(injectRuntime
-          ? { runtime: { transport: control.transport, loadHistory: async () => [], onTurnEnd } }
+          ? {
+              runtime: {
+                transport: control.transport,
+                loadHistory: async () => history,
+                onTurnEnd
+              }
+            }
           : {})}
       />
     </MemoryRouter>
@@ -106,6 +118,14 @@ function userTexts(control: MockTransport, index: number): string[] {
     .flatMap((part) => (part.type === 'text' ? [part.text] : []))
 }
 
+/**
+ * 审批条（round 29）从"没了"到"真摘掉"中间有 300ms 的退场过渡（用户口径：不许闪现），
+ * 断言"不再出现"要等它跑完。
+ */
+async function expectNoApproval(): Promise<void> {
+  await waitFor(() => expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument())
+}
+
 let bridge: KyclawBridgeStubs
 
 beforeEach(() => {
@@ -134,7 +154,7 @@ afterEach(() => {
 })
 
 describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
-  it('挂起轮：卡片带 diff 与四决策；点「允许一次」→ 自动续跑、回灌 approved:true', async () => {
+  it('挂起轮：审批条停在输入框上方、带 diff 与四决策；点「允许一次」→ 自动续跑、回灌 approved:true', async () => {
     const control = createMockTransport()
     const session = await renderSession(control)
 
@@ -151,6 +171,13 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     const lines = screen.getAllByTestId('approval-diff-line')
     expect(lines.map((line) => line.getAttribute('data-kind'))).toEqual(['add', 'add'])
     expect(lines[0]).toHaveTextContent('第一行')
+
+    // round 29：卡在停靠区里（输入框上方），不在消息流里；消息流只剩只读的「等待审批」状态行
+    const dock = screen.getByTestId('approval-dock')
+    expect(dock).toHaveAttribute('data-open', 'true')
+    expect(dock).toContainElement(card)
+    expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
+    expect(screen.getByTestId('tool-state')).toHaveTextContent('等待审批')
 
     // 挂起轮不是完成轮（渲染端据此不跑标题生成/完成通知）
     await waitFor(() =>
@@ -180,7 +207,7 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
         awaitingApproval: false
       })
     )
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
     expect(control.requests).toHaveLength(2)
   })
 
@@ -249,7 +276,7 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
       approved: false,
       reason: '用户拒绝了这次操作'
     })
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
 
     act(() => {
       control.push('好，那我不写。')
@@ -318,7 +345,7 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
 
     await waitFor(() => expect(control.requests).toHaveLength(3))
     expect(approvalIn(control, 2, 'call-b')).toMatchObject({ approved: true })
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
 
     act(() => {
       control.toolOutput('call-b', '已写入 b.txt')
@@ -454,7 +481,7 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
 
     await waitFor(() => expect(control.requests).toHaveLength(3))
     expect(approvalIn(control, 2, 'call-b')).toMatchObject({ approved: true })
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
   })
 
   it('永久允许落盘失败：露一行"没保存"，本对话里仍然继续放行；原始 Error 落控制台', async () => {
@@ -488,7 +515,7 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     })
 
     await waitFor(() => expect(control.requests).toHaveLength(3))
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
   })
 
   it('本会话允许只覆盖当前对话：换个会话（threadId 不同）照旧弹卡', async () => {
@@ -516,6 +543,137 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     expect(await screen.findByTestId('approval-card')).toBeInTheDocument()
     // 没有自动放行：请求数还是 1（自动放行会立刻续跑出第二次请求）
     expect(second.requests).toHaveLength(1)
+  })
+})
+
+describe('审批条停靠（round 29：输入框上方，不在消息流里）', () => {
+  it('同一步多个挂起：审批条里多条堆叠、逐个决策，全部处理完才自动续跑', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('写两个文件')
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+      control.requestApproval({
+        toolCallId: 'call-b',
+        toolName: 'write',
+        input: { path: 'b.txt', content: 'x' },
+        approvalId: 'run-1::call-b'
+      })
+      control.finish()
+    })
+
+    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(2))
+    expect(screen.getByTestId('approval-dock')).toHaveAttribute('data-open', 'true')
+    expect(screen.getAllByTestId('approval-target').map((node) => node.textContent)).toEqual([
+      'a.txt',
+      'b.txt'
+    ])
+
+    // 只决策第一条：还有待审批 → 不续跑（闸门在 canResumeAfterApproval）
+    fireEvent.click(screen.getAllByTestId('approval-allow-once')[0])
+    expect(control.requests).toHaveLength(1)
+    await waitFor(() => expect(screen.getAllByTestId('approval-card')).toHaveLength(1))
+
+    // 第二条也决策完 → 两条审批一起回灌、自动续跑
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(approvalIn(control, 1, 'call-a')).toMatchObject({ approved: true })
+    expect(approvalIn(control, 1, 'call-b')).toMatchObject({ approved: true })
+    await expectNoApproval()
+  })
+
+  it('重开会话（重启后）：存储里挂起的审批恢复成输入框上方的审批条，批准即续跑', async () => {
+    const control = createMockTransport()
+    const history = mapStoredMessages([
+      {
+        id: 'u1',
+        role: 'user',
+        content: { format: 2, parts: [{ type: 'text', text: '写个文件' }] }
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: {
+          format: 2,
+          parts: [
+            { type: 'reasoning', reasoning: '先看一下工作区' },
+            {
+              type: 'tool-invocation',
+              toolInvocation: {
+                state: 'call',
+                toolCallId: 'call-hang',
+                toolName: 'write',
+                args: { path: 'a.txt', content: '第一行' }
+              }
+            }
+          ],
+          metadata: {
+            pendingToolApprovals: {
+              'call-hang': {
+                toolCallId: 'call-hang',
+                toolName: 'write',
+                runId: 'run-9',
+                type: 'approval'
+              }
+            }
+          }
+        }
+      } as unknown as StoredMessage
+    ])
+
+    await renderSession(control, true, THREAD_ID, history)
+
+    const card = await screen.findByTestId('approval-card')
+    expect(screen.getByTestId('approval-dock')).toContainElement(card)
+    expect(card).toHaveAttribute('data-tool', 'write')
+    expect(card).toHaveAttribute('data-workspace', WORKSPACE)
+    expect(screen.getByTestId('approval-target')).toHaveTextContent('a.txt')
+    // 消息流里同样只有只读状态行（审批入口只有输入框上方这一处）
+    expect(screen.getByTestId('tool-state')).toHaveTextContent('等待审批')
+
+    fireEvent.click(screen.getByTestId('approval-allow-once'))
+
+    // 审批 id 按服务端口径复原（runId::toolCallId）→ 回灌后服务端能从快照续跑
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    expect(approvalIn(control, 0, 'call-hang')).toMatchObject({
+      id: 'run-9::call-hang',
+      approved: true
+    })
+  })
+
+  it('思考段先于工具行到达：流里先出「思考中…」，工具调用前不裸奔（round 29 复核）', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('看看环境再写')
+    act(() => {
+      control.reason('先看看工作区里有什么')
+    })
+
+    // 只有思考：独立思考块直接出、「思考中…」行在
+    expect(await screen.findByTestId('reasoning-toggle')).toHaveTextContent('思考中…')
+    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
+
+    // 工具行到达（这一轮还在流）：思考段保持展开 —— 不是"工具挨工具"裸奔
+    act(() => {
+      control.requestApproval(APPROVAL_A)
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
+    )
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
+    expect(screen.getByTestId('approval-dock')).toHaveAttribute('data-open', 'true')
+
+    // 挂起轮收尾（流停）：思考段按老口径收起，过程块因为还有待审批仍开着（只读状态行看得见）
+    act(() => {
+      control.finish()
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+    )
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
   })
 })
 
@@ -675,6 +833,6 @@ describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重
       control.push('写好了。')
       control.finish()
     })
-    expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument()
+    await expectNoApproval()
   })
 })

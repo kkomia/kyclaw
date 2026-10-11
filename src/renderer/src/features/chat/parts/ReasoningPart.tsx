@@ -9,16 +9,30 @@ import { TraceFold } from './TraceFold'
  * 折叠行为：流式期间自动展开（能看到它在想什么），流结束自动收起（不占版面）；
  * 手动点一下之后听用户的（override），不再被流式状态覆盖。
  * 收起走容器级 grid-rows 过渡（TraceFold），不做条件渲染硬切；正文限高 268px 自滚。
+ *
+ * round 29 拆开两个语义（现场口径：模型调工具前的思考不能"工具挨工具"裸奔）：
+ *   - `streaming` = **这一段自己**正在被写（标签「思考中…」+ 流光）；
+ *   - `live` = **这一轮**还在流式（决定自动展开）——过程块里的思考段后面跟着工具行时，
+ *     `streaming` 早就翻成 false 了（最后可渲染的是那条工具），但它还属于正在跑的过程：
+ *     只要这一轮没跑完就该保持展开，否则思考段在工具行到达的瞬间自动收起 = 看不见。
+ * 不传 `live` 就与 `streaming` 同档（独立思考块那条旧口径不变）。
  */
 export interface ReasoningPartProps {
   text: string
+  /** 这一段是当前正在写的内容（标签 + 流光） */
   streaming?: boolean
+  /** 这一轮还在流式（流式期间自动展开、跑完自动收起）；不传 = 跟 streaming 同档 */
+  live?: boolean
 }
 
-export function ReasoningPart({ text, streaming = false }: ReasoningPartProps): React.JSX.Element {
+export function ReasoningPart({
+  text,
+  streaming = false,
+  live
+}: ReasoningPartProps): React.JSX.Element {
   // 用户手动折叠/展开过就听用户的；没动过就跟流式状态走（流式期间展开、结束收起）
   const [override, setOverride] = useState<boolean | null>(null)
-  const open = override ?? streaming
+  const open = override ?? live ?? streaming
 
   return (
     <div data-testid="reasoning-part">
