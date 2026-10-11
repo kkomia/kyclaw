@@ -44,7 +44,10 @@ export function AppShell(): React.JSX.Element {
   const toggleSidebar = useShellStore((state) => state.toggleSidebar)
   const toggleWorkPanel = useShellStore((state) => state.toggleWorkPanel)
   const setWorkPanelOpen = useShellStore((state) => state.setWorkPanelOpen)
-  const inSettings = useLocation().pathname.startsWith('/settings')
+  const pathname = useLocation().pathname
+  const inSettings = pathname.startsWith('/settings')
+  // round 17（用户实拍）：工作台开关属于**对话区**，只在对话路由出现（设置/插件等页面右上角不再有它）
+  const inChat = pathname.startsWith('/chat')
   const rowRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -89,14 +92,17 @@ export function AppShell(): React.JSX.Element {
           {/* 工作台开关（round 4：从顶栏搬到这里 —— 用户裁决 R2 concern ①"右侧边栏属于 chat 的内容"，
               位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。面板开时同一位就是
               面板顶右（按钮始终在卡的右上角，不遮挡消息列/输入卡：卡右缘 - 44px，而内容列 800 封顶）。
-              形态与顶栏窗控一致（36 图标钮、无外圈、hover 铺 Fills-F1）；testid / 可访问名不变。 */}
-          <IconButton
-            data-testid="work-panel-toggle"
-            label={workPanelOpen ? '收起工作台' : '展开工作台'}
-            icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
-            className="absolute top-2 right-2 z-10 border-transparent hover:bg-hover"
-            onClick={toggleWorkPanel}
-          />
+              形态与顶栏窗控一致（36 图标钮、无外圈、hover 铺 Fills-F1）；testid / 可访问名不变。
+              round 17：只在对话路由渲染（用户实拍：设置/插件页不该有"属于对话区"的按钮）。 */}
+          {inChat ? (
+            <IconButton
+              data-testid="work-panel-toggle"
+              label={workPanelOpen ? '收起工作台' : '展开工作台'}
+              icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
+              className="absolute top-2 right-2 z-10 border-transparent hover:bg-hover"
+              onClick={toggleWorkPanel}
+            />
+          ) : null}
         </ContentRegion>
         {/* 壳上的"凹角"（R2 D2；round 3 起一对）：内容区是四角圆角卡（ContentRegion 的
             rounded-overlay + 右/底 --shell-edge-gap 留缝），铺满整条主列（R13：主列几何不随侧栏变），

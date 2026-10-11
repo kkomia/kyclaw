@@ -88,6 +88,21 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(send).toBeEnabled()
   })
 
+  it('发送钮禁用态（round 17）：图标用 Labels-Tertiary 一档（干净可辨、不显得可用）', () => {
+    setup()
+
+    const send = screen.getByTestId('composer-send')
+    expect(send).toBeDisabled()
+    expect(send).toHaveClass('bg-(--fill-disabled)', 'text-(--text-tertiary)')
+    // 线宽 2.4：20px 渲染时正好 device 2px（2.4 × 20/24），像素网格上不发虚
+    expect(send.querySelector('svg')?.getAttribute('stroke-width')).toBe('2.4')
+
+    // 可用态完全另一档（墨色底 + 反白箭头），与禁用不混淆
+    type('有内容了')
+    expect(send).toBeEnabled()
+    expect(send).toHaveClass('bg-(--button-primary-bg)', 'text-(--button-primary-fg)')
+  })
+
   it('引用镜像层（round 14）：同排版 / aria-hidden / pointer-events-none；textarea 在上层且滚动同步', () => {
     setup()
 

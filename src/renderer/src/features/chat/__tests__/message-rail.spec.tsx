@@ -2,13 +2,16 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage } from 'ai'
 import { MessageList } from '@renderer/features/chat/MessageList'
+import { useShellStore } from '@renderer/lib/shell-store'
 
 /**
- * 消息导览轨（round 7，用户实拍 #10 图2/图3；round 8 加驻留宽限）：
- *   - 少于 2 条用户消息不出轨；节点 = 用户消息；
- *   - 默认只显示短横（面板 data-open 缺省）；hover / 聚焦弹摘要列表；
- *   - 当前节点跟着滚动走（横线加长 + aria-current）；点击滚动定位（reduced-motion 时直跳）；
- *   - 鼠标移出后**延迟 300ms 关**（穿过节点列与浮窗之间的空隙来得及），重入撤销；点项立即关。
+ * 消息导览轨（round 7；round 17 重做）：
+ *   - 少于 2 条用户消息不出轨；每个用户消息 = 一行 `[摘要文本 … 右端横线]`；
+ *   - 收起态只显横线列（文本收成 0 宽）；hover / 聚焦展开，整块圆角底把全部横线包住；
+ *   - 行内没有前导横条；当前项用文字色/字重 + 更长的横线区分；
+ *   - 当前节点跟着滚动走（aria-current）；点行滚动定位（reduced-motion 时直跳）、点完即关；
+ *   - 鼠标移出后延迟 300ms 关（宽限），重入撤销；键盘聚焦展开、Esc 关；
+ *   - 工作台（workPanelOpen）打开时整条轨不渲染。
  * jsdom 没有布局：用 stub 的 getBoundingClientRect 摆"消息在容器里的位置"，测的是判定与行为。
  */
 
@@ -48,6 +51,7 @@ function stubRect(element: HTMLElement, top: number): void {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  useShellStore.setState({ workPanelOpen: false })
 })
 
 describe('消息导览轨 · 结构', () => {
@@ -90,25 +94,48 @@ describe('消息导览轨 · 结构', () => {
     expect(column).not.toHaveClass('px-4')
   })
 
-  it('浮窗包裹横条区（round 14，Kimi 图4）：right-0 + 横条列 z-10 在上方可点——命中区连续无缝', () => {
+  it('round 17 结构：一行 = [摘要文本 … 右端横线]，行内无前导横条；横线全在面板容器内', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
     const panel = screen.getByTestId('rail-panel')
-    expect(panel).toHaveClass('right-0')
-    expect(panel.className).not.toContain('right-full')
-    expect(panel.className).toContain('pr-10') // 内容给横条让位的右侧内边距
+    // 横线（行按钮）全在容器里：圆角底包住所有横线，滚动/展开都不脱底
+    for (const id of ['u1', 'u2', 'u3']) {
+      expect(panel).toContainElement(screen.getByTestId(`rail-node-${id}`))
+    }
 
-    const nodesRow = screen.getByTestId('rail-node-u1').parentElement
-    expect(nodesRow).toHaveClass('relative', 'z-10')
+    const row = screen.getByTestId('rail-node-u1')
+    const children = Array.from(row.children)
+    // 行首是文本（没有前导横条），横线在行右端（最后一个子元素）
+    expect(children[0]).toHaveAttribute('data-testid', 'rail-item-u1')
+    expect(children[children.length - 1].className).toContain('h-0.5')
+
+    // 收起态：文本 0 宽、横线不带左间距（窄条）；展开态：文本长出、横线让出间距
+    expect(screen.getByTestId('rail-item-u1')).toHaveClass('max-w-0')
+    expect(children[children.length - 1]).toHaveClass('ml-0')
+
+    fireEvent.mouseEnter(screen.getByTestId('message-rail'))
+    expect(screen.getByTestId('rail-item-u1')).toHaveClass('max-w-56')
+    expect(Array.from(screen.getByTestId('rail-node-u1').children)[1]).toHaveClass('ml-3')
   })
 
-  it('默认收起：摘要列表在 DOM 里但没有展开标记（不硬切，走 opacity 过渡）', () => {
+  it('工作台打开：整条轨不渲染（round 17 用户口径）；收起后恢复', () => {
+    useShellStore.setState({ workPanelOpen: true })
+    render(<MessageList messages={MESSAGES} status="ready" />)
+    expect(screen.queryByTestId('message-rail')).not.toBeInTheDocument()
+
+    act(() => {
+      useShellStore.setState({ workPanelOpen: false })
+    })
+    expect(screen.getByTestId('message-rail')).toBeInTheDocument()
+  })
+
+  it('收起态只显横线列（round 17）：面板无 data-open、摘要文本收成 0 宽（不硬切）', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
     const panel = screen.getByTestId('rail-panel')
     expect(panel).not.toHaveAttribute('data-open')
-    expect(panel).toHaveAttribute('aria-hidden', 'true')
-    expect(panel).toHaveClass('opacity-0')
+    const text = screen.getByTestId('rail-item-u1')
+    expect(text).toHaveClass('max-w-0', 'opacity-0')
   })
 
   it('消息区不显示滚动条（round 8 实拍）：隐条类挂在滚动容器上，列表其它行为不变', () => {
@@ -119,13 +146,13 @@ describe('消息导览轨 · 结构', () => {
     expect(list).toHaveClass('overflow-y-auto') // 滚动能力不变
   })
 
-  it('hover 展开摘要列表；摘要项 = 用户消息截断文本', () => {
+  it('hover 展开摘要（文本从 0 宽长出）；摘要项 = 用户消息截断文本', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
     fireEvent.mouseEnter(screen.getByTestId('message-rail'))
     const panel = screen.getByTestId('rail-panel')
     expect(panel).toHaveAttribute('data-open', 'true')
-    expect(panel).toHaveClass('opacity-100')
+    expect(screen.getByTestId('rail-item-u1')).toHaveClass('max-w-56', 'opacity-100')
     expect(screen.getByTestId('rail-item-u2')).toHaveTextContent('第二问：再把依赖列出来')
   })
 
@@ -218,6 +245,17 @@ describe('消息导览轨 · 结构', () => {
       vi.useRealTimers()
     }
   })
+
+  it('Esc 关（键盘路径保留）', () => {
+    render(<MessageList messages={MESSAGES} status="ready" />)
+
+    const rail = screen.getByTestId('message-rail')
+    fireEvent.focusIn(screen.getByTestId('rail-node-u1'))
+    expect(screen.getByTestId('rail-panel')).toHaveAttribute('data-open', 'true')
+
+    fireEvent.keyDown(rail, { key: 'Escape' })
+    expect(screen.getByTestId('rail-panel')).not.toHaveAttribute('data-open')
+  })
 })
 
 describe('消息导览轨 · 当前节点与跳转', () => {
@@ -237,7 +275,9 @@ describe('消息导览轨 · 当前节点与跳转', () => {
     stubRect(screen.getByTestId('message-u2'), 110)
     fireEvent.scroll(container)
     expect(screen.getByTestId('rail-node-u2')).toHaveAttribute('aria-current', 'true')
-    expect(screen.getByTestId('rail-item-u2')).toHaveAttribute('aria-current', 'true')
+    // 当前项在文字上也区分（round 17：字重 + 墨色，不再靠前导横条）
+    expect(screen.getByTestId('rail-item-u2')).toHaveClass('font-medium', 'text-ink')
+    expect(screen.getByTestId('rail-item-u1')).toHaveClass('text-ink-secondary')
     expect(screen.getByTestId('rail-node-u1')).not.toHaveAttribute('aria-current')
   })
 

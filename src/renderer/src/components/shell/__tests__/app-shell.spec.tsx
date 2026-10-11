@@ -92,6 +92,19 @@ describe('AppShell 三栏骨架', () => {
     expect(iconClass).not.toContain('lucide-panel-right-open')
   })
 
+  it('工作台开关只在对话路由（round 17 用户实拍）：其它页面右上角没有它', () => {
+    renderShell('/plugins')
+
+    expect(screen.queryByTestId('work-panel-toggle')).not.toBeInTheDocument()
+    // 面板本体仍在（只是没有开关入口；窄窗自动收的逻辑不受影响）
+    expect(screen.getByTestId('work-panel')).toBeInTheDocument()
+  })
+
+  it('对话路由：开关在（/chat；/ 会被重定向到 /chat）', () => {
+    renderShell('/chat')
+    expect(screen.getByTestId('work-panel-toggle')).toBeInTheDocument()
+  })
+
   it('两个开关互不牵连（侧栏折叠不影响面板，反之亦然）', () => {
     renderShell()
 

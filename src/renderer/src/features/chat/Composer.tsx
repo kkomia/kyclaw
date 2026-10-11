@@ -448,7 +448,10 @@ export function Composer({
               'flex size-9 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
               canSend
                 ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
-                : 'bg-(--fill-disabled) text-(--text-disabled)'
+                : // round 17（用户实拍"禁用态糊"）：图标从 Labels-Quaternary（30% 黑，糊在浅灰底上）
+                  // 提到 Labels-Tertiary（55% 黑）——干净可辨、又不至于像可用（可用的墨色圆底完全另一档）。
+                  // 线宽保持 2.4：20px 渲染时正好是 device 2px（2.4 × 20/24），在像素网格上不发虚。
+                  'bg-(--fill-disabled) text-(--text-tertiary)'
             )}
           >
             <ArrowUp aria-hidden="true" className="size-5" strokeWidth={2.4} />

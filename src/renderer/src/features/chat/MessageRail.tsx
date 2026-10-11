@@ -1,25 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { UIMessage } from 'ai'
 import { cn } from '@renderer/components/ui/cn'
+import { useShellStore } from '@renderer/lib/shell-store'
 import { activeUserIdFrom, summarizeMessage } from './message-rail-model'
 
 /**
- * 消息导览轨（round 7，用户实拍 #10 图2/图3）：聊天区右缘的细轨，节点 = **用户消息**。
- *   - 默认只显示短横；当前节点（滚过视口上沿的最后一条用户消息）横线加长加实；
- *   - hover（或键盘聚焦）弹出摘要列表：每项 = 用户消息压成一行的文本，当前项横线加长；
- *   - 点节点 / 点摘要项 → 平滑滚动定位（reduced-motion 时直接跳，不动画）。
- * 面板走 opacity/translate 过渡（不硬切）；行为只依赖 DOM 里的消息节点，不碰消息数据。
+ * 消息导览轨（round 7；round 17 按用户实拍重做）：
+ *   每个用户消息 = **一行** `[摘要文本 … 右端横线]`；**收起态只显横线列**（文本收成 0 宽），
+ *   hover/聚焦展开——**整块**圆角底把全部横线一起包住（横线是行的子元素，永远在背景里：
+ *   不超出、不被圆角裁、不上下露头）。浮窗行内**没有前导横条**；当前项用文字色/字重 +
+ *   更长的横线区分。超高时整块一起滚（横线始终在被滚动的同一背景里）。
+ *   位置：聊天区右缘 `right-2`（8px 呼吸位）。
+ *   工作台（`useShellStore.workPanelOpen`）打开时**整条轨不渲染**（展开右侧边栏就隐藏摘要条）。
  *
- * 驻留（round 8 用户实拍："鼠标移过去就消失了"）：鼠标移出后**延迟关闭**（宽限 300ms）——
- * 立即关的话鼠标还没够到浮窗它就没了；进入浮窗（它是本 nav 的子节点，重入会再触发 onMouseEnter）
- * 即撤销关闭。点摘要项跳转仍立即关。
- *
- * 包裹横条（round 14，Kimi 图4）：浮窗改 `right-0` + 右侧内边距给横条让位，命中区**覆盖横条区**、
- * 与横条列连续无缝——从任意横条滑进浮窗全程不离开 nav 子树，不会触发 mouseleave；
- * 横条容器 `relative z-10` 浮在浮窗之上，保持可点。300ms 宽限作为兜底保留。
- *
- * 定位：贴右缘 `right-2`（8px 呼吸位；消息区的滚动条已按 round 8 隐藏，不再是让条的理由）。
- * 走廊（round 14 第二块）：消息列在 MessageList 里留了右侧内边距，正文不会钻到轨道下面。
+ * 驻留（round 8 用户实拍"鼠标移过去就消失了"）：鼠标移出后延迟关闭（宽限 300ms），
+ * 进入轨（整块就是一个命中区）即撤销；点行跳转立即关。
+ * 行为：点行 → 平滑滚动定位（reduced-motion 直跳）；键盘聚焦展开、Enter 跳、Esc 关。
  */
 export interface MessageRailProps {
   messages: UIMessage[]
@@ -27,7 +23,7 @@ export interface MessageRailProps {
   containerRef: RefObject<HTMLDivElement | null>
 }
 
-/** 鼠标移出后的关闭宽限（ms）：够穿过节点列与浮窗之间的空隙并落进浮窗 */
+/** 鼠标移出后的关闭宽限（ms）：够穿过轨道右缘的呼吸位并落回轨道 */
 const PANEL_CLOSE_GRACE_MS = 300
 
 function prefersReducedMotion(): boolean {
@@ -38,6 +34,7 @@ export function MessageRail({
   messages,
   containerRef
 }: MessageRailProps): React.JSX.Element | null {
+  const workPanelOpen = useShellStore((state) => state.workPanelOpen)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<number | null>(null)
@@ -49,13 +46,13 @@ export function MessageRail({
     }
   }, [])
 
-  /** 立刻展开（进入轨/浮窗、键盘聚焦都走它）：顺带撤掉还没到点的关闭定时器 */
+  /** 立刻展开（进入轨、键盘聚焦都走它）：顺带撤掉还没到点的关闭定时器 */
   const openPanel = useCallback((): void => {
     cancelClose()
     setOpen(true)
   }, [cancelClose])
 
-  /** 延迟关闭：给鼠标留穿过空隙的时间；期间重入由 openPanel 撤销 */
+  /** 延迟关闭：给鼠标留穿过呼吸位的时间；期间重入由 openPanel 撤销 */
   const closePanelSoon = useCallback((): void => {
     cancelClose()
     closeTimer.current = window.setTimeout(() => {
@@ -102,98 +99,89 @@ export function MessageRail({
         }
       }
       setActiveId(id)
-      // 点项跳转：立即关（不等宽限），顺手撤掉待关的定时器
+      // 点行跳转：立即关（不等宽限），顺手撤掉待关的定时器
       cancelClose()
       setOpen(false)
     },
     [cancelClose, containerRef]
   )
 
-  if (users.length < 2) return null
+  if (users.length < 2 || workPanelOpen) return null
 
   return (
     <nav
       data-testid="message-rail"
       aria-label="消息导览"
-      className="absolute top-1/2 right-2 z-10 -translate-y-1/2"
+      className={cn(
+        'absolute top-1/2 right-2 z-10 max-h-[70vh] -translate-y-1/2 overflow-y-auto rounded-overlay [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        'transition-[background-color] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        // 展开 = 圆角底把**全部**横线包住（背景画在滚动容器自己的盒子上，滚动时也不脱底）
+        open && 'bg-menu shadow-(--shadow-overlay) backdrop-blur-(--blur-glass)'
+      )}
       onMouseEnter={openPanel}
       onMouseLeave={closePanelSoon}
       onFocus={openPanel}
       onBlur={(event) => {
-        // 键盘路径：焦点移出整个轨（含浮窗）才关；轨内换焦点不动
+        // 键盘路径：焦点移出整个轨才关；轨内换焦点不动
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
           cancelClose()
           setOpen(false)
         }
       }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelClose()
+          setOpen(false)
+        }
+      }}
     >
-      {/* 横条列：浮在浮窗之上（z-10），保证"从横条滑入浮窗"时横条仍可点、命中区连续 */}
-      <div className="relative z-10 flex flex-col items-end gap-2 py-2 pl-2">
+      <div
+        data-testid="rail-panel"
+        data-open={open ? 'true' : undefined}
+        className="flex flex-col p-1"
+      >
         {users.map((message) => {
           const active = message.id === activeId
+          const summary = summarizeMessage(message)
           return (
             <button
               key={message.id}
               type="button"
               data-testid={`rail-node-${message.id}`}
-              aria-label={summarizeMessage(message)}
+              aria-label={summary}
               aria-current={active ? 'true' : undefined}
               onClick={() => jump(message.id)}
-              className="group flex h-3 w-8 cursor-pointer items-center justify-end"
+              className={cn(
+                'flex h-7 w-full cursor-pointer items-center justify-end rounded-(--menu-item-radius) pr-1 pl-3 transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                open && 'hover:bg-hover'
+              )}
             >
+              {/* 摘要文本（行首是文本，没有前导横条）：收起时收成 0 宽，展开时从左侧长出（不硬切）；
+                  当前项用文字色 + 字重区分 */}
+              <span
+                data-testid={`rail-item-${message.id}`}
+                aria-hidden="true"
+                className={cn(
+                  'overflow-hidden text-left text-b2 whitespace-nowrap transition-[max-width,opacity] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                  open ? 'max-w-56 opacity-100' : 'max-w-0 opacity-0',
+                  active ? 'font-medium text-ink' : 'text-ink-secondary'
+                )}
+              >
+                {summary}
+              </span>
+              {/* 行右端的横线：当前项加长加实；所有行靠右对齐成一列 */}
               <span
                 aria-hidden="true"
                 className={cn(
-                  'h-0.5 rounded-pill transition-[width,background-color] duration-(--motion-fast) ease-main motion-reduce:transition-none',
-                  active ? 'w-4 bg-ink' : 'w-2 bg-ink-tertiary opacity-60 group-hover:opacity-100'
+                  'h-0.5 shrink-0 rounded-pill transition-[width,background-color] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                  open ? 'ml-3' : 'ml-0',
+                  active ? 'w-4 bg-ink' : 'w-2 bg-ink-tertiary opacity-60'
                 )}
               />
             </button>
           )
         })}
-      </div>
-
-      {/* 摘要列表：hover/聚焦展开；收起时留在 DOM 里做淡出（不硬切），并断开指针。
-          round 14：right-0 + pr-10 —— 面板盒覆盖横条区（40px = 横条列的 pl-2 + w-8），
-          内容仍留在横条左侧；从任意横条滑进浮窗命中区连续无缝。 */}
-      <div
-        data-testid="rail-panel"
-        data-open={open ? 'true' : undefined}
-        aria-hidden={open ? undefined : true}
-        className={cn(
-          'absolute top-1/2 right-0 w-72 -translate-y-1/2 overflow-hidden rounded-overlay bg-menu pr-10 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
-          open ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-1 opacity-0'
-        )}
-      >
-        <ul className="max-h-72 overflow-y-auto p-1">
-          {users.map((message) => {
-            const active = message.id === activeId
-            const summary = summarizeMessage(message)
-            return (
-              <li key={message.id}>
-                <button
-                  type="button"
-                  data-testid={`rail-item-${message.id}`}
-                  aria-current={active ? 'true' : undefined}
-                  onClick={() => jump(message.id)}
-                  className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded-(--menu-item-radius) px-2 py-1.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none hover:bg-hover',
-                    active ? 'text-ink' : 'text-ink-secondary'
-                  )}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      'h-0.5 shrink-0 rounded-pill',
-                      active ? 'w-4 bg-ink' : 'w-2 bg-ink-tertiary opacity-60'
-                    )}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-b2">{summary}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
       </div>
     </nav>
   )
