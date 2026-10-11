@@ -1,4 +1,4 @@
-import { PanelRight, PanelRightOpen } from 'lucide-react'
+import { PanelRightOpen } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { useShellStore } from '@renderer/lib/shell-store'
@@ -37,13 +37,19 @@ function collapseWidthThreshold(): number {
  *
  * 窄窗兜底（R2 D4）：窗口窄到"侧栏 + 内容最小可读宽 + 工作台"都放不下时自动收起工作台，
  * 保证内容列始终有可读宽度（720 极窄 + 全开时曾经只剩 79px）。
+ *
+ * round 39：工作台宽度由 shell-store 给（WorkPanel 拖拽调宽），全屏时中列挂 `hidden`
+ * 让位但不卸载（聊天状态要留）；面板关掉时全屏状态在 store 里一并复位。
  */
 export function AppShell(): React.JSX.Element {
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
+  const workPanelWidth = useShellStore((state) => state.workPanelWidth)
+  const workPanelFullscreen = useShellStore((state) => state.workPanelFullscreen)
   const toggleSidebar = useShellStore((state) => state.toggleSidebar)
   const toggleWorkPanel = useShellStore((state) => state.toggleWorkPanel)
   const setWorkPanelOpen = useShellStore((state) => state.setWorkPanelOpen)
+  const setWorkPanelWidth = useShellStore((state) => state.setWorkPanelWidth)
   const pathname = useLocation().pathname
   const inSettings = pathname.startsWith('/settings')
   // round 17（用户实拍）：工作台开关属于**对话区**，只在对话路由出现（设置/插件等页面右上角不再有它）
@@ -83,23 +89,30 @@ export function AppShell(): React.JSX.Element {
           )}
         </Sidebar>
         <ContentRegion>
-          <MainColumn>
+          <MainColumn className={workPanelFullscreen ? 'hidden' : undefined}>
             <Outlet />
           </MainColumn>
-          <WorkPanel open={workPanelOpen}>
+          <WorkPanel
+            open={workPanelOpen}
+            fullscreen={workPanelFullscreen}
+            width={workPanelWidth}
+            onWidthChange={setWorkPanelWidth}
+          >
             <Workbench />
           </WorkPanel>
           {/* 工作台开关（round 4：从顶栏搬到这里 —— 用户裁决 R2 concern ①"右侧边栏属于 chat 的内容"，
-              位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。面板开时同一位就是
-              面板顶右（按钮始终在卡的右上角，不遮挡消息列/输入卡：卡右缘 - 44px，而内容列 800 封顶）。
+              位置按 Kimi 实况 c828bba8：图标按钮钉在内容卡**内部**的右上角）。
               形态与顶栏窗控一致（36 图标钮、无外圈、hover 铺 Fills-F1）；testid / 可访问名不变。
               round 17：只在对话路由渲染（用户实拍：设置/插件页不该有"属于对话区"的按钮）。
-              round 24：对话页顶部栏（40px）出来之后，按钮就是这条带的右端——上移 6px 与带对齐。 */}
-          {inChat ? (
+              round 24：对话页顶部栏（40px）出来之后，按钮就是这条带的右端——上移 6px 与带对齐。
+              round 39：面板开着时这个位置就是工作台自己的头部（＋ / ⤢ / ▯ 图标簇在那里），
+              浮动钮让位、只保留"打开入口"这一半；关面板改用头部那个 ▯（`workbench-close`，
+              容器沿用 work-panel-toggle 这一 e2e 契约，见 Workbench）。 */}
+          {inChat && !workPanelOpen ? (
             <IconButton
               data-testid="work-panel-toggle"
-              label={workPanelOpen ? '收起工作台' : '展开工作台'}
-              icon={workPanelOpen ? <PanelRight /> : <PanelRightOpen />}
+              label="展开工作台"
+              icon={<PanelRightOpen />}
               className="absolute top-0.5 right-2 z-10 border-transparent hover:bg-hover"
               onClick={toggleWorkPanel}
             />

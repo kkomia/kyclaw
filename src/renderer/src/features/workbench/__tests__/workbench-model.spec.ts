@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { resetWorkbenchStore, useWorkbenchStore } from '../workbench-store'
+import { resetWorkbenchStore, browserTabTitle, useWorkbenchStore } from '../workbench-store'
 import { absoluteOf } from '../use-workbench-root'
 import { formatBytes, formatDateTime, formatLineStat, refTone, splitRefs } from '../format'
 import { describeLoadError, normalizeUrl } from '../webview-element'
@@ -13,19 +13,82 @@ beforeEach(() => {
   useSettingsStore.setState({ settings: defaultSettings() })
 })
 
-describe('workbench-store：tab 选择与保活', () => {
-  it('默认停在文件；切到别的 tab 会把新 tab 加进挂载集合，切回来不重复', () => {
-    expect(useWorkbenchStore.getState().activeTab).toBe('files')
-    expect(useWorkbenchStore.getState().mounted).toEqual(['files'])
+describe('workbench-store：标签页模型', () => {
+  it('默认一个「文件」标签；文件/Git 复用，浏览器/终端每次新开', () => {
+    const initial = useWorkbenchStore.getState()
+    expect(initial.tabs.map((tab) => tab.kind)).toEqual(['files'])
+    expect(initial.activeTabId).toBe(initial.tabs[0]?.id)
 
-    useWorkbenchStore.getState().select('terminal')
-    expect(useWorkbenchStore.getState().activeTab).toBe('terminal')
-    expect(useWorkbenchStore.getState().mounted).toEqual(['files', 'terminal'])
+    useWorkbenchStore.getState().openTab('terminal')
+    useWorkbenchStore.getState().openTab('terminal')
+    useWorkbenchStore.getState().openTab('browser')
+    useWorkbenchStore.getState().openTab('browser')
+    let tabs = useWorkbenchStore.getState().tabs
+    expect(tabs.map((tab) => tab.kind)).toEqual([
+      'files',
+      'terminal',
+      'terminal',
+      'browser',
+      'browser'
+    ])
+    // 新开的那个是当前标签
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[4]?.id)
 
-    useWorkbenchStore.getState().select('browser')
-    useWorkbenchStore.getState().select('terminal')
-    expect(useWorkbenchStore.getState().mounted).toEqual(['files', 'terminal', 'browser'])
-    expect(useWorkbenchStore.getState().activeTab).toBe('terminal')
+    // 文件 / Git 是世界状态：已开着就只激活，不重复开
+    useWorkbenchStore.getState().openTab('git')
+    useWorkbenchStore.getState().openTab('git')
+    useWorkbenchStore.getState().openTab('files')
+    tabs = useWorkbenchStore.getState().tabs
+    expect(tabs.filter((tab) => tab.kind === 'files')).toHaveLength(1)
+    expect(tabs.filter((tab) => tab.kind === 'git')).toHaveLength(1)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+  })
+
+  it('关标签：接左边的邻居；全关光 = 空态（activeTabId 空串）；未知 id 不误伤', () => {
+    const { openTab, closeTab, selectTab } = useWorkbenchStore.getState()
+    openTab('terminal')
+    openTab('git')
+    const [files, terminal, git] = useWorkbenchStore.getState().tabs
+    if (files === undefined || terminal === undefined || git === undefined) {
+      throw new Error('三个标签没开出来')
+    }
+
+    selectTab(terminal.id)
+    // 关掉不是当前的那个：当前标签不动
+    closeTab(files.id)
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.id)).toEqual([terminal.id, git.id])
+    expect(useWorkbenchStore.getState().activeTabId).toBe(terminal.id)
+
+    // 关掉当前标签：接到左边那个（terminal 左边没东西 → 接右边的 git）
+    closeTab(terminal.id)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(git.id)
+
+    closeTab('没这个标签')
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.id)).toEqual([git.id])
+    selectTab('也没这个')
+    expect(useWorkbenchStore.getState().activeTabId).toBe(git.id)
+
+    closeTab(git.id)
+    expect(useWorkbenchStore.getState().tabs).toEqual([])
+    expect(useWorkbenchStore.getState().activeTabId).toBe('')
+  })
+
+  it('resetWorkbench：回默认单「文件」；浏览器标题按页面标题 → 主机名 → 兜底名', () => {
+    useWorkbenchStore.getState().openTab('browser')
+    const browser = useWorkbenchStore.getState().tabs[1]
+    if (browser === undefined) throw new Error('浏览器标签没开出来')
+    useWorkbenchStore.getState().setTabTitle(browser.id, '示例站点')
+    expect(useWorkbenchStore.getState().tabs[1]?.title).toBe('示例站点')
+
+    useWorkbenchStore.getState().resetWorkbench()
+    const tabs = useWorkbenchStore.getState().tabs
+    expect(tabs.map((tab) => tab.kind)).toEqual(['files'])
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+
+    expect(browserTabTitle('页面标题', 'https://a.b/c')).toBe('页面标题')
+    expect(browserTabTitle('   ', 'https://example.com/a?b=1')).toBe('example.com')
+    expect(browserTabTitle('', 'about:blank')).toBe('浏览器')
+    expect(browserTabTitle('', '不是网址')).toBe('浏览器')
   })
 })
 

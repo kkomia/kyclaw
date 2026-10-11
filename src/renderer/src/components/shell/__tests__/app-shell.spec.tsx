@@ -5,7 +5,12 @@ import { useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
 
 beforeEach(() => {
-  useShellStore.setState({ sidebarCollapsed: false, workPanelOpen: false })
+  useShellStore.setState({
+    sidebarCollapsed: false,
+    workPanelOpen: false,
+    workPanelWidth: 400,
+    workPanelFullscreen: false
+  })
 })
 
 afterEach(() => {
@@ -61,13 +66,16 @@ describe('AppShell 三栏骨架', () => {
     fireEvent.click(screen.getByTestId('work-panel-toggle'))
     expect(panel).toHaveClass('is-open', 'w-(--work-panel-width)')
     expect(panel).not.toHaveClass('w-0')
+    // 宽度走 store → 内联覆盖 token（round 39 拖拽调宽之后，内外层仍读同一条变量）
+    expect(panel).toHaveStyle('--work-panel-width: 400px')
 
-    fireEvent.click(screen.getByTestId('work-panel-toggle'))
+    // round 39：面板开着时收起它的是头部那个 ▯（浮动钮让位，两者共用 e2e 契约的 testid）
+    fireEvent.click(screen.getByTestId('workbench-close'))
     expect(panel).not.toHaveClass('is-open')
     expect(panel).toHaveClass('w-0')
   })
 
-  it('工作台开关的新家（round 4）：钉在内容卡右上角，顶栏不再有它（用户裁决 R2 concern ①）', () => {
+  it('工作台开关的新家（round 4 / round 39）：关着时钉在内容卡右上角，开着时让位给头部图标簇', () => {
     renderShell()
 
     const toggle = screen.getByTestId('work-panel-toggle')
@@ -79,16 +87,19 @@ describe('AppShell 三栏骨架', () => {
     // 形态与窗控同口径：无外圈、hover 铺 Fills-F1、图标 18
     expect(toggle).toHaveClass('border-transparent', 'hover:bg-hover')
     expect(toggle.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
-    // 可访问名随开合换；展开态 = ◧（PanelRight），不带收起箭头
+    // 关着时它就是"打开入口"：可访问名与图标都指向"展开"
     expect(toggle).toHaveAccessibleName('展开工作台')
     expect(toggle.querySelector('svg')?.getAttribute('class') ?? '').toContain(
       'lucide-panel-right-open'
     )
 
     fireEvent.click(toggle)
-    const opened = screen.getByTestId('work-panel-toggle')
-    expect(opened).toHaveAccessibleName('收起工作台')
-    const iconClass = opened.querySelector('svg')?.getAttribute('class') ?? ''
+    // 打开后浮动钮不渲染（round 39：那个位置换成了工作台自己的头部）；
+    // 同一个 testid 落在头部的 ▯ 上 —— walkthrough 用它收起面板，契约不破
+    const headerClose = screen.getByTestId('workbench-close')
+    expect(screen.getByTestId('work-panel-toggle')).toContainElement(headerClose)
+    expect(headerClose).toHaveAccessibleName('收起工作台')
+    const iconClass = headerClose.querySelector('svg')?.getAttribute('class') ?? ''
     expect(iconClass).toContain('lucide-panel-right')
     expect(iconClass).not.toContain('lucide-panel-right-open')
   })
@@ -200,19 +211,25 @@ describe('AppShell 三栏骨架', () => {
     useShellStore.setState({ workPanelOpen: true })
     renderShell()
 
-    expect(callbacks).toHaveLength(1)
+    // 两个观察者：AppShell 的（壳宽 → 自动收面板）与 WorkPanel 的（内容区宽 → 收回过宽宽度）。
+    // 这里只驱动"壳宽"这一路；把回调全喂一遍即可（宽度那路收到 0 宽的内容区也不动）
+    expect(callbacks.length).toBeGreaterThan(0)
+    const fire = (width: number): void => {
+      act(() => {
+        for (const callback of callbacks) {
+          callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver)
+        }
+      })
+    }
+
     // 阈值 token 在 jsdom 里读不到 → 用兜底 1120：窄窗（< 1120）收、宽窗不动
-    act(() => {
-      callbacks[0]([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver)
-    })
+    fire(900)
     expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
 
     act(() => {
       useShellStore.setState({ workPanelOpen: true })
     })
-    act(() => {
-      callbacks[0]([{ contentRect: { width: 1400 } } as ResizeObserverEntry], {} as ResizeObserver)
-    })
+    fire(1400)
     expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
   })
 
@@ -224,5 +241,64 @@ describe('AppShell 三栏骨架', () => {
     fireEvent.click(screen.getByTestId('sidebar-toggle'))
 
     expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+  })
+})
+
+describe('AppShell · round 39（全屏 / 浮动钮让位）', () => {
+  it('浮动 ▯：面板关着时是打开入口；开着时不渲染（不与头部图标簇重叠）', () => {
+    renderShell()
+
+    expect(screen.getByTestId('work-panel-toggle')).toHaveClass('absolute')
+    expect(screen.queryByTestId('workbench-close')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('work-panel-toggle'))
+
+    // 浮动钮不在了；开关落到头部 ▯ 上（同一个 testid 换了个家）
+    const toggle = screen.getByTestId('work-panel-toggle')
+    expect(toggle).not.toHaveClass('absolute')
+    expect(screen.getByTestId('workbench-close')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('workbench-close'))
+    expect(screen.getByTestId('work-panel-toggle')).toHaveClass('absolute')
+  })
+
+  it('全屏（⤢）：中列 hidden 让位但不卸载，工作台占满内容区；关面板时一并退出全屏', () => {
+    renderShell()
+    fireEvent.click(screen.getByTestId('work-panel-toggle'))
+
+    fireEvent.click(screen.getByTestId('workbench-fullscreen'))
+
+    expect(useShellStore.getState().workPanelFullscreen).toBe(true)
+    const panel = screen.getByTestId('work-panel')
+    expect(panel).toHaveClass('is-open', 'flex-1')
+    expect(panel).not.toHaveClass('w-(--work-panel-width)')
+    // 中列只是 hidden（聊天状态要留），不是卸载
+    const main = screen.getByTestId('main-column')
+    expect(main).toHaveClass('hidden')
+    expect(screen.getByTestId('content-region')).toContainElement(main)
+    // 全屏时没有可拖的把手（宽度不适用）
+    expect(screen.queryByTestId('work-panel-resizer')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('workbench-close'))
+
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
+  })
+
+  it('面板开着时才有拖拽把手；窄窗自动收面板也走 store（全屏一并复位）', () => {
+    useShellStore.setState({ workPanelOpen: true, workPanelFullscreen: true })
+    renderShell()
+
+    const panel = screen.getByTestId('work-panel')
+    expect(panel).toHaveClass('flex-1')
+    expect(screen.queryByTestId('work-panel-resizer')).not.toBeInTheDocument()
+
+    act(() => {
+      useShellStore.getState().setWorkPanelOpen(false)
+    })
+    expect(panel).toHaveClass('w-0')
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
   })
 })

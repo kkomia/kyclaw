@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { cn } from '../ui/cn'
 
 /**
  * 中列（主列）：flex-1，宽度只由容器决定 —— 侧栏折叠不动它（spec §6.2 的"覆盖层"口径）。
@@ -7,12 +8,14 @@ import type { ReactNode } from 'react'
  * 消息列/输入区的 max 800 / 768 是 T5、T7 的内容层的事。
  */
 export interface MainColumnProps {
+  /** 追加类：round 39 工作台全屏时给 `hidden`（中列让位但**不卸载**，聊天状态要留） */
+  className?: string
   children?: ReactNode
 }
 
-export function MainColumn({ children }: MainColumnProps): React.JSX.Element {
+export function MainColumn({ className, children }: MainColumnProps): React.JSX.Element {
   return (
-    <main data-testid="main-column" className="flex min-w-0 flex-1 flex-col">
+    <main data-testid="main-column" className={cn('flex min-w-0 flex-1 flex-col', className)}>
       {children}
     </main>
   )
