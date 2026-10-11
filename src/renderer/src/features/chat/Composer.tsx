@@ -7,10 +7,11 @@ import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { visionOf } from '@shared/models'
-import { PlusMenu, PermissionChip, ModelChip, PendingChips } from './ComposerControls'
+import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
+import { resolveContextItem, subscribeContextItems } from './composer-inbox'
 import { ComposerSuggest } from './ComposerSuggest'
 import { ReferenceChipInner } from './reference-chip'
 import {
@@ -34,8 +35,8 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
  * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 48 / 最大 170，超出内部滚动）+
  * 底部工具条（48）：左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档
- * ask|full，当前会话工作区）；右端模型 chip（T8 已配置 provider 的默认项；round 8 按用户实拍
- * 从左侧组移到右侧、发送钮之前）+ 发送/停止。
+ * ask|full，当前会话工作区）；右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
+ * （T8 已配置 provider 的默认项；round 8 按用户实拍从左侧组移到右侧、发送钮之前）+ 发送/停止。
  *
  * 高度按 Kimi 实况页（a84af355 截图：单行输入 + 一行工具条），默认单行时紧凑，
  * 不再固定三段 "40 + 111 + 49" —— 那是首屏形态，常态下多出来的空白正是用户点名的"过高"。
@@ -45,6 +46,9 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 附件（round 7 起；模块 2 扩三类）：文本类 ≤16KB 读成文本内联；**图片**在当前模型 vision=true 时
  * 随消息真发（vision=false 人话拒收，不假装收下）；**PDF** 统一由主进程抽文字层再内联（扫描件给人话）。
  * 拖拽与 ＋ 上传走同一个 pickFiles —— 两条入口的行为必须是同一套。口径见 composer-attachments.ts 头注。
+ *
+ * 第三条入口（round 42）：工作台文件树的「添加到上下文」与预览区选中的「添加到上下文（摘选）」
+ * 走 composer-inbox 的事件通道进来，落进**同一个附件条**、同一套上限（解析在订阅方做）。
  *
  * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
  * 与 round 15 的建议浮窗同一条路 ——
@@ -103,7 +107,14 @@ export function Composer({
   const pendingCaret = useRef<number | null>(null)
 
   const settings = useSettingsStore((state) => state.settings)
-  const projectOf = useProjectsStore((state) => state.projectOf)
+  // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
+  // （「移至项目」/ 映射快照迟到）组件不重渲染 → 会话根停在旧值。口径与工作台
+  // use-workbench-root.ts 同一套（那边是用户实报的同一类缺陷）。
+  const mappings = useProjectsStore((state) => state.mappings)
+  const projectOf = useCallback(
+    (id: string | null): string | null => (id === null ? null : (mappings[id] ?? null)),
+    [mappings]
+  )
   const rootWorkspace = sessionWorkspaceOf({ threadId, settings, projectOf })
   const contextLabel = rootWorkspace === null ? null : folderNameOf(rootWorkspace.path)
   const enabledPlugins = settings.mcpServers
@@ -329,6 +340,38 @@ export function Composer({
     )
   }
 
+  /**
+   * round 42：「添加到上下文」（文件树右键 / 预览选中）→ 附件条。
+   * 事件只说"哪个会话的哪个文件"，读文件与判档在这里做（口径仍是 composer-attachments 那套，
+   * 见 composer-inbox.ts）；别的会话的事件、自己没有会话时的事件都丢掉——不猜、不错挂。
+   */
+  useEffect(() => {
+    if (threadId === null) return
+    // 换会话 / 卸载时把这条订阅收掉：晚到的解析结果不再往新会话的附件条上挂（与 listFiles 同一套 alive 口径）
+    let alive = true
+    const unsubscribe = subscribeContextItems((item) => {
+      if (item.threadId !== threadId) return
+      void resolveContextItem(item, {
+        channel: window.kyclaw?.workbench ?? null,
+        vision,
+        extractPdf,
+        id: uid()
+      }).then((result) => {
+        if (!alive) return
+        if ('problem' in result) {
+          setNotice({ tone: 'warning', text: `未附加：${item.name}（${result.problem}）` })
+          return
+        }
+        setAttachments((previous) => [...previous, result.attachment])
+        setNotice(result.note === undefined ? null : { tone: 'warning', text: result.note })
+      })
+    })
+    return () => {
+      alive = false
+      unsubscribe()
+    }
+  }, [threadId, vision, extractPdf])
+
   return (
     <div
       data-testid="composer"
@@ -540,8 +583,12 @@ export function Composer({
           ) : null}
         </span>
 
+        {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放 */}
         {settings.providers.length === 0 ? null : (
-          <ModelChip threadId={threadId} onNotice={setNotice} />
+          <>
+            <ContextChip threadId={threadId} />
+            <ModelChip onNotice={setNotice} />
+          </>
         )}
 
         {busy ? (

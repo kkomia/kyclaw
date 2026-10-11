@@ -7,6 +7,10 @@
  * 这里只递相对路径，绝对路径只用来拼"复制路径"的文本。
  *
  * 会话切换（threadId 变）时整棵树清空重来，并用"代次"丢弃晚到的响应（旧会话的目录不会再画回来）。
+ *
+ * round 42：右键菜单首项「添加到上下文」（仅文件）与预览区选中的「添加到上下文（摘选）」
+ * 走 composer-inbox 的事件通道进输入卡的附件条；这里只发布"哪个会话的哪个文件 / 哪段摘选"，
+ * 读文件与上限判定都在订阅方（Composer）做。
  */
 import {
   ChevronRight,
@@ -14,15 +18,18 @@ import {
   File as FileIcon,
   Folder,
   FolderOpen,
-  FolderSearch
+  FolderSearch,
+  MessageSquarePlus,
+  TextSelect
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { DirEntry, FileBytesResult, FilePreview } from '@shared/workbench'
 import { cn } from '@renderer/components/ui/cn'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { linesOfSelection, publishContextItem } from '@renderer/features/chat/composer-inbox'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
-import { ContextMenu, type ContextMenuState } from './ContextMenu'
+import { ContextMenu, type ContextMenuState, type ContextMenuItem } from './ContextMenu'
 import { ImagePreview } from './preview/ImagePreview'
 import { MarkdownPreview } from './preview/MarkdownPreview'
 import { PdfPreview } from './preview/PdfPreview'
@@ -157,6 +164,85 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     [rootPath]
   )
 
+  /**
+   * round 42：把**整份文件**交给输入卡（只报"哪个会话的哪个文件"——读文件与判档在订阅方做，
+   * 见 composer-inbox.ts；没有会话时不发布，事件挂不到任何输入卡上）。
+   */
+  const addFileToContext = useCallback(
+    (relative: string): void => {
+      if (threadId === null) return
+      publishContextItem({ source: 'file', threadId, relative, name: baseName(relative) })
+    },
+    [threadId]
+  )
+
+  /**
+   * round 42：把预览里**选中的那段**交给输入卡（名称带「摘选」，与整份文件区分开）。
+   * 位置（行号区间）在这一侧算：只有预览手里有**源文**（订阅方只看得到选中的文字本身）。
+   * 算不出就不带 `lines`——不瞎编（口径见 composer-inbox.ts 的 linesOfSelection）。
+   */
+  const addSelectionToContext = useCallback(
+    (state: PreviewState, text: string): void => {
+      if (threadId === null) return
+      const source = sourceTextOf(state)
+      const lines = source === null ? null : linesOfSelection(source, text)
+      publishContextItem({
+        source: 'selection',
+        threadId,
+        relative: state.relative,
+        name: `${baseName(state.relative)} 摘选`,
+        text,
+        ...(lines === null ? {} : { lines })
+      })
+    },
+    [threadId]
+  )
+
+  /** 「全选」：把预览体的内容整体选上（选中后右键就是"有选区"那一档菜单） */
+  const previewBodyRef = useRef<HTMLDivElement>(null)
+  const selectPreviewAll = useCallback((): void => {
+    const node = previewBodyRef.current
+    const selection = window.getSelection()
+    if (node === null || selection === null) return
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }, [])
+
+  /**
+   * 预览区的右键 = 自绘菜单（雷点 4：原生菜单一律拦掉——整块预览区都拦，不只是选中文字那一小块）。
+   * 有选区：[添加到上下文（摘选）/ 复制 / 全选]；没有：[全选]（最小集合，不摆点了没用的项）。
+   */
+  const onPreviewContextMenu = (event: React.MouseEvent, state: PreviewState): void => {
+    event.preventDefault()
+    const selected = window.getSelection()?.toString() ?? ''
+    const items: ContextMenuItem[] = []
+    if (selected.trim() !== '') {
+      items.push({
+        id: 'context',
+        label: '添加到上下文（摘选）',
+        icon: <MessageSquarePlus />,
+        onSelect: () => addSelectionToContext(state, selected)
+      })
+      items.push({
+        id: 'copy',
+        label: '复制',
+        icon: <Copy />,
+        onSelect: () => {
+          void navigator.clipboard?.writeText(selected)
+        }
+      })
+    }
+    items.push({
+      id: 'select-all',
+      label: '全选',
+      icon: <TextSelect />,
+      onSelect: selectPreviewAll
+    })
+    setMenu({ x: event.clientX, y: event.clientY, items })
+  }
+
   if (!ready) {
     return <ToolEmpty testId="files-notice" icon={FolderOpen} title={notice ?? '文件不可用'} />
   }
@@ -199,6 +285,17 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
                 x: event.clientX,
                 y: event.clientY,
                 items: [
+                  // round 42：只有文件能进上下文（目录不进——"把文件夹塞进消息"没有意义）
+                  ...(isDir
+                    ? []
+                    : [
+                        {
+                          id: 'context',
+                          label: '添加到上下文',
+                          icon: <MessageSquarePlus />,
+                          onSelect: () => addFileToContext(relative)
+                        }
+                      ]),
                   {
                     id: 'reveal',
                     label: isDir ? '在文件资源管理器中打开' : '在文件资源管理器中定位',
@@ -219,13 +316,19 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
       </div>
 
       {preview === null ? null : (
-        <BottomSheet
-          testId="file-preview"
-          title={baseName(preview.relative)}
-          onClose={() => setPreview(null)}
-        >
-          <PreviewBody state={preview} />
-        </BottomSheet>
+        // display: contents 的包装层：只为把整块预览区（含标题条）的右键都拦下来，
+        // 自己不产生盒子、不改布局（自绘菜单见 onPreviewContextMenu）
+        <div className="contents" onContextMenu={(event) => onPreviewContextMenu(event, preview)}>
+          <BottomSheet
+            testId="file-preview"
+            title={baseName(preview.relative)}
+            onClose={() => setPreview(null)}
+          >
+            <div ref={previewBodyRef} data-testid="file-preview-body">
+              <PreviewBody state={preview} />
+            </div>
+          </BottomSheet>
+        </div>
       )}
 
       {menu === null ? null : <ContextMenu state={menu} onClose={() => setMenu(null)} />}
@@ -236,6 +339,16 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
 function baseName(relative: string): string {
   const index = relative.lastIndexOf('/')
   return index === -1 ? relative : relative.slice(index + 1)
+}
+
+/**
+ * 预览手里能拿来比对位置的**源文**：只有文本通道有（markdown 也是这条通道，内容就是源文）。
+ * 字节通道（图片 / PDF）没有可比对的文本 → null（位置就省略）。
+ */
+function sourceTextOf(state: PreviewState): string | null {
+  const value = state.value
+  if (value === undefined || value.channel !== 'text' || value.preview.kind !== 'text') return null
+  return value.preview.text
 }
 
 interface LevelProps {

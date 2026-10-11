@@ -43,9 +43,11 @@ import type { ReferenceKind } from './reference-markers'
  *   - `PermissionChip`：权限两档（每次询问 / 完全访问）——**只走引擎既有两档**，
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
+ *   - `ContextChip`：上下文环（round 42 二轮从 ModelChip 里拆出来的**独立组件**）——环自己点了开明细卡、
+ *     hover 也出同一张卡；与模型名只是相邻，不共用按钮；
  *   - `ModelChip`：模型切换（只列 T8 已配置的 provider，含 isDefault 语义；不带小字说明）；
- *     round 41：弹层底部摊开上下文占用 / 分解 / 缓存 / 阈值（与 hover 卡同源）；
- *   - `PendingChips`：附件 / 引用 chip 行（可移除）。
+ *     弹层 = 模型列表 + 思考强度 + 对话长度（round 42 二轮起**不含**上下文明细）；
+ *   - `PendingChips`：附件 / 引用卡行（可移除；round 42 二轮的摘选是「引用卡」）。
  * 图标按钮 hover 铺灰底（Fills-F1）= 图10 口径；不给说明性小字（雷点 2）。
  */
 export interface ComposerNotice {
@@ -273,12 +275,10 @@ export function PermissionChip({ workspace, onNotice }: PermissionChipProps): Re
 }
 
 export interface ModelChipProps {
-  /** 当前会话（上下文环按这条会话的 usage 取数；null = 不取，环停在空态） */
-  threadId?: string | null
   onNotice: (notice: ComposerNotice | null) => void
 }
 
-/** 上下文环（round 18，图3）：模型名左侧 16px 小环；超过阈值时整环转警示色 */
+/** 上下文环（round 18，图3）：16px 小环；超过阈值时整环转警示色（round 42 起是独立组件 ContextChip 的图标） */
 function ContextRing({
   percent,
   warning
@@ -319,7 +319,7 @@ function ContextRing({
 }
 
 /**
- * 上下文明细的取数口径（一处算、两处用：hover 明细卡与模型弹层里的「上下文」区块）：
+ * 上下文明细的取数口径（一处算、两处用：环 hover 的明细卡与环点开后的明细卡同源）：
  * 百分比与进度条跟上下文环同源（四舍五入、封顶 100），分解 = 已用 − 基线，
  * 缓存命中率 = 缓存输入 / 输入。**禁止**两处各算一套或各写一份文案。
  */
@@ -345,8 +345,8 @@ interface ContextStats {
 }
 
 /**
- * 上下文明细卡的正文（round 41）：hover 明细卡与模型弹层里的「上下文」区块共用同一份
- * 布局与文案（口径只此一份）。数据没到时给骨架占位——不闪一个假的 0% 出来（有过渡不硬切）。
+ * 上下文明细卡的正文（round 41）：环 hover 的卡与环点开后的卡共用同一份布局与文案（口径只此一份）。
+ * 数据没到时给骨架占位——不闪一个假的 0% 出来（有过渡不硬切）。
  */
 function ContextCardBody({
   stats,
@@ -467,40 +467,30 @@ function ContextSlider({
 }
 
 /**
- * 模型 chip（round 8 形态；round 18 重做内容；round 41 把上下文摊到弹层里）：
- *   - 触发器 = [上下文环] + 模型名（无描边文字按钮）；
- *   - 浮窗**上下两截**（用户图1）：上=模型列表（当前项勾选）；下（分隔线之后）=「思考强度」「对话长度」
- *     两个二级项（右侧显示当前档 + chevron）；
- *   - 思考强度按注册表（shared/models.ts）动态给挡位——选中即落 settings.modelPrefs 并按
- *     agent.ts 的口径真透传（能传的模型才列多档，传不了的如实只有「默认」）；
- *   - 对话长度 = 官方上下文长度 × 10%–100%（滑块，松手即存）；阈值 = 同一根滑块；
- *   - 弹层底部 = **上下文明细区块**（round 41：已用 %、~已用/~总量、进度条、分解、缓存命中率、阈值）：
- *     点开弹层就能看全，不用去 hover；与 hover 明细卡同源（同一个 ContextCardBody）；
- *   - hover 触发器 = 同一张暗色明细卡（行为不变）。
+ * 上下文明细的取数（round 42 二轮：从 ModelChip 里拆出来给独立的 `ContextChip` 用）。
+ * 口径与 round 41 完全一致（`ContextCardBody` 那份数字），只是取数挪到环自己的组件里。
  */
-export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.JSX.Element {
+function useContextStats(threadId: string | null): {
+  stats: ContextStats
+  pending: boolean
+  refresh: () => void
+} {
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const probedModels = useSettingsStore((state) => state.settings.probedModels)
-  const modelCapabilities = useSettingsStore((state) => state.settings.modelCapabilities)
-  const saveProviders = useSettingsStore((state) => state.saveProviders)
-  const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
-  const [pending, setPending] = useState(false)
   const [context, setContext] = useState<UsageThreadContext | null>(null)
   /** 取数失败的那条会话（服务没起来 / 还没记录）：没数据时不再给骨架，如实画 0% */
   const [failedThreadId, setFailedThreadId] = useState<string | null>(null)
 
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
-  const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
-  const pref = modelPrefs[prefKey]
+  const pref = modelPrefs[current === undefined ? '' : `${current.id}/${current.model}`]
   // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）
   const probed =
     current === undefined ? undefined : probedModels[probedKeyOf(current.id, current.model)]
-  const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort, probed)
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
   const windowTokens = contextTokensFor(current?.model, pct, probed)
 
-  const refreshContext = useCallback((): void => {
+  const refresh = useCallback((): void => {
     if (threadId === null || threadId === '') return
     void fetchThreadContext(threadId).then(
       (next) => setContext(next),
@@ -509,15 +499,8 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
     )
   }, [threadId])
   useEffect(() => {
-    refreshContext()
-  }, [refreshContext])
-
-  /** round 22：菜单打开且实测缓存缺失/过期（>24h）→ 后台重抓一次（不闪、不阻塞菜单） */
-  const refreshModelMeta = useCallback((): void => {
-    if (current === undefined) return
-    if (isProbedFresh(probedModels[probedKeyOf(current.id, current.model)])) return
-    void useSettingsStore.getState().probeModels(current.id)
-  }, [current, probedModels])
+    refresh()
+  }, [refresh])
 
   // 只认"这条会话自己"的数据（换会话后旧数据立即失效，不闪现到新会话上）
   const threadContext = context !== null && context.threadId === threadId ? context : null
@@ -538,21 +521,121 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
     threadContext === null || threadContext.todayInput === 0
       ? null
       : Math.round((threadContext.todayCachedInput / threadContext.todayInput) * 100)
-  /** 明细卡的一份口径（hover 卡与弹层区块共用同一份数据与文案） */
-  const contextStats: ContextStats = {
-    usedPct,
-    usedInput,
-    windowTokens,
-    overThreshold,
-    baseline,
-    messageTokens,
-    lastHitRate,
-    todayHitRate,
-    thresholdPct: pct
+
+  return {
+    stats: {
+      usedPct,
+      usedInput,
+      windowTokens,
+      overThreshold,
+      baseline,
+      messageTokens,
+      lastHitRate,
+      todayHitRate,
+      thresholdPct: pct
+    },
+    /** 数据还没到（刚打开 / 刚换会话 / 上一次还没回）：给骨架，不闪假 0% */
+    pending:
+      threadId !== null && threadId !== '' && threadContext === null && failedThreadId !== threadId,
+    refresh
   }
-  /** 数据还没到（刚打开弹层 / 刚换会话 / 上一次还没回）：给骨架，不闪假 0% */
-  const contextPending =
-    threadId !== null && threadId !== '' && threadContext === null && failedThreadId !== threadId
+}
+
+export interface ContextChipProps {
+  /** 当前会话（上下文按这条会话的 usage 取数；null = 不取，环停在空态） */
+  threadId?: string | null
+}
+
+/**
+ * 上下文环（round 42 二轮，用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。
+ *
+ * 环自己是**独立的目标**：点击 → 弹出明细卡（复用 menu.tsx 的顶层 custom：只读区块，不装 menuitem）；
+ * hover → 同一张卡（Tooltip）。它和模型名只是**相邻**：不共用按钮、不互相嵌套在对方弹层里，
+ * 也不在一个按钮里（模型名那侧是 ModelChip，见下）。
+ */
+export function ContextChip({ threadId = null }: ContextChipProps): React.JSX.Element {
+  const { stats, pending, refresh } = useContextStats(threadId)
+
+  return (
+    <Menu
+      trigger={
+        // 32px 圆形 hover 底（与 ＋ / 权限 chip 同一档）；图标本身就是上下文环
+        <button
+          type="button"
+          data-testid="composer-context"
+          aria-label="上下文"
+          className={ICON_TRIGGER_CLASS}
+        >
+          <Tooltip
+            side="top"
+            align="start"
+            className="w-72 p-3"
+            label={
+              <div data-testid="context-card" className="text-left">
+                <ContextCardBody stats={stats} loading={pending} />
+              </div>
+            }
+          >
+            <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
+              <ContextRing percent={stats.usedPct} warning={stats.overThreshold} />
+            </span>
+          </Tooltip>
+        </button>
+      }
+      items={[
+        {
+          id: 'context-usage',
+          type: 'custom',
+          content: (
+            <div data-testid="context-menu-card" className="w-72">
+              <ContextCardBody stats={stats} loading={pending} />
+            </div>
+          )
+        }
+      ]}
+      side="top"
+      align="start"
+      onOpenChange={(open) => {
+        // 点开就重取一次（上一次可能是很久以前；取不到也照常画 0%，不挡弹层）
+        if (open) refresh()
+      }}
+    />
+  )
+}
+
+/**
+ * 模型 chip（round 8 形态；round 18 重做内容；round 42 二轮把上下文拆走）：
+ *   - 触发器 = 模型名（无描边文字按钮；round 42 起**不含**上下文环——环是隔壁的独立组件）；
+ *   - 浮窗两截：上=模型列表（当前项勾选）；下（分隔线之后）=「思考强度」「对话长度」
+ *     两个二级项（右侧显示当前档 + chevron）；
+ *   - 思考强度按注册表（shared/models.ts）动态给挡位——选中即落 settings.modelPrefs 并按
+ *     agent.ts 的口径真透传（能传的模型才列多档，传不了的如实只有「默认」）；
+ *   - 对话长度 = 官方上下文长度 × 10%–100%（滑块，松手即存）；阈值 = 同一根滑块。
+ */
+export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
+  const providers = useSettingsStore((state) => state.settings.providers)
+  const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
+  const probedModels = useSettingsStore((state) => state.settings.probedModels)
+  const modelCapabilities = useSettingsStore((state) => state.settings.modelCapabilities)
+  const saveProviders = useSettingsStore((state) => state.saveProviders)
+  const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
+  const [pending, setPending] = useState(false)
+
+  const current = providers.find((provider) => provider.isDefault) ?? providers[0]
+  const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
+  const pref = modelPrefs[prefKey]
+  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）
+  const probed =
+    current === undefined ? undefined : probedModels[probedKeyOf(current.id, current.model)]
+  const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort, probed)
+  const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
+
+  /** round 22：菜单打开且实测缓存缺失/过期（>24h）→ 后台重抓一次（不闪、不阻塞菜单） */
+  const refreshModelMeta = useCallback((): void => {
+    if (current === undefined) return
+    if (isProbedFresh(probedModels[probedKeyOf(current.id, current.model)])) return
+    void useSettingsStore.getState().probeModels(current.id)
+  }, [current, probedModels])
 
   const savePrefs = (patch: { thinkingEffort?: string; contextPct?: number }): void => {
     if (current === undefined) return
@@ -626,19 +709,9 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
           )
         }
       ]
-    },
-    // round 41：上下文占用 / 构成分解 / 缓存 / 阈值——**点开弹层就能看全**（不再只藏在 hover 卡里）。
-    // 与 hover 卡同一份口径、同一份文案（ContextCardBody）；只读，不参与键盘导航。
-    { id: 'split-usage', type: 'separator' },
-    {
-      id: 'context-usage',
-      type: 'custom',
-      content: (
-        <div data-testid="model-context-card" className="w-72">
-          <ContextCardBody stats={contextStats} loading={contextPending} />
-        </div>
-      )
     }
+    // round 42 二轮：这里**不再**拼上下文明细区块——那是隔壁 ContextChip 的弹层内容
+    // （用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。menu.tsx 的顶层 custom 保留。
   ]
 
   const label = current === undefined ? '' : current.model === '' ? current.id : current.model
@@ -648,29 +721,12 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
       trigger={
         // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
         // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
-        // round 18：模型名左侧是上下文环（hover 出明细卡）。
         <button
           type="button"
           data-testid="composer-model"
           disabled={pending}
           className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
         >
-          {current === undefined ? null : (
-            <Tooltip
-              side="top"
-              align="start"
-              className="w-72 p-3"
-              label={
-                <div data-testid="context-card" className="text-left">
-                  <ContextCardBody stats={contextStats} loading={contextPending} />
-                </div>
-              }
-            >
-              <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
-                <ContextRing percent={usedPct} warning={overThreshold} />
-              </span>
-            </Tooltip>
-          )}
           <span className="truncate">{label}</span>
         </button>
       }
@@ -678,11 +734,8 @@ export function ModelChip({ threadId = null, onNotice }: ModelChipProps): React.
       side="top"
       align="start"
       onOpenChange={(open) => {
-        if (open) {
-          refreshContext()
-          // round 22：顺带看一眼实测元数据是不是缺/过期（后台抓，不挡菜单）
-          refreshModelMeta()
-        }
+        // round 22：打开菜单时看一眼实测元数据是不是缺/过期（后台抓，不挡菜单）
+        if (open) refreshModelMeta()
       }}
     />
   )
@@ -693,10 +746,72 @@ export interface PendingChipsProps {
   onRemoveAttachment: (id: string) => void
 }
 
+/** 引用卡的摘要长度（码点）：卡上只铺这么点，完整内容照样原样传出去 */
+const QUOTE_SUMMARY_CHARS = 60
+
+/** 摘要：空白压成单空格、按**码点**截（不劈代理对），超了加省略号 */
+function quoteSummaryOf(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const points = [...flat]
+  if (points.length <= QUOTE_SUMMARY_CHARS) return flat
+  return `${points.slice(0, QUOTE_SUMMARY_CHARS).join('')}…`
+}
+
+/**
+ * 摘选的「引用」卡（round 42 二轮，用户给了截图："引用"标识 + 文件路径与行号 + 内容摘要可删除）。
+ * 含标识 / 路径 / 行号 / 摘要（截断展示）/ 总字数；完整内容不铺在界面上——传出去的仍是全文
+ * （上限 16KB，超了截断并另行给一句人话），大段选择不会把输入卡撑开。
+ */
+function QuoteCard({
+  attachment,
+  onRemove
+}: {
+  attachment: PendingAttachment
+  onRemove: () => void
+}): React.JSX.Element {
+  const text = attachment.text ?? ''
+  return (
+    <div
+      data-testid={`composer-attachment-${attachment.name}`}
+      data-quote="true"
+      className="flex min-w-0 max-w-96 flex-col gap-0.5 rounded-button-lg border-(length:--hairline-width) border-hairline bg-secondary px-2.5 py-1.5 text-c1"
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="shrink-0 rounded-badge bg-(--fill-active) px-1 py-0.5 text-ink-secondary">
+          引用
+        </span>
+        <span className="min-w-0 truncate text-ink">{attachment.relative ?? attachment.name}</span>
+        {attachment.lines === undefined ? null : (
+          <span data-testid="composer-quote-lines" className="shrink-0 text-ink-tertiary">
+            第 {attachment.lines.start}–{attachment.lines.end} 行
+          </span>
+        )}
+        <button
+          type="button"
+          aria-label={`移除 ${attachment.name}`}
+          onClick={onRemove}
+          className="ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+        >
+          <X aria-hidden="true" className="size-3" />
+        </button>
+      </div>
+      <div className="flex min-w-0 items-center gap-1 text-ink-tertiary">
+        <span data-testid="composer-quote-summary" className="min-w-0 truncate">
+          {quoteSummaryOf(text)}
+        </span>
+        <span data-testid="composer-quote-count" className="shrink-0">
+          共 {[...text].length} 字
+        </span>
+      </div>
+    </div>
+  )
+}
+
 /**
  * 附件 chip 行：数据（名字/大小）直接印在 chip 上，× 移除；没有内容时整行不渲染。
  * round 14：引用不再走这里（改为输入框内联标记 + 镜像 pill，见 reference-markers.ts）。
  * 模块 2：图片把回形针换成**缩略图**（发送前就能确认是哪张）；PDF 额外印一截页数（数据，不是说明小字）。
+ * round 42 二轮：摘选画成**引用卡**（路径 + 行号 + 摘要 + 字数），整文件仍是原来的 chip。
  */
 export function PendingChips({
   attachments,
@@ -706,42 +821,50 @@ export function PendingChips({
 
   return (
     <div data-testid="composer-pending" className="flex flex-wrap items-center gap-2 px-3 pt-3">
-      {attachments.map((attachment) => (
-        <span
-          key={attachment.id}
-          data-testid={`composer-attachment-${attachment.name}`}
-          className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
-        >
-          {attachment.image === undefined ? (
-            <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
-          ) : (
-            <img
-              data-testid={`composer-attachment-thumb-${attachment.name}`}
-              src={attachment.image.url}
-              alt=""
-              aria-hidden="true"
-              className="size-5 shrink-0 rounded-control object-cover"
-            />
-          )}
-          <span className="min-w-0 truncate">{attachment.name}</span>
-          {attachment.pdf === undefined ? null : (
-            <span className="shrink-0 text-ink-tertiary">
-              {attachment.pdf.truncated
-                ? `${attachment.pdf.pages} 页（已截断）`
-                : `${attachment.pdf.pages} 页`}
-            </span>
-          )}
-          <span className="shrink-0 text-ink-tertiary">{formatBytes(attachment.size)}</span>
-          <button
-            type="button"
-            aria-label={`移除 ${attachment.name}`}
-            onClick={() => onRemoveAttachment(attachment.id)}
-            className="mr-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+      {attachments.map((attachment) =>
+        attachment.quote === true ? (
+          <QuoteCard
+            key={attachment.id}
+            attachment={attachment}
+            onRemove={() => onRemoveAttachment(attachment.id)}
+          />
+        ) : (
+          <span
+            key={attachment.id}
+            data-testid={`composer-attachment-${attachment.name}`}
+            className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
           >
-            <X aria-hidden="true" className="size-3" />
-          </button>
-        </span>
-      ))}
+            {attachment.image === undefined ? (
+              <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+            ) : (
+              <img
+                data-testid={`composer-attachment-thumb-${attachment.name}`}
+                src={attachment.image.url}
+                alt=""
+                aria-hidden="true"
+                className="size-5 shrink-0 rounded-control object-cover"
+              />
+            )}
+            <span className="min-w-0 truncate">{attachment.name}</span>
+            {attachment.pdf === undefined ? null : (
+              <span className="shrink-0 text-ink-tertiary">
+                {attachment.pdf.truncated
+                  ? `${attachment.pdf.pages} 页（已截断）`
+                  : `${attachment.pdf.pages} 页`}
+              </span>
+            )}
+            <span className="shrink-0 text-ink-tertiary">{formatBytes(attachment.size)}</span>
+            <button
+              type="button"
+              aria-label={`移除 ${attachment.name}`}
+              onClick={() => onRemoveAttachment(attachment.id)}
+              className="mr-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+            >
+              <X aria-hidden="true" className="size-3" />
+            </button>
+          </span>
+        )
+      )}
     </div>
   )
 }

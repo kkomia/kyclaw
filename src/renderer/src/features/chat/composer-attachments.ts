@@ -28,12 +28,21 @@ export interface PendingAttachment {
   id: string
   name: string
   size: number
-  /** 文本内容（文本类原文 / PDF 抽取结果）；图片没有 */
+  /** 文本内容（文本类原文 / PDF 抽取结果 / 摘选）；图片没有 */
   text?: string
   /** 图片：随消息真发的 data URL 与 MIME（vision=true 才有） */
   image?: { url: string; mediaType: string }
   /** PDF 抽取信息（气泡上显示页数；truncated = 触到上限） */
   pdf?: { pages: number; truncated: boolean }
+  /**
+   * 相对会话根的路径（round 42）：文件树 / 预览那条路才有（＋ 上传与拖拽没有）。
+   * 内容进消息时用它当抬头——不把路径丢掉，模型看得到"这是哪个文件"。
+   */
+  relative?: string
+  /** 摘选（round 42 二轮）：载荷头用「【引用】文件：…」，卡片也按引用卡画；没有就是普通【附件】块 */
+  quote?: boolean
+  /** 摘选在源文里的行号区间（1 基闭区间；定位不到就不给——不瞎编） */
+  lines?: { start: number; end: number }
 }
 
 /** 随消息真发的文件（形状 = AI SDK 的 FileUIPart；image 之外的类型本轮不发） */
@@ -258,6 +267,21 @@ function fenceFor(text: string): string {
 }
 
 /**
+ * 附件块的抬头（round 42：内容进消息时**带上来源路径与位置**）：
+ *   - 摘选 → `【引用】文件：<相对路径>（第 X–Y 行）`（行号定位不到就不写那半截，不瞎编）；
+ *   - 整文件 → `【附件】<相对路径>`（没有路径的 ＋ 上传与拖拽仍是文件名，行为不变）。
+ */
+function attachmentHeaderOf(attachment: PendingAttachment): string {
+  const label = attachment.relative ?? attachment.name
+  if (attachment.quote === true) {
+    return attachment.lines === undefined
+      ? `【引用】文件：${label}`
+      : `【引用】文件：${label}（第 ${attachment.lines.start}–${attachment.lines.end} 行）`
+  }
+  return `【附件】${label}`
+}
+
+/**
  * 发送时的组装（round 14：引用已改为输入框内联标记，不再单独成段）：正文 → 附件块
  * （附件内容包在围栏里，模型按原文读）。图片不进来——它不走文本，走 file part。
  */
@@ -273,7 +297,7 @@ export function composeOutgoingText(input: {
     if (attachment.text === undefined) continue
     const content = attachment.text.replace(/\n+$/, '')
     const fence = fenceFor(content)
-    blocks.push(`【附件】${attachment.name}\n${fence}\n${content}\n${fence}`)
+    blocks.push(`${attachmentHeaderOf(attachment)}\n${fence}\n${content}\n${fence}`)
   }
   return blocks.join('\n\n')
 }

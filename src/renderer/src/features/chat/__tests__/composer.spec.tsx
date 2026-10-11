@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
+import { publishContextItem } from '@renderer/features/chat/composer-inbox'
 import {
   clearKyclawBridge,
   installKyclawBridge,
@@ -873,13 +874,44 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     setup({ threadId: 't1' })
   }
 
-  it('round 41：点开弹层就能看全上下文（占用 / 分解 / 缓存 / 阈值）', async () => {
-    mountHalfWindow()
-    await screen.findByTestId('context-ring')
+  it('round 42 二轮：环与模型名是**两个组件**（互不嵌套、不共用按钮）；点环开的是明细卡', () => {
+    setup({ threadId: 't1' })
+
+    const ringButton = screen.getByTestId('composer-context')
+    const modelButton = screen.getByTestId('composer-model')
+    expect(ringButton).not.toBe(modelButton)
+    // 不互相嵌套：任一个都不是另一个的后代
+    expect(ringButton.contains(modelButton)).toBe(false)
+    expect(modelButton.contains(ringButton)).toBe(false)
+    // 环自己的按钮里没有模型名（那是隔壁那个按钮的内容）
+    expect(ringButton).not.toHaveTextContent('deepseek-v4-pro')
+
+    fireEvent.keyDown(ringButton, { key: 'ArrowDown' })
+    expect(screen.getByTestId('context-menu-card')).toBeInTheDocument()
+    // 开的是环的明细卡，不是模型列表
+    expect(screen.queryByTestId('composer-model-deepseek')).not.toBeInTheDocument()
+  })
+
+  it('round 42 二轮：模型弹层里没有上下文明细区块（拆干净了）', () => {
+    setup({ threadId: 't1' })
 
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
 
-    const card = screen.getByTestId('model-context-card')
+    expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
+    expect(screen.getByTestId('model-efforts')).toBeInTheDocument()
+    expect(screen.getByTestId('model-context')).toBeInTheDocument()
+    expect(screen.queryByTestId('context-menu-card')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('menu-custom-context-usage')).not.toBeInTheDocument()
+    expect(screen.queryByText('上下文已用')).not.toBeInTheDocument()
+  })
+
+  it('round 42 二轮：点环就能看全上下文（占用 / 分解 / 缓存 / 阈值）', async () => {
+    mountHalfWindow()
+    await screen.findByTestId('context-ring')
+
+    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
+
+    const card = screen.getByTestId('context-menu-card')
     await waitFor(() => expect(card).toHaveTextContent('上下文已用 100%'))
     expect(card).toHaveTextContent('~500K / 500K')
     expect(card).toHaveTextContent('系统提示词 / 工具定义')
@@ -893,7 +925,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(card.querySelector('div[style]')).toHaveClass('bg-warning')
   })
 
-  it('round 41：数据还没到 → 弹层里给加载态，不闪一个假的 0%', async () => {
+  it('round 42 二轮：数据还没到 → 点开的卡里给加载态，不闪一个假的 0%', async () => {
     // 闸门：端点地址那一步是异步的，fetch 可能晚于本函数的同步段才被调用——放行要能被"追认"
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
@@ -908,8 +940,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     )
     setup({ threadId: 't1' })
 
-    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    const card = screen.getByTestId('model-context-card')
+    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
+    const card = screen.getByTestId('context-menu-card')
     expect(screen.getByTestId('context-loading')).toBeInTheDocument()
     expect(card).not.toHaveTextContent('上下文已用')
 
@@ -920,7 +952,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(card).not.toHaveTextContent('（已超过）')
   })
 
-  it('round 41：hover 卡与弹层区块是同源一份（文案逐字一致）', async () => {
+  it('round 42 二轮：hover 卡与点开的卡是同源一份（文案逐字一致）', async () => {
     mountHalfWindow()
     const ring = await screen.findByTestId('context-ring')
     await waitFor(() => expect(ring.querySelector('svg')).toHaveAttribute('data-warning', 'true'))
@@ -928,10 +960,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     fireEvent.focus(ring)
     const hoverText = (await screen.findByTestId('context-card')).textContent
 
-    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    await waitFor(() =>
-      expect(screen.getByTestId('model-context-card').textContent).toBe(hoverText)
-    )
+    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
+    await waitFor(() => expect(screen.getByTestId('context-menu-card').textContent).toBe(hoverText))
   })
 })
 
@@ -971,6 +1001,8 @@ describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', ()
     setup()
 
     expect(screen.queryByTestId('composer-model')).not.toBeInTheDocument()
+    // 上下文环的取数分母来自当前模型：没有模型就没有环（不然是一个没有意义的百分比）
+    expect(screen.queryByTestId('composer-context')).not.toBeInTheDocument()
   })
 
   it('chip 显示默认 provider 的模型名；菜单选中项跟着 isDefault', () => {
@@ -1262,5 +1294,237 @@ describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
     mount('deepseek-chat')
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     expect(screen.getByTestId('composer-model-p1')).not.toHaveTextContent('看图')
+  })
+})
+
+describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件条）', () => {
+  let bridge: KyclawBridgeStubs
+
+  /** 当前环境：一个能看图的模型（图片的收/拒要看它） */
+  function mount(vision = true): ReturnType<typeof vi.fn> {
+    const initial: AppSettings = {
+      ...settingsWithProvider('deepseek-chat'),
+      modelCapabilities: vision ? { 'deepseek-chat': { vision: true } } : {}
+    }
+    bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const { onSend } = setup({ threadId: 't1' })
+    return onSend
+  }
+
+  beforeEach(() => {
+    bridge = installKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: true })
+  })
+
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  it('文件事件 → 附件 chip；发送时内容进【附件】围栏（走文本通道）', async () => {
+    const onSend = mount()
+    bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: 'export const a = 1\n',
+      size: 19,
+      truncated: false
+    })
+
+    publishContextItem({
+      source: 'file',
+      threadId: 't1',
+      relative: 'src/notes.txt',
+      name: 'notes.txt'
+    })
+
+    const chip = await screen.findByTestId('composer-attachment-notes.txt')
+    expect(chip).toHaveTextContent('19 B')
+    expect(bridge.workbench.readFile).toHaveBeenCalledWith('t1', 'src/notes.txt')
+
+    type('看这个')
+    fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+    // round 42 二轮：整文件也带**相对路径**（模型看得到"这是哪个文件"，不再只有裸文件名）
+    expect(sentText(onSend)).toBe('看这个\n\n【附件】src/notes.txt\n```\nexport const a = 1\n```')
+    expect(screen.queryByTestId('composer-attachment-notes.txt')).not.toBeInTheDocument()
+  })
+
+  it('摘选事件 → 引用卡（路径 + 行号 + 摘要 + 字数），不读文件', async () => {
+    mount()
+
+    publishContextItem({
+      source: 'selection',
+      threadId: 't1',
+      relative: 'src/app.ts',
+      name: 'app.ts 摘选',
+      text: 'const a = 1',
+      lines: { start: 3, end: 8 }
+    })
+
+    const card = await screen.findByTestId('composer-attachment-app.ts 摘选')
+    expect(card).toHaveAttribute('data-quote', 'true')
+    expect(card).toHaveTextContent('引用')
+    expect(card).toHaveTextContent('src/app.ts')
+    expect(screen.getByTestId('composer-quote-lines')).toHaveTextContent('第 3–8 行')
+    expect(screen.getByTestId('composer-quote-summary')).toHaveTextContent('const a = 1')
+    expect(screen.getByTestId('composer-quote-count')).toHaveTextContent('共 11 字')
+    expect(bridge.workbench.readFile).not.toHaveBeenCalled()
+    expect(bridge.workbench.readBytes).not.toHaveBeenCalled()
+
+    // 可删除
+    fireEvent.click(screen.getByLabelText('移除 app.ts 摘选'))
+    expect(screen.queryByTestId('composer-attachment-app.ts 摘选')).not.toBeInTheDocument()
+  })
+
+  it('大段选择：卡上只铺截断摘要（注明总字数），**传出去的仍是完整内容**', async () => {
+    const onSend = mount()
+    const text = Array.from({ length: 1000 }, (_value, index) => `第${index}行内容`).join('\n')
+
+    publishContextItem({
+      source: 'selection',
+      threadId: 't1',
+      relative: 'src/app.ts',
+      name: 'app.ts 摘选',
+      text,
+      lines: { start: 1, end: 1000 }
+    })
+
+    const card = await screen.findByTestId('composer-attachment-app.ts 摘选')
+    const summary = screen.getByTestId('composer-quote-summary')
+    // 卡上不铺原文：摘要只有 60 个码点 + 省略号
+    expect([...summary.textContent!.replace(/…$/, '')].length).toBeLessThanOrEqual(60)
+    expect(summary.textContent!.endsWith('…')).toBe(true)
+    expect(screen.getByTestId('composer-quote-count')).toHaveTextContent(
+      `共 ${[...text].length} 字`
+    )
+    expect(card.textContent).not.toContain('第999行内容')
+
+    // 传出去的是整段（带路径 + 行号）
+    fireEvent.click(screen.getByTestId('composer-send'))
+    const sent = sentText(onSend)
+    expect(sent.startsWith('【引用】文件：src/app.ts（第 1–1000 行）\n```\n')).toBe(true)
+    expect(sent).toContain('第999行内容')
+    expect(sent.endsWith('\n```')).toBe(true)
+  })
+
+  it('摘选超上限：按字节截断并给人话；定位不到行号时**不写位置**（不瞎编）', async () => {
+    mount()
+
+    publishContextItem({
+      source: 'selection',
+      threadId: 't1',
+      relative: 'src/app.ts',
+      name: 'app.ts 摘选',
+      text: '中'.repeat(20 * 1024)
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent('已截断：app.ts 摘选')
+    )
+    const card = screen.getByTestId('composer-attachment-app.ts 摘选')
+    // 没有行号就不画那半截（位置是"算得出才有"的数据）
+    expect(screen.queryByTestId('composer-quote-lines')).not.toBeInTheDocument()
+    expect(card).toHaveTextContent('src/app.ts')
+  })
+
+  it('别的会话的事件、以及自己没有会话时：一律丢掉（不猜、不错挂）', async () => {
+    mount()
+    publishContextItem({ source: 'file', threadId: 'other', relative: 'a.txt', name: 'a.txt' })
+    await tick()
+    expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
+    expect(bridge.workbench.readFile).not.toHaveBeenCalled()
+  })
+
+  it('没有会话（threadId 为空）：不订阅，事件静默丢弃', async () => {
+    setup()
+    publishContextItem({ source: 'file', threadId: 't1', relative: 'a.txt', name: 'a.txt' })
+    await tick()
+    expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
+    expect(bridge.workbench.readFile).not.toHaveBeenCalled()
+  })
+
+  it('不支持 / 超限 → notice 人话（与 ＋ 上传同一句形状）', async () => {
+    mount()
+    bridge.workbench.readFile.mockResolvedValue({ kind: 'binary', size: 2048 })
+
+    publishContextItem({ source: 'file', threadId: 't1', relative: 'logo.ico', name: 'logo.ico' })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
+        '未附加：logo.ico（这个格式暂不支持加入上下文）'
+      )
+    )
+    expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
+  })
+
+  it('图片：vision=true 收下（缩略图 + 随消息真发）；vision=false 人话拒收', async () => {
+    const onSend = mount()
+    bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'image-png',
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      size: 4
+    })
+
+    publishContextItem({ source: 'file', threadId: 't1', relative: '图片.png', name: '图片.png' })
+
+    await screen.findByTestId('composer-attachment-thumb-图片.png')
+    fireEvent.click(screen.getByTestId('composer-send'))
+    const files = sentFiles(onSend) as Array<{ mediaType: string; url: string; filename?: string }>
+    expect(files[0].filename).toBe('图片.png')
+    expect(files[0].url.startsWith('data:image/png;base64,')).toBe(true)
+
+    cleanup()
+    bridge.workbench.readBytes.mockClear()
+    mount(false)
+    publishContextItem({ source: 'file', threadId: 't1', relative: '图片.png', name: '图片.png' })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
+        '未附加：图片.png（当前模型不支持看图'
+      )
+    )
+    // 视觉不看，连字节都不去拉
+    expect(bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('PDF：走字节通道 + 主进程抽取，chip 上印页数', async () => {
+    mount()
+    bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'pdf',
+      bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      size: 4
+    })
+    bridge.attachments.extractPdf.mockResolvedValue({
+      ok: true,
+      pages: 3,
+      truncated: false,
+      text: '【第 1 页】\n内容'
+    })
+
+    publishContextItem({ source: 'file', threadId: 't1', relative: '报告.pdf', name: '报告.pdf' })
+
+    const chip = await screen.findByTestId('composer-attachment-报告.pdf')
+    expect(chip).toHaveTextContent('3 页')
+    expect(bridge.attachments.extractPdf).toHaveBeenCalled()
+  })
+
+  it('半路换会话：晚到的解析结果不挂到新会话的附件条上', async () => {
+    let release: () => void = () => {}
+    bridge.workbench.readFile.mockReturnValue(
+      new Promise((resolve) => {
+        release = () => resolve({ kind: 'text', text: '迟到的内容', size: 15, truncated: false })
+      })
+    )
+    const props = { onSend: vi.fn(), onStop: vi.fn() }
+    const view = render(<Composer threadId="t1" {...props} />)
+
+    publishContextItem({ source: 'file', threadId: 't1', relative: 'a.txt', name: 'a.txt' })
+    view.rerender(<Composer threadId="t2" {...props} />)
+    release()
+    await tick()
+
+    expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
   })
 })

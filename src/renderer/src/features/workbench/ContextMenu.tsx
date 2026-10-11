@@ -50,25 +50,29 @@ export function ContextMenu({
   }, [state.x, state.y, state.items])
 
   useEffect(() => {
-    const close = (): void => {
+    // 点在菜单**自己里面**不关：真机一次点击是 pointerdown →（mouseup）→ click 三次事件，
+    // 捕获阶段的 pointerdown 若先把菜单卸掉，后面的 click 就落在空气上——用户实报「点了没反应」。
+    // （回归：files-tool.spec 的「真实鼠标路径：pointerdown → click」用例。）
+    const closeOutside = (event: PointerEvent): void => {
+      if (ref.current?.contains(event.target as Node) === true) return
       onClose()
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close()
+      if (event.key === 'Escape') onClose()
     }
-    window.addEventListener('pointerdown', close, true)
+    window.addEventListener('pointerdown', closeOutside, true)
     // 用 wheel 而不是 scroll 来"滚动即关"：**程序化的 scroll 事件是异步补发的**——
     // 打开菜单前为把目标行滚进视口触发的那次滚动，会在菜单挂上之后才送达，从而把刚开的
     // 菜单立刻关掉（真机实测：列表需要滚动时右键菜单一闪就没）。滚轮手势没有这个问题。
-    window.addEventListener('wheel', close, { capture: true, passive: true })
-    window.addEventListener('resize', close)
-    window.addEventListener('blur', close)
+    window.addEventListener('wheel', onClose, { capture: true, passive: true })
+    window.addEventListener('resize', onClose)
+    window.addEventListener('blur', onClose)
     window.addEventListener('keydown', onKeyDown)
     return () => {
-      window.removeEventListener('pointerdown', close, true)
-      window.removeEventListener('wheel', close, true)
-      window.removeEventListener('resize', close)
-      window.removeEventListener('blur', close)
+      window.removeEventListener('pointerdown', closeOutside, true)
+      window.removeEventListener('wheel', onClose, true)
+      window.removeEventListener('resize', onClose)
+      window.removeEventListener('blur', onClose)
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])
