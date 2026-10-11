@@ -41,17 +41,30 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-/** 对话页的外框（round 21 拆两层）：
+/** 对话页的外框（round 21 拆两层；round 27 顶栏外提）：
  *  外层 = **聊天区整幅**（相对定位基准：消息导览轨贴它的右缘 8px，图2 口径）；
- *  内层 = **限宽内容列**（.content-column，P0 回归口径不变：活动会话的整列——消息区 + 发送框——
- *  都挂在它里面，否则会横向铺满主列被覆盖层侧栏裁掉；routes.spec / chat-flow.spec 认的也是它）。
+ *  `header` = **对话顶部栏**（round 27 用户口径：标题贴面板最左，脱离限宽列）——横跨主列整幅，
+ *  用 `ml-(--content-safe-left)` 让到"内容卡可见左缘"（侧栏是覆盖层，卡片可见部分从 safe-left 起）；
+ *  配合 header 自身 pl-2 + 标题按钮 px-2 → 标题左缘 = 内容卡左缘 + 16px（不再被居中列推开）。
+ *  内层 = **限宽内容列**（.content-column，P0 回归口径不变：消息区 + 发送框都挂在它里面，
+ *  否则会横向铺满主列被覆盖层侧栏裁掉；routes.spec / chat-flow.spec 认的也是它）。
  *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 限宽列。 */
-function ChatFrame({ children }: { children: React.ReactNode }): React.JSX.Element {
+function ChatFrame({
+  header,
+  children
+}: {
+  header?: React.ReactNode
+  children: React.ReactNode
+}): React.JSX.Element {
   return (
     <section
       data-testid="chat-page"
       className="animate-page-in relative flex min-h-0 flex-1 flex-col"
     >
+      {/* round 27：顶部栏在限宽列之外（整幅宽；左padding 让到内容卡可见左缘，跟着侧栏开合过渡） */}
+      {header === undefined ? null : (
+        <div className="ml-(--content-safe-left) shrink-0">{header}</div>
+      )}
       <div data-testid="chat-column" className="content-column flex min-h-0 flex-1 flex-col">
         {children}
       </div>
@@ -200,7 +213,7 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
   }
 
   return (
-    <ChatFrame>
+    <ChatFrame header={<ChatHeader threadId={threadId} />}>
       <ActiveChat chat={chat} threadId={threadId} />
     </ChatFrame>
   )
@@ -483,8 +496,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
 
   return (
     <>
-      {/* round 24：对话顶部栏（名称 + 同款菜单；背景与 chat 不区分） */}
-      <ChatHeader threadId={threadId} />
+      {/* round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列 */}
       <MessageList
         messages={messages}
         status={status}

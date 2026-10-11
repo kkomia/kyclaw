@@ -137,6 +137,25 @@ describe('活动会话落在限宽内容列（P0 回归）', () => {
     expect(within(column).getByTestId('composer')).toBeInTheDocument()
   })
 
+  it('顶栏在限宽列之外（round 27）：整幅 header 带、ml 让到内容卡可见左缘；标题 = 卡左缘 + 16', async () => {
+    const control = createMockTransport()
+    await renderSession(control, makeRuntime(control).runtime)
+
+    const frame = screen.getByTestId('chat-page')
+    const column = within(frame).getByTestId('chat-column')
+    const header = screen.getByTestId('chat-header')
+    // 顶栏不在限宽列里（列只装消息区 + 发送框；用户口径：标题贴面板最左，不被居中列推开）
+    expect(column).not.toContainElement(header)
+    // 顶栏带：整幅宽 + ml(内容安全左缘) 跟着侧栏开合过渡；标题 = 卡左缘 + header pl-2 + 按钮 px-2 = +16
+    const band = header.parentElement as HTMLElement
+    expect(frame).toContainElement(band)
+    expect(band.className).toContain('ml-(--content-safe-left)')
+    expect(header).toHaveClass('pl-2')
+    expect(screen.getByTestId('chat-title')).toHaveClass('px-2')
+    // DOM 顺序：顶栏带在限宽列之前
+    expect(band.compareDocumentPosition(column) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('摘要轨的定位基准是 chat 页根（round 21）：closest(".relative") = chat-page（整幅），不是限宽列', async () => {
     const control = createMockTransport()
     await renderSession(control, makeRuntime(control).runtime)

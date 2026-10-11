@@ -37,7 +37,7 @@ import { PluginsSkillsPanel } from './PluginsSkillsPanel'
  *
  * 「插件」分区的数据来自主进程的 `plugins:overview`（市场清单 + 插件 + 安装记录 + 已装技能）；
  * 「＋新增」菜单按分区给不同入口：插件区 = 添加插件市场（照 Codex 的三字段）；MCP 区 = round 9 的三项
- * （stdio / HTTP / 从 JSON 导入）；技能区没有新增（技能随插件或应用提供）。
+ * （stdio / HTTP / 从 JSON 导入）；技能区没有新增——**技能只随插件安装，不能单独装**（用户口径）。
  * 文案照用户口径：不解释后端（雷点 2.1/2.2）。
  */
 type PluginsTab = 'plugins' | 'mcp' | 'skills'
@@ -52,7 +52,7 @@ const TABS: Array<{ id: PluginsTab; label: string; testId: string }> = [
 const HEADINGS: Record<PluginsTab, { title: string; subtitle: string }> = {
   plugins: { title: '插件', subtitle: '从插件市场安装与管理插件' },
   mcp: { title: 'MCP', subtitle: '连接外部工具服务' },
-  skills: { title: '技能', subtitle: '查看可用与已安装的技能' }
+  skills: { title: '技能', subtitle: '查看已安装的技能' }
 }
 
 /** 导入框里的示例（placeholder 就是口径说明，不写解释性小字） */

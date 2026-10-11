@@ -21,7 +21,10 @@ import { readCollapsedProjects, writeCollapsedProjects } from './project-fold'
  * round 16（用户实拍）：
  *   - **点项目行 = 展开/折叠**名下会话（`aria-expanded` + 行首 chevron 旋转；开合走 .trace-fold
  *     的 grid-rows 过渡，reduced-motion 由 CSS 域兜底）；折叠状态按项目 id 记 localStorage，默认展开；
- *   - **悬停隔离**：hover 灰底只挂行按钮自身（行按钮 `flex-1 min-w-0`、行尾操作 flex 占位）。
+ *
+ * round 27（用户口径，round 16 的"悬停隔离"作废）：**整行一个 hover 底**——含行尾 ⋯ 与 ⊕
+ *   （对齐 SessionList 的行容器口径：外观穿在行容器 `project-row-*` 上，内部按钮不铺底）；
+ *   与子列表的隔离仍在：会话行不在项目行容器里，hover 互不点亮。
  *
  * round 25（图2）：行尾两个按钮（hover/聚焦出现，与既有行操作同一观感）：
  *   - **⋯ 菜单**：置顶项目（toggle）/ 在文件资源管理器中打开 / 重命名项目 / 归档 / 删除（danger 最后）；
@@ -186,13 +189,18 @@ export function ProjectList({
             data-testid={`project-group-${project.id}`}
             className="group/project flex flex-col gap-0.5"
           >
-            {/* 行 = 折叠按钮（flex-1 min-w-0，hover 只在自己身上）+ 行尾两个按钮（flex 占位） */}
-            <div className="flex items-center gap-1">
+            {/* 行 = **整行一个 hover 底**（round 27 用户口径：浅灰底要盖住行尾 ⋯ 与 ⊕；对齐
+                SessionList 的行容器口径）——外观（高 36 / 圆角 / hover 底）穿在行容器上；
+                折叠按钮退成纯布局按钮（flex-1 min-w-0；折叠行为、图标、testid 全不变）。 */}
+            <div
+              data-testid={`project-row-${project.id}`}
+              className={cn(navItemClass(), 'gap-1 pe-1')}
+            >
               <button
                 type="button"
                 data-testid={`project-item-${project.id}`}
                 aria-expanded={!isCollapsed}
-                className={cn(navItemClass(), 'min-w-0 flex-1')}
+                className="flex h-full min-w-0 flex-1 items-center gap-2 text-left"
                 onClick={() => toggleProject(project.id)}
               >
                 <ChevronRight
@@ -217,8 +225,8 @@ export function ProjectList({
                   <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
                 </Tooltip>
               </button>
-              {/* 行尾操作（hover/聚焦出现；悬停隔离保持——按钮群在行按钮之外）：
-                  ⋯ 菜单 + ⊕ 在该项目下新建会话（round 25 图2） */}
+              {/* 行尾操作（hover/聚焦出现；round 27 起整行底已盖住这一块——按钮自身不铺底，
+                  只做透明度变化，不会叠出第二层观感）：⋯ 菜单 + ⊕ 新建会话（round 25 图2） */}
               <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-(--motion-fast) group-hover/project:opacity-100 focus-within:opacity-100">
                 <Menu
                   align="end"

@@ -71,19 +71,24 @@ describe('ProjectList', () => {
     expect(screen.queryByTestId('session-list-empty')).not.toBeInTheDocument()
   })
 
-  it('悬停隔离（round 16）：hover 只挂行按钮自身；项目行不再有持久选中填充', () => {
+  it('整行 hover 底（round 27）：行容器穿 navItem 外观（盖住行尾 ⋯/⊕），与子列表仍隔离', () => {
     renderList()
 
+    const row = screen.getByTestId('project-row-p1')
     const projectRow = screen.getByTestId('project-item-p1')
     const sessionRow = screen.getByTestId('session-row-t-a')
-    // 两行各自的 hover 灰底（指针在哪行亮哪行），不会互相点亮
-    expect(projectRow).toHaveClass('hover:bg-hover')
-    expect(sessionRow).toHaveClass('hover:bg-hover')
+    // 整行一个 hover 底：⋯ 与 ⊕ 都在行容器里（用户口径：底要盖住两个按钮）
+    expect(row).toHaveClass('hover:bg-hover', 'h-(--nav-item-height)', 'rounded-control')
+    expect(row).toContainElement(screen.getByTestId('project-more-p1'))
+    expect(row).toContainElement(screen.getByTestId('project-new-session-p1'))
+    // 折叠按钮退成纯布局：不自己铺底（避免两截底色）
+    expect(projectRow).not.toHaveClass('hover:bg-hover')
     // 项目行没有持久填充：Fills-F2（选中）与 Fills-F1（hover）肉眼无差，
     // "选中的项目 + 悬停的会话"同时灰着正是用户实拍的"同时 hover 阴影"
-    expect(projectRow).not.toHaveClass('bg-selected')
-    // hover 作用域不包住子列表：会话行不在项目按钮里面
-    expect(projectRow).not.toContainElement(sessionRow)
+    expect(row).not.toHaveClass('bg-selected')
+    // 与子列表的隔离仍在：会话行不在项目行容器里（各自 hover，互不点亮）
+    expect(row).not.toContainElement(sessionRow)
+    expect(sessionRow).toHaveClass('hover:bg-hover')
   })
 
   it('点项目行 = 展开/折叠名下会话（aria-expanded + chevron 旋转，收起不卸载）；再点展开', () => {

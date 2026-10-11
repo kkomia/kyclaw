@@ -203,7 +203,7 @@ describe('插件页 · 三个分区（round 10）', () => {
     // 技能区：只有「已安装（来自插件）」+ 空态（round 13：内置技能整块下线）；没有新增按钮
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
     expect(screen.getByTestId('plugins-title')).toHaveTextContent('技能')
-    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看可用与已安装的技能')
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看已安装的技能')
     expect(screen.getByTestId('skills-installed-empty')).toHaveTextContent(
       '还没有从插件装进来的技能'
     )
