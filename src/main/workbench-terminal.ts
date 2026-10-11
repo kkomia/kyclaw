@@ -10,11 +10,13 @@
  * node-pty 是原生模块（N-API 预编译件，见报告里的 ABI 结论）：这里**动态 import** 并缓存结果 ——
  * 加载不了（缺件 / ABI 不对）只让「终端」这一个 tab 报一句人话，不拦住应用启动。
  *
- * shell 走 `main/git-bash.ts` 的探测链（与 bash 工具同口径，`KYCLAW_GIT_BASH` 可覆盖），
- * 参数用 `--login -i`：/etc/profile 会配好 PS1 与 MSYS 的 PATH，与用户双击 Git Bash 的观感一致
- * （启动多 ~0.5s，对交互式终端是值得的）。cwd = 会话根（主进程解析，渲染端传不了任意路径）。
+ * shell 走 `main/git-bash.ts` 的 `currentShell`（与 bash 工具同口径，`KYCLAW_GIT_BASH` 可覆盖）：
+ * Git Bash 用 `--login -i`（/etc/profile 会配好 PS1 与 MSYS 的 PATH，与用户双击 Git Bash 的观感
+ * 一致，启动多 ~0.5s，对交互式终端是值得的）；**没有 Git Bash 的 Windows 回落 PowerShell**
+ * （round 33 用户口径："系统有就用，没有就回落"），起法 `pwsh|powershell -NoLogo`（交互式，
+ * 不加载 profile 以免用户 profile 的输出糊住首屏）。cwd = 会话根（主进程解析，渲染端传不了任意路径）。
  */
-import { GIT_BASH_MISSING, gitBashPath } from './git-bash'
+import { SHELL_MISSING, currentShell, type ResolvedShell } from './git-bash'
 import type { IPty } from 'node-pty'
 import type { TerminalSession } from '../shared/workbench'
 
@@ -26,8 +28,8 @@ export interface TerminalSink {
 
 export interface TerminalServiceOptions {
   sink: TerminalSink
-  /** shell 解析（缺省 Git Bash 探测链；测试注入假件） */
-  resolveShell?: () => string | null
+  /** shell 解析（缺省 Git Bash 优先 + PowerShell 回落；测试注入假件） */
+  resolveShell?: () => ResolvedShell | null
   /** node-pty 的加载（缺省真 require；测试注入假件） */
   loadPty?: () => Promise<typeof import('node-pty')>
   /** 环境变量（缺省 process.env + TERM/LANG 兜底） */
@@ -80,8 +82,13 @@ function terminalEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env
 }
 
+/** 终端进程的 argv（round 33）：Git Bash 走 login shell，PowerShell 走 `-NoLogo` 交互式 */
+export function shellArgs(shell: ResolvedShell): string[] {
+  return shell.kind === 'powershell' ? ['-NoLogo'] : ['--login', '-i']
+}
+
 export function createTerminalService(options: TerminalServiceOptions): TerminalService {
-  const resolveShell = options.resolveShell ?? gitBashPath
+  const resolveShell = options.resolveShell ?? currentShell
   const loadPty = options.loadPty ?? loadNodePty
   const env = terminalEnv(options.env ?? process.env)
   const sessions = new Map<string, { term: IPty; owner: number }>()
@@ -100,7 +107,7 @@ export function createTerminalService(options: TerminalServiceOptions): Terminal
   return {
     start: async (id, owner, cwd, cols, rows) => {
       const shell = resolveShell()
-      if (shell === null) throw new Error(GIT_BASH_MISSING)
+      if (shell === null) throw new Error(SHELL_MISSING)
       // 同一个 id 重启：先把老的杀掉，免得两条进程共用一个 id
       kill(id)
 
@@ -109,7 +116,7 @@ export function createTerminalService(options: TerminalServiceOptions): Terminal
         const detail = cause instanceof Error ? cause.message : String(cause)
         throw new Error(`终端组件加载失败（node-pty）：${detail}`)
       })
-      const term = pty.spawn(shell, ['--login', '-i'], {
+      const term = pty.spawn(shell.path, shellArgs(shell), {
         name: 'xterm-256color',
         cols,
         rows,
@@ -127,7 +134,7 @@ export function createTerminalService(options: TerminalServiceOptions): Terminal
         options.sink.exit(id, exitCode ?? null)
       })
 
-      return { id, shell, cwd }
+      return { id, shell: shell.path, cwd }
     },
 
     write: (id, data) => {

@@ -9,15 +9,20 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { Tool } from '@mastra/core/tools'
 import {
+  bashToolDescription,
   createBashTool,
   findGitBash,
   findGitOnPath,
-  GIT_BASH_MISSING,
   gitBashPath,
   parseHandshake,
   resetGitBashCache,
-  stripHandshake
+  resolveShell,
+  shellGuidance,
+  SHELL_MISSING,
+  stripHandshake,
+  type BashInput
 } from '../bash'
 import { callTool, createBed, type TestBed } from './helpers'
 
@@ -299,7 +304,7 @@ describe.runIf(hasBash)('bash：真进程执行', () => {
   })
 })
 
-describe('bash：找不到 Git Bash', () => {
+describe('bash：一个 shell 都没有', () => {
   let bed: TestBed
 
   beforeEach(() => {
@@ -310,9 +315,159 @@ describe('bash：找不到 Git Bash', () => {
     bed.dispose()
   })
 
-  it('不静默回落：给中文错误（提示装 Git）', async () => {
-    const tool = await createBashTool(bed.ctx, { resolveBash: () => null })
-    await expect(callTool(tool, { command: 'echo hi' })).rejects.toThrow(GIT_BASH_MISSING)
-    await expect(callTool(tool, { command: 'echo hi' })).rejects.toThrow(/Git Bash/)
+  it('给中文错误（不静默假装跑过）', async () => {
+    const tool = await createBashTool(bed.ctx, { resolveShell: () => null })
+    await expect(callTool(tool, { command: 'echo hi' })).rejects.toThrow(SHELL_MISSING)
+    await expect(callTool(tool, { command: 'echo hi' })).rejects.toThrow(/找不到可用的 shell/)
+  })
+})
+
+describe('resolveShell：Git Bash 优先，没有就回落 PowerShell（round 33）', () => {
+  const winBash = join('C:\\Program Files', 'Git', 'bin', 'bash.exe')
+  const pwsh = join('C:\\PowerShell', 'pwsh.exe')
+  const legacy = join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+  it('有 Git Bash 就用它（不回落）', () => {
+    expect(
+      resolveShell({
+        platform: 'win32',
+        env: { ProgramFiles: 'C:\\Program Files', SystemRoot: 'C:\\Windows' },
+        exists: (path) => path === winBash || path === pwsh || path === legacy,
+        findGit: () => null,
+        findPwsh: () => pwsh
+      })
+    ).toEqual({ kind: 'git-bash', path: winBash })
+  })
+
+  it('没有 Git Bash：PATH 上 pwsh.exe 优先', () => {
+    expect(
+      resolveShell({
+        platform: 'win32',
+        env: { SystemRoot: 'C:\\Windows' },
+        exists: (path) => path === pwsh || path === legacy,
+        findGit: () => null,
+        findPwsh: () => pwsh
+      })
+    ).toEqual({ kind: 'powershell', path: pwsh })
+  })
+
+  it('没有 Git Bash 也没有 pwsh：回落 System32 的 Windows PowerShell', () => {
+    expect(
+      resolveShell({
+        platform: 'win32',
+        env: { SystemRoot: 'C:\\Windows' },
+        exists: (path) => path === legacy,
+        findGit: () => null,
+        findPwsh: () => null
+      })
+    ).toEqual({ kind: 'powershell', path: legacy })
+  })
+
+  it('SystemRoot 没设时用系统盘兜底（Windows 一定有 Windows PowerShell）', () => {
+    expect(
+      resolveShell({
+        platform: 'win32',
+        env: {},
+        exists: (path) => path === legacy,
+        findGit: () => null,
+        findPwsh: () => null
+      })
+    ).toEqual({ kind: 'powershell', path: legacy })
+  })
+
+  it('非 Windows：没有 bash 就回 null（不做奇怪的回落）', () => {
+    expect(
+      resolveShell({
+        platform: 'linux',
+        env: {},
+        exists: () => false,
+        findGit: () => null,
+        findPwsh: () => null
+      })
+    ).toBeNull()
+  })
+})
+
+/** 真 Windows PowerShell 的路径（本机一定有；没有 Git Bash 也没有 pwsh 时解析出来的那条） */
+const realPowershell = ((): string | null => {
+  const shell = resolveShell({
+    platform: process.platform,
+    env: process.env,
+    exists: existsSync,
+    findGit: () => null,
+    findPwsh: () => null
+  })
+  return shell !== null && shell.kind === 'powershell' ? shell.path : null
+})()
+
+describe.runIf(realPowershell !== null)('bash：PowerShell 分支（真跑）', () => {
+  let bed: TestBed
+
+  beforeEach(() => {
+    bed = createBed()
+  })
+
+  afterEach(() => {
+    bed.dispose()
+  })
+
+  const psTool = async (b: TestBed): Promise<Tool<BashInput, string>> =>
+    await createBashTool(b.ctx, {
+      resolveShell: () => ({ kind: 'powershell', path: realPowershell as string })
+    })
+
+  it('中文输出原样回传（UTF-8 编码声明生效，无 U+FFFD）', async () => {
+    const tool = await psTool(bed)
+    const out = String(await callTool(tool, { command: "Write-Output '中文输出测试✓'" }))
+    expect(out).toContain('中文输出测试✓')
+    expect(out).not.toContain('\uFFFD')
+    // 回显前缀按 shell 给（PowerShell 是 PS>，不是 $）
+    expect(out).toContain("PS> Write-Output '中文输出测试✓'")
+    expect(out).toContain(`[cwd: ${bed.root}]`)
+  })
+
+  it('退出码透传：原生命令的非零退出码带得回来（cmd /c exit 7 → 7）', async () => {
+    const tool = await psTool(bed)
+    const out = String(await callTool(tool, { command: 'cmd /c exit 7' }))
+    expect(out).toContain('[退出码 7]')
+  })
+
+  it('纯 cmdlet：退出码 0；显式 exit 也透传', async () => {
+    const tool = await psTool(bed)
+    expect(String(await callTool(tool, { command: "Write-Output 'ok'" }))).toContain('[退出码 0]')
+    expect(String(await callTool(tool, { command: 'exit 3' }))).toContain('[退出码 3]')
+  })
+
+  it('空输出明确标注；多行输出保持顺序', async () => {
+    const tool = await psTool(bed)
+    expect(String(await callTool(tool, { command: '$null' }))).toContain('（无输出）')
+    const out = String(await callTool(tool, { command: "Write-Output '甲'\nWrite-Output '乙'" }))
+    const body = out.split('\n\n')[1]?.split('\n\n[退出码')[0] ?? ''
+    expect(body.split('\n').filter((line) => line !== '')).toEqual(['甲', '乙'])
+  })
+})
+
+describe('bash 工具的口径文案按是否回落切（round 33）', () => {
+  it('Git Bash：描述说 bash 语法；系统指令追加 Git Bash 那行', () => {
+    const text = bashToolDescription({ kind: 'git-bash', path: 'D:\\Git\\bin\\bash.exe' })
+    expect(text).toContain('在 Git Bash 里执行')
+    expect(text).toContain('bash 语法，不是 PowerShell')
+    expect(shellGuidance({ kind: 'git-bash', path: 'x' })).toContain('当前运行的是 Git Bash')
+  })
+
+  it('回落 PowerShell：描述与指令都点名 PowerShell，不让人拿 bash 语法往里灌', () => {
+    const shell = { kind: 'powershell' as const, path: 'C:\\ps\\powershell.exe' }
+    const text = bashToolDescription(shell)
+    expect(text).toContain('在 Windows PowerShell 里执行')
+    expect(text).toContain('命令请写 PowerShell 语法，不是 bash')
+    expect(text).toContain('Start-Process')
+    const line = shellGuidance(shell)
+    expect(line).toContain('没有 Git Bash，已回落')
+    expect(line).toContain('Get-ChildItem')
+  })
+
+  it('一个 shell 都没有：描述与指令如实说不可用', () => {
+    expect(bashToolDescription(null)).toContain('无法执行')
+    expect(shellGuidance(null)).toContain('既没有 Git Bash 也没有 PowerShell')
   })
 })

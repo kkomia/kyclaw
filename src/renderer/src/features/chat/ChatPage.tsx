@@ -20,7 +20,7 @@ import type { ApprovalRequest } from './approval'
 import type { ApprovalDecision } from './ApprovalCard'
 import type { ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
-import type { ThreadChatRuntime } from './thread-chats'
+import type { ThreadChatRuntime, TurnOutcome } from './thread-chats'
 import { ApprovalDock } from './ApprovalDock'
 import { ChatHeader } from './ChatHeader'
 import { Composer } from './Composer'
@@ -41,6 +41,20 @@ import { MessageList } from './MessageList'
  */
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
+}
+
+/**
+ * 轮末提示（round 33）：一轮**看起来跑完、其实是被截停/截断**时给一行人话。
+ *   - `tool-calls` 收尾且没有待审批 = "还欠一次模型调用就收尾"：单轮步数预算（KYCLAW_MAX_STEPS）
+ *     用尽。这是用户实报的"任务没完成就中断了"——引擎语义不变，但界面必须说出来；
+ *   - `length` = 模型输出被长度上限截断（工具照执行、不续跑，见 tool-roundtrip.spec 钉住的语义）。
+ * 其余收尾原因（stop / abort / error / 无值）不提示：那是正常的结束或另有错误卡在管。
+ */
+function turnNoticeOf(outcome: TurnOutcome): string | null {
+  if (outcome.isError || outcome.isAbort || outcome.awaitingApproval) return null
+  if (outcome.finishReason === 'tool-calls') return '已达单轮步数上限，回复「继续」可接着做'
+  if (outcome.finishReason === 'length') return '输出达到长度上限，内容被截断'
+  return null
 }
 
 /** 对话页的外框（round 21 拆两层；round 27 顶栏外提）：
@@ -147,6 +161,8 @@ export interface ChatSessionProps {
 
 export function ChatSession({ transport, threadId, runtime }: ChatSessionProps): React.JSX.Element {
   const [reloadToken, setReloadToken] = useState(0)
+  /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
+  const [turnNotice, setTurnNotice] = useState<string | null>(null)
   /**
    * 解析结果与它对应的 key 一起存：key 变了（换会话/重试）就自然回到"载入中"，
    * 不需要在 effect 里同步 setState 清场（那会触发级联渲染）。
@@ -168,7 +184,22 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
       }),
     [transport]
   )
-  const activeRuntime = runtime ?? defaultRuntime
+  const baseRuntime = runtime ?? defaultRuntime
+  /**
+   * round 33：包一层 onTurnEnd —— 不论 runtime 是注入的还是默认的，都在这里按 finishReason
+   * 算出轮末提示（null = 清除），再原样交给下游回调。
+   */
+  const activeRuntime = useMemo<ThreadChatRuntime>(
+    () => ({
+      ...baseRuntime,
+      onTurnEnd: (id, outcome) => {
+        setTurnNotice(turnNoticeOf(outcome))
+        baseRuntime.onTurnEnd(id, outcome)
+      }
+    }),
+    [baseRuntime]
+  )
+  const clearTurnNotice = useCallback(() => setTurnNotice(null), [])
 
   useEffect(() => {
     let alive = true
@@ -216,7 +247,12 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
 
   return (
     <ChatFrame header={<ChatHeader threadId={threadId} />}>
-      <ActiveChat chat={chat} threadId={threadId} />
+      <ActiveChat
+        chat={chat}
+        threadId={threadId}
+        turnNotice={turnNotice}
+        onClearTurnNotice={clearTurnNotice}
+      />
     </ChatFrame>
   )
 }
@@ -224,6 +260,10 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
 interface ActiveChatProps {
   chat: Chat<UIMessage>
   threadId: string
+  /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
+  turnNotice: string | null
+  /** 新一轮开始（发送 / 重试 / 编辑重发 / 审批续跑）时清掉上一轮的提示 */
+  onClearTurnNotice: () => void
 }
 
 /** 编辑/重试先要在服务端截断的那一步失败了：带着原动作重试 */
@@ -233,7 +273,12 @@ interface PendingSync {
   text?: string
 }
 
-function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
+function ActiveChat({
+  chat,
+  threadId,
+  turnNotice,
+  onClearTurnNotice
+}: ActiveChatProps): React.JSX.Element {
   /**
    * 流式中发的消息排队（最简队列：先进先出，一轮结束自动发下一条）。
    * 队列本体放 ref（状态回调里要读最新值）；state 只存条数给界面看。
@@ -400,6 +445,14 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
     }
   }, [messages, addToolApprovalResponse, workspaces, threadId])
 
+  /**
+   * round 33：新一轮开跑就清掉上一轮的"被截停/被截断"提示 —— 发送、审批续跑、重试、编辑重发
+   * 都会把 status 推到 submitted/streaming，统一在这里收口（提示不会赖在界面上）。
+   */
+  useEffect(() => {
+    if (status === 'submitted' || status === 'streaming') onClearTurnNotice()
+  }, [status, onClearTurnNotice])
+
   const flushNext = useCallback(() => {
     const [next, ...rest] = pending.current
     if (next === undefined) return
@@ -538,6 +591,16 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
       {permissionError === null ? null : (
         <p data-testid="approval-permanent-error" className="px-4 pt-2 text-c1 text-danger">
           {permissionError}
+        </p>
+      )}
+      {/* round 33：轮末提示（被步数预算截停 / 输出被截断）——输入框上方一行，随新轮开始清除 */}
+      {turnNotice === null ? null : (
+        <p
+          data-testid="turn-notice"
+          role="status"
+          className="animate-fade-in px-4 pt-2 text-b2 text-warning"
+        >
+          {turnNotice}
         </p>
       )}
       <div className="shrink-0 px-4 pt-4 pb-6">

@@ -67,7 +67,7 @@ describe('createTerminalService', () => {
     const pty = fakePty(terms)
     const service = createTerminalService({
       sink: sinkOf(),
-      resolveShell: () => 'D:\\Git\\bin\\bash.exe',
+      resolveShell: () => ({ kind: 'git-bash', path: 'D:\\Git\\bin\\bash.exe' }),
       loadPty: async () => pty as unknown as typeof import('node-pty'),
       env: { PATH: 'C:\\' }
     })
@@ -95,7 +95,7 @@ describe('createTerminalService', () => {
     const sink = sinkOf()
     const service = createTerminalService({
       sink,
-      resolveShell: () => 'bash',
+      resolveShell: () => ({ kind: 'git-bash', path: 'bash' }),
       loadPty: async () => fakePty(terms) as unknown as typeof import('node-pty')
     })
 
@@ -115,7 +115,7 @@ describe('createTerminalService', () => {
     const terms: FakeTerm[] = []
     const service = createTerminalService({
       sink: sinkOf(),
-      resolveShell: () => 'bash',
+      resolveShell: () => ({ kind: 'git-bash', path: 'bash' }),
       loadPty: async () => fakePty(terms) as unknown as typeof import('node-pty')
     })
 
@@ -141,7 +141,7 @@ describe('createTerminalService', () => {
     const sink = sinkOf()
     const service = createTerminalService({
       sink,
-      resolveShell: () => 'bash',
+      resolveShell: () => ({ kind: 'git-bash', path: 'bash' }),
       loadPty: async () => fakePty(terms) as unknown as typeof import('node-pty')
     })
 
@@ -160,7 +160,7 @@ describe('createTerminalService', () => {
     const terms: FakeTerm[] = []
     const service = createTerminalService({
       sink: sinkOf(),
-      resolveShell: () => 'bash',
+      resolveShell: () => ({ kind: 'git-bash', path: 'bash' }),
       loadPty: async () => fakePty(terms) as unknown as typeof import('node-pty')
     })
 
@@ -175,7 +175,7 @@ describe('createTerminalService', () => {
     expect(() => service.resize('t', 10, 10)).not.toThrow()
   })
 
-  it('找不到 Git Bash → 中文错误，不起进程', async () => {
+  it('一个 shell 都没有（Git Bash 与 PowerShell 都缺）→ 中文错误，不起进程', async () => {
     const pty = fakePty([])
     const service = createTerminalService({
       sink: sinkOf(),
@@ -183,8 +183,25 @@ describe('createTerminalService', () => {
       loadPty: async () => pty as unknown as typeof import('node-pty')
     })
 
-    await expect(service.start('t', 1, '/tmp', 80, 24)).rejects.toThrow(/找不到 Git Bash/)
+    await expect(service.start('t', 1, '/tmp', 80, 24)).rejects.toThrow(/找不到可用的 shell/)
     expect(pty.spawn).not.toHaveBeenCalled()
+  })
+
+  it('回落 PowerShell：用 `-NoLogo` 起 PTY，会话回的 shell 是 powershell 路径（round 33）', async () => {
+    const terms: FakeTerm[] = []
+    const pty = fakePty(terms)
+    const ps = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    const service = createTerminalService({
+      sink: sinkOf(),
+      resolveShell: () => ({ kind: 'powershell', path: ps }),
+      loadPty: async () => pty as unknown as typeof import('node-pty')
+    })
+
+    const session = await service.start('t1', 1, 'D:\\工作区', 80, 24)
+    expect(session).toEqual({ id: 't1', shell: ps, cwd: 'D:\\工作区' })
+    const [command, argv] = pty.spawn.mock.calls[0] as [string, string[]]
+    expect(command).toBe(ps)
+    expect(argv).toEqual(['-NoLogo'])
   })
 
   it('node-pty 加载失败：人话错误 + 结果缓存（不每次重试）', async () => {
@@ -193,7 +210,7 @@ describe('createTerminalService', () => {
     })
     const service = createTerminalService({
       sink: sinkOf(),
-      resolveShell: () => 'bash',
+      resolveShell: () => ({ kind: 'git-bash', path: 'bash' }),
       loadPty
     })
 

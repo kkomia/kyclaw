@@ -1,4 +1,4 @@
-import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai'
+import type { ChatTransport, FinishReason, UIMessage, UIMessageChunk } from 'ai'
 
 /**
  * 单测用的假 transport（不碰网络）：把 sendMessages 的入参存下来，
@@ -44,8 +44,8 @@ export interface MockTransport {
    * AI SDK 的 lastAssistantMessageIsCompleteWithApprovalResponses 会再触发一次自动续跑。
    */
   toolOutput: (toolCallId: string, output: unknown) => void
-  /** 结束当前流（text-end + finish） */
-  finish: () => void
+  /** 结束当前流（text-end + finish）；可带收尾原因（round 33：截停/截断提示的数据面） */
+  finish: (finishReason?: FinishReason) => void
   /** 半截流上断掉（模拟断网/断流）：已推的内容留在消息里，错误抛给上层 */
   disconnect: (error?: Error) => void
   /** 让下一个请求在建立阶段就失败（模拟 401 / 断网） */
@@ -162,12 +162,14 @@ export function createMockTransport(): MockTransport {
       endReasoning()
       controller.enqueue({ type: 'tool-output-available', toolCallId, output })
     },
-    finish() {
+    finish(finishReason) {
       if (!controller) throw new Error('mock transport：当前没有进行中的流')
       endReasoning()
       startText()
       controller.enqueue({ type: 'text-end', id: activeTextId })
-      controller.enqueue({ type: 'finish' })
+      controller.enqueue(
+        finishReason === undefined ? { type: 'finish' } : { type: 'finish', finishReason }
+      )
       controller.close()
       controller = null
     },

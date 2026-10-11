@@ -28,6 +28,10 @@
  * memory（T9）：由 index.ts 建好注入（存储挂在 Mastra 实例上的 libsql）。
  * 工具的"未读先改"记录按会话（agent 线程）隔离，见 tools/guard.ts。
  *
+ * shell 口径（round 33）：bash 工具的**描述**与系统指令末尾那行 shell 说明都按当前解析出来的
+ * shell 现算（Git Bash 优先，没有就回落 PowerShell，见 main/git-bash.ts 的 resolveShell）——
+ * 所以 bash 工具在下面的 `tools` 函数里创建、instructions 用函数形态（都是每轮现取）。
+ *
  * Agent 类是 ESM-only（@mastra/core），所以工厂是异步的：运行时靠动态 import() 拿。
  */
 import type { Agent } from '@mastra/core/agent'
@@ -36,8 +40,9 @@ import type { MastraMemory } from '@mastra/core/memory'
 import type { Project } from '../../shared/projects'
 import type { PermissionRule, McpServerConfig, Workspace } from '../../shared/settings'
 import { sessionRoots } from '../../main/projects'
+import { currentShell, type ResolvedShell } from '../../main/git-bash'
 import { createToolContext, needsApproval } from '../tools/guard'
-import { createBashTool } from '../tools/bash'
+import { createBashTool, shellGuidance } from '../tools/bash'
 import { createDeleteTool } from '../tools/delete'
 import { createEditTool } from '../tools/edit'
 import { createFetchTool } from '../tools/fetch'
@@ -77,16 +82,24 @@ export interface KyclawAgentTools {
   mcpTools?: (gate: McpToolGate) => Promise<Record<string, Tool>>
 }
 
-/** kyclaw 的身份与行为底线 */
+/** kyclaw 的身份与行为底线（与 shell 无关的部分；shell 口径见 shellGuidance） */
 export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑上的个人 AI agent。
 - 默认用用户的语言回答（中文提问就用中文），先给结论，再给必要的细节。
 - 你只能看到用户在这个对话里给你的内容；不确定就直说，不要编造事实或执行结果。
 - 文件工具（read / write / edit / glob / grep / delete / move）与 git 工具只作用于当前会话的工作区（项目文件夹或默认工作区）。越界会直接失败：如实告诉用户失败原因，并给出下一步（改用 bash、把文件夹加进「设置 → 工作区」），不要反复换写法重试。
-- bash 工具执行 shell 命令：环境是 Git Bash，写 bash 语法（不是 PowerShell）。默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请重定向输出到文件并用 & 放到后台，不要前台常驻。
+- bash 工具执行 shell 命令：默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请放到后台，不要前台常驻。
 - 联网用 fetch 工具（GET/POST、自定义请求头）；要保存响应就带 save_to（落进工作区）。
 - git 用 git_status / git_diff / git_log 查看（只读）；git_add / git_commit 提交改动；不做 push，需要推远端时请用户自己操作。
 - 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit）执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
+
+/**
+ * 每轮现算的完整系统指令（round 33）：静态底线 + **当前 shell 的口径**（`shellGuidance`）。
+ * 本机装/卸 Git Bash 不该让助手一直拿错语法 —— 每轮重解析（探测成功才缓存），指令跟着走。
+ */
+export function kyclawInstructions(shell: ResolvedShell | null): string {
+  return `${KYCLAW_INSTRUCTIONS}\n${shellGuidance(shell)}`
+}
 
 export async function createKyclawAgent(
   resolveModel: ModelResolver,
@@ -127,8 +140,8 @@ export async function createKyclawAgent(
     edit: await createEditTool(ctx),
     glob: await createGlobTool(ctx),
     grep: await createGrepTool(ctx),
-    // round28 模块 1：命令 / 删除移动 / 网络 / git（审批档位见 main/permission/classify 与 guard.needsApproval）
-    bash: await createBashTool(ctx),
+    // bash 刻意不在这里建：它的描述要按"当前解析出来的 shell"给（Git Bash / 回落 PowerShell），
+    // 所以放进下面每轮现取的 tools 函数里（round 33，与指令的现算口径一致）
     fetch: await createFetchTool(ctx),
     delete: await createDeleteTool(ctx),
     move: await createMoveTool(ctx),
@@ -142,11 +155,14 @@ export async function createKyclawAgent(
   return new AgentClass({
     id: KYCLAW_AGENT_ID,
     name: KYCLAW_AGENT_ID,
-    instructions: KYCLAW_INSTRUCTIONS,
+    // 现算（round 33）：末尾那行"当前 shell 是什么、该怎么写"跟着解析结果走（装了 Git 就换口径）
+    instructions: () => kyclawInstructions(currentShell()),
     model: () => resolveModel(),
-    // 函数形态：每轮现取（MCP 设置改了、server 掉线重连，下一轮就反映出来）
+    // 函数形态：每轮现取（MCP 设置改了、server 掉线重连，下一轮就反映出来；
+    // bash 也在这一层建 —— 它的描述按当前 shell 给，见上）
     tools: async () => ({
       ...tools,
+      bash: await createBashTool(ctx),
       ...((await mcpToolsFor?.(gate)) ?? {})
     }),
     ...(memory === undefined ? {} : { memory })

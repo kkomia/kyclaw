@@ -19,9 +19,11 @@
  * 见 approval.ts 头注）；用户做完决策（addToolApprovalResponse）后自动把消息发回服务端续跑；
  * onFinish 里把"还停在等审批"的轮次标出来（awaitingApproval），渲染端据此不把它当完成轮。
  * 重开会话时挂起的审批由 message-map 从存储 metadata 恢复成 approval-requested（round28）。
+ * round 33：onFinish 把 ai@7 给的 finishReason 也带进 TurnOutcome（ChatPage 据此在轮末给一行
+ * 可见提示：`tool-calls` 收尾 = 单轮步数预算用尽，`length` = 输出被截断）。
  */
 import { Chat } from '@ai-sdk/react'
-import type { ChatTransport, UIMessage } from 'ai'
+import type { ChatTransport, FinishReason, UIMessage } from 'ai'
 import { mapStoredMessages } from '../../lib/message-map'
 import { fetchThreadMessages } from '../../lib/threads-api'
 import { canResumeAfterApproval, hasPendingApproval } from './approval'
@@ -34,6 +36,12 @@ export interface TurnOutcome {
    * 但语义上**不是完成轮** —— 标题生成/完成通知都得等用户做完决策、resume 那一轮跑完再走。
    */
   awaitingApproval: boolean
+  /**
+   * 这一轮的收尾原因（ai@7 Chat 的 onFinish 给的原生值）。渲染端用它给"被截停/被截断"的轮次
+   * 加一行可见提示（round 33）：`tool-calls` 收尾 = 还欠一次模型调用就停了（单轮步数预算用尽），
+   * `length` = 输出被长度上限截断。缺省（undefined）= 拿不到原因，不提示。
+   */
+  finishReason?: FinishReason
 }
 
 export interface ThreadChatRuntime {
@@ -61,11 +69,12 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
     return new Chat<UIMessage>({
       transport: runtime.transport,
       messages,
-      onFinish: ({ message, isError, isAbort }) =>
+      onFinish: ({ message, isError, isAbort, finishReason }) =>
         runtime.onTurnEnd(threadId, {
           isError,
           isAbort,
-          awaitingApproval: hasPendingApproval(message)
+          awaitingApproval: hasPendingApproval(message),
+          finishReason
         }),
       /**
        * 审批回灌（T13）：`addToolApprovalResponse` 只把 part 改成 approval-responded，
