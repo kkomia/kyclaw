@@ -271,6 +271,10 @@ export async function createKyclawMastra(options: {
         chatRoute({
           path: CHAT_ROUTE_PATH,
           version: CHAT_PROTOCOL_VERSION,
+          // 思考过程随流下发（round29）：库默认 false —— reasoning 只进存储、不进直播流，
+          // 渲染端直播时先看到的是工具调用（观感首字延迟），刷新后才从存储回放出"思考过程"。
+          // wire 形状钉在 __tests__/reasoning-stream.spec.ts（reasoning 先于 tool-input 到达）
+          sendReasoning: true,
           // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）；
           // round 19：输入处理器把该会话的压缩摘要注入成系统前缀（不碰消息流/存储，见 compaction.ts）
           defaultOptions: {
