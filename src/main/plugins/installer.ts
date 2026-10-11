@@ -14,7 +14,7 @@ import {
   safeReadJson,
   scanPluginDir
 } from './marketplace'
-import { ensureDir, removeDir, type PluginsDirs } from './store'
+import { ensureDir, removeDirRobust, type PluginsDirs } from './store'
 
 /**
  * 插件安装 / 卸载（round 10）：目录解析 → MCP 服务器映射（`${CLAUDE_PLUGIN_ROOT}` 已替换）→
@@ -63,17 +63,17 @@ export async function installPlugin(options: {
         : plugin.source.url
     ensureDir(dirs.installed)
     const target = join(dirs.installed, id)
-    if (existsSync(target)) removeDir(target)
+    if (existsSync(target)) removeDirRobust(target)
     const cloned = await runGit(['clone', '--depth', '1', url, target])
     if (!cloned.ok) {
-      removeDir(target)
+      removeDirRobust(target)
       throw new Error(`克隆失败：${firstLine(cloned.stderr) || 'git clone 返回非零'}`)
     }
     installDir = target
     if (plugin.source.kind === 'git-subdir') {
       const sub = resolveWithin(target, plugin.source.path)
       if (sub === null || !existsSync(sub)) {
-        removeDir(target)
+        removeDirRobust(target)
         throw new Error(`插件子目录不存在：${plugin.source.path}`)
       }
       pluginDir = sub
@@ -83,7 +83,7 @@ export async function installPlugin(options: {
   }
 
   const cleanupClone = (): void => {
-    if (installDir !== null) removeDir(installDir)
+    if (installDir !== null) removeDirRobust(installDir)
   }
 
   // 2) MCP 服务器映射（解析器的人话错误原样上抛；失败连克隆一起清）
@@ -107,13 +107,13 @@ export async function installPlugin(options: {
     for (const skill of scanPluginDir(pluginDir).skills) {
       const dirName = `${id}-${skill}`
       const target = join(dirs.skills, dirName)
-      removeDir(target)
+      removeDirRobust(target)
       cpSync(join(pluginDir, 'skills', skill), target, { recursive: true })
       skillDirs.push(dirName)
     }
   } catch (error) {
     cleanupClone()
-    for (const dirName of skillDirs) removeDir(join(dirs.skills, dirName))
+    for (const dirName of skillDirs) removeDirRobust(join(dirs.skills, dirName))
     throw new Error(
       `复制技能失败：${firstLine(error instanceof Error ? error.message : String(error))}`
     )
@@ -144,6 +144,6 @@ export async function installPlugin(options: {
 
 /** 卸载（纯文件清理；mcpServers 条目与记录由调用方从 settings 摘掉） */
 export function uninstallPluginFiles(record: InstalledPlugin, dirs: PluginsDirs): void {
-  for (const dirName of record.skillDirs) removeDir(join(dirs.skills, dirName))
-  if (record.installDir !== null) removeDir(record.installDir)
+  for (const dirName of record.skillDirs) removeDirRobust(join(dirs.skills, dirName))
+  if (record.installDir !== null) removeDirRobust(record.installDir)
 }

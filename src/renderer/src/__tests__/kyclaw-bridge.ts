@@ -310,6 +310,8 @@ export interface PluginsApiStub {
   removeMarketplace: Mock<(id: string) => Promise<PluginsOverview>>
   install: Mock<(marketplaceId: string, name: string) => Promise<PluginsOverview>>
   uninstall: Mock<(id: string) => Promise<PluginsOverview>>
+  /** round 23：插件图标（data URL；默认 null = 字母头像） */
+  icon: Mock<(marketplaceId: string, name: string) => Promise<{ dataUrl: string | null }>>
 }
 
 export function pluginsApiStub(
@@ -321,7 +323,8 @@ export function pluginsApiStub(
     refreshMarketplace: vi.fn(async () => initial),
     removeMarketplace: vi.fn(async () => initial),
     install: vi.fn(async () => initial),
-    uninstall: vi.fn(async () => initial)
+    uninstall: vi.fn(async () => initial),
+    icon: vi.fn(async () => ({ dataUrl: null }))
   }
 }
 

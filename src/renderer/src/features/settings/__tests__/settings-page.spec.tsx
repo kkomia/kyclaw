@@ -52,7 +52,9 @@ describe('设置页骨架（栏目页）', () => {
     renderPage()
 
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-page')).toHaveClass('content-column')
+    // round 23：限宽列在里层（滚动条在外层全宽容器上，贴窗口右缘）
+    expect(screen.getByTestId('settings-page-column')).toHaveClass('content-column')
+    expect(screen.getByTestId('settings-page')).toHaveClass('overflow-y-auto')
     expect(screen.getByTestId('settings-group-appearance')).toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-model')).not.toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-usage')).not.toBeInTheDocument()

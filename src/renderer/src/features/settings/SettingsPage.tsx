@@ -113,59 +113,62 @@ export function SettingsPage(): React.JSX.Element {
   const meta = findSettingsSection(section) ?? SETTINGS_SECTIONS[0]
 
   return (
-    <div
+    // round 23：外层全宽滚动容器（滚动条贴窗口右缘）+ 内层限宽内容列（口径不变）
+    <section
       data-testid="settings-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+      className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
-      <h1 className="text-t1 font-medium text-ink">{meta.label}</h1>
+      <div data-testid="settings-page-column" className="content-column flex flex-col gap-6 p-6">
+        <h1 className="text-t1 font-medium text-ink">{meta.label}</h1>
 
-      {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
-      <div key={meta.id} className="animate-page-in flex flex-col gap-6">
-        {meta.id === 'appearance' ? (
-          <SettingsGroup title="主题与字号" testId="settings-group-appearance">
-            <AppearanceOptions />
-          </SettingsGroup>
-        ) : null}
-        {meta.id === 'model' ? (
-          <SettingsGroup title="模型" testId="settings-group-model">
-            <ModelSettings />
-          </SettingsGroup>
-        ) : null}
-        {meta.id === 'workspaces' ? (
-          <SettingsGroup title="工作区" testId="settings-group-workspaces">
-            <WorkspaceSettings />
-          </SettingsGroup>
-        ) : null}
-        {/* 记忆 / 用量（round 5 去重）：设置是唯一导航源——面板直接复用独立页的实现（MemoryPanel /
+        {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
+        <div key={meta.id} className="animate-page-in flex flex-col gap-6">
+          {meta.id === 'appearance' ? (
+            <SettingsGroup title="主题与字号" testId="settings-group-appearance">
+              <AppearanceOptions />
+            </SettingsGroup>
+          ) : null}
+          {meta.id === 'model' ? (
+            <SettingsGroup title="模型" testId="settings-group-model">
+              <ModelSettings />
+            </SettingsGroup>
+          ) : null}
+          {meta.id === 'workspaces' ? (
+            <SettingsGroup title="工作区" testId="settings-group-workspaces">
+              <WorkspaceSettings />
+            </SettingsGroup>
+          ) : null}
+          {/* 记忆 / 用量（round 5 去重）：设置是唯一导航源——面板直接复用独立页的实现（MemoryPanel /
             UsagePanel），不再套一层分组卡（面板自带 round 5 的 ≤2 层口径），版式与其他组同一内容列。 */}
-        {meta.id === 'memory' ? (
-          <div data-testid="settings-group-memory" className="flex flex-col gap-3">
-            <MemoryPanel />
-          </div>
-        ) : null}
-        {meta.id === 'usage' ? (
-          <div data-testid="settings-group-usage" className="flex flex-col gap-3">
-            <UsagePanel />
-          </div>
-        ) : null}
-        {/* round 20：归档（查看 / 搜索 / 取消归档；数据与实现见 features/settings/ArchiveSettings.tsx） */}
-        {meta.id === 'archived' ? (
-          <SettingsGroup title="归档" testId="settings-group-archived">
-            <ArchiveSettings />
-          </SettingsGroup>
-        ) : null}
-        {/* 追踪 / 关于（T17）：都是显式配置项；两组各一行状态文字，不套框线（雷点 v1 的第 7 条） */}
-        {meta.id === 'tracing' ? (
-          <SettingsGroup title="Langfuse" testId="settings-group-tracing">
-            <TracingSettings />
-          </SettingsGroup>
-        ) : null}
-        {meta.id === 'about' ? (
-          <SettingsGroup title="版本与更新" testId="settings-group-about">
-            <AboutSettings />
-          </SettingsGroup>
-        ) : null}
+          {meta.id === 'memory' ? (
+            <div data-testid="settings-group-memory" className="flex flex-col gap-3">
+              <MemoryPanel />
+            </div>
+          ) : null}
+          {meta.id === 'usage' ? (
+            <div data-testid="settings-group-usage" className="flex flex-col gap-3">
+              <UsagePanel />
+            </div>
+          ) : null}
+          {/* round 20：归档（查看 / 搜索 / 取消归档；数据与实现见 features/settings/ArchiveSettings.tsx） */}
+          {meta.id === 'archived' ? (
+            <SettingsGroup title="归档" testId="settings-group-archived">
+              <ArchiveSettings />
+            </SettingsGroup>
+          ) : null}
+          {/* 追踪 / 关于（T17）：都是显式配置项；两组各一行状态文字，不套框线（雷点 v1 的第 7 条） */}
+          {meta.id === 'tracing' ? (
+            <SettingsGroup title="Langfuse" testId="settings-group-tracing">
+              <TracingSettings />
+            </SettingsGroup>
+          ) : null}
+          {meta.id === 'about' ? (
+            <SettingsGroup title="版本与更新" testId="settings-group-about">
+              <AboutSettings />
+            </SettingsGroup>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </section>
   )
 }

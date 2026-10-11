@@ -9,7 +9,7 @@
  */
 import { z } from './zod'
 import { providerKeyStateSchema, type ProviderKeyState } from './providers'
-import type { PluginsOverview } from './plugins'
+import type { PluginIconResponse, PluginsOverview } from './plugins'
 import {
   appSettingsPatchSchema,
   workspaceModeSchema,
@@ -120,7 +120,12 @@ export const IPC_CHANNELS = {
     /** 安装插件（入参 [{ marketplaceId, name }]；返回新的总览） */
     install: 'plugins:install',
     /** 卸载插件（入参 [id]；返回新的总览） */
-    uninstall: 'plugins:uninstall'
+    uninstall: 'plugins:uninstall',
+    /**
+     * round 23：读一个插件的本地图标（入参 [marketplaceId, pluginName]，返回 { dataUrl | null }）——
+     * 插件目录在主进程解析（渲染端传不了任意路径）；没有可用图标 = null，渲染端画字母头像。
+     */
+    icon: 'plugins:icon'
   }
 } as const
 
@@ -306,6 +311,9 @@ export const pluginInstallArgsSchema = z.tuple([
 /** plugins:uninstall 的入参：[id] */
 export const pluginIdArgsSchema = z.tuple([z.string().min(1)])
 
+/** plugins:icon 的入参：[marketplaceId, pluginName]（插件目录在主进程解析，同 containment 口径） */
+export const pluginIconArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
+
 /** 跨边界入参不合法（主进程侧抛这个，不静默忽略） */
 export class IpcInputError extends Error {
   constructor(channel: string, detail: string) {
@@ -471,4 +479,6 @@ export interface KyclawPluginsApi {
   removeMarketplace(id: string): Promise<PluginsOverview>
   install(marketplaceId: string, name: string): Promise<PluginsOverview>
   uninstall(id: string): Promise<PluginsOverview>
+  /** round 23：读插件本地图标（data URL；没有 = null，渲染端画字母头像） */
+  icon(marketplaceId: string, name: string): Promise<PluginIconResponse>
 }

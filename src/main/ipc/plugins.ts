@@ -10,6 +10,7 @@ import {
   noArgsSchema,
   parseIpcArgs,
   pluginAddMarketplaceArgsSchema,
+  pluginIconArgsSchema,
   pluginIdArgsSchema,
   pluginInstallArgsSchema,
   pluginMarketplaceIdArgsSchema
@@ -19,6 +20,7 @@ import { installPlugin, uninstallPluginFiles } from '../plugins/installer'
 import {
   addMarketplace,
   readMarketplacePlugins,
+  readPluginIconDataUrl,
   refreshMarketplace,
   removeMarketplaceFiles
 } from '../plugins/marketplace'
@@ -151,5 +153,18 @@ export function registerPluginIpc(userDataDir: string): void {
       mcpServers: settings.mcpServers.filter((server) => !removedMcpIds.has(server.id))
     })
     return overview()
+  })
+
+  // round 23：插件图标（data URL）。目录解析/containment/大小上限都在主进程；
+  // 没有可用图标回 { dataUrl: null }（渲染端画字母头像）
+  ipcMain.handle(IPC_CHANNELS.plugins.icon, (_event, ...args) => {
+    const [marketplaceId, name] = parseIpcArgs(
+      pluginIconArgsSchema,
+      args,
+      IPC_CHANNELS.plugins.icon
+    )
+    const marketplace = store.read().pluginMarketplaces.find((item) => item.id === marketplaceId)
+    if (marketplace === undefined) return { dataUrl: null }
+    return { dataUrl: readPluginIconDataUrl(marketplace, name) }
   })
 }

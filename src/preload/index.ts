@@ -33,7 +33,11 @@ import {
   type UpdateState
 } from '../shared/ipc'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
-import { pluginsOverviewSchema, type PluginsOverview } from '../shared/plugins'
+import {
+  pluginsOverviewSchema,
+  pluginIconResponseSchema,
+  type PluginsOverview
+} from '../shared/plugins'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -243,7 +247,15 @@ const pluginsApi: KyclawPluginsApi = {
   install: async (marketplaceId, name) =>
     parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.install, { marketplaceId, name })),
   uninstall: async (id) =>
-    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.uninstall, id))
+    parseOverview(await ipcRenderer.invoke(IPC_CHANNELS.plugins.uninstall, id)),
+  // round 23：插件图标（data URL；没有可用图标 = null）
+  icon: async (marketplaceId, name) => {
+    const parsed = pluginIconResponseSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.plugins.icon, marketplaceId, name)
+    )
+    if (!parsed.success) return { dataUrl: null }
+    return parsed.data
+  }
 }
 
 function parseOverview(payload: unknown): PluginsOverview {

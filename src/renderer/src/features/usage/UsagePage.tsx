@@ -182,12 +182,15 @@ export function UsagePanel(): React.JSX.Element {
 /** 用量页（独立路由 /usage）：页级容器 + 标题 + 面板；面板同时被设置页「用量」栏复用。 */
 export function UsagePage(): React.JSX.Element {
   return (
+    // round 23：外层全宽滚动容器（滚动条贴窗口右缘）+ 内层限宽内容列（口径不变）
     <section
       data-testid="usage-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+      className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
-      <h1 className="text-t1 font-medium text-ink">用量</h1>
-      <UsagePanel />
+      <div data-testid="usage-page-column" className="content-column flex flex-col gap-6 p-6">
+        <h1 className="text-t1 font-medium text-ink">用量</h1>
+        <UsagePanel />
+      </div>
     </section>
   )
 }

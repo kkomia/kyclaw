@@ -32,6 +32,8 @@ export const marketplaceManifestSchema = z.object({
       description: z.string().optional(),
       version: z.string().optional(),
       category: z.string().optional(),
+      /** round 23：图标声明（相对插件目录的路径，如 `logo.svg`；认不出/越界就当没有） */
+      icon: z.string().optional(),
       source: z.union([z.string(), z.record(z.string(), z.unknown())])
     })
   )
@@ -244,7 +246,9 @@ export const marketplacePluginViewSchema = z.strictObject({
   source: pluginSourceSchema,
   skills: z.array(z.string()),
   mcpServers: z.array(z.string()),
-  supported: z.boolean()
+  supported: z.boolean(),
+  /** round 23：有可用的本地图标（≤256KB 的常见图片文件）——渲染端据此取 data URL，没有画字母头像 */
+  icon: z.boolean()
 })
 
 export const marketplaceViewSchema = pluginMarketplaceSchema.extend({
@@ -268,7 +272,13 @@ export const pluginsOverviewSchema = z.strictObject({
   installedSkills: z.array(installedSkillViewSchema)
 })
 
+/** round 23：`plugins:icon` 的回包（没有可用图标 / 读不出来 → dataUrl null，渲染端回字母头像） */
+export const pluginIconResponseSchema = z.strictObject({
+  dataUrl: z.string().nullable()
+})
+
 export type MarketplacePluginView = z.infer<typeof marketplacePluginViewSchema>
 export type MarketplaceView = z.infer<typeof marketplaceViewSchema>
 export type InstalledSkillView = z.infer<typeof installedSkillViewSchema>
 export type PluginsOverview = z.infer<typeof pluginsOverviewSchema>
+export type PluginIconResponse = z.infer<typeof pluginIconResponseSchema>

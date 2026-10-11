@@ -38,3 +38,9 @@ export async function installPlugin(marketplaceId: string, name: string): Promis
 export async function uninstallPlugin(id: string): Promise<PluginsOverview> {
   return pluginsApi().uninstall(id)
 }
+
+/** round 23：读插件本地图标（data URL；没有可用图标 = null → 渲染端画字母头像） */
+export async function fetchPluginIcon(marketplaceId: string, name: string): Promise<string | null> {
+  const { dataUrl } = await pluginsApi().icon(marketplaceId, name)
+  return dataUrl
+}

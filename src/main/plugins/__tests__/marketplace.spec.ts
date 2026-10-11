@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -9,8 +17,10 @@ import {
   addMarketplace,
   collectPluginServerMaps,
   firstLine,
+  probePluginIconPath,
   readMarketplaceManifest,
   readMarketplacePlugins,
+  readPluginIconDataUrl,
   refreshMarketplace,
   removeMarketplaceFiles,
   runGit,
@@ -510,5 +520,100 @@ describe('firstLine · 凭据脱敏（Minor-1）', () => {
       'ssh://git@github.com/org/repo.git 不存在'
     )
     expect(firstLine('\n\nnot a url\nsecond')).toBe('not a url')
+  })
+})
+
+describe('round 23 · 插件图标探测（有则显示、无则字母头像）', () => {
+  it('没图标资源：视图 icon=false、data URL 为 null（该市场 94 个插件就是这种）', async () => {
+    const { market, dirs } = makeFixture(root)
+    const record = await addMarketplace({
+      input: { source: market },
+      dirs,
+      existing: [],
+      addedAt: NOW
+    })
+
+    const view = readMarketplacePlugins(record)
+    expect(view.plugins[0]).toMatchObject({ name: 'p-relative', icon: false })
+    expect(view.plugins[1]).toMatchObject({ name: 'p-npm', icon: false })
+    expect(readPluginIconDataUrl(record, 'p-relative')).toBeNull()
+    expect(readPluginIconDataUrl(record, '不存在的插件')).toBeNull()
+  })
+
+  it('`.claude-plugin/icon.png`：icon=true + data URL（mime 按扩展名）', async () => {
+    const { market, dirs } = makeFixture(root)
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    mkdirSync(join(market, 'plugins', 'p-relative', '.claude-plugin'), { recursive: true })
+    writeFileSync(join(market, 'plugins', 'p-relative', '.claude-plugin', 'icon.png'), png)
+    const record = await addMarketplace({
+      input: { source: market },
+      dirs,
+      existing: [],
+      addedAt: NOW
+    })
+
+    const view = readMarketplacePlugins(record)
+    expect(view.plugins[0]?.icon).toBe(true)
+    const dataUrl = readPluginIconDataUrl(record, 'p-relative')
+    expect(dataUrl).toMatch(/^data:image\/png;base64,/)
+    expect(dataUrl).toContain(png.toString('base64'))
+  })
+
+  it('清单条目的 icon 声明优先（相对插件目录；配合 logo.svg 这类自定义名）', async () => {
+    const { market, dirs } = makeFixture(root)
+    // 改清单：给 p-relative 加 icon 声明
+    writeJson(join(market, '.claude-plugin', 'marketplace.json'), {
+      name: 'demo-market',
+      owner: { name: 'tester' },
+      plugins: [
+        {
+          name: 'p-relative',
+          description: '本地插件',
+          version: '1.0.0',
+          icon: './assets/logo.svg',
+          source: './plugins/p-relative'
+        },
+        { name: 'p-npm', source: { source: 'npm', package: '@scope/x' } }
+      ]
+    })
+    writeFile(join(market, 'plugins', 'p-relative', 'assets', 'logo.svg'), '<svg></svg>')
+    const record = await addMarketplace({
+      input: { source: market },
+      dirs,
+      existing: [],
+      addedAt: NOW
+    })
+
+    expect(readMarketplacePlugins(record).plugins[0]?.icon).toBe(true)
+    expect(readPluginIconDataUrl(record, 'p-relative')).toMatch(/^data:image\/svg\+xml;base64,/)
+  })
+
+  it('越界声明 / 非图片扩展名 / 超 256KB：一律当没有', async () => {
+    const { market, dirs } = makeFixture(root)
+    const plugin = join(market, 'plugins', 'p-relative')
+    writeFile(join(root, 'outside.png'), 'x')
+
+    // 越界声明：marketplace.json 条目的 icon 指到插件目录外面（resolveWithin 拦下）
+    const manifestPath = join(market, '.claude-plugin', 'marketplace.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      plugins: Array<Record<string, unknown>>
+    }
+    manifest.plugins[0] = { ...manifest.plugins[0], icon: '../../../../outside.png' }
+    writeJson(manifestPath, manifest)
+    // 非图片扩展名（就算内容像图片也不算）
+    writeFile(join(plugin, 'icon.txt'), 'x')
+    const record = await addMarketplace({
+      input: { source: market },
+      dirs,
+      existing: [],
+      addedAt: NOW
+    })
+    expect(readMarketplacePlugins(record).plugins[0]?.icon).toBe(false)
+    expect(readPluginIconDataUrl(record, 'p-relative')).toBeNull()
+
+    // 超限：300KB 的 png 不算
+    writeFileSync(join(plugin, 'icon.png'), Buffer.alloc(300 * 1024))
+    expect(probePluginIconPath(plugin)).toBeNull()
+    expect(readPluginIconDataUrl(record, 'p-relative')).toBeNull()
   })
 })

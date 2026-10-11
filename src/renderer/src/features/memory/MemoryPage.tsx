@@ -244,12 +244,15 @@ export function MemoryPanel(): React.JSX.Element {
  */
 export function MemoryPage(): React.JSX.Element {
   return (
+    // round 23：外层全宽滚动容器（滚动条贴窗口右缘）+ 内层限宽内容列（口径不变）
     <section
       data-testid="memory-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+      className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
-      <h1 className="text-t1 font-medium text-ink">记忆</h1>
-      <MemoryPanel />
+      <div data-testid="memory-page-column" className="content-column flex flex-col gap-6 p-6">
+        <h1 className="text-t1 font-medium text-ink">记忆</h1>
+        <MemoryPanel />
+      </div>
     </section>
   )
 }

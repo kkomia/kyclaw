@@ -17,6 +17,7 @@ import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
 import { probeConfiguredProvidersQuietly } from './model-probe'
+import { pluginsDirs, sweepPluginResidue } from './plugins/store'
 import { getProviderKey, secretsPath } from './secrets'
 import { readSettings, settingsPath } from './settings'
 import { readLangfuseConfig } from './telemetry'
@@ -77,6 +78,19 @@ if (!app.requestSingleInstanceLock()) {
     void probeConfiguredProvidersQuietly({
       file: settingsPath(userDataDir),
       readKey: (providerId) => getProviderKey(secretsFile, providerId)
+    })
+    // round 23：插件残骸清扫（*.trash-* 与没有主人的 git 市场目录）——异步尽力，不挡窗口；
+    // 只动 plugins/ 下我们管理的目录，local 市场指向的用户目录绝不碰
+    setImmediate(() => {
+      try {
+        const dirs = pluginsDirs(userDataDir)
+        sweepPluginResidue({
+          dirs,
+          marketplaces: readSettings(settingsPath(userDataDir)).pluginMarketplaces
+        })
+      } catch (error) {
+        console.warn('[kyclaw] 插件残骸清扫失败（不影响使用）', error)
+      }
     })
     registerWorkspaceIpc(userDataDir, (threadId) => agentProjectIdOf?.(threadId) ?? null)
     registerProjectsIpc(userDataDir)

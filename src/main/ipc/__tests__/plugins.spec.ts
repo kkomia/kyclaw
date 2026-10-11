@@ -77,9 +77,10 @@ function makeMarket(base: string): string {
 }
 
 describe('plugins 通道 handler：注册与入参闸门', () => {
-  it('六条通道都注册了', () => {
+  it('七条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'plugins:add-marketplace',
+      'plugins:icon',
       'plugins:install',
       'plugins:overview',
       'plugins:refresh-marketplace',
@@ -271,5 +272,47 @@ describe('plugins:remove-marketplace', () => {
     expect(existsSync(join(dir, 'skills', 'market-p-relative-demo'))).toBe(false)
     // 本机目录是用户的，不动
     expect(existsSync(market)).toBe(true)
+  })
+})
+
+describe('plugins:icon（round 23：插件图标）', () => {
+  it('没有图标资源 → { dataUrl: null }；入参先过闸门', async () => {
+    const market = makeMarket(dir)
+    await handlerOf(IPC_CHANNELS.plugins.addMarketplace)(EVENT, { source: market })
+
+    expect(await handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, 'market', 'p-relative')).toEqual({
+      dataUrl: null
+    })
+
+    for (const args of [[], ['market'], [1, 'p'], ['market', '']]) {
+      expect(() => handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, ...args)).toThrow(IpcInputError)
+    }
+  })
+
+  it('有图标资源 → data URL（相对来源自带的文件）', async () => {
+    const market = makeMarket(dir)
+    writeFile(join(market, 'plugins', 'p-relative', '.claude-plugin', 'icon.png'), 'png-bytes')
+    await handlerOf(IPC_CHANNELS.plugins.addMarketplace)(EVENT, { source: market })
+
+    const result = (await handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, 'market', 'p-relative')) as {
+      dataUrl: string | null
+    }
+    expect(result.dataUrl).toMatch(/^data:image\/png;base64,/)
+
+    // 总览里该插件 icon=true（渲染端据此才知道要取）
+    const overview = (await handlerOf(IPC_CHANNELS.plugins.overview)(EVENT)) as PluginsOverview
+    expect(overview.marketplaces[0]?.plugins[0]).toMatchObject({ name: 'p-relative', icon: true })
+  })
+
+  it('市场不在列表 / 插件不存在：都回 null（不抛，界面回字母头像）', async () => {
+    expect(await handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, 'nope', 'p')).toEqual({
+      dataUrl: null
+    })
+
+    const market = makeMarket(dir)
+    await handlerOf(IPC_CHANNELS.plugins.addMarketplace)(EVENT, { source: market })
+    expect(await handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, 'market', '不存在')).toEqual({
+      dataUrl: null
+    })
   })
 })

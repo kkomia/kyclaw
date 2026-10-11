@@ -11,7 +11,7 @@ import {
   type MarketplacePluginView
 } from '../../shared/plugins'
 import type { PluginMarketplace } from '../../shared/settings'
-import { ensureDir, removeDir, type PluginsDirs } from './store'
+import { ensureDir, removeDirRobust, type PluginsDirs } from './store'
 
 /**
  * 插件市场（round 10）：按 URL / 本地目录添加、刷新、移除。
@@ -207,14 +207,14 @@ export async function addMarketplace(options: {
     addedAt: options.addedAt
   })
   const target = join(options.dirs.marketplaces, placeholder.id)
-  if (existsSync(target)) removeDir(target)
+  if (existsSync(target)) removeDirRobust(target)
 
   const cloneArgs = ['clone', '--depth', '1']
   if (placeholder.ref !== undefined) cloneArgs.push('--branch', placeholder.ref)
   cloneArgs.push(normalized.url, target)
   const cloned = await runGit(cloneArgs)
   if (!cloned.ok) {
-    removeDir(target)
+    removeDirRobust(target)
     throw new Error(`克隆失败：${firstLine(cloned.stderr) || 'git clone 返回非零'}`)
   }
 
@@ -228,7 +228,7 @@ export async function addMarketplace(options: {
       ...placeholder.sparsePaths
     ])
     if (!sparse.ok) {
-      removeDir(target)
+      removeDirRobust(target)
       throw new Error(`稀疏检出失败：${firstLine(sparse.stderr) || 'git sparse-checkout 返回非零'}`)
     }
   }
@@ -237,7 +237,7 @@ export async function addMarketplace(options: {
   try {
     manifest = readMarketplaceManifest(target)
   } catch (error) {
-    removeDir(target)
+    removeDirRobust(target)
     throw error
   }
 
@@ -265,7 +265,7 @@ export async function refreshMarketplace(
 
 /** 移除：git 模式删克隆目录（local 不动用户目录）；记录由调用方从 settings 摘掉 */
 export function removeMarketplaceFiles(marketplace: PluginMarketplace): void {
-  if (marketplace.kind === 'git') removeDir(marketplace.path)
+  if (marketplace.kind === 'git') removeDirRobust(marketplace.path)
 }
 
 /** 读一个市场的插件清单 + 组件摘要（相对来源扫目录；远端来源只报名字与描述） */
@@ -282,10 +282,10 @@ export function readMarketplacePlugins(marketplace: PluginMarketplace): {
 
   const plugins = manifest.plugins.map((plugin) => {
     const source = normalizePluginSource(plugin.source)
+    const dir =
+      source.kind === 'relative' ? (resolveWithin(marketplace.path, source.path) ?? '') : ''
     const components =
-      source.kind === 'relative'
-        ? scanPluginDir(resolveWithin(marketplace.path, source.path) ?? '')
-        : { skills: [], mcpServers: [] }
+      source.kind === 'relative' ? scanPluginDir(dir) : { skills: [], mcpServers: [] }
     return {
       name: plugin.name,
       description: plugin.description ?? '',
@@ -294,10 +294,103 @@ export function readMarketplacePlugins(marketplace: PluginMarketplace): {
       source,
       skills: components.skills,
       mcpServers: components.mcpServers,
-      supported: source.kind !== 'unsupported'
+      supported: source.kind !== 'unsupported',
+      // round 23：有可用本地图标才算 true（渲染端据此取 data URL；没有就画字母头像）
+      icon: source.kind === 'relative' && probePluginIconPath(dir, plugin.icon) !== null
     }
   })
   return { plugins }
+}
+
+/** 图标大小上限（byte）：超过就当作没有（data URL 进 IPC/内存都得有界） */
+export const PLUGIN_ICON_MAX_BYTES = 256 * 1024
+
+const ICON_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg'
+}
+
+function iconMimeOf(file: string): string | null {
+  const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase()
+  return ICON_MIME_BY_EXT[ext] ?? null
+}
+
+/**
+ * 探一个插件目录的可用图标（round 23）：
+ *   候选顺序 = 清单条目的 `icon` 声明（相对插件目录，resolveWithin 拦越界）→
+ *   `.claude-plugin/icon.{png,svg,webp,jpg,jpeg}` → `icon.*` → `.claude-plugin/logo.*` → `logo.*`；
+ *   命中条件 = 是文件、非空、≤256KB、扩展名在图片白名单（其余一律当没有）。
+ */
+export function probePluginIconPath(pluginDir: string, declared?: string): string | null {
+  if (pluginDir === '') return null
+  const candidates: string[] = []
+  if (typeof declared === 'string' && declared.trim() !== '') {
+    const within = resolveWithin(pluginDir, declared.trim())
+    if (within !== null) candidates.push(within)
+  }
+  for (const ext of Object.keys(ICON_MIME_BY_EXT)) {
+    candidates.push(join(pluginDir, '.claude-plugin', `icon.${ext}`))
+  }
+  for (const ext of Object.keys(ICON_MIME_BY_EXT)) {
+    candidates.push(join(pluginDir, `icon.${ext}`))
+  }
+  for (const ext of Object.keys(ICON_MIME_BY_EXT)) {
+    candidates.push(join(pluginDir, '.claude-plugin', `logo.${ext}`))
+  }
+  for (const ext of Object.keys(ICON_MIME_BY_EXT)) {
+    candidates.push(join(pluginDir, `logo.${ext}`))
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const stat = statSync(candidate)
+      if (!stat.isFile() || stat.size <= 0 || stat.size > PLUGIN_ICON_MAX_BYTES) continue
+      if (iconMimeOf(candidate) === null) continue
+      return candidate
+    } catch {
+      // 不存在/读不了 → 下一个候选
+    }
+  }
+  return null
+}
+
+/** 读图标文件 → data URL（再查一遍白名单与上限；读不出来回 null，调用方画字母头像） */
+export function readIconDataUrl(file: string): string | null {
+  try {
+    const mime = iconMimeOf(file)
+    if (mime === null) return null
+    const stat = statSync(file)
+    if (!stat.isFile() || stat.size <= 0 || stat.size > PLUGIN_ICON_MAX_BYTES) return null
+    return `data:${mime};base64,${readFileSync(file).toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `plugins:icon` 的实现：按（市场 id, 插件名）在**主进程**解析插件目录并读图标——
+ * 渲染端传不了任意路径；相对来源才可能有图标（远端来源没落地文件）。
+ */
+export function readPluginIconDataUrl(
+  marketplace: PluginMarketplace,
+  pluginName: string
+): string | null {
+  try {
+    const manifest = readMarketplaceManifest(marketplace.path)
+    const entry = manifest.plugins.find((plugin) => plugin.name === pluginName)
+    if (entry === undefined) return null
+    const source = normalizePluginSource(entry.source)
+    if (source.kind !== 'relative') return null
+    const dir = resolveWithin(marketplace.path, source.path)
+    if (dir === null) return null
+    const icon = probePluginIconPath(dir, entry.icon)
+    return icon === null ? null : readIconDataUrl(icon)
+  } catch {
+    return null
+  }
 }
 
 /**

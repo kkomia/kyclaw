@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Dialog } from '@renderer/components/ui/dialog'
+import { fetchPluginIcon } from '@renderer/lib/plugins-api'
 import type { MarketplaceView } from '@shared/plugins'
 import type { InstalledPlugin } from '@shared/settings'
+import { PluginAvatar } from './PluginAvatar'
 
 /**
  * 插件页「插件」面板（round 10）：两块——**插件市场**（添加/刷新/移除）与**插件**（跨市场汇总，安装/卸载）。
@@ -43,12 +45,43 @@ export function PluginsPluginPanel({
   /** 等确认的移除目标（市场）与卸载目标（插件记录） */
   const [removing, setRemoving] = useState<MarketplaceView | null>(null)
   const [uninstalling, setUninstalling] = useState<InstalledPlugin | null>(null)
+  /** round 23：已取回的插件图标（键 `<marketplaceId>:<name>`；null = 没有可用图标） */
+  const [icons, setIcons] = useState<Record<string, string | null>>({})
+  const requested = useRef(new Set<string>())
 
   const marketplaces = overview?.marketplaces ?? []
   const installed = overview?.installed ?? []
   const plugins = marketplaces.flatMap((marketplace) =>
     marketplace.plugins.map((plugin) => ({ marketplace, plugin }))
   )
+
+  // 只对「有可用图标」的插件取 data URL（主进程判定 icon=true 才值得跑这一趟 IPC）；
+  // 失败静默（回字母头像）；requested 记账避免重复请求。依赖用签名字符串——数组每次渲染都是新引用
+  const iconSignature = plugins
+    .filter(({ plugin }) => plugin.icon)
+    .map(({ marketplace, plugin }) => `${marketplace.id}:${plugin.name}`)
+    .join('|')
+  useEffect(() => {
+    let alive = true
+    for (const { marketplace, plugin } of plugins) {
+      if (!plugin.icon) continue
+      const key = `${marketplace.id}:${plugin.name}`
+      if (requested.current.has(key)) continue
+      requested.current.add(key)
+      void fetchPluginIcon(marketplace.id, plugin.name).then(
+        (dataUrl) => {
+          if (alive) setIcons((previous) => ({ ...previous, [key]: dataUrl }))
+        },
+        () => {
+          if (alive) setIcons((previous) => ({ ...previous, [key]: null }))
+        }
+      )
+    }
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 签名即"有哪些插件要取图标"；plugins 每次渲染都是新引用
+  }, [iconSignature])
 
   return (
     <div data-testid="plugins-plugin-panel" className="flex flex-col gap-5">
@@ -65,6 +98,7 @@ export function PluginsPluginPanel({
               data-testid={`marketplace-${marketplace.id}`}
               className={ROW_CLASS}
             >
+              <PluginAvatar name={marketplace.name} />
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate text-b1 font-medium text-ink">{marketplace.name}</span>
                 <span className="min-w-0 truncate text-c1 text-ink-tertiary">
@@ -128,6 +162,10 @@ export function PluginsPluginPanel({
                 data-testid={`plugin-${marketplace.id}-${plugin.name}`}
                 className={ROW_CLASS}
               >
+                <PluginAvatar
+                  name={plugin.name}
+                  iconDataUrl={icons[`${marketplace.id}:${plugin.name}`] ?? null}
+                />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate text-b1 font-medium text-ink">{plugin.name}</span>
                   {plugin.description === '' ? null : (

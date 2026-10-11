@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearKyclawBridge,
@@ -120,6 +120,7 @@ function pluginView(patch: Partial<MarketplacePluginView> = {}): MarketplacePlug
     skills: ['s1'],
     mcpServers: ['web'],
     supported: true,
+    icon: false,
     ...patch
   }
 }
@@ -850,5 +851,76 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('2')
     expect(screen.queryByTestId('skills-installed-empty')).not.toBeInTheDocument()
     expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
+  })
+})
+
+describe('round 23 · 头像 / 图标 / 错误位置', () => {
+  it('市场行与插件行都有头像；没有图标资源 = 字母头像（首字母 + 稳定底色）', async () => {
+    installPluginsBridge({
+      marketplaces: [marketplaceView({ name: 'demo-market' })],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+    await screen.findByTestId('marketplace-demo')
+
+    const marketAvatar = within(screen.getByTestId('marketplace-demo')).getByTestId('plugin-avatar')
+    expect(marketAvatar).toHaveTextContent('D')
+    const pluginAvatar = within(screen.getByTestId('plugin-demo-p1')).getByTestId('plugin-avatar')
+    expect(pluginAvatar).toHaveTextContent('P')
+    // 底色来自 Fills 三档之一（中性、稳定；同名永远同色由 avatar.ts 的单测钉）
+    expect(
+      ['bg-hover', 'bg-selected', 'bg-active'].some((tone) => pluginAvatar.classList.contains(tone))
+    ).toBe(true)
+  })
+
+  it('icon=true：走 plugins:icon 取 data URL 并渲染 <img>（不是纯文字了）', async () => {
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView({ plugins: [pluginView({ icon: true })] })],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.icon.mockResolvedValueOnce({ dataUrl: 'data:image/png;base64,AAAA' })
+
+    render(<PluginsPage />)
+    await screen.findByTestId('marketplace-demo')
+
+    await waitFor(() => expect(bridge.plugins.icon).toHaveBeenCalledWith('demo', 'p1'))
+    const img = await within(screen.getByTestId('plugin-demo-p1')).findByTestId('plugin-avatar-img')
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,AAAA')
+  })
+
+  it('icon=false：不发 icon 请求（没有图标资源就不消费 IPC）', async () => {
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+    await screen.findByTestId('marketplace-demo')
+
+    expect(bridge.plugins.icon).not.toHaveBeenCalled()
+  })
+
+  it('移除失败：错误行出现在面板**上方**（贴近动作；"没反应"的根修之一）', async () => {
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    bridge.plugins.removeMarketplace.mockRejectedValueOnce(
+      new Error('删除被占用：C:/data/plugins/marketplaces/demo（关掉占用它的程序后重试）')
+    )
+    render(<PluginsPage />)
+    await screen.findByTestId('marketplace-demo')
+
+    fireEvent.click(screen.getByTestId('marketplace-demo-remove'))
+    fireEvent.click(screen.getByTestId('marketplace-remove-confirm'))
+
+    const error = await screen.findByTestId('plugins-error')
+    expect(error).toHaveTextContent('删除被占用')
+    // DOM 顺序：错误行在面板容器之前（面板紧随其后）
+    const panel = screen.getByTestId('plugins-plugin-panel')
+    expect(error.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

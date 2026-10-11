@@ -146,7 +146,7 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('settings-group-appearance')).toBeInTheDocument()
   })
 
-  it('内容列限宽居中：各页面都走 .content-column（侧栏覆盖层不压内容、也不横向裁切）', () => {
+  it('内容列限宽居中：各页面都走 .content-column（侧栏覆盖层不压内容、也不横向裁切）；round 23 起滚动条贴窗口右缘', () => {
     renderAt('/chat')
 
     // round 21：对话页套了两层——chat-page = 整幅（摘要轨的定位基准），限宽列是它的子层
@@ -154,13 +154,17 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('chat-page')).toContainElement(screen.getByTestId('chat-column'))
 
     openSettings()
-    expect(screen.getByTestId('settings-page')).toHaveClass('content-column')
+    expect(screen.getByTestId('settings-page-column')).toHaveClass('content-column')
+    // round 23：滚动容器是外层（全宽）——滚动条贴窗口右缘，内容列限宽口径不变
+    expect(screen.getByTestId('settings-page')).toHaveClass('overflow-y-auto')
+    expect(screen.getByTestId('settings-page-column')).not.toHaveClass('overflow-y-auto')
 
     fireEvent.click(screen.getByTestId('settings-nav-memory'))
-    expect(screen.getByTestId('settings-page')).toHaveClass('content-column')
+    expect(screen.getByTestId('settings-page-column')).toHaveClass('content-column')
 
     fireEvent.click(screen.getByTestId('settings-back'))
     fireEvent.click(screen.getByTestId('nav-plugins'))
-    expect(screen.getByTestId('plugins-page')).toHaveClass('content-column')
+    expect(screen.getByTestId('plugins-page-column')).toHaveClass('content-column')
+    expect(screen.getByTestId('plugins-page')).toHaveClass('overflow-y-auto')
   })
 })

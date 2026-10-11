@@ -221,362 +221,367 @@ export function PluginsPage(): React.JSX.Element {
   }
 
   return (
+    // round 23：外层全宽滚动容器（滚动条贴窗口右缘）+ 内层限宽内容列（口径不变）
     <section
       data-testid="plugins-page"
-      className="content-column animate-page-in flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6"
+      className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
-      <div data-testid="plugins-tabs" role="tablist" aria-label="插件分区" className="flex gap-5">
-        {TABS.map((entry) => {
-          const selected = tab === entry.id
-          return (
-            <button
-              key={entry.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              data-testid={entry.testId}
-              onClick={() => setTab(entry.id)}
-              className={cn(
-                'flex items-center gap-1.5 border-b-2 pb-2 text-b1 transition-colors duration-(--motion-fast) ease-main',
-                selected
-                  ? 'border-(--text-primary) font-medium text-ink'
-                  : 'border-transparent text-ink-secondary hover:text-ink'
-              )}
-            >
-              {entry.label}
-              <span
-                data-testid={`${entry.testId}-count`}
-                className="text-c1 text-ink-tertiary tabular-nums"
+      <div data-testid="plugins-page-column" className="content-column flex flex-col gap-6 p-6">
+        <div data-testid="plugins-tabs" role="tablist" aria-label="插件分区" className="flex gap-5">
+          {TABS.map((entry) => {
+            const selected = tab === entry.id
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                data-testid={entry.testId}
+                onClick={() => setTab(entry.id)}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 pb-2 text-b1 transition-colors duration-(--motion-fast) ease-main',
+                  selected
+                    ? 'border-(--text-primary) font-medium text-ink'
+                    : 'border-transparent text-ink-secondary hover:text-ink'
+                )}
               >
-                {counts[entry.id]}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 data-testid="plugins-title" className="text-t1 font-medium text-ink">
-            {HEADINGS[tab].title}
-          </h1>
-          <p data-testid="plugins-subtitle" className="text-b2 text-ink-secondary">
-            {HEADINGS[tab].subtitle}
-          </p>
+                {entry.label}
+                <span
+                  data-testid={`${entry.testId}-count`}
+                  className="text-c1 text-ink-tertiary tabular-nums"
+                >
+                  {counts[entry.id]}
+                </span>
+              </button>
+            )
+          })}
         </div>
-        {tab === 'plugins' ? (
-          <Menu
-            align="end"
-            items={[
-              {
-                id: 'marketplace',
-                label: '添加插件市场',
-                testId: 'marketplace-add',
-                onSelect: () => {
-                  setMarketplaceError(undefined)
-                  setMarketplaceOpen(true)
-                }
-              }
-            ]}
-            trigger={
-              <Button size="sm" icon={<Plus />} data-testid="plugins-add">
-                新增
-              </Button>
-            }
-          />
-        ) : tab === 'mcp' ? (
-          <Menu
-            align="end"
-            items={[
-              {
-                id: 'stdio',
-                label: '本地命令（stdio）',
-                testId: 'mcp-add-stdio',
-                onSelect: () => openAddMcp('stdio')
-              },
-              {
-                id: 'http',
-                label: '远程地址（HTTP）',
-                testId: 'mcp-add-http',
-                onSelect: () => openAddMcp('http')
-              },
-              {
-                id: 'json',
-                label: '从 JSON 导入',
-                testId: 'mcp-add-json',
-                onSelect: openImport
-              }
-            ]}
-            trigger={
-              <Button size="sm" icon={<Plus />} data-testid="mcp-add">
-                新增
-              </Button>
-            }
-          />
-        ) : null}
-      </div>
 
-      {/* 页级容器（Step D 的第 1 层；行是第 2 层）——三个分区同一块面 */}
-      <div className="rounded-panel bg-secondary p-4">
-        {tab === 'plugins' ? (
-          <PluginsPluginPanel
-            overview={overview}
-            busy={busy}
-            onRefresh={(id) => run(`refresh:${id}`, () => refreshPluginMarketplace(id))}
-            onRemove={(id) => run(`remove:${id}`, () => removePluginMarketplace(id))}
-            onInstall={(marketplaceId, name) =>
-              run(`install:${marketplaceId}:${name}`, () => installPlugin(marketplaceId, name))
-            }
-            onUninstall={(id) => run(`uninstall:${id}`, () => uninstallPlugin(id))}
-          />
-        ) : tab === 'mcp' ? (
-          <PluginsMcpPanel revision={revision} />
-        ) : (
-          <PluginsSkillsPanel installedSkills={overview?.installedSkills ?? []} />
-        )}
-      </div>
-
-      {actionError === undefined ? null : (
-        <p data-testid="plugins-error" className="text-c1 text-danger">
-          {actionError}
-        </p>
-      )}
-
-      {/* 添加插件市场（照 Codex 的 Add a marketplace：来源 / 分支或标签 / 稀疏路径） */}
-      <Dialog
-        open={marketplaceOpen}
-        onOpenChange={(open) => {
-          if (!open) setMarketplaceOpen(false)
-        }}
-        title="添加插件市场"
-        size="md"
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              data-testid="marketplace-cancel"
-              onClick={() => setMarketplaceOpen(false)}
-            >
-              取消
-            </Button>
-            <Button
-              data-testid="marketplace-save"
-              loading={adding}
-              disabled={source.trim() === ''}
-              onClick={() => void submitMarketplace()}
-            >
-              添加
-            </Button>
-          </>
-        }
-      >
-        <div className="flex flex-col gap-4">
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">来源</span>
-            <Input
-              data-testid="marketplace-source"
-              value={source}
-              placeholder="owner/repo、git URL 或本地文件夹"
-              onChange={(event) => setSource(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">Git 分支或标签</span>
-            <Input
-              data-testid="marketplace-ref"
-              value={ref}
-              placeholder="留空 = 仓库默认分支"
-              onChange={(event) => setRef(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">稀疏路径</span>
-            <textarea
-              data-testid="marketplace-sparse"
-              aria-label="稀疏路径"
-              rows={2}
-              value={sparseText}
-              placeholder={'每行一条，留空 = 全量检出\nplugins/foo'}
-              onChange={(event) => setSparseText(event.target.value)}
-              className="w-full resize-none rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 py-2 font-mono text-c1 text-ink outline-none placeholder:text-(--text-quaternary)"
-            />
-          </label>
-          {marketplaceError === undefined ? null : (
-            <p data-testid="marketplace-error" className="text-c1 text-danger">
-              {marketplaceError}
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-col gap-1">
+            <h1 data-testid="plugins-title" className="text-t1 font-medium text-ink">
+              {HEADINGS[tab].title}
+            </h1>
+            <p data-testid="plugins-subtitle" className="text-b2 text-ink-secondary">
+              {HEADINGS[tab].subtitle}
             </p>
+          </div>
+          {tab === 'plugins' ? (
+            <Menu
+              align="end"
+              items={[
+                {
+                  id: 'marketplace',
+                  label: '添加插件市场',
+                  testId: 'marketplace-add',
+                  onSelect: () => {
+                    setMarketplaceError(undefined)
+                    setMarketplaceOpen(true)
+                  }
+                }
+              ]}
+              trigger={
+                <Button size="sm" icon={<Plus />} data-testid="plugins-add">
+                  新增
+                </Button>
+              }
+            />
+          ) : tab === 'mcp' ? (
+            <Menu
+              align="end"
+              items={[
+                {
+                  id: 'stdio',
+                  label: '本地命令（stdio）',
+                  testId: 'mcp-add-stdio',
+                  onSelect: () => openAddMcp('stdio')
+                },
+                {
+                  id: 'http',
+                  label: '远程地址（HTTP）',
+                  testId: 'mcp-add-http',
+                  onSelect: () => openAddMcp('http')
+                },
+                {
+                  id: 'json',
+                  label: '从 JSON 导入',
+                  testId: 'mcp-add-json',
+                  onSelect: openImport
+                }
+              ]}
+              trigger={
+                <Button size="sm" icon={<Plus />} data-testid="mcp-add">
+                  新增
+                </Button>
+              }
+            />
+          ) : null}
+        </div>
+
+        {/* round 23：动作失败的行内错误**贴着面板顶部**（原来在页面底，被 94 行插件列表淹没，
+          "移除没反应"的体感就是错误看不见） */}
+        {actionError === undefined ? null : (
+          <p data-testid="plugins-error" className="text-c1 text-danger">
+            {actionError}
+          </p>
+        )}
+
+        {/* 页级容器（Step D 的第 1 层；行是第 2 层）——三个分区同一块面 */}
+        <div className="rounded-panel bg-secondary p-4">
+          {tab === 'plugins' ? (
+            <PluginsPluginPanel
+              overview={overview}
+              busy={busy}
+              onRefresh={(id) => run(`refresh:${id}`, () => refreshPluginMarketplace(id))}
+              onRemove={(id) => run(`remove:${id}`, () => removePluginMarketplace(id))}
+              onInstall={(marketplaceId, name) =>
+                run(`install:${marketplaceId}:${name}`, () => installPlugin(marketplaceId, name))
+              }
+              onUninstall={(id) => run(`uninstall:${id}`, () => uninstallPlugin(id))}
+            />
+          ) : tab === 'mcp' ? (
+            <PluginsMcpPanel revision={revision} />
+          ) : (
+            <PluginsSkillsPanel installedSkills={overview?.installedSkills ?? []} />
           )}
         </div>
-      </Dialog>
 
-      {/* MCP：新增对话框（round 9 流程，原样保留） */}
-      <Dialog
-        open={addForm !== null}
-        onOpenChange={(open) => {
-          if (!open) setAddForm(null)
-        }}
-        title="新增 MCP 服务"
-        size="md"
-        footer={
-          <>
-            <Button variant="ghost" data-testid="mcp-add-cancel" onClick={() => setAddForm(null)}>
-              取消
-            </Button>
-            <Button
-              data-testid="mcp-add-save"
-              loading={saving}
-              disabled={addProblems.length > 0}
-              onClick={() => void submitAddMcp()}
-            >
-              保存
-            </Button>
-          </>
-        }
-      >
-        {addForm === null ? null : (
+        {/* 添加插件市场（照 Codex 的 Add a marketplace：来源 / 分支或标签 / 稀疏路径） */}
+        <Dialog
+          open={marketplaceOpen}
+          onOpenChange={(open) => {
+            if (!open) setMarketplaceOpen(false)
+          }}
+          title="添加插件市场"
+          size="md"
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                data-testid="marketplace-cancel"
+                onClick={() => setMarketplaceOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                data-testid="marketplace-save"
+                loading={adding}
+                disabled={source.trim() === ''}
+                onClick={() => void submitMarketplace()}
+              >
+                添加
+              </Button>
+            </>
+          }
+        >
           <div className="flex flex-col gap-4">
             <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">名称</span>
+              <span className="text-b2 text-ink-secondary">来源</span>
               <Input
-                data-testid="mcp-add-name"
-                value={addForm.name}
-                onChange={(event) => setAddForm({ ...addForm, name: event.target.value })}
+                data-testid="marketplace-source"
+                value={source}
+                placeholder="owner/repo、git URL 或本地文件夹"
+                onChange={(event) => setSource(event.target.value)}
               />
             </label>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">类型</span>
-              <div role="group" aria-label="传输类型" className="flex gap-3">
-                {(['http', 'stdio'] as const).map((transport) => (
-                  <Chip
-                    key={transport}
-                    data-testid={`mcp-add-type-${transport}`}
-                    aria-pressed={addForm.transport === transport}
-                    className={cn(addForm.transport === transport && 'bg-selected')}
-                    onClick={() => setAddForm({ ...addForm, transport })}
-                  >
-                    {transport === 'http' ? 'HTTP' : 'stdio'}
-                  </Chip>
-                ))}
-              </div>
-            </div>
-
-            {addForm.transport === 'stdio' ? (
-              <>
-                <label className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">命令</span>
-                  <Input
-                    data-testid="mcp-add-command"
-                    value={addForm.command}
-                    placeholder="如 npx"
-                    onChange={(event) => setAddForm({ ...addForm, command: event.target.value })}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">参数</span>
-                  <Input
-                    data-testid="mcp-add-args"
-                    value={addForm.argsText}
-                    placeholder="如 -y @modelcontextprotocol/server-filesystem D:/notes"
-                    onChange={(event) => setAddForm({ ...addForm, argsText: event.target.value })}
-                  />
-                </label>
-                <div className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">环境变量</span>
-                  <McpKeyValueEditor
-                    rows={addForm.env}
-                    onChange={(env) => setAddForm({ ...addForm, env })}
-                    testIdPrefix="mcp-add-env"
-                    namePlaceholder="环境变量名"
-                    valuePlaceholder="环境变量值"
-                    addLabel="添加环境变量"
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <label className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">地址</span>
-                  <Input
-                    data-testid="mcp-add-url"
-                    value={addForm.url}
-                    placeholder="https://example.com/mcp"
-                    onChange={(event) => setAddForm({ ...addForm, url: event.target.value })}
-                  />
-                </label>
-                <div className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">Headers</span>
-                  <McpKeyValueEditor
-                    rows={addForm.headers}
-                    onChange={(headers) => setAddForm({ ...addForm, headers })}
-                    testIdPrefix="mcp-add-headers"
-                    namePlaceholder="Header 名称"
-                    valuePlaceholder="Header 值"
-                    addLabel="添加 Header"
-                  />
-                </div>
-              </>
-            )}
-
-            {addProblems.length > 0 ? (
-              <p data-testid="mcp-add-problems" className="text-c1 text-danger">
-                {addProblems.join('；')}
+            <label className="flex flex-col gap-1">
+              <span className="text-b2 text-ink-secondary">Git 分支或标签</span>
+              <Input
+                data-testid="marketplace-ref"
+                value={ref}
+                placeholder="留空 = 仓库默认分支"
+                onChange={(event) => setRef(event.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-b2 text-ink-secondary">稀疏路径</span>
+              <textarea
+                data-testid="marketplace-sparse"
+                aria-label="稀疏路径"
+                rows={2}
+                value={sparseText}
+                placeholder={'每行一条，留空 = 全量检出\nplugins/foo'}
+                onChange={(event) => setSparseText(event.target.value)}
+                className="w-full resize-none rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 py-2 font-mono text-c1 text-ink outline-none placeholder:text-(--text-quaternary)"
+              />
+            </label>
+            {marketplaceError === undefined ? null : (
+              <p data-testid="marketplace-error" className="text-c1 text-danger">
+                {marketplaceError}
               </p>
-            ) : null}
+            )}
+          </div>
+        </Dialog>
+
+        {/* MCP：新增对话框（round 9 流程，原样保留） */}
+        <Dialog
+          open={addForm !== null}
+          onOpenChange={(open) => {
+            if (!open) setAddForm(null)
+          }}
+          title="新增 MCP 服务"
+          size="md"
+          footer={
+            <>
+              <Button variant="ghost" data-testid="mcp-add-cancel" onClick={() => setAddForm(null)}>
+                取消
+              </Button>
+              <Button
+                data-testid="mcp-add-save"
+                loading={saving}
+                disabled={addProblems.length > 0}
+                onClick={() => void submitAddMcp()}
+              >
+                保存
+              </Button>
+            </>
+          }
+        >
+          {addForm === null ? null : (
+            <div className="flex flex-col gap-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-b2 text-ink-secondary">名称</span>
+                <Input
+                  data-testid="mcp-add-name"
+                  value={addForm.name}
+                  onChange={(event) => setAddForm({ ...addForm, name: event.target.value })}
+                />
+              </label>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-b2 text-ink-secondary">类型</span>
+                <div role="group" aria-label="传输类型" className="flex gap-3">
+                  {(['http', 'stdio'] as const).map((transport) => (
+                    <Chip
+                      key={transport}
+                      data-testid={`mcp-add-type-${transport}`}
+                      aria-pressed={addForm.transport === transport}
+                      className={cn(addForm.transport === transport && 'bg-selected')}
+                      onClick={() => setAddForm({ ...addForm, transport })}
+                    >
+                      {transport === 'http' ? 'HTTP' : 'stdio'}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+
+              {addForm.transport === 'stdio' ? (
+                <>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-b2 text-ink-secondary">命令</span>
+                    <Input
+                      data-testid="mcp-add-command"
+                      value={addForm.command}
+                      placeholder="如 npx"
+                      onChange={(event) => setAddForm({ ...addForm, command: event.target.value })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-b2 text-ink-secondary">参数</span>
+                    <Input
+                      data-testid="mcp-add-args"
+                      value={addForm.argsText}
+                      placeholder="如 -y @modelcontextprotocol/server-filesystem D:/notes"
+                      onChange={(event) => setAddForm({ ...addForm, argsText: event.target.value })}
+                    />
+                  </label>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-b2 text-ink-secondary">环境变量</span>
+                    <McpKeyValueEditor
+                      rows={addForm.env}
+                      onChange={(env) => setAddForm({ ...addForm, env })}
+                      testIdPrefix="mcp-add-env"
+                      namePlaceholder="环境变量名"
+                      valuePlaceholder="环境变量值"
+                      addLabel="添加环境变量"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-b2 text-ink-secondary">地址</span>
+                    <Input
+                      data-testid="mcp-add-url"
+                      value={addForm.url}
+                      placeholder="https://example.com/mcp"
+                      onChange={(event) => setAddForm({ ...addForm, url: event.target.value })}
+                    />
+                  </label>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-b2 text-ink-secondary">Headers</span>
+                    <McpKeyValueEditor
+                      rows={addForm.headers}
+                      onChange={(headers) => setAddForm({ ...addForm, headers })}
+                      testIdPrefix="mcp-add-headers"
+                      namePlaceholder="Header 名称"
+                      valuePlaceholder="Header 值"
+                      addLabel="添加 Header"
+                    />
+                  </div>
+                </>
+              )}
+
+              {addProblems.length > 0 ? (
+                <p data-testid="mcp-add-problems" className="text-c1 text-danger">
+                  {addProblems.join('；')}
+                </p>
+              ) : null}
+              {dialogError === undefined ? null : (
+                <p data-testid="mcp-add-error" className="text-c1 text-danger">
+                  {dialogError}
+                </p>
+              )}
+            </div>
+          )}
+        </Dialog>
+
+        {/* MCP：从 JSON 导入（round 9 流程，原样保留） */}
+        <Dialog
+          open={importOpen}
+          onOpenChange={(open) => {
+            if (!open) setImportOpen(false)
+          }}
+          title="从 JSON 导入"
+          size="md"
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                data-testid="mcp-add-json-cancel"
+                onClick={() => setImportOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                data-testid="mcp-add-json-import"
+                loading={saving}
+                disabled={importText.trim() === ''}
+                onClick={() => void submitImport()}
+              >
+                导入
+              </Button>
+            </>
+          }
+        >
+          <div className="flex flex-col gap-2">
+            <textarea
+              data-testid="mcp-add-json-text"
+              aria-label="MCP 服务 JSON"
+              rows={8}
+              value={importText}
+              placeholder={IMPORT_PLACEHOLDER}
+              onChange={(event) => setImportText(event.target.value)}
+              className="w-full resize-none rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 py-2 font-mono text-c1 text-ink outline-none placeholder:text-(--text-quaternary)"
+            />
             {dialogError === undefined ? null : (
-              <p data-testid="mcp-add-error" className="text-c1 text-danger">
+              <p data-testid="mcp-add-json-error" className="text-c1 text-danger">
                 {dialogError}
               </p>
             )}
           </div>
-        )}
-      </Dialog>
-
-      {/* MCP：从 JSON 导入（round 9 流程，原样保留） */}
-      <Dialog
-        open={importOpen}
-        onOpenChange={(open) => {
-          if (!open) setImportOpen(false)
-        }}
-        title="从 JSON 导入"
-        size="md"
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              data-testid="mcp-add-json-cancel"
-              onClick={() => setImportOpen(false)}
-            >
-              取消
-            </Button>
-            <Button
-              data-testid="mcp-add-json-import"
-              loading={saving}
-              disabled={importText.trim() === ''}
-              onClick={() => void submitImport()}
-            >
-              导入
-            </Button>
-          </>
-        }
-      >
-        <div className="flex flex-col gap-2">
-          <textarea
-            data-testid="mcp-add-json-text"
-            aria-label="MCP 服务 JSON"
-            rows={8}
-            value={importText}
-            placeholder={IMPORT_PLACEHOLDER}
-            onChange={(event) => setImportText(event.target.value)}
-            className="w-full resize-none rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 py-2 font-mono text-c1 text-ink outline-none placeholder:text-(--text-quaternary)"
-          />
-          {dialogError === undefined ? null : (
-            <p data-testid="mcp-add-json-error" className="text-c1 text-danger">
-              {dialogError}
-            </p>
-          )}
-        </div>
-      </Dialog>
+        </Dialog>
+      </div>
     </section>
   )
 }
