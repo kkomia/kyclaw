@@ -86,6 +86,17 @@ export const mcpServerSchema = z.strictObject({
   args: z.array(z.string()).optional(),
   /** http：Streamable HTTP 端点地址 */
   url: z.string().optional(),
+  /**
+   * http：自定义请求头（如 `Authorization`）——透传给 @mastra/mcp 的 `requestInit.headers`
+   * （round 9：用户要"定义了 url 之后可以自定义 headers"）。键/值的换行与空名在
+   * shared/mcp.ts 的 mcpServerProblems 里拦（HTTP 头注入防线），schema 只管形状。
+   */
+  headers: z.record(z.string(), z.string()).optional(),
+  /**
+   * stdio：追加给子进程的环境变量——透传给 @mastra/mcp 的 `StdioServerDefinition.env`
+   * （round 9，库已支持）。同样是纯加法字段，老配置文件不受影响。
+   */
+  env: z.record(z.string(), z.string()).optional(),
   /** 启用中的 server 会随 agent 使用建立连接；停用即断开 */
   enabled: z.boolean(),
   /** 被标记为只读的工具名（server 自己的工具名，不带 mcp__ 前缀） */

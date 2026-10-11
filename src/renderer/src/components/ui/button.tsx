@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority'
-import type { ComponentProps, ReactNode } from 'react'
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { cn } from './cn'
 import { Spinner } from './spinner'
 
@@ -57,10 +57,63 @@ export type ButtonSize = NonNullable<VariantProps<typeof button>['size']>
 export interface ButtonProps extends ComponentProps<'button'> {
   variant?: ButtonVariant
   size?: ButtonSize
-  /** loading：换成 spinner（直径跟档位）、禁用交互、标 aria-busy */
+  /** loading：换成 spinner（直径跟档位）、禁用交互、标 aria-busy（视觉防闪见 useDelayedLoading） */
   loading?: boolean
   /** 前导图标（loading 时被 spinner 顶掉） */
   icon?: ReactNode
+}
+
+/**
+ * 防闪时序（round 9 用户实拍："点击保存存在保存按钮内的快速转圈闪烁"）：
+ * loading 置位后**延迟这么久**才把 spinner/灰底显示出来——本机保存往往 <50ms，
+ * 期间就结束的话视觉上完全不动（但按钮从第一刻起就禁用防重复提交）。
+ */
+const LOADING_SHOW_DELAY_MS = 200
+
+/** 一旦显示了 spinner，**至少保持这么久**再退回（避免收尾时再闪一下） */
+const LOADING_MIN_VISIBLE_MS = 300
+
+/**
+ * loading → "要不要把 spinner 画出来"。两个定时器口径：晚到 200ms、早退 300ms。
+ * 定时器存 ref，重入 / 卸载都会清（重入：loading 又变回 true 时把待退的定时器撤掉，
+ * spinner 连续显示不闪断）。
+ */
+function useDelayedLoading(loading: boolean): boolean {
+  const [visible, setVisible] = useState(false)
+  const timerRef = useRef<number | null>(null)
+  /** spinner 真正显示出来的时刻（算"至少保持"用） */
+  const shownAtRef = useRef(0)
+
+  useEffect(() => {
+    const clear = (): void => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
+    clear()
+
+    if (loading) {
+      if (visible) return clear
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        shownAtRef.current = Date.now()
+        setVisible(true)
+      }, LOADING_SHOW_DELAY_MS)
+      return clear
+    }
+    if (visible) {
+      // 到点（或已过点）再退：0 也走异步定时器，避免在 effect 里同步 setState
+      const remaining = Math.max(LOADING_MIN_VISIBLE_MS - (Date.now() - shownAtRef.current), 0)
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        setVisible(false)
+      }, remaining)
+    }
+    return clear
+  }, [loading, visible])
+
+  return visible
 }
 
 export function Button({
@@ -74,17 +127,22 @@ export function Button({
   children,
   ...props
 }: ButtonProps): React.JSX.Element {
+  // 功能上立即禁用（防重复提交）；视觉上的 spinner / 灰底走防闪时序
   const isDisabled = disabled === true || loading
+  const showLoading = useDelayedLoading(loading)
 
   return (
     <button
       type={type}
       disabled={isDisabled}
       aria-busy={loading || undefined}
-      className={cn(button({ variant, size, disabled: isDisabled }), className)}
+      className={cn(
+        button({ variant, size, disabled: disabled === true || showLoading }),
+        className
+      )}
       {...props}
     >
-      {loading ? (
+      {showLoading ? (
         <Spinner size={size} decorative />
       ) : icon === undefined ? null : (
         <span

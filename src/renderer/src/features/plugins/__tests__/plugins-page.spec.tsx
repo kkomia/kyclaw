@@ -131,20 +131,21 @@ describe('插件页 · 两个 tab', () => {
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
   })
 
-  it('底部常驻添加 chips 已删除（round 5）：页面里没有旧的 mcp-add-stdio 常驻按钮', async () => {
+  it('底部常驻添加 chips 已删除（round 5）：新增走右上角菜单（round 9 起含「从 JSON 导入」）', async () => {
     installMockApi([])
     render(<PluginsPage />)
     openMcpTab()
     await screen.findByTestId('mcp-empty')
 
-    // 新增走右上角菜单：按钮点了才出现两个选项
+    // 新增走右上角菜单：按钮点了才出现选项
     expect(screen.queryByTestId('mcp-add-stdio')).not.toBeInTheDocument()
     fireEvent.keyDown(screen.getByTestId('mcp-add'), { key: 'ArrowDown' })
     expect(screen.getByTestId('mcp-add-stdio')).toHaveTextContent('本地命令（stdio）')
     expect(screen.getByTestId('mcp-add-http')).toHaveTextContent('远程地址（HTTP）')
+    expect(screen.getByTestId('mcp-add-json')).toHaveTextContent('从 JSON 导入')
   })
 
-  it('＋新增（stdio）：以停用落盘、自动切到 MCP tab，行列表里出现新条目', async () => {
+  it('＋新增（stdio）：点菜单项直接开对话框；填好保存才落盘（停用）→ 列表出现新行', async () => {
     const api = installMockApi([])
     render(<PluginsPage />)
 
@@ -154,13 +155,121 @@ describe('插件页 · 两个 tab', () => {
     fireEvent.keyDown(screen.getByTestId('mcp-add'), { key: 'ArrowDown' })
     fireEvent.click(screen.getByTestId('mcp-add-stdio'))
 
+    // round 9：直接开对话框填配置——不再先往列表落一条空草稿
+    expect(api.state.servers).toEqual([])
+    expect(screen.getByTestId('mcp-add-command')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('mcp-add-name'), { target: { value: '回显测试' } })
+    fireEvent.change(screen.getByTestId('mcp-add-command'), { target: { value: 'node' } })
+    fireEvent.change(screen.getByTestId('mcp-add-args'), { target: { value: 'server.mjs' } })
+    fireEvent.click(screen.getByTestId('mcp-add-save'))
+
     await waitFor(() =>
       expect(api.state.servers).toEqual([
-        expect.objectContaining({ transport: 'stdio', enabled: false, command: '' })
+        expect.objectContaining({
+          name: '回显测试',
+          transport: 'stdio',
+          command: 'node',
+          args: ['server.mjs'],
+          enabled: false
+        })
       ])
     )
-    expect(await screen.findByTestId('mcp-server-0')).toBeInTheDocument()
-    expect(screen.getByTestId('mcp-server-0')).toHaveTextContent('stdio')
+    // 对话框关掉、行列表里出现新条目
+    await waitFor(() => expect(screen.queryByTestId('mcp-add-save')).not.toBeInTheDocument())
+    expect(await screen.findByTestId('mcp-server-0')).toHaveTextContent('回显测试')
+  })
+
+  it('＋新增：校验不过时保存禁用 + 行内给原因；取消什么都不发生', async () => {
+    const api = installMockApi([])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-empty')
+    fireEvent.keyDown(screen.getByTestId('mcp-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('mcp-add-http'))
+
+    expect(screen.getByTestId('mcp-add-save')).toBeDisabled()
+    expect(screen.getByTestId('mcp-add-problems')).toHaveTextContent('HTTP 服务需要填写地址')
+
+    fireEvent.change(screen.getByTestId('mcp-add-url'), { target: { value: 'ftp://x/mcp' } })
+    expect(screen.getByTestId('mcp-add-problems')).toHaveTextContent('HTTP 地址要是完整的')
+
+    fireEvent.change(screen.getByTestId('mcp-add-url'), {
+      target: { value: 'https://api.example/mcp' }
+    })
+    expect(screen.getByTestId('mcp-add-save')).toBeEnabled()
+
+    // HTTP 新增：Headers 键值行编辑器（填一行）
+    fireEvent.click(screen.getByTestId('mcp-add-headers-add'))
+    fireEvent.change(screen.getByTestId('mcp-add-headers-name-0'), {
+      target: { value: 'Authorization' }
+    })
+    fireEvent.change(screen.getByTestId('mcp-add-headers-value-0'), {
+      target: { value: 'Bearer T' }
+    })
+
+    // 取消：不落盘、关对话框
+    fireEvent.click(screen.getByTestId('mcp-add-cancel'))
+    await waitFor(() => expect(screen.queryByTestId('mcp-add-save')).not.toBeInTheDocument())
+    expect(api.state.servers).toEqual([])
+
+    // 再开一次：表单是新的（上一次填的没带去）
+    fireEvent.keyDown(screen.getByTestId('mcp-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('mcp-add-http'))
+    expect(screen.getByTestId('mcp-add-url')).toHaveValue('')
+    expect(screen.queryByTestId('mcp-add-headers-name-0')).not.toBeInTheDocument()
+  })
+
+  it('从 JSON 导入：整段 mcpServers 多条都进（停用 + headers 原样）；失败行内报错且保留输入', async () => {
+    const api = installMockApi([])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-empty')
+    fireEvent.keyDown(screen.getByTestId('mcp-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('mcp-add-json'))
+
+    // 坏 JSON：行内错误、输入保留（不清空）、不落盘
+    const textarea = screen.getByTestId('mcp-add-json-text')
+    fireEvent.change(textarea, { target: { value: '{oops' } })
+    fireEvent.click(screen.getByTestId('mcp-add-json-import'))
+    expect(await screen.findByTestId('mcp-add-json-error')).toHaveTextContent('不是合法的 JSON')
+    expect(textarea).toHaveValue('{oops')
+    expect(api.state.servers).toEqual([])
+
+    // 用户原话那种整段 JSON：http（带 headers）+ stdio 一起导入
+    fireEvent.change(textarea, {
+      target: {
+        value: JSON.stringify({
+          mcpServers: {
+            perfsight: {
+              type: 'http',
+              url: 'https://api.perfsight.qq.com/mcp',
+              headers: { Authorization: 'Bearer YOUR_API_KEY' }
+            },
+            echo: { command: 'node', args: ['echo.mjs'] }
+          }
+        })
+      }
+    })
+    fireEvent.click(screen.getByTestId('mcp-add-json-import'))
+
+    await waitFor(() => expect(api.state.servers).toHaveLength(2))
+    expect(api.state.servers[0]).toMatchObject({
+      id: 'perfsight',
+      transport: 'http',
+      headers: { Authorization: 'Bearer YOUR_API_KEY' },
+      enabled: false
+    })
+    expect(api.state.servers[1]).toMatchObject({
+      id: 'echo',
+      transport: 'stdio',
+      command: 'node',
+      enabled: false
+    })
+    // 对话框关掉、列表出现两条（顺序 = 导入顺序）
+    await waitFor(() => expect(screen.queryByTestId('mcp-add-json-text')).not.toBeInTheDocument())
+    expect(await screen.findByTestId('mcp-server-0')).toHaveTextContent('perfsight')
+    expect(screen.getByTestId('mcp-server-1')).toHaveTextContent('echo')
   })
 })
 
@@ -237,6 +346,59 @@ describe('插件页 · 行式列表（开关 / 编辑 / 测试 / 删除）', () 
     fireEvent.click(screen.getByTestId('mcp-edit-cancel'))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(api.state.servers[0].name).toBe('我的回显')
+  })
+
+  it('编辑对话框（http）：Headers 键值行编辑器——填一行保存落盘（round 9）', async () => {
+    const api = installMockApi([
+      serverConfig({
+        id: 'remote',
+        name: '远程',
+        transport: 'http',
+        url: 'http://127.0.0.1:9/mcp',
+        command: undefined,
+        args: undefined,
+        enabled: false
+      })
+    ])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    openEditor()
+    // stdio 的字段不出现；Headers 编辑器在
+    expect(screen.queryByTestId('mcp-server-0-command')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('mcp-server-0-headers-add'))
+    fireEvent.change(screen.getByTestId('mcp-server-0-headers-name-0'), {
+      target: { value: 'Authorization' }
+    })
+    fireEvent.change(screen.getByTestId('mcp-server-0-headers-value-0'), {
+      target: { value: 'Bearer T' }
+    })
+    fireEvent.click(screen.getByTestId('mcp-server-0-save'))
+
+    await waitFor(() => expect(api.state.servers[0].headers).toEqual({ Authorization: 'Bearer T' }))
+  })
+
+  it('编辑对话框（stdio）：环境变量编辑器复用同一组件；空行在保存时丢弃（round 9）', async () => {
+    const api = installMockApi([serverConfig({ env: { API_KEY: 'old' }, enabled: false })])
+    render(<PluginsPage />)
+    openMcpTab()
+    await screen.findByTestId('mcp-server-0')
+
+    openEditor()
+    // 已有的 env 预填成一行
+    expect(screen.getByTestId('mcp-server-0-env-name-0')).toHaveValue('API_KEY')
+    expect(screen.getByTestId('mcp-server-0-env-value-0')).toHaveValue('old')
+
+    // 加一行只填值（名字空着）→ 保存时应被丢弃
+    fireEvent.click(screen.getByTestId('mcp-server-0-env-add'))
+    fireEvent.change(screen.getByTestId('mcp-server-0-env-value-1'), {
+      target: { value: '丢弃' }
+    })
+    fireEvent.click(screen.getByTestId('mcp-server-0-save'))
+
+    await waitFor(() => expect(api.puts.length).toBeGreaterThan(0))
+    expect(api.state.servers[0].env).toEqual({ API_KEY: 'old' })
   })
 
   it('测试连接：行内出结果；打开对话框能看到工具清单 + 免审批开关', async () => {

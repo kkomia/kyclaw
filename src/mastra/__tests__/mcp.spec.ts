@@ -143,6 +143,44 @@ describe('mcp.ts：命名与分级', () => {
     ).toThrow(/完整/)
   })
 
+  it('serverDefinition：headers / env 透传；空表不传（round 9）', () => {
+    // stdio：env 原样交给子进程
+    const withEnv = serverDefinition(stdioConfig({ env: { API_KEY: 'secret' } }), 1000)
+    expect((withEnv as { env?: Record<string, string> }).env).toEqual({ API_KEY: 'secret' })
+    // 空表（或没配）不传这个字段
+    expect('env' in serverDefinition(stdioConfig({ env: {} }), 1000)).toBe(false)
+    expect('env' in serverDefinition(stdioConfig(), 1000)).toBe(false)
+
+    // http：headers 走 requestInit.headers
+    const withHeaders = serverDefinition(
+      stdioConfig({
+        transport: 'http',
+        command: undefined,
+        args: undefined,
+        url: 'https://api.example/mcp',
+        headers: { Authorization: 'Bearer token' }
+      }),
+      1000
+    )
+    expect(
+      (withHeaders as { requestInit?: { headers?: Record<string, string> } }).requestInit
+    ).toEqual({ headers: { Authorization: 'Bearer token' } })
+    // 空表不传 requestInit（避免空对象影响库的默认构造）
+    expect(
+      'requestInit' in
+        serverDefinition(
+          stdioConfig({
+            transport: 'http',
+            command: undefined,
+            args: undefined,
+            url: 'https://api.example/mcp',
+            headers: {}
+          }),
+          1000
+        )
+    ).toBe(false)
+  })
+
   it('collectMcpTools：停用的 server 不进工具表；启用并发现到的才进，gate 逐调用生效', () => {
     const toolsets = { echo: { echo: { id: 'echo_echo', description: '' } } }
     const gate = (tool: string, input: unknown): boolean =>

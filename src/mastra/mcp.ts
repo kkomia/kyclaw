@@ -90,9 +90,12 @@ export function serverDefinition(
   if (config.transport === 'stdio') {
     const command = (config.command ?? '').trim()
     if (command === '') throw new Error(`${config.name}：stdio 服务没有填写启动命令`)
+    // env（round 9）：用户配的环境变量原样交给子进程；空表不传（保持库的默认环境继承口径）
+    const env = config.env
     return {
       command,
       args: config.args ?? [],
+      ...(env === undefined || Object.keys(env).length === 0 ? {} : { env }),
       timeout: timeoutMs,
       // 子进程的 stderr 收进管道（默认会直接喷到应用日志里；出问题看 getServerStderr）
       stderr: 'pipe'
@@ -102,7 +105,17 @@ export function serverDefinition(
   const url = (config.url ?? '').trim()
   if (url === '') throw new Error(`${config.name}：HTTP 服务没有填写地址`)
   if (!isHttpUrl(url)) throw new Error(`${config.name}：${URL_PROBLEM}`)
-  return { url: new URL(url), timeout: timeoutMs, connectTimeout: timeoutMs }
+  // headers（round 9）：自定义请求头（如 Authorization）透传给 Streamable HTTP transport；
+  // 空表不传（避免空 requestInit 影响库的默认构造）
+  const headers = config.headers
+  return {
+    url: new URL(url),
+    ...(headers === undefined || Object.keys(headers).length === 0
+      ? {}
+      : { requestInit: { headers } }),
+    timeout: timeoutMs,
+    connectTimeout: timeoutMs
+  }
 }
 
 /** 工具调用的审批判定入口（agent 装配把它接到 guard.needsApproval 上） */

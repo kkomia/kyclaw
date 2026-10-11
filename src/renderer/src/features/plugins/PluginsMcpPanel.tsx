@@ -15,6 +15,8 @@ import {
   type McpToolInfo
 } from '@shared/mcp'
 import type { McpServerConfig } from '@shared/settings'
+import { McpKeyValueEditor } from './McpKeyValueEditor'
+import { recordToRows, rowsToRecord, type KeyValueRow } from './mcp-form'
 
 /**
  * 插件页「MCP」面板（R2 round 5；原设置页「工具与 MCP」改版迁入）：
@@ -22,17 +24,22 @@ import type { McpServerConfig } from '@shared/settings'
  *
  * 口径（round 5）：
  *   - 启停是**一个开关**（Switch，Kimi 图5 形态），不再做"启用/停用"两个 chip；
- *   - 新增走页面右上角「＋新增」（stdio/HTTP 菜单，照 ChatGPT「Add ∨」），本面板不再有底部常驻 chips；
+ *   - 新增走页面右上角「＋新增」菜单（round 9 起：点菜单项**直接开对话框**填配置，见 PluginsPage），
+ *     本面板只管列表与编辑；
  *   - 嵌套 ≤2 层（Step D）：页级容器（PluginsPage 给）> 行；编辑在**对话框**里做（字段 + 保存/删除 +
  *     测试工具清单），不再在行内叠三层面板；
- *   - 行为与 T12 一致：整表保存、以回吐为准、失败行内报错；新加的 server 一律停用落盘；
+ *   - 行为与 T12 一致：整表保存、以回吐为准、失败行内报错；新增一律停用落盘；
  *     测试连接真连一次；单工具「只读」= 勾了免审批（写类逐次询问）——落盘状态的一部分。
+ *   - round 9：编辑对话框补 Headers（http）/ 环境变量（stdio）键值编辑器（复用 McpKeyValueEditor）；
+ *     删掉标题下那句解释性小字（雷点 2.1/2.2：流程靠控件本身表达）。
  */
 interface Draft {
   name: string
   command: string
   argsText: string
   url: string
+  headers: KeyValueRow[]
+  env: KeyValueRow[]
 }
 
 function draftOf(server: McpServerConfig): Draft {
@@ -40,7 +47,9 @@ function draftOf(server: McpServerConfig): Draft {
     name: server.name,
     command: server.command ?? '',
     argsText: argsToText(server.args ?? []),
-    url: server.url ?? ''
+    url: server.url ?? '',
+    headers: recordToRows(server.headers),
+    env: recordToRows(server.env)
   }
 }
 
@@ -52,9 +61,10 @@ function withDraft(server: McpServerConfig, draft: Draft): McpServerConfig {
   return {
     ...server,
     name: draft.name,
+    // 只写当前 transport 的字段；另一类的字段保持原值（空行由 rowsToRecord 丢弃）
     ...(server.transport === 'stdio'
-      ? { command: draft.command, args: textToArgs(draft.argsText) }
-      : { url: draft.url })
+      ? { command: draft.command, args: textToArgs(draft.argsText), env: rowsToRecord(draft.env) }
+      : { url: draft.url, headers: rowsToRecord(draft.headers) })
   }
 }
 
@@ -214,6 +224,8 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
 
   const editingServer = servers.find((server) => server.id === editing) ?? null
   const editingIndex = editingServer === null ? -1 : servers.indexOf(editingServer)
+  const editingDraft =
+    editingServer === null ? null : (drafts[editingServer.id] ?? draftOf(editingServer))
 
   return (
     <div data-testid="mcp-settings" className="flex flex-col gap-3">
@@ -315,7 +327,6 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
           if (!open) setEditing(null)
         }}
         title="编辑 MCP 服务"
-        description="改完先「保存」，再「测试连接」；只读的工具走免审批。"
         size="md"
         footer={
           <>
@@ -345,13 +356,13 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
           </>
         }
       >
-        {editingServer === null ? null : (
+        {editingServer === null || editingDraft === null ? null : (
           <div className="flex flex-col gap-4">
             <label className="flex flex-col gap-1">
               <span className="text-b2 text-ink-secondary">名称</span>
               <Input
                 data-testid={`mcp-server-${editingIndex}-name`}
-                value={drafts[editingServer.id]?.name ?? editingServer.name}
+                value={editingDraft.name}
                 onChange={(event) => patchDraft(editingServer, { name: event.target.value })}
               />
             </label>
@@ -362,7 +373,7 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
                   <span className="text-b2 text-ink-secondary">命令</span>
                   <Input
                     data-testid={`mcp-server-${editingIndex}-command`}
-                    value={drafts[editingServer.id]?.command ?? editingServer.command ?? ''}
+                    value={editingDraft.command}
                     placeholder="如 npx"
                     onChange={(event) => patchDraft(editingServer, { command: event.target.value })}
                   />
@@ -371,26 +382,48 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
                   <span className="text-b2 text-ink-secondary">参数</span>
                   <Input
                     data-testid={`mcp-server-${editingIndex}-args`}
-                    value={
-                      drafts[editingServer.id]?.argsText ?? argsToText(editingServer.args ?? [])
-                    }
+                    value={editingDraft.argsText}
                     placeholder="如 -y @modelcontextprotocol/server-filesystem D:/notes"
                     onChange={(event) =>
                       patchDraft(editingServer, { argsText: event.target.value })
                     }
                   />
                 </label>
+                <div className="flex flex-col gap-1">
+                  <span className="text-b2 text-ink-secondary">环境变量</span>
+                  <McpKeyValueEditor
+                    rows={editingDraft.env}
+                    onChange={(env) => patchDraft(editingServer, { env })}
+                    testIdPrefix={`mcp-server-${editingIndex}-env`}
+                    namePlaceholder="环境变量名"
+                    valuePlaceholder="环境变量值"
+                    addLabel="添加环境变量"
+                  />
+                </div>
               </>
             ) : (
-              <label className="flex flex-col gap-1">
-                <span className="text-b2 text-ink-secondary">地址</span>
-                <Input
-                  data-testid={`mcp-server-${editingIndex}-url`}
-                  value={drafts[editingServer.id]?.url ?? editingServer.url ?? ''}
-                  placeholder="http://127.0.0.1:8000/mcp"
-                  onChange={(event) => patchDraft(editingServer, { url: event.target.value })}
-                />
-              </label>
+              <>
+                <label className="flex flex-col gap-1">
+                  <span className="text-b2 text-ink-secondary">地址</span>
+                  <Input
+                    data-testid={`mcp-server-${editingIndex}-url`}
+                    value={editingDraft.url}
+                    placeholder="http://127.0.0.1:8000/mcp"
+                    onChange={(event) => patchDraft(editingServer, { url: event.target.value })}
+                  />
+                </label>
+                <div className="flex flex-col gap-1">
+                  <span className="text-b2 text-ink-secondary">Headers</span>
+                  <McpKeyValueEditor
+                    rows={editingDraft.headers}
+                    onChange={(headers) => patchDraft(editingServer, { headers })}
+                    testIdPrefix={`mcp-server-${editingIndex}-headers`}
+                    namePlaceholder="Header 名称"
+                    valuePlaceholder="Header 值"
+                    addLabel="添加 Header"
+                  />
+                </div>
+              </>
             )}
 
             {tools[editingServer.id] === undefined ? null : (

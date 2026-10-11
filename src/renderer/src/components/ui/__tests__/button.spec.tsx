@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { Button } from '../button'
@@ -107,36 +107,122 @@ describe('Button', () => {
     ['sm', 'size-(--icon-size-sm)'],
     ['md', 'size-(--icon-size-md)'],
     ['lg', 'size-(--icon-size-lg)']
-  ] as const)('loading 时 spinner 直径跟随档位（%s → %s；§4.7 的 16/18/20）', (size, sizeClass) => {
-    render(
-      <Button size={size} loading>
-        提交
-      </Button>
-    )
+  ] as const)(
+    'loading 延迟 200ms 才出 spinner（%s → %s 直径；§4.7 的 16/18/20）；功能立即禁用 + aria-busy',
+    (size, sizeClass) => {
+      vi.useFakeTimers()
+      try {
+        render(
+          <Button size={size} loading>
+            提交
+          </Button>
+        )
 
-    // 可访问名只有文字：spinner 是装饰性的，状态由 aria-busy 表达
-    const button = screen.getByRole('button', { name: '提交' })
-    expect(button).toBeDisabled()
-    expect(button).toHaveAttribute('aria-busy', 'true')
-    expect(button).not.toHaveClass('hover:bg-(--button-primary-bg-hover)')
-    expect(within(button).queryByRole('status')).toBeNull()
+        // 可访问名只有文字：spinner 是装饰性的，状态由 aria-busy 表达
+        const button = screen.getByRole('button', { name: '提交' })
+        // 功能上从第一刻起就禁用（防重复提交）；视觉上先不动（防闪）
+        expect(button).toBeDisabled()
+        expect(button).toHaveAttribute('aria-busy', 'true')
+        expect(button.querySelector('.animate-spin')).toBeNull()
 
-    const spinner = button.querySelector('.animate-spin')
-    expect(spinner).not.toBeNull()
-    expect(spinner).toHaveClass(sizeClass)
+        act(() => {
+          vi.advanceTimersByTime(200)
+        })
+
+        expect(within(button).queryByRole('status')).toBeNull()
+        expect(button).not.toHaveClass('hover:bg-(--button-primary-bg-hover)')
+
+        const spinner = button.querySelector('.animate-spin')
+        expect(spinner).not.toBeNull()
+        expect(spinner).toHaveClass(sizeClass)
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+  )
+
+  it('快操作不闪：loading 没到 200ms 就结束 → 视觉完全没动过（无 spinner、无灰底）', () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(<Button>保存</Button>)
+      const button = screen.getByRole('button', { name: '保存' })
+      const baseline = button.className
+
+      rerender(<Button loading>保存</Button>)
+      // 窗口期内：功能已禁用，但 className 一动不动
+      expect(button).toBeDisabled()
+      expect(button.className).toBe(baseline)
+      expect(button.querySelector('.animate-spin')).toBeNull()
+
+      act(() => {
+        vi.advanceTimersByTime(150)
+      })
+      expect(button.querySelector('.animate-spin')).toBeNull()
+      expect(button.className).toBe(baseline)
+
+      // 操作结束（还没到显示点）→ 之后也不会有迟到的 spinner
+      rerender(<Button>保存</Button>)
+      act(() => {
+        vi.advanceTimersByTime(1000)
+      })
+      expect(button.className).toBe(baseline)
+      expect(button).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('loading 时用 spinner 顶掉 icon，但保留文字', () => {
-    const { rerender } = render(<Button icon={<svg data-testid="icon" />}>发送</Button>)
-    expect(screen.getByTestId('icon')).toBeInTheDocument()
+  it('慢操作：spinner 一旦显示就至少保持 300ms 再退（避免收尾再闪一下）', () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(<Button>保存</Button>)
+      const button = screen.getByRole('button', { name: '保存' })
+      const hasSpinner = (): boolean => button.querySelector('.animate-spin') !== null
 
-    rerender(
-      <Button icon={<svg data-testid="icon" />} loading>
-        发送
-      </Button>
-    )
-    expect(screen.queryByTestId('icon')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument()
+      rerender(<Button loading>保存</Button>)
+      act(() => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(hasSpinner()).toBe(true)
+
+      // 慢操作结束（loading 恢复）→ 保底 300ms 以内不撤
+      rerender(<Button>保存</Button>)
+      act(() => {
+        vi.advanceTimersByTime(299)
+      })
+      expect(hasSpinner()).toBe(true)
+
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+      expect(hasSpinner()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('loading 时用 spinner 顶掉 icon，但保留文字（延迟窗口过后）', () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(<Button icon={<svg data-testid="icon" />}>发送</Button>)
+      expect(screen.getByTestId('icon')).toBeInTheDocument()
+
+      rerender(
+        <Button icon={<svg data-testid="icon" />} loading>
+          发送
+        </Button>
+      )
+      // 窗口期内图标还在（视觉不动）
+      expect(screen.getByTestId('icon')).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(screen.queryByTestId('icon')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '发送' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('type 默认 button（免误触发表单提交），可显式覆盖', () => {
