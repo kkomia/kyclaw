@@ -26,6 +26,19 @@ describe('classifyToolCall：内置文件工具', () => {
     expect(classifyToolCall('move')).toBe('dangerous')
   })
 
+  it('round28 能力类：bash / fetch 按写类；git 只读三件套 read、add / commit 写类', () => {
+    expect(classifyToolCall('bash')).toBe('write')
+    expect(classifyToolCall('fetch')).toBe('write')
+    expect(classifyToolCall('git_status')).toBe('read')
+    expect(classifyToolCall('git_diff')).toBe('read')
+    expect(classifyToolCall('git_log')).toBe('read')
+    expect(classifyToolCall('git_add')).toBe('write')
+    expect(classifyToolCall('git_commit')).toBe('write')
+    // 大小写与空白同样不敏感
+    expect(classifyToolCall(' Bash ')).toBe('write')
+    expect(classifyToolCall('Git_Commit')).toBe('write')
+  })
+
   it('名字大小写与空白不影响分级', () => {
     expect(classifyToolCall('Read')).toBe('read')
     expect(classifyToolCall(' EDIT ')).toBe('write')
@@ -38,10 +51,13 @@ describe('classifyToolCall：MCP / 外部工具', () => {
     expect(classifyToolCall('mcp__filesystem__read')).toBe('read')
     expect(classifyToolCall('mcp__shell__delete')).toBe('dangerous')
     expect(classifyToolCall('mcp__echo__echo')).toBe('write')
+    // round28 表项也按末段进"名字证据"（`mcp__x__bash` 仍只是 write 档）
+    expect(classifyToolCall('mcp__x__bash')).toBe('write')
+    expect(classifyToolCall('mcp__x__git_add')).toBe('write')
   })
 
   it('未知工具名 → write（默认询问；不是"未知就当只读放行"）', () => {
-    expect(classifyToolCall('bash')).toBe('write')
+    expect(classifyToolCall('unknown_tool')).toBe('write')
     expect(classifyToolCall('')).toBe('write')
     expect(classifyToolCall('某些中文工具')).toBe('write')
   })
@@ -52,7 +68,16 @@ describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判
     for (const name of ['read', 'glob', 'grep', 'write', 'edit', ' WRITE ']) {
       expect(isWorkspaceFileTool(name), name).toBe(true)
     }
-    for (const name of ['mcp__a__write', 'mcp__a__edit', 'delete', 'move', 'bash', '']) {
+    for (const name of [
+      'mcp__a__write',
+      'mcp__a__edit',
+      'delete',
+      'move',
+      'bash',
+      'fetch',
+      'git_add',
+      ''
+    ]) {
       expect(isWorkspaceFileTool(name), name).toBe(false)
     }
   })

@@ -20,9 +20,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { startAgentServer, type AgentServerHandle } from '../../../main/agent/service'
 import { KYCLAW_AGENT_ID } from '../../agents/kyclaw'
+import { gitBashPath } from '../bash'
 import { threadMemoryBody } from '../../../shared/threads'
 import type { Project } from '../../../shared/projects'
 import type { Workspace } from '../../../shared/settings'
+
+const hasGitBash = gitBashPath() !== null
 
 const USAGE = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -103,14 +106,15 @@ function approvedReply(
   toolCallId: string,
   input: unknown,
   approvalId: unknown,
-  approved: boolean
+  approved: boolean,
+  toolName = 'write'
 ): Record<string, unknown> {
   return {
     id: messageId,
     role: 'assistant',
     parts: [
       {
-        type: `tool-write`,
+        type: `tool-${toolName}`,
         toolCallId,
         state: 'approval-responded',
         input,
@@ -219,6 +223,43 @@ describe('审批接线：写类工具 → approval-requested → 批准执行', 
       '好，处理完了。'
     ])
   }, 30_000)
+
+  it.skipIf(!hasGitBash)(
+    'bash：默认弹审批；批准回灌后真跑 Git Bash、输出回给模型',
+    async () => {
+      scripts.length = 0
+      scripts.push(() => toolCallScript('call-bash', 'bash', { command: 'echo approved-bash-1' }))
+      scripts.push(() => textScript('跑完了。'))
+      const user = { id: 'u-bash', role: 'user', parts: [{ type: 'text', text: '跑个命令' }] }
+
+      const first = sseParts(await chat([user], 'thread-bash'))
+      const approval = first.find((part) => part.type === 'tool-approval-request')
+      expect(approval?.toolCallId).toBe('call-bash')
+      expect(first.some((part) => part.type === 'tool-output-available')).toBe(false)
+
+      const messageId = first.find((part) => part.type === 'start')?.messageId
+      const assistant = approvedReply(
+        messageId,
+        'call-bash',
+        { command: 'echo approved-bash-1' },
+        approval?.approvalId,
+        true,
+        'bash'
+      )
+      const second = sseParts(await chat([user, assistant], 'thread-bash'))
+
+      const output = second.find(
+        (part) => part.type === 'tool-output-available' && part.toolCallId === 'call-bash'
+      )
+      expect(output).toBeDefined()
+      expect(String(output?.output)).toContain('approved-bash-1')
+      expect(String(output?.output)).toContain('[退出码 0]')
+      expect(second.filter((part) => part.type === 'text-delta').map((part) => part.delta)).toEqual(
+        ['跑完了。']
+      )
+    },
+    60_000
+  )
 })
 
 describe('审批接线：不该弹的都不弹', () => {

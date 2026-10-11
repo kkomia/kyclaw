@@ -13,7 +13,18 @@
  * fs 可注入（测试用延迟/故障模拟），默认实现就是 node:fs——真实行为由各工具自己的用例钉。
  */
 import { globSync } from 'node:fs'
-import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename as fsRename,
+  rm,
+  rmdir,
+  stat,
+  unlink,
+  writeFile
+} from 'node:fs/promises'
 import type { PermissionRule, Workspace } from '../../shared/settings'
 import { isAllowedByRules } from '../../shared/permissions'
 import { isWorkspaceFileTool, type ToolClass } from '../../main/permission/classify'
@@ -46,6 +57,13 @@ export interface ToolFs {
   readdir(path: string): Promise<readonly DirEntry[]>
   /** 以 cwd 为基准的 glob；结果可能是相对 cwd 的路径，也可能是绝对路径（调用方两者都收） */
   glob(pattern: string, cwd: string): Promise<readonly string[]>
+  /**
+   * 删除：文件 unlink；目录 recursive=false 只删空目录（非空抛错，调用方翻成人话）、
+   * recursive=true 整树删。目标不存在时抛错（调用方先 stat 过，这里不做静默 no-op）。
+   */
+  remove(path: string, options: { recursive: boolean }): Promise<void>
+  /** 重命名/移动（同卷语义：目标已存在的行为由调用方负责，先删还是拒绝由工具决定） */
+  rename(from: string, to: string): Promise<void>
 }
 
 export const nodeToolFs: ToolFs = {
@@ -66,7 +84,17 @@ export const nodeToolFs: ToolFs = {
     await mkdir(path, { recursive: true })
   },
   readdir: (path) => readdir(path, { withFileTypes: true }),
-  glob: async (pattern, cwd) => globSync(pattern, { cwd })
+  glob: async (pattern, cwd) => globSync(pattern, { cwd }),
+  async remove(path, options) {
+    const stats = await stat(path)
+    if (!stats.isDirectory()) {
+      await unlink(path)
+      return
+    }
+    if (options.recursive) await rm(path, { recursive: true })
+    else await rmdir(path)
+  },
+  rename: (from, to) => fsRename(from, to)
 }
 
 /** 拿不到线程 id 时的会话键（单测、无记忆运行都落这一桶） */
@@ -183,10 +211,17 @@ export function resolveTarget(
   return { ok: false, reason: `不在任何授权工作区内（${firstReason}）` }
 }
 
-/** 工具里用这个：解析不到直接抛（错误进工具卡，模型看到原因） */
+/** 越界时的可行动指引（round28 模块 1）：别让模型反复换写法死循环，告诉它下一步 */
+export const OUT_OF_WORKSPACE_HINT =
+  '；可以用 bash 工具在任意路径下操作（会请求用户审批），或在「设置 → 工作区」里添加该文件夹'
+
+/** 工具里用这个：解析不到直接抛（错误进工具卡，模型看到原因与下一步） */
 export function toolTarget(ctx: ToolContext, target: string, session?: string): ResolvedTarget {
   const resolved = resolveTarget(ctx, target, session)
-  if (!resolved.ok) throw new Error(`无法使用路径「${target}」：${resolved.reason}`)
+  if (!resolved.ok) {
+    const hint = resolved.reason.includes('工作区之外') ? OUT_OF_WORKSPACE_HINT : ''
+    throw new Error(`无法使用路径「${target}」：${resolved.reason}${hint}`)
+  }
   return { abs: resolved.abs, workspace: resolved.workspace }
 }
 
@@ -215,10 +250,17 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  * 审批判定（spec §5.2）：
  *   - 只读（classify）→ 放行；
  *   - 危险（delete/move）→ 永远问（Full access 与"永久允许"规则都不放行）；
- *   - 写类 → 按工具身份分两档：
+ *   - 写类 → 按工具身份分三档：
  *       · **内置工作区文件工具**（write/edit）：执行路径必过引擎。目标明确落在 mode='full' 的
  *         工作区、或 (工具, 工作区) 命中一条"永久允许"规则才放行；目标解析不到时**不问**
  *         —— 我们的工具马上会 fail closed 拒掉，弹一张"批了也不会执行"的卡只会误导用户。
+ *       · **能力类工具**（round28：bash / fetch / git_add / git_commit）：按它们的"显式目标"
+ *         字段（bash=cwd、fetch=save_to、git=path）解析；没给目标时执行层的根 = 会话根，
+ *         审批层拿不到会话 —— 只有授权列表**恰好一条**时能绑定。规则命中放行；
+ *         **full 只对 git 生效**（git 是工作区受限工具），bash/fetch 能碰工作区之外的东西
+ *         （bash 能 cd 出去、fetch 能请求任意地址），Full access 管不了它们，只有显式规则能豁免。
+ *         目标给了解析不出去：bash 的执行层**允许**在工作区外跑（这正是它的用途）→ 问；
+ *         fetch/git 的目标过引擎、执行层会 fail closed → 不问（批了也不执行，弹卡是噪音）。
  *       · **其它写类**（MCP 外部工具、未知工具）：执行不走我们的引擎，无法证明"只碰这个工作区"
  *         （入参里的 path 可能根本不是文件路径）。**一律问**；唯一的放行口子是这个目标能解析进
  *         某个工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，用户对这张卡
@@ -231,6 +273,10 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  * 像是不用管的"。v1 曾用"有 path 但解析不出去 → 不问"，对内置工具安全，对 MCP 工具是静默
  * 绕过审批的漏洞，已按此分叉修掉。
  *
+ * 能力类工具（bash/fetch/git_*）按**整名**识别：`mcp__shell__bash` 不会被认成内置 bash，
+ * 走的是外部工具那一档（一律问，全名规则才放行）。"问一次后可永久允许"的出口对它们是
+ * (工具, 工作区) 规则；多工作区且没给显式目标时绑不上工作区，只能每次问（保守方向）。
+ *
  * T18（会话根）与这一层的关系：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)`
  * 不传 session）。执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts
  * 的 sessionRoots）——两者是"超集 / 子集"关系：任何能落盘的写都落在审批看过的那条工作区条目上
@@ -241,6 +287,9 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
   const toolClass = ctx.classify(tool, input)
   if (toolClass === 'read') return false
   if (toolClass === 'dangerous') return true
+
+  const capability = capabilityOf(tool)
+  if (capability !== null) return capabilityNeedsApproval(ctx, capability, tool, input)
 
   const target = inputPath(input)
   if (target === null) return true
@@ -256,6 +305,57 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
   if (!resolved.ok) return false
   if (resolved.workspace.mode === 'full') return false
   return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
+}
+
+/** 能力类工具（按整名；MCP 名一律不算） */
+type Capability = 'shell' | 'network' | 'git'
+
+function capabilityOf(tool: string): Capability | null {
+  switch (tool.trim().toLowerCase()) {
+    case 'bash':
+      return 'shell'
+    case 'fetch':
+      return 'network'
+    case 'git_add':
+    case 'git_commit':
+      return 'git'
+    default:
+      return null
+  }
+}
+
+/** 每种能力的"显式目标"入参名（bash 的 cwd / fetch 的 save_to / git 的 path） */
+function capabilityTarget(capability: Capability, input: unknown): string | null {
+  if (typeof input !== 'object' || input === null) return null
+  const key = capability === 'shell' ? 'cwd' : capability === 'network' ? 'save_to' : 'path'
+  const value = (input as Record<string, unknown>)[key]
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+function capabilityNeedsApproval(
+  ctx: ToolContext,
+  capability: Capability,
+  tool: string,
+  input: unknown
+): boolean {
+  const target = capabilityTarget(capability, input)
+  if (target !== null) {
+    const resolved = resolveTarget(ctx, target)
+    if (resolved.ok) {
+      if (capability === 'git' && resolved.workspace.mode === 'full') return false
+      return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
+    }
+    // 目标解析不出去：bash 的执行层允许在工作区外跑（带审批的主通道）→ 必须问；
+    // fetch/git 的目标过引擎，执行层会 fail closed —— 不问（弹"批了也不执行"的卡没意义）
+    return capability === 'shell'
+  }
+
+  // 没给显式目标：执行层的根 = 会话根，审批层拿不到会话 —— 授权列表恰好一条时可绑定
+  const roots = workspaceRoots(ctx)
+  if (roots.length !== 1) return true
+  const workspace = roots[0]
+  if (capability === 'git' && workspace.mode === 'full') return false
+  return !isAllowedByRules(ctx.permissionRules(), tool, workspace.path)
 }
 
 function inputPath(input: unknown): string | null {

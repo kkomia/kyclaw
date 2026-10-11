@@ -3,10 +3,15 @@ import {
   Brain,
   ChevronRight,
   FileText,
+  FolderInput,
+  GitBranch,
+  Globe,
   Pencil,
   PenLine,
   Search,
   Server,
+  Terminal,
+  Trash2,
   Wrench
 } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
@@ -26,7 +31,8 @@ import type { ToolCardPart } from './tool-part'
 
 /**
  * 工具行（round 6 改造，对照《对话UI-工具链与显示口径 v0.1》§1.4/§1.5/§1.6）：
- * 行 = 图标 + 工具名 + 行详情（path/pattern）+ 状态签 + hover 才露的 chevron；
+ * 行 = 图标 + 工具名 + 行详情（path/pattern；round28 补了 bash 的命令与 fetch 的 URL）+
+ * 状态签 + hover 才露的 chevron；
  * 展开体 = 入参 + 结果（走 TraceFold 的 grid-rows 折叠，不做条件渲染硬切）。
  * 24px 行高、hover 只变字色（无底色）、行级耗时不印。
  *
@@ -66,9 +72,41 @@ function ToolIcon({
       return <Search aria-hidden="true" className={className} />
     case 'updateWorkingMemory':
       return <Brain aria-hidden="true" className={className} />
+    // round28 模块 1 的新工具（没有专名也在 default 兜底里照常显示，这里只是给套更像的图标）
+    case 'bash':
+      return <Terminal aria-hidden="true" className={className} />
+    case 'delete':
+      return <Trash2 aria-hidden="true" className={className} />
+    case 'move':
+      return <FolderInput aria-hidden="true" className={className} />
+    case 'fetch':
+      return <Globe aria-hidden="true" className={className} />
+    case 'git_status':
+    case 'git_diff':
+    case 'git_log':
+    case 'git_add':
+    case 'git_commit':
+      return <GitBranch aria-hidden="true" className={className} />
     default:
       return <Wrench aria-hidden="true" className={className} />
   }
+}
+
+/**
+ * 行详情兜底（round28）：tool-part.toolDetailOf 只认 path/pattern/query，
+ * bash（command）与 fetch（url）在这两样上取不到值 —— 在组件侧补一条只读兜底，
+ * 不改 tool-part 的公共口径。删除/移动有 path，走既有路径。
+ */
+function extraDetailOf(toolName: string, input: unknown): string | null {
+  if (typeof input !== 'object' || input === null) return null
+  const record = input as { command?: unknown; url?: unknown }
+  if (toolName === 'bash' && typeof record.command === 'string' && record.command !== '') {
+    return record.command
+  }
+  if (toolName === 'fetch' && typeof record.url === 'string' && record.url !== '') {
+    return record.url
+  }
+  return null
 }
 
 function rowClass(interactive: boolean): string {
@@ -96,7 +134,7 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
   // 单步默认折着（文档 §1.3：单步没有自动展开档）；点过听用户的
   const open = override ?? false
   const tone = STATE_TONES[part.state] ?? 'pending'
-  const detail = toolDetailOf(part.input)
+  const detail = toolDetailOf(part.input) ?? extraDetailOf(part.toolName, part.input)
   const live = running && toolStateRunning(part.state)
   const stateLabel =
     part.state === 'input-available' && !running

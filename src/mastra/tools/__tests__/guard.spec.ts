@@ -16,6 +16,7 @@ import {
   resolveTarget,
   scanRoot,
   sessionKey,
+  toolTarget,
   ToolState
 } from '../guard'
 import { createBed, writeText, type TestBed } from './helpers'
@@ -204,6 +205,120 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
 
     expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
     expect(needsApproval(bed.ctx, 'mcp__b__write', { path: 'a.txt', content: 'x' })).toBe(true)
+  })
+})
+
+describe('needsApproval：能力类工具（round28：bash / fetch / git）', () => {
+  it('bash：默认问；命中(工具×工作区)规则放行；full 不豁免（shell 不止碰这个文件夹）', () => {
+    expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
+
+    bed.roots[0].mode = 'full'
+    expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
+    bed.roots[0].mode = 'ask'
+
+    bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(false)
+  })
+
+  it('bash：cwd 指到工作区 → 该工作区的规则可放行；cwd 在工作区之外 → 必问（无工作区可绑定）', () => {
+    const second = createBed()
+    try {
+      bed.roots.push({ path: second.root, mode: 'ask' })
+      bed.rules.push({ tool: 'bash', workspace: second.root, mode: 'allow' })
+
+      // cwd 明确落在 second → 命中规则
+      expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: second.root })).toBe(false)
+      // cwd 落在 first（没有规则）→ 问
+      expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.root })).toBe(true)
+      // cwd 在工作区之外：bash 允许在任意路径跑（带审批的主通道）→ 必问，规则绑不上
+      expect(needsApproval(bed.ctx, 'bash', { command: 'ls', cwd: bed.outside })).toBe(true)
+    } finally {
+      bed.roots.pop()
+      second.dispose()
+    }
+  })
+
+  it('bash：多个工作区且没给 cwd → 绑不上工作区，问', () => {
+    const second = createBed()
+    try {
+      bed.roots.push({ path: second.root, mode: 'ask' })
+      bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
+      expect(needsApproval(bed.ctx, 'bash', { command: 'echo hi' })).toBe(true)
+    } finally {
+      bed.roots.pop()
+      second.dispose()
+    }
+  })
+
+  it('fetch：默认问；规则放行；full 不豁免；save_to 越界不问（执行 fail closed）', () => {
+    expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(true)
+
+    bed.roots[0].mode = 'full'
+    expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(true)
+    bed.roots[0].mode = 'ask'
+
+    bed.rules.push({ tool: 'fetch', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'fetch', { url: 'https://example.com' })).toBe(false)
+    expect(
+      needsApproval(bed.ctx, 'fetch', { url: 'https://example.com', save_to: 'out.bin' })
+    ).toBe(false)
+    // save_to 解析不出去：执行层会 fail closed —— 与内置文件工具同口径，不问
+    expect(
+      needsApproval(bed.ctx, 'fetch', {
+        url: 'https://example.com',
+        save_to: join(bed.outside, 'x.bin')
+      })
+    ).toBe(false)
+  })
+
+  it('git：只读三件套放行；add/commit 默认问、full 放行、规则放行；path 越界不问', () => {
+    expect(needsApproval(bed.ctx, 'git_status', {})).toBe(false)
+    expect(needsApproval(bed.ctx, 'git_diff', {})).toBe(false)
+    expect(needsApproval(bed.ctx, 'git_log', {})).toBe(false)
+
+    expect(needsApproval(bed.ctx, 'git_add', { paths: ['.'] })).toBe(true)
+    expect(needsApproval(bed.ctx, 'git_commit', { message: 'x' })).toBe(true)
+    // path 明确落在工作区里也一样（git 是工作区受限工具，但没 full/规则仍要问）
+    expect(needsApproval(bed.ctx, 'git_add', { paths: ['.'], path: bed.root })).toBe(true)
+
+    bed.roots[0].mode = 'full'
+    expect(needsApproval(bed.ctx, 'git_add', { paths: ['.'] })).toBe(false)
+    expect(needsApproval(bed.ctx, 'git_commit', { message: 'x', path: bed.root })).toBe(false)
+    bed.roots[0].mode = 'ask'
+
+    bed.rules.push({ tool: 'git_commit', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'git_commit', { message: 'x' })).toBe(false)
+
+    // path 解析不出去：执行层 fail closed → 不问
+    expect(
+      needsApproval(bed.ctx, 'git_commit', { message: 'x', path: join(bed.outside, 'repo') })
+    ).toBe(false)
+  })
+
+  it('MCP 名不冒充能力类：mcp__shell__bash 按外部工具档（只认 path + 全名规则）', () => {
+    expect(needsApproval(bed.ctx, 'mcp__shell__bash', { command: 'echo hi' })).toBe(true)
+    // 外部工具的 cwd 不是我们的 cwd 语义：解析不了工作区就一律问（不赌）
+    expect(needsApproval(bed.ctx, 'mcp__shell__bash', { cwd: bed.root })).toBe(true)
+
+    // 全名规则 + 目标能解析（path）→ 放行（与 T12 的外部工具口径一致）
+    bed.rules.push({ tool: 'mcp__shell__bash', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'mcp__shell__bash', { path: bed.root })).toBe(false)
+    // 内置 bash 的规则不影响 MCP 名
+    bed.rules.length = 0
+    bed.rules.push({ tool: 'bash', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'mcp__shell__bash', { path: bed.root })).toBe(true)
+  })
+})
+
+describe('toolTarget：越界报错带可行动指引（round28）', () => {
+  it('工作区之外：提示用 bash 或在设置里添加工作区', () => {
+    expect(() => toolTarget(bed.ctx, join(bed.outside, 'x.txt'))).toThrow(/bash 工具/)
+    expect(() => toolTarget(bed.ctx, '../outside/x.txt')).toThrow(/「设置 → 工作区」/)
+  })
+
+  it('没有工作区：仍指向设置（文案本身就是行动指令）', () => {
+    bed.roots.length = 0
+    expect(() => toolTarget(bed.ctx, 'a.txt')).toThrow(/授权工作区/)
   })
 })
 

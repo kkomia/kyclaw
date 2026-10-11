@@ -1,8 +1,11 @@
 /**
  * kyclaw agent 的装配（身份 + 模型 + 工具集 + 记忆）。
  *
- * 工具集（T11）：五个文件工具（read/write/edit/glob/grep），全部经 guard 装配——
- * 路径只认授权工作区（T10 的 realpath 引擎）、写类按 spec §5.2 挂审批（requireApproval）。
+ * 工具集（T11 + round28 模块 1）：文件工具五件套（read/write/edit/glob/grep）+
+ * bash / fetch / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit），
+ * 全部经 guard 装配——文件工具路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
+ * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问、(工具×工作区) 规则可豁免；
+ * bash/fetch 不吃 Full access，git 吃）；写类按 spec §5.2 挂审批（requireApproval）。
  * 工作区列表与"永久允许"规则（T13）都用**取值函数**传（现读设置）：用户中途加工作区、
  * 批准一条永久规则，下一轮工具就能用，不必重启服务。
  *
@@ -33,9 +36,14 @@ import type { Project } from '../../shared/projects'
 import type { PermissionRule, McpServerConfig, Workspace } from '../../shared/settings'
 import { sessionRoots } from '../../main/projects'
 import { createToolContext, needsApproval } from '../tools/guard'
+import { createBashTool } from '../tools/bash'
+import { createDeleteTool } from '../tools/delete'
 import { createEditTool } from '../tools/edit'
+import { createFetchTool } from '../tools/fetch'
+import { createGitTools } from '../tools/git'
 import { createGlobTool } from '../tools/glob'
 import { createGrepTool } from '../tools/grep'
+import { createMoveTool } from '../tools/move'
 import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
 import { createMcpClassify, type McpToolGate } from '../mcp'
@@ -72,8 +80,12 @@ export interface KyclawAgentTools {
 export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑上的个人 AI agent。
 - 默认用用户的语言回答（中文提问就用中文），先给结论，再给必要的细节。
 - 你只能看到用户在这个对话里给你的内容；不确定就直说，不要编造事实或执行结果。
-- 文件工具（read / write / edit / glob / grep）只能在当前会话的工作区里使用（用户在侧栏给它指定的项目文件夹，或是默认工作区）。越界会直接失败：如实告诉用户，让他换个路径、把文件夹建/开成项目，或到「设置 → 工作区」里指定默认工作区，不要尝试绕过。
-- 改文件前先用 read 看原文；write / edit 是写操作，执行前会弹给用户审批（也可能被拒绝）——被拒绝就说清原因、换个做法，不要反复重试同一处改动。`
+- 文件工具（read / write / edit / glob / grep / delete / move）与 git 工具只作用于当前会话的工作区（项目文件夹或默认工作区）。越界会直接失败：如实告诉用户失败原因，并给出下一步（改用 bash、把文件夹加进「设置 → 工作区」），不要反复换写法重试。
+- bash 工具执行 shell 命令：环境是 Git Bash，写 bash 语法（不是 PowerShell）。默认在会话工作区里运行，可用 cwd 指向别处；适合跑测试、装依赖、编译、命令行操作。命令会占住调用直到结束，长驻服务请重定向输出到文件并用 & 放到后台，不要前台常驻。
+- 联网用 fetch 工具（GET/POST、自定义请求头）；要保存响应就带 save_to（落进工作区）。
+- git 用 git_status / git_diff / git_log 查看（只读）；git_add / git_commit 提交改动；不做 push，需要推远端时请用户自己操作。
+- 写类操作（write / edit / delete / move / bash / fetch / git_add / git_commit）执行前都会弹给用户审批，也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
+- 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
 export async function createKyclawAgent(
   resolveModel: ModelResolver,
@@ -113,7 +125,13 @@ export async function createKyclawAgent(
     write: await createWriteTool(ctx),
     edit: await createEditTool(ctx),
     glob: await createGlobTool(ctx),
-    grep: await createGrepTool(ctx)
+    grep: await createGrepTool(ctx),
+    // round28 模块 1：命令 / 删除移动 / 网络 / git（审批档位见 main/permission/classify 与 guard.needsApproval）
+    bash: await createBashTool(ctx),
+    fetch: await createFetchTool(ctx),
+    delete: await createDeleteTool(ctx),
+    move: await createMoveTool(ctx),
+    ...(await createGitTools(ctx))
   }
 
   // 内置与 MCP 共用同一个 gate：requireApproval 的判定是同一份 needsApproval

@@ -4,6 +4,9 @@
  * 分类**只看工具名**（T11 定名、T12 的 MCP 名字是 `mcp__<server>__<tool>`），按 `__` 取最后一段
  * （`toolBasename`）再查表：`mcp__shell__delete` 仍会落到"危险类"这一保守档。
  *
+ * round28 模块 1 新增：`bash` / `fetch` 按**写类**（默认问；它们能碰工作区之外的东西，read 档太松）；
+ * `git_status` / `git_diff` / `git_log` 只读（git 自己不写索引）；`git_add` / `git_commit` 写类。
+ *
  * 这个函数不认识设置（纯名字 → 三档），所以它对 MCP 名字的分级只是**名字证据**：
  * 末段是 read/glob/grep 也照样回 'read'。MCP 工具"未标只读默认按写类询问"的口径由
  * `mastra/mcp.ts` 的 `createMcpClassify` 叠加（标了只读才 read；未标按写，末段是 delete/move 保留危险档）。
@@ -26,7 +29,18 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   write: 'write',
   edit: 'write',
   delete: 'dangerous',
-  move: 'dangerous'
+  move: 'dangerous',
+  // round28 模块 1：命令 / 网络 / git 四档。bash 与 fetch 都按**写类**（默认问）——
+  // bash 能碰机器上的任何东西、fetch 能把数据发到任何地址，read 档意味着静默放行，
+  // 对这两件能力都太松（保守优先，报告里有取舍说明）。
+  bash: 'write',
+  fetch: 'write',
+  // git 只读三件套是真只读（git 自己不写索引）；add / commit 动仓库，按写类
+  git_status: 'read',
+  git_diff: 'read',
+  git_log: 'read',
+  git_add: 'write',
+  git_commit: 'write'
 }
 
 /** 没在表里的工具（含 MCP 里未标只读的那些）按写类处理：默认问一次，不静默放行 */
