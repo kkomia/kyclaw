@@ -1,18 +1,22 @@
 /**
  * 审批 part 的读取与记忆（T13）。
  *
- * 三个纯函数 + 一份模块级内存：
+ * 四个纯函数 + 一份模块级内存：
  *   1. `approvalRequestOf` / `pendingApprovals` / `hasPendingApproval`：从 AI SDK 的 tool part
  *      里认出"正在等审批"的调用（`state='approval-requested'` + `approval.id`）；
  *   2. `resolveApprovalWorkspace`：按渲染端那份设置判这次调用落在哪个工作区 —— 只用于
  *      审批记忆的粒度（工具 + 工作区）与"永久允许"写哪条规则，**不是安全边界**（边界在
- *      服务端 guard：路径只认引擎归一后的 abs）；
- *   3. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = **对话（thread）+ 工具 + 工作区**。
+ *      服务端 guard：路径只认引擎归一后的 abs）。round28：目标字段按工具身份取
+ *      （bash=cwd、fetch=save_to、其余=path，与服务端 guard 的能力类口径一致）；能力类工具
+ *      没给显式目标时只有授权列表恰好一条才绑得上（多工作区判不出 → 不给记忆入口，保守方向）；
+ *      危险档（delete/move，永远问、不吃规则）由 `isDangerousTool` 拦下，不给记忆入口；
+ *   3. `approvalDetailOf`：审批卡上"这次在批什么"的正文（bash 命令 / fetch URL / move 目标）；
+ *   4. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = **对话（thread）+ 工具 + 工作区**。
  *
  * 工作区判定与工具名归一都走 shared/permissions 的同一把尺，和服务端的规则匹配保持一致。
  */
 import type { Workspace } from '@shared/settings'
-import { normalizeToolName, normalizeWorkspacePath } from '@shared/permissions'
+import { normalizeToolName, normalizeWorkspacePath, toolBasename } from '@shared/permissions'
 
 /** 一次待审批的工具调用（从 tool part 里抽出来的最小信息） */
 export interface ApprovalRequest {
@@ -21,7 +25,10 @@ export interface ApprovalRequest {
   toolCallId: string
   toolName: string
   input: unknown
-  /** 入参里的目标路径（write/edit 等有 path 的工具）；没有就是 null */
+  /**
+   * 入参里的目标（展示用）：path 优先，没有就依次看 cwd（bash）、save_to（fetch）；
+   * 都没有就是 null。工作区判定另走 resolveApprovalWorkspace（按工具身份取字段）。
+   */
   path: string | null
 }
 
@@ -39,11 +46,86 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** 入参里的目标路径（模型给的是原始串：可能是绝对路径，也可能是相对工作区的相对路径） */
-export function approvalPath(input: unknown): string | null {
+/**
+ * 入参里的"目标"（卡片展示 + 审批记忆判定共用；模型给的是原始串，可能是绝对路径也可能是
+ * 相对工作区的相对路径）：
+ *   - 没给工具名（展示兜底）：`path → cwd → save_to` 依次取第一个非空字符串；
+ *   - 给了工具名：按服务端 guard.needsApproval 的能力类口径**只认该工具的字段** ——
+ *     bash=cwd、fetch=save_to、其余（含 git / 内置文件工具 / MCP）=path。字段拿不准就不猜：
+ *     猜出来的目标会造出一条服务端永不生效的"永久允许"规则（round28）。
+ */
+export function approvalPath(input: unknown, toolName?: string): string | null {
   if (!isRecord(input)) return null
-  const path = input.path
-  return typeof path === 'string' && path !== '' ? path : null
+  const capability = toolName === undefined ? null : capabilityToolOf(toolName)
+  const keys: readonly string[] =
+    toolName === undefined
+      ? ['path', 'cwd', 'save_to']
+      : capability === 'shell'
+        ? ['cwd']
+        : capability === 'network'
+          ? ['save_to']
+          : ['path']
+  for (const key of keys) {
+    const value = input[key]
+    if (typeof value === 'string' && value !== '') return value
+  }
+  return null
+}
+
+/**
+ * 能力类工具（整名；镜像 `src/mastra/tools/guard.ts` 的 capabilityOf —— 渲染端不引主进程
+ * 代码，两处口径必须一起改）：bash 的显式目标是 cwd、fetch 是 save_to、git_add/commit 是 path。
+ */
+export type ApprovalCapability = 'shell' | 'network' | 'git'
+
+export function capabilityToolOf(toolName: string): ApprovalCapability | null {
+  switch (normalizeToolName(toolName)) {
+    case 'bash':
+      return 'shell'
+    case 'fetch':
+      return 'network'
+    case 'git_add':
+    case 'git_commit':
+      return 'git'
+    default:
+      return null
+  }
+}
+
+/**
+ * 危险档（delete/move；`mcp__x__delete` 这类末段命中的也算 —— 与 main/permission/classify
+ * 同一口径）：服务端**永远问**、Full access 与"永久允许"规则都不生效。审批卡据此隐藏
+ * 「本会话允许 / 永久允许」入口 —— 点了只会写一条永不生效的规则。
+ */
+const DANGEROUS_BASENAMES = new Set(['delete', 'move'])
+
+export function isDangerousTool(toolName: string): boolean {
+  return DANGEROUS_BASENAMES.has(toolBasename(toolName))
+}
+
+/** 审批卡上"这次在批什么"的正文（diff 之外的多行信息） */
+export interface ApprovalDetail {
+  kind: 'command' | 'url' | 'move-to'
+  text: string
+}
+
+/**
+ * 认得出就回展示正文：bash → 要执行的命令；fetch → 请求的 URL；move → 目标位置。
+ * 只认整名（`mcp__x__bash` 不算我们的 bash）；认不出回 null（卡片退回"只看 path"）。
+ */
+export function approvalDetailOf(toolName: string, input: unknown): ApprovalDetail | null {
+  if (!isRecord(input)) return null
+  const name = normalizeToolName(toolName)
+  if (name === 'bash' && typeof input.command === 'string' && input.command !== '') {
+    return { kind: 'command', text: input.command }
+  }
+  if (name === 'fetch' && typeof input.url === 'string' && input.url !== '') {
+    return { kind: 'url', text: input.url }
+  }
+  if (name === 'move' && typeof input.to === 'string' && input.to !== '') {
+    return { kind: 'move-to', text: input.to }
+  }
+  return null
 }
 
 /** part → 待审批请求；不是"正在等审批"就回 null（已回应/执行完成都不算） */
@@ -172,17 +254,26 @@ export function canResumeAfterApproval(
 
 /**
  * 这次调用落在哪个工作区（渲染端口径，用于审批记忆粒度）：
- *   - 绝对路径（含盘符 / 根路径 / UNC）：按前缀找那个包含它的工作区；找不到回 null；
- *   - 相对路径：**第一个工作区** —— 与服务的 resolveTarget 同一顺序（相对路径在任何
- *     工作区根下都能解出，服务端也是按列表顺序取第一个）；
- *   - 判不出（没有 path / 没有工作区）回 null。判不出时不给"永久允许"入口（保守）。
+ *   - 目标字段按工具身份取（见 approvalPath）；绝对路径按前缀找包含它的工作区，相对路径
+ *     归**第一个工作区** —— 与服务的 resolveTarget 同一顺序（相对路径在任何工作区根下都能解出，
+ *     服务端也是按列表顺序取第一个）；
+ *   - 能力类工具（bash/fetch/git_add/commit）没给显式目标：执行层的根 = 会话根，审批层拿不到
+ *     会话 —— 只有授权列表**恰好一条**才绑得上（与服务端 guard.capabilityNeedsApproval 同口径）；
+ *     多工作区判不出 → null（不给记忆入口，保守方向）；
+ *   - 判不出（没有目标 / 没有工作区）回 null。
  */
 export function resolveApprovalWorkspace(
   input: unknown,
-  workspaces: readonly Workspace[]
+  workspaces: readonly Workspace[],
+  toolName?: string
 ): string | null {
-  const path = approvalPath(input)
-  if (path === null || workspaces.length === 0) return null
+  const path = approvalPath(input, toolName)
+  if (path === null) {
+    const capability = toolName === undefined ? null : capabilityToolOf(toolName)
+    if (capability !== null && workspaces.length === 1) return workspaces[0].path
+    return null
+  }
+  if (workspaces.length === 0) return null
 
   const relative = isRelativePath(path)
   if (relative) return workspaces[0].path
@@ -208,8 +299,8 @@ function isRelativePath(path: string): boolean {
  * "会话"取 UI 里那个词义（侧栏的会话 = 一个聊天线程，threadId）：用户在某个对话里说
  * "本会话允许"，就只对那个对话里的同类调用不再打扰；换个对话照旧问。
  * 只活在当前渲染进程里（重启应用即清空），不落盘、不过桥 —— 这是"这次先放过它"的语义。
- * 工作区必须明确（审批卡只在判得出工作区时才给这两个记忆入口）：判不出工作区的放行范围
- * 说不清，那种调用只给"允许一次 / 拒绝"。
+ * 记忆入口只在工作区明确时才给（放行范围说不清的不给）：判不出工作区的、以及危险档
+ * （delete/move，服务端永远问、不吃记忆）都只给"允许一次 / 拒绝"。
  */
 const sessionAllowed = new Set<string>()
 

@@ -12,6 +12,7 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import {
   allowForSession,
   isAllowedForSession,
+  isDangerousTool,
   pendingApprovals,
   resolveApprovalWorkspace
 } from './approval'
@@ -339,25 +340,28 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
    *     settings.permissions.rules（服务端下一轮就不再问）；落盘失败要露出来（见 permissionError）；
    *   - 决策本身经 addToolApprovalResponse 回灌；`sendAutomaticallyWhen`（thread-chats 里挂的
    *     `canResumeAfterApproval`，approval.ts）会在所有审批都有回应后自动把消息发回服务端执行。
-   * 两个记忆入口都要求工作区明确（审批卡在判不出工作区时不显示它们，这里再守一道）。
+   * 两个记忆入口都要求工作区明确、且不是危险档（delete/move 服务端永远问、不吃记忆；审批卡
+   * 不显示这两个入口，这里再守一道 —— 防任何调用方绕出"点了却不生效"的规则）。
    */
   const decideApproval = useCallback(
     (request: ApprovalRequest, decision: ApprovalDecision) => {
-      const workspace = resolveApprovalWorkspace(request.input, workspaces)
-      if (workspace !== null && (decision === 'session' || decision === 'forever')) {
-        allowForSession(threadId, request.toolName, workspace)
-      }
-      if (workspace !== null && decision === 'forever') {
-        useSettingsStore
-          .getState()
-          .allowToolForever(request.toolName, workspace)
-          .then(
-            () => setPermissionError(null),
-            (cause: unknown) => {
-              console.error('[kyclaw] 「永久允许」没能写进设置', cause)
-              setPermissionError('「永久允许」没能保存：这次先记在当前对话里，重启后要重新确认')
-            }
-          )
+      const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
+      if (workspace !== null && !isDangerousTool(request.toolName)) {
+        if (decision === 'session' || decision === 'forever') {
+          allowForSession(threadId, request.toolName, workspace)
+        }
+        if (decision === 'forever') {
+          useSettingsStore
+            .getState()
+            .allowToolForever(request.toolName, workspace)
+            .then(
+              () => setPermissionError(null),
+              (cause: unknown) => {
+                console.error('[kyclaw] 「永久允许」没能写进设置', cause)
+                setPermissionError('「永久允许」没能保存：这次先记在当前对话里，重启后要重新确认')
+              }
+            )
+        }
       }
       void addToolApprovalResponse({
         id: request.approvalId,
@@ -375,7 +379,7 @@ function ActiveChat({ chat, threadId }: ActiveChatProps): React.JSX.Element {
   /** 会话记忆命中的待批调用直接放行（"本会话允许"之后不再弹卡） */
   useEffect(() => {
     for (const request of pendingApprovals(messages[messages.length - 1])) {
-      const workspace = resolveApprovalWorkspace(request.input, workspaces)
+      const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
       if (workspace !== null && isAllowedForSession(threadId, request.toolName, workspace)) {
         void addToolApprovalResponse({ id: request.approvalId, approved: true })
       }

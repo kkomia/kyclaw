@@ -5,19 +5,27 @@ import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { formatToolName } from '@shared/mcp'
 import type { Workspace } from '@shared/settings'
-import { resolveApprovalWorkspace, type ApprovalRequest } from './approval'
+import {
+  approvalDetailOf,
+  isDangerousTool,
+  resolveApprovalWorkspace,
+  type ApprovalRequest
+} from './approval'
 import { approvalDiff, type DiffLine } from './approval-diff'
 
 /**
- * 审批卡（T13）：写类工具在 ask 工作区里弹出，给用户四个决策。
+ * 审批卡（T13）：写类工具在 ask 工作区里弹出，给用户决策。
  *
- * 卡的内容 = 工具名 + 目标路径 + 行级 diff + 四个按钮：
+ * 卡的内容 = 工具名 + 目标（path；bash 加命令、fetch 加 URL、move 加目标位置）+ 行级 diff +
+ * 按钮：
  *   - 允许一次：只放行这一次调用；
  *   - 本会话允许：这次会话里同工具 + 同工作区不再打扰（内存，不落盘）；
  *   - 永久允许：写成设置里的规则（settings.permissions.rules），重启后仍生效；
  *   - 拒绝：这次调用不执行（模型会拿到拒绝继续）。
- * 目标工作区判不出来时（只存在于没有 path 的外部工具）不给"本会话/永久允许"入口 ——
- * 那种情况下放行范围说不清，保守地只给"允许一次 / 拒绝"。
+ * 「本会话/永久允许」两个记忆入口只在**工作区判得出、且不是危险档**时才给：
+ *   - 工作区判不出（round28 起 bash 按 cwd、fetch 按 save_to 判；都没有且授权列表不止一条
+ *     就判不出）→ 放行范围说不清，只给"允许一次 / 拒绝"；
+ *   - 危险档（delete/move，服务端永远问、不吃规则）→ 隐藏记忆入口：点了只会写一条永不生效的规则。
  *
  * 展示形状与工具卡同一族（圆角面板 + 一条 hairline），diff 区用底色分层、不再套第二层框线（雷点 7）。
  * 行级 diff 的 +/- 用 --Colors-DiffAdd / --Colors-DiffDelete（经 semantic 的 --diff-add / --diff-delete）。
@@ -56,7 +64,10 @@ export function ApprovalCard({
   workspaces,
   onDecide
 }: ApprovalCardProps): React.JSX.Element {
-  const workspace = resolveApprovalWorkspace(request.input, workspaces)
+  const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
+  const detail = approvalDetailOf(request.toolName, request.input)
+  // 记忆入口的两个条件：工作区判得出 + 不是危险档（危险档服务端永远问、规则不生效）
+  const rememberable = workspace !== null && !isDangerousTool(request.toolName)
   const diff = approvalDiff(request.toolName, request.input)
   // 与 ToolCard 一致（round 14）：MCP 工具显示「服务名 · 工具名」，认不出回落原样
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
@@ -92,6 +103,16 @@ export function ApprovalCard({
         </Tooltip>
       )}
 
+      {detail === null ? null : (
+        <pre
+          data-testid="approval-detail"
+          data-kind={detail.kind}
+          className="max-h-40 overflow-auto rounded-control bg-surface px-2 py-1 font-mono text-c1 whitespace-pre-wrap text-ink-secondary [overflow-wrap:anywhere]"
+        >
+          {detail.kind === 'move-to' ? `→ ${detail.text}` : detail.text}
+        </pre>
+      )}
+
       {diff === null || diff.length === 0 ? null : (
         <div
           data-testid="approval-diff"
@@ -120,7 +141,7 @@ export function ApprovalCard({
         <Button size="sm" data-testid="approval-allow-once" onClick={() => onDecide('once')}>
           允许一次
         </Button>
-        {workspace === null ? null : (
+        {rememberable ? (
           <Button
             size="sm"
             variant="ghost"
@@ -129,8 +150,8 @@ export function ApprovalCard({
           >
             本会话允许
           </Button>
-        )}
-        {workspace === null ? null : (
+        ) : null}
+        {rememberable ? (
           <Button
             size="sm"
             variant="ghost"
@@ -139,7 +160,7 @@ export function ApprovalCard({
           >
             永久允许
           </Button>
-        )}
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
