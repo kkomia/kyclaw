@@ -180,6 +180,11 @@ describe('模型组 · 新增弹窗', () => {
 
     expect(screen.getByTestId('model-empty')).toHaveTextContent('点右上角「新增」')
     expect(screen.getByTestId('model-add')).toBeInTheDocument()
+    // round 48（用户口径）：动作在组标题行、**卡外**的右端 —— 不塞进圆角卡里
+    expect(screen.getByTestId('settings-group-model')).toContainElement(
+      screen.getByTestId('model-add')
+    )
+    expect(screen.getByTestId('model-add').closest('.rounded-panel')).toBeNull()
     expect(screen.queryByTestId('provider-presets')).not.toBeInTheDocument()
     for (const preset of ['deepseek', 'moonshot', 'openai', 'anthropic']) {
       expect(screen.queryByTestId(`add-preset-${preset}`), preset).not.toBeInTheDocument()

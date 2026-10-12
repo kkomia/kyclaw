@@ -8,6 +8,7 @@ import { probedKeyOf } from '@shared/models'
 import { withDefaultProvider, type ProviderConfig, type ProviderKeyState } from '@shared/providers'
 import { ModelAddDialog } from './ModelAddDialog'
 import { ProviderRow, type ProviderDraft } from './ModelProviderRow'
+import { SettingsGroup } from './SettingsGroup'
 
 /**
  * 设置页「模型」组（T8；round 48 换成"折叠列表 + 新增弹窗"的形态）。
@@ -21,10 +22,12 @@ import { ProviderRow, type ProviderDraft } from './ModelProviderRow'
  *     （元数据 + 一条真带图的 chat，见 main/model-probe.ts）把结论写进 settings.probedModels；
  *     这一页不提供"支持看图"的手动声明，全应用（composer 的收/拒、模型菜单的标记）都按探测结论走。
  *
- * 形态（round 48，用户两条口径）：一屏只列**最基本信息**（名字 / 上下文 / 能力图标 / 默认），
- * 点行才展开编辑；新增不再把渠道铺在页面上（那排 chips 又长又不美观），改成右上角一个「新增」
- * 开弹窗、渠道进下拉（见 ModelAddDialog）。半截配置（缺模型名 / 缺 Base URL / 缺密钥）行内给具体提示——
- * 文案与模型解析处是同一句（shared/providers.providerConfigProblems），不静默回落 mock。
+ * 形态（round 48，用户口径）：一屏只列**最基本信息**（名字 / 上下文 / 能力图标 / 默认），点行才
+ * 展开编辑；新增不再把渠道铺在页面上（那排 chips 又长又不美观），改成**组标题行右端的「新增」**
+ * 开弹窗、渠道进下拉（见 ModelAddDialog）。这一组自己就是 SettingsGroup（action 槽）——按钮在
+ * **圆角卡外面**，与插件页的「新增」同一套模式，别塞回卡里。半截配置（缺模型名 / 缺 Base URL /
+ * 缺密钥）行内给具体提示——文案与模型解析处是同一句（shared/providers.providerConfigProblems），
+ * 不静默回落 mock。
  */
 type Pending = 'saving' | 'testing'
 
@@ -203,50 +206,56 @@ export function ModelSettings(): React.JSX.Element {
   }, [])
 
   return (
-    <div data-testid="model-settings" className="flex flex-col gap-4">
-      <div className="flex items-center justify-end">
+    <SettingsGroup
+      title="模型"
+      testId="settings-group-model"
+      // round 48（用户口径）：动作在组标题行、**圆角卡外面**的右端 —— 与插件页「新增」同一套模式
+      action={
         <Button size="sm" data-testid="model-add" icon={<Plus />} onClick={() => setAddOpen(true)}>
           新增
         </Button>
+      }
+    >
+      <div data-testid="model-settings" className="flex flex-col gap-4">
+        {providers.length === 0 ? (
+          <p data-testid="model-empty" className="text-b2 text-ink-secondary">
+            还没有模型通道：点右上角「新增」加一个。
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {providers.map((provider) => {
+              const draft = drafts[provider.id] ?? draftOf(provider)
+              return (
+                <ProviderRow
+                  key={provider.id}
+                  provider={provider}
+                  open={expanded[provider.id] === true}
+                  onToggle={() => toggle(provider.id)}
+                  draft={draft}
+                  onDraftChange={(patch) => patchDraft(provider, patch)}
+                  keyState={keyStates[provider.id]}
+                  probed={probedModels[probedKeyOf(provider.id, provider.model)]}
+                  pending={pending[provider.id]}
+                  result={results[provider.id]}
+                  error={errors[provider.id]}
+                  onSave={() => void save(provider)}
+                  onTest={() => void test(provider)}
+                  onSetDefault={() => void setDefault(provider.id)}
+                  onRemove={() => void remove(provider.id)}
+                />
+              )
+            })}
+          </div>
+        )}
+
+        {pageError ? (
+          <p data-testid="model-page-error" className="text-c1 text-danger">
+            {pageError}
+          </p>
+        ) : null}
+
+        <ModelAddDialog open={addOpen} onOpenChange={setAddOpen} onAdded={handleAdded} />
       </div>
-      {providers.length === 0 ? (
-        <p data-testid="model-empty" className="text-b2 text-ink-secondary">
-          还没有模型通道：点右上角「新增」加一个。
-        </p>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {providers.map((provider) => {
-            const draft = drafts[provider.id] ?? draftOf(provider)
-            return (
-              <ProviderRow
-                key={provider.id}
-                provider={provider}
-                open={expanded[provider.id] === true}
-                onToggle={() => toggle(provider.id)}
-                draft={draft}
-                onDraftChange={(patch) => patchDraft(provider, patch)}
-                keyState={keyStates[provider.id]}
-                probed={probedModels[probedKeyOf(provider.id, provider.model)]}
-                pending={pending[provider.id]}
-                result={results[provider.id]}
-                error={errors[provider.id]}
-                onSave={() => void save(provider)}
-                onTest={() => void test(provider)}
-                onSetDefault={() => void setDefault(provider.id)}
-                onRemove={() => void remove(provider.id)}
-              />
-            )
-          })}
-        </div>
-      )}
-
-      {pageError ? (
-        <p data-testid="model-page-error" className="text-c1 text-danger">
-          {pageError}
-        </p>
-      ) : null}
-
-      <ModelAddDialog open={addOpen} onOpenChange={setAddOpen} onAdded={handleAdded} />
-    </div>
+    </SettingsGroup>
   )
 }

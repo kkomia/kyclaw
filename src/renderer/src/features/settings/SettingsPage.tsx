@@ -4,13 +4,13 @@ import { MemoryPanel } from '@renderer/features/memory/MemoryPage'
 import { UsagePanel } from '@renderer/features/usage/UsagePage'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
-import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
+import { SettingsGroup } from './SettingsGroup'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from './sections'
@@ -23,6 +23,9 @@ import { findSettingsSection, settingsSectionFromPath, SETTINGS_SECTIONS } from 
  *
  * 三选/三档的取值直接来自 shared/settings 的 schema（options 顺序就是显示顺序），
  * 免得 UI 里再抄一份字面量、跟落盘校验漂开。
+ *
+ * round 48：卡片组抽到 ./SettingsGroup（多了 action 槽，动作在标题行、卡外右端）；「模型」组
+ * 自己渲染那个组（它的「新增」就在组标题行，见 ModelSettings）。
  */
 const THEME_LABELS: Record<ThemeMode, string> = {
   system: '跟随系统',
@@ -34,24 +37,6 @@ const FONT_LABELS: Record<FontTier, string> = {
   small: '小',
   default: '默认',
   large: '大'
-}
-
-/** 栏目卡片组：组用底色分层（不描边），组内控件自己带一条 hairline —— 避免近距多层框线 */
-function SettingsGroup({
-  title,
-  testId,
-  children
-}: {
-  title: string
-  testId: string
-  children: ReactNode
-}): React.JSX.Element {
-  return (
-    <section data-testid={testId} className="flex flex-col gap-3">
-      <h2 className="text-b2 text-ink-secondary">{title}</h2>
-      <div className="rounded-panel bg-secondary p-4">{children}</div>
-    </section>
-  )
 }
 
 /** 一行选项：左边标签，右边一组 chip（选中用 Fills-F2 填充，与导航项同一套"当前项"口径） */
@@ -132,9 +117,8 @@ export function SettingsPage(): React.JSX.Element {
           ) : null}
           {meta.id === 'model' ? (
             <>
-              <SettingsGroup title="模型" testId="settings-group-model">
-                <ModelSettings />
-              </SettingsGroup>
+              {/* round 48：「模型」组的内容自己就是 SettingsGroup（标题行右端带「新增」，见 ModelSettings） */}
+              <ModelSettings />
               {/* round 32：思考翻译（思维链是英文时先翻再回显；开关 + 模式 + 翻译服务） */}
               <SettingsGroup title="思考翻译" testId="settings-group-reasoning-translate">
                 <ReasoningTranslateSettings />
