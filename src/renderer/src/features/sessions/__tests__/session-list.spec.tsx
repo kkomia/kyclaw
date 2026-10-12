@@ -5,14 +5,14 @@ import { SessionList, type SessionListEntry } from '../SessionList'
 
 /**
  * 会话列表（T9 接真实数据后的展示层）：
- * 分组 今天/更早、选中 Fills-F2、hover Fills-F1（spec §6.2 / 附录 A）。
+ * **平铺**（round 61 去掉"今天 / 更早"与置顶分组——分组头由外层给，见 TasksGroup / ProjectList）、
+ * 选中 Fills-F2、hover Fills-F1（spec §6.2 / 附录 A）。
  *
  * round 24：行尾 ⋯ 的菜单、重命名/删除对话框与动作接线都搬进了 **SessionActionsMenu**
  * （对话页顶部栏共用；菜单/对话框/动作的用例见 session-actions-menu.spec）——
- * 本文件只测列表自己的形态：分组、选中、整行 hover、置顶标识/分组、草稿规则、完成点、截断。
+ * 本文件只测列表自己的形态：平铺顺序、选中、整行 hover、置顶标识、草稿规则、完成点、截断。
  */
 const TODAY = new Date().toISOString()
-const EARLIER = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString()
 
 function entry(id: string, title: string | null, updatedAt = TODAY): SessionListEntry {
   return { id, title, updatedAt }
@@ -47,21 +47,26 @@ function renderList(
   return { onSelect }
 }
 
-describe('会话列表：分组与选中', () => {
-  it('按更新时间分组（今天/更早），缺标题显示"新会话"', () => {
-    renderList([entry('t1', '今天的会话', TODAY), entry('t2', null, EARLIER)])
+describe('会话列表：平铺与选中', () => {
+  it('平铺：一条一行、顺序即传入顺序，缺标题显示"新会话"', () => {
+    renderList([entry('t1', '今天的会话'), entry('t2', null)])
 
-    expect(screen.getByTestId('session-group-today')).toHaveTextContent('今天')
-    expect(screen.getByTestId('session-group-earlier')).toHaveTextContent('更早')
+    const list = screen.getByTestId('session-list')
+    expect(list).toContainElement(screen.getByTestId('session-row-t1'))
+    expect(list).toContainElement(screen.getByTestId('session-row-t2'))
+    expect(
+      screen.getAllByTestId(/^session-row-/).map((row) => row.getAttribute('data-testid'))
+    ).toEqual(['session-row-t1', 'session-row-t2'])
     expect(screen.getByTestId('session-item-t1')).toHaveTextContent('今天的会话')
     expect(screen.getByTestId('session-item-t2')).toHaveTextContent('新会话')
   })
 
-  it('没有"更早"的会话时不渲染那一组', () => {
-    renderList([entry('t1', '今天的会话', TODAY)])
+  it('round 61：不再自带分组头（今天/更早/置顶分组都不渲染——分组头由外层给）', () => {
+    renderList([entry('t1', '甲'), entry('t2', '乙')], { pinnedIds: new Set(['t2']) })
 
-    expect(screen.getByTestId('session-group-today')).toBeInTheDocument()
-    expect(screen.queryByTestId('session-group-earlier')).not.toBeInTheDocument()
+    for (const stale of ['session-group-today', 'session-group-earlier', 'session-group-pinned']) {
+      expect(screen.queryByTestId(stale)).not.toBeInTheDocument()
+    }
   })
 
   it('选中项 Fills-F2 + aria-current；未选中项只有 hover 档（round 20：底挂整行）', () => {
@@ -133,14 +138,10 @@ describe('会话列表：分组与选中', () => {
     expect(screen.getByTestId('session-done-t2')).toBeInTheDocument()
   })
 
-  it('round 20：置顶的行带图钉标识、单独提到时间分组之上（无分组标题）', () => {
-    renderList([entry('t1', '甲'), entry('t2', '乙', EARLIER)], { pinnedIds: new Set(['t2']) })
+  it('round 20：置顶的行带图钉标识（"排最前"由 composeSidebarSessions 给，列表不再自己分组）', () => {
+    renderList([entry('t1', '甲'), entry('t2', '乙')], { pinnedIds: new Set(['t2']) })
 
     expect(screen.getByTestId('session-pin-mark-t2')).toBeInTheDocument()
-    const pinnedGroup = screen.getByTestId('session-group-pinned')
-    expect(pinnedGroup).toContainElement(screen.getByTestId('session-row-t2'))
-    expect(screen.getByTestId('session-group-today')).toContainElement(
-      screen.getByTestId('session-row-t1')
-    )
+    expect(screen.queryByTestId('session-pin-mark-t1')).not.toBeInTheDocument()
   })
 })

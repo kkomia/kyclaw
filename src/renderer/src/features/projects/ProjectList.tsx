@@ -10,7 +10,7 @@ import { Menu, type MenuEntry } from '../../components/ui/menu'
 import { Tooltip } from '../../components/ui/tooltip'
 import { navItemClass } from '../../components/shell/nav-item'
 import { SessionList, type SessionListEntry } from '../sessions/SessionList'
-import { readCollapsedProjects, writeCollapsedProjects } from './project-fold'
+import { readCollapsedProjects, toggleCollapsed } from './project-fold'
 
 /**
  * 侧栏「项目」区（T18；形态参考 Kimi 的 项目 ∨ + 悬浮 ＋）：
@@ -81,12 +81,10 @@ export function ProjectList({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => readCollapsedProjects())
   const pinnedProjects = pinnedProjectIds ?? new Set<string>()
 
+  // round 61：「任务」组与项目行共用同一份折叠存储——toggleCollapsed 先读后写，
+  // 两边的收起项不会互相抹掉（各自的旧快照不能当底）
   const toggleProject = (projectId: string): void => {
-    const next = new Set(collapsed)
-    if (next.has(projectId)) next.delete(projectId)
-    else next.add(projectId)
-    writeCollapsedProjects(next)
-    setCollapsed(next)
+    setCollapsed(toggleCollapsed(projectId))
   }
 
   const submitRename = (): void => {
@@ -263,7 +261,6 @@ export function ProjectList({
                       sessions={sessions}
                       activeId={activeSessionId}
                       notices={notices}
-                      showGroups={false}
                       emptyHint={false}
                       listClassName="min-h-0 overflow-visible pt-0"
                       onSelect={onSelectSession}

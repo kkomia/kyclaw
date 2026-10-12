@@ -3,7 +3,7 @@ import type { ThreadSummary } from '@shared/threads'
 import { composeSidebarSessions } from '../sidebar-sessions'
 
 /**
- * 侧栏会话分组（T18）：项目名下 vs 平铺区（今天/更早）。
+ * 侧栏会话分组（T18）：项目名下 vs 无项目（round 61 起去侧栏的「任务」组）。
  * 口径：映射指向已删项目 = 没有项目；草稿排在自己那个桶的最前；排序沿用服务端。
  */
 const threads: ThreadSummary[] = [
@@ -38,7 +38,7 @@ describe('composeSidebarSessions', () => {
     expect(result.byProject['p1']?.[0]?.draft).toBe(true)
   })
 
-  it('草稿没有项目：进平铺区最前（与 T9 的行为一致）', () => {
+  it('草稿没有项目：进「任务」组最前（与 T9 的行为一致）', () => {
     const result = composeSidebarSessions({
       threads,
       activeId: 'draft-1',
@@ -68,7 +68,7 @@ describe('composeSidebarSessions', () => {
     expect(withoutTitle.ungrouped[0]?.title).toBeNull()
   })
 
-  it('映射指向已删项目：当"没有项目"处理（回平铺区）', () => {
+  it('映射指向已删项目：当"没有项目"处理（回「任务」组）', () => {
     const result = composeSidebarSessions({
       threads,
       activeId: null,
@@ -126,7 +126,7 @@ describe('composeSidebarSessions', () => {
       pinnedIds: new Set(['t3', 't2'])
     })
 
-    // 平铺区：t3 置顶排最前（t1 在它后面）
+    // 「任务」组（ungrouped）：t3 置顶排最前（t1 在它后面）
     expect(result.ungrouped.map((entry) => entry.id)).toEqual(['t3', 't1'])
     // 项目桶：t2 置顶，但草稿永远更靠前（T18 的口径不动）
     expect(result.byProject['p1']?.map((entry) => entry.id)).toEqual(['draft-1', 't2'])

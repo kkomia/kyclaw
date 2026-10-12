@@ -5,26 +5,26 @@ import { PluginsNavItem } from '../plugins/PluginsNavItem'
 import { ProjectsSection } from '../projects/ProjectsSection'
 import { useProjectsStore } from '../projects/projects-store'
 import { NewSessionButton } from './NewSessionButton'
-import { SessionList } from './SessionList'
+import { TasksGroup } from './TasksGroup'
 import { composeSidebarSessions } from './sidebar-sessions'
 import { useSessionsStore } from './sessions-store'
 
 /**
  * 侧栏会话区（T9 起，T18 补项目区，round 20 补置顶/归档；round 24 会话动作抽到公共实现）：
- * 把 sessions-store 接到 SessionList / NewSessionButton 上。
+ * 把 sessions-store 接到 TasksGroup / NewSessionButton 上。
  *
  * 三件事在这里做：
  *   1. 首屏拉一次会话列表（与对话页共用 ensureLoaded，重复调用会去重）；
  *   2. 中部插一段「项目」区（ProjectsSection，T18）——项目名下的会话在那边渲染；
- *   3. 维护"平铺区"的列表：**没有项目的会话**（含草稿）走「今天 / 更早」（口径见
- *      sidebar-sessions.composeSidebarSessions）；项目名下的会话不在这儿重复出现；
- *      归档的（settings.archivedThreads）不出现，置顶的（settings.pinnedThreads）排前。
+ *   3. 项目区之后是「任务」组（TasksGroup，round 61）：**没有项目的会话**（含草稿）——
+ *      口径见 sidebar-sessions.composeSidebarSessions 的 ungrouped；项目名下的会话不在这儿
+ *      重复出现；归档的（settings.archivedThreads）不出现，置顶的（settings.pinnedThreads）排前。
  *
  * round 24：行尾 ⋯ 的菜单、重命名/删除对话框与动作接线（置顶/移至项目/文件资源管理器/归档）
  * 都搬进了 **SessionActionsMenu + useSessionActions**（对话页顶部栏共用同一份）——
  * 这里只把失败的一句话接到就地错误行（`session-action-error`），不再自己实现动作。
  *
- * 滚动：整个导航区（项目 + 平铺列表）共用一个滚动容器（Kimi 的侧栏也是整块滚）；
+ * 滚动：整个导航区（项目 + 任务组）共用一个滚动容器（Kimi 的侧栏也是整块滚）；
  * 「新建会话」固定在顶部不随滚动走。
  *
  * 列表加载失败不炸侧栏：错误行 + 重试（R11 的"顶部状态条"是后续任务，这里先就地）。
@@ -62,6 +62,7 @@ export function SessionsController(): React.JSX.Element {
     [archivedThreads]
   )
   const pinnedIds = useMemo(() => new Set(pinnedThreads), [pinnedThreads])
+  /** 「任务」组的列表（round 61）= 没有项目的会话（含草稿）；顺序口径见 composeSidebarSessions */
   const sessions = useMemo(
     () =>
       composeSidebarSessions({
@@ -103,20 +104,19 @@ export function SessionsController(): React.JSX.Element {
           {actionError}
         </p>
       )}
-      {/* 整块导航共用一个滚动容器：项目区与平铺列表一起滚（列表自己的滚动关掉）；
+      {/* 整块导航共用一个滚动容器：项目区与「任务」组一起滚（列表自己的滚动关掉）；
           滚动条静置隐藏（round 50）：指针进栏/区内有焦点才淡入，见 tailwind.css 的 scrollbar-auto-hide */}
       <div
         data-testid="sidebar-nav-scroll"
         className="scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto"
       >
         <ProjectsSection />
-        <SessionList
+        <TasksGroup
           sessions={sessions}
           activeId={activeId}
           notices={notices}
-          listClassName="min-h-0 overflow-visible"
-          onSelect={select}
           pinnedIds={pinnedIds}
+          onSelect={select}
           onActionError={(message) => setActionError(message)}
         />
       </div>

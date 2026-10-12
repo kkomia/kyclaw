@@ -157,19 +157,22 @@ afterEach(() => {
 })
 
 describe('SessionsController：首屏与列表', () => {
-  it('拉服务端列表：今天/更早分组、最近一条选中', async () => {
+  it('拉服务端列表：无项目会话平铺进「任务」组、最近一条选中', async () => {
     installFakeServer(THREADS)
     renderController()
 
     await waitFor(() => {
       expect(screen.getByTestId('session-item-t-a')).toHaveTextContent('今天的会话')
     })
-    expect(screen.getByTestId('session-group-today')).toContainElement(
+    // round 61：无项目会话都归「任务」组，组内平铺（不再有 今天/更早 分组头）
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
       screen.getByTestId('session-item-t-a')
     )
-    expect(screen.getByTestId('session-group-earlier')).toContainElement(
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
       screen.getByTestId('session-item-t-b')
     )
+    expect(screen.queryByTestId('session-group-today')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-group-earlier')).not.toBeInTheDocument()
     // round 20：选中填充挂在**行容器**上（标题 + ⋯ 同一个圆角内），按钮自己只留 aria-current
     expect(screen.getByTestId('session-row-t-a')).toHaveClass('bg-selected')
     // round 50：导航滚动容器挂静置隐藏的滚动条（机制与实测见 styles/__tests__/scrollbar-contract.spec.ts）
@@ -328,17 +331,19 @@ describe('SessionsController：项目区（T18）', () => {
     window.localStorage.clear()
   })
 
-  it('项目名下的会话挂在项目下（平铺区里不再重复出现）', async () => {
+  it('项目名下的会话挂在项目下（「任务」组里不再重复出现）', async () => {
     await mountWithProjects([{ threadId: 't-b', projectId: 'p1' }])
 
     expect(screen.getByTestId('project-group-p1')).toContainElement(
       screen.getByTestId('session-item-t-b')
     )
-    // 平铺区（今天）只剩没有项目的那条
-    expect(screen.getByTestId('session-group-today')).toContainElement(
+    // round 61：「任务」组只剩没有项目的那条；项目名下的不在这里
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
       screen.getByTestId('session-item-t-a')
     )
-    expect(screen.queryByTestId('session-group-earlier')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tasks-sessions')).not.toContainElement(
+      screen.getByTestId('session-item-t-b')
+    )
   })
 
   it('点项目行：展开/折叠名下会话（round 16 起不再开会话；折叠记 localStorage）', async () => {
@@ -371,7 +376,7 @@ describe('SessionsController：项目区（T18）', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
   })
 
-  it('删除项目：projects:remove(id)，名下会话归属被摘掉、回到平铺区', async () => {
+  it('删除项目：projects:remove(id)，名下会话归属被摘掉、回到「任务」组', async () => {
     const { server } = await mountWithProjects([{ threadId: 't-b', projectId: 'p1' }])
 
     pick('project-more-p1', 'project-delete-p1')
@@ -389,7 +394,7 @@ describe('SessionsController：项目区（T18）', () => {
       expect(server.mappings).toEqual([])
     })
     await waitFor(() => {
-      expect(screen.getByTestId('session-group-earlier')).toContainElement(
+      expect(screen.getByTestId('tasks-sessions')).toContainElement(
         screen.getByTestId('session-item-t-b')
       )
     })
@@ -415,7 +420,7 @@ describe('SessionsController：项目区（T18）', () => {
 })
 
 describe('SessionsController·round 20：置顶 / 移至项目 / 资源管理器 / 归档', () => {
-  it('置顶：写 settings.pinnedThreads，行移到置顶分组（带图钉标识）', async () => {
+  it('置顶：写 settings.pinnedThreads，行排到最前（带图钉标识）', async () => {
     const bridge = installKyclawBridge()
     installFakeServer(THREADS)
     renderController()
@@ -428,10 +433,11 @@ describe('SessionsController·round 20：置顶 / 移至项目 / 资源管理器
     await waitFor(() => {
       expect(bridge.update).toHaveBeenCalledWith({ pinnedThreads: ['t-a'] })
     })
+    // round 61：不再有"置顶分组"——置顶的会话排到列表最前（顺序由 composeSidebarSessions 给）
     await waitFor(() => {
-      expect(screen.getByTestId('session-group-pinned')).toContainElement(
-        screen.getByTestId('session-row-t-a')
-      )
+      expect(
+        screen.getAllByTestId(/^session-row-/).map((row) => row.getAttribute('data-testid'))
+      ).toEqual(['session-row-t-a', 'session-row-t-b'])
     })
     expect(screen.getByTestId('session-pin-mark-t-a')).toBeInTheDocument()
   })
@@ -647,9 +653,10 @@ describe('SessionsController·round 25：置顶项目 / ⊕ 新建会话 / 重�
       // 服务端那边的映射没有任何变化：新草稿不在里面，也没有 PUT 发出去
       expect(server.mappings).toEqual([{ threadId: 't-a', projectId: 'p2' }])
       expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
-      // 新草稿不在 p2 组下（项目分组里没有它），它在平铺区正常渲染
+      // 新草稿不在 p2 组下（项目分组里没有它），它在「任务」组里正常渲染
       const draftRow = screen.getByTestId(`session-item-${draftId}`)
       expect(draftRow.closest('[data-testid="project-sessions-p2"]')).toBeNull()
+      expect(screen.getByTestId('tasks-sessions')).toContainElement(draftRow)
       expect(screen.getByTestId(`session-row-${draftId}`)).toHaveClass('bg-selected')
     })
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
@@ -760,7 +767,7 @@ describe('SessionsController·round 26：草稿会话的动作（侧栏）', () 
     return useSessionsStore.getState().activeId!
   }
 
-  it('草稿置顶：先物化（POST /api/threads）再写 pinnedThreads，行移到置顶分组', async () => {
+  it('草稿置顶：先物化（POST /api/threads）再写 pinnedThreads，行排到最前', async () => {
     const server = installFakeServer(THREADS)
     const draftId = await draftAfterNewSession()
 
@@ -777,10 +784,11 @@ describe('SessionsController·round 26：草稿会话的动作（侧栏）', () 
       expect(useSettingsStore.getState().settings.pinnedThreads).toEqual([draftId])
     })
     await waitFor(() => {
-      expect(screen.getByTestId('session-group-pinned')).toContainElement(
-        screen.getByTestId(`session-row-${draftId}`)
-      )
+      expect(
+        screen.getAllByTestId(/^session-row-/).map((row) => row.getAttribute('data-testid'))
+      ).toEqual([`session-row-${draftId}`, 'session-row-t-a', 'session-row-t-b'])
     })
+    expect(screen.getByTestId(`session-pin-mark-${draftId}`)).toBeInTheDocument()
   })
 
   it('草稿移至项目：先物化，再走映射通道（PUT）；会话进项目分组', async () => {
@@ -846,5 +854,120 @@ describe('SessionsController·round 26：草稿会话的动作（侧栏）', () 
     })
     expect(server.calls.some((call) => call.method === 'DELETE')).toBe(false)
     expect(useSessionsStore.getState().activeId).toBe('t-a')
+  })
+})
+
+describe('SessionsController·round 61：「任务」组（没有项目的会话）', () => {
+  const PROJECTS: AppSettings['projects'] = [
+    { id: 'p1', name: '插件', path: 'D:\\ws\\插件', createdAt: '2026-10-11T00:00:00.000Z' }
+  ]
+
+  /** 挂上"有一个项目"的侧栏；默认没有映射 = 所有会话都没有项目 */
+  async function mountTasks(
+    mappings: MappingRow[] = []
+  ): Promise<ReturnType<typeof installFakeServer>> {
+    const server = installFakeServer(THREADS, mappings)
+    clearKyclawBridge()
+    installKyclawBridge({ ...defaultSettings(), projects: PROJECTS })
+    await useSettingsStore.getState().load()
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+    })
+    return server
+  }
+
+  const rowOrder = (): (string | null)[] =>
+    screen.getAllByTestId(/^session-row-/).map((row) => row.getAttribute('data-testid'))
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    window.localStorage.clear()
+  })
+
+  it('分桶：无项目会话在「任务」组里平铺；项目名下的只在项目下（不再有 今天/更早 子分组）', async () => {
+    await mountTasks([{ threadId: 't-b', projectId: 'p1' }])
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+
+    const tasks = screen.getByTestId('session-group-tasks')
+    expect(tasks).toHaveTextContent('任务')
+    expect(tasks).toContainElement(screen.getByTestId('session-item-t-a'))
+    expect(tasks).not.toContainElement(screen.getByTestId('session-item-t-b'))
+    // 组内平铺：行直接排在「任务」组的那一个列表里（没有 今天/更早/置顶 这类子分组）
+    const tasksList = tasks.querySelector('[data-testid="session-list"]')
+    expect(tasksList).not.toBeNull()
+    expect(tasksList).toContainElement(screen.getByTestId('session-row-t-a'))
+    for (const stale of ['session-group-today', 'session-group-earlier', 'session-group-pinned']) {
+      expect(screen.queryByTestId(stale)).not.toBeInTheDocument()
+    }
+  })
+
+  it('点组头折叠/展开：aria-expanded 与 data-open 切换，收起状态记进 localStorage（与项目折叠同一份存储）', async () => {
+    await mountTasks()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    const head = screen.getByTestId('tasks-item')
+    const fold = screen.getByTestId('tasks-sessions')
+    expect(head).toHaveAttribute('aria-expanded', 'true')
+    expect(fold).toHaveAttribute('data-open', 'true')
+
+    fireEvent.click(head)
+
+    expect(head).toHaveAttribute('aria-expanded', 'false')
+    expect(fold).toHaveAttribute('data-open', 'false')
+    expect(window.localStorage.getItem('kyclaw.projects.collapsed')).toContain('__tasks__')
+    // 收起 ≠ 卸载：内容留在 DOM 里走 .trace-fold 的过渡
+    expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+
+    fireEvent.click(head)
+    expect(fold).toHaveAttribute('data-open', 'true')
+  })
+
+  it('重启后保持：存储里记着 __tasks__ 时首屏就是收起的', async () => {
+    window.localStorage.setItem('kyclaw.projects.collapsed', JSON.stringify(['__tasks__']))
+    await mountTasks()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('tasks-sessions')).toHaveAttribute('data-open', 'false')
+    expect(screen.getByTestId('tasks-item')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('无项目会话为 0 时：整组不渲染（组头也不留）', async () => {
+    await mountTasks([
+      { threadId: 't-a', projectId: 'p1' },
+      { threadId: 't-b', projectId: 'p1' }
+    ])
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId('session-item-t-a')
+      )
+    })
+
+    expect(screen.queryByTestId('session-group-tasks')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tasks-item')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tasks-sessions')).not.toBeInTheDocument()
+  })
+
+  it('置顶的会话在「任务」组里排最前（组内顺序由 composeSidebarSessions 给）', async () => {
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), projects: PROJECTS, pinnedThreads: ['t-b'] },
+      loaded: true
+    })
+    installFakeServer(THREADS)
+    renderController()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-b')).toBeInTheDocument()
+    })
+
+    expect(rowOrder()).toEqual(['session-row-t-b', 'session-row-t-a'])
+    expect(screen.getByTestId('session-pin-mark-t-b')).toBeInTheDocument()
   })
 })

@@ -122,6 +122,17 @@ describe('ProjectList', () => {
     expect(screen.getByTestId('project-item-p2')).toHaveAttribute('aria-expanded', 'true')
   })
 
+  it('round 61：与「任务」组共用一份折叠存储——收起项目不冲掉任务组的收起项（先读后写）', () => {
+    window.localStorage.setItem('kyclaw.projects.collapsed', JSON.stringify(['__tasks__']))
+    renderList()
+
+    fireEvent.click(screen.getByTestId('project-item-p1'))
+
+    expect(JSON.parse(window.localStorage.getItem('kyclaw.projects.collapsed') ?? '[]')).toEqual(
+      expect.arrayContaining(['__tasks__', 'p1'])
+    )
+  })
+
   it('长标题截断不压到 ⋯（round 16）：文本 truncate + ⋯ 固定宽度占位（不绝对定位）', () => {
     renderList()
 

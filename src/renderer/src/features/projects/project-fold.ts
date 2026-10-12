@@ -1,12 +1,19 @@
 /**
- * 项目折叠状态（round 16）：按项目 id 记忆"收起了哪些项目"，localStorage 轻量持久
- * （刷新/重启后保留；默认展开 = 不在集合里）。
+ * 侧栏导航的折叠状态（round 16 项目；round 61 起「任务」组共用）：按 id 记忆"收起了哪些"，
+ * localStorage 轻量持久（刷新/重启后保留；默认展开 = 不在集合里）。
  *
  * 为什么是 localStorage 而不是设置文件：这是**视图层**的临时偏好（像滚动位置），
  * 进 settings.json 要过 IPC/落盘/迁移一整套，代价与收益不成比例。读写都兜错：
  * 隐私模式/配额满/被禁用时退化成"本次会话的内存态"，不影响任何功能。
+ *
+ * 一份存储、多个写入方（项目行各自 + 「任务」组）：id 用项目 id，另有一个保留 id
+ * `TASKS_FOLD_ID` 归「任务」组。**写入前先重新读**（toggleCollapsed / 各自的读-改-写），
+ * 否则一个组用自己的旧快照写回，会把另一组刚记下的收起项抹掉。
  */
 const STORAGE_KEY = 'kyclaw.projects.collapsed'
+
+/** 「任务」组（没有项目的会话）在折叠集合里的保留 id（不是真实的项目 id） */
+export const TASKS_FOLD_ID = '__tasks__'
 
 /** 读回收起集合（坏值/读不了都当空集 = 全展开） */
 export function readCollapsedProjects(storage?: Pick<Storage, 'getItem'>): ReadonlySet<string> {
@@ -31,4 +38,19 @@ export function writeCollapsedProjects(
   } catch {
     // 隐私模式 / 配额满：不打扰使用
   }
+}
+
+/**
+ * 收起 / 展开一个 id 并落盘，返回新集合。
+ * 先读后写（不拿调用方的内存快照当底）：与项目行共用同一份存储时，各自的最新状态不会被覆盖。
+ */
+export function toggleCollapsed(
+  id: string,
+  storage?: Pick<Storage, 'getItem'> & Pick<Storage, 'setItem'>
+): ReadonlySet<string> {
+  const next = new Set(readCollapsedProjects(storage))
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  writeCollapsedProjects(next, storage)
+  return next
 }

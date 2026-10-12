@@ -37,7 +37,8 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('main-column')).toBeInTheDocument()
     expect(screen.getByTestId('work-panel')).toBeInTheDocument()
     expect(screen.getByTestId('new-session')).toBeInTheDocument()
-    expect(screen.getByTestId('session-list')).toBeInTheDocument()
+    // round 61：无项目会话归「任务」组（空态整组不渲染）——侧栏内容用常驻的导航滚动容器认
+    expect(screen.getByTestId('sidebar-nav-scroll')).toBeInTheDocument()
     // round 5：插件入口在「新建会话」下方（侧栏里）
     expect(screen.getByTestId('nav-plugins')).toBeInTheDocument()
   })
