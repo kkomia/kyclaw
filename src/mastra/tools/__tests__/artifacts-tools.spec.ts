@@ -242,6 +242,34 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     expect(zipText(entries, 'ppt/slides/slide2.xml')).toContain('增长 12%')
   })
 
+  it('create_ppt：主题 + 版式走完整链路（schema → 渲染 → 落盘）', async () => {
+    const tool = await createPptTool(bed.ctx)
+    const out = String(
+      await callTool(tool, {
+        title: '季度复盘',
+        theme: '商务蓝',
+        slides: [
+          { section: '业务概览' },
+          { title: '关键指标', stats: [{ value: '12%', label: '营收同比' }] }
+        ]
+      })
+    )
+
+    const file = join(bed.root, '季度复盘.pptx')
+    expect(existsSync(file)).toBe(true)
+    expect(out).toContain('；结构校验通过')
+
+    const entries = readZipEntries(readFileSync(file))
+    // 封面 + 章节 + 数字卡 + 自动结尾页
+    expect(
+      [...entries.keys()].filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    ).toHaveLength(4)
+    const stats = zipText(entries, 'ppt/slides/slide3.xml')
+    expect(stats).toContain('val="1F5FA9"')
+    expect(stats).toContain('微软雅黑')
+    expect(stats).toContain('<a:t>12%</a:t>')
+  })
+
   it('create_docx：落盘为真 docx（解包能读到正文）', async () => {
     const tool = await createDocxTool(bed.ctx)
     const out = String(

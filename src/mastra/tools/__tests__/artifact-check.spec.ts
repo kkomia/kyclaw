@@ -103,7 +103,8 @@ describe('checkPackage：三种真实产出物全过', () => {
 
   it('pptx：页数与封面标题都核得上', async () => {
     const rendered = await renderPptx(PPT_INPUT)
-    expect(rendered.slides).toBe(2)
+    // round 62：老形状现在是 封面 + 正文页 + 自动结尾页
+    expect(rendered.slides).toBe(3)
 
     const result = checkPackage(rendered.data, {
       kind: 'pptx',
@@ -215,7 +216,7 @@ describe('checkEntries：篡改条目地图，逐项命中', () => {
     const result = checkEntries(entries, { kind: 'pptx', slides: rendered.slides })
 
     expect(failedNames(result)).toEqual(['幻灯片页数与声明一致'])
-    expect(itemNamed(result, '幻灯片页数').detail).toContain('包内 1 页')
+    expect(itemNamed(result, '幻灯片页数').detail).toContain('包内 2 页')
   })
 
   it('样本文本不在包内：文本项失败并列出来', async () => {

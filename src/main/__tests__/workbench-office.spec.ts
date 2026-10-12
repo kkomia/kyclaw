@@ -233,7 +233,7 @@ describe('parseTableText：csv / tsv', () => {
 })
 
 describe('extractPptx：PPT → 逐页文字提要', () => {
-  it('真件读回：封面 + 内容页，一页一张卡（产出器不写标题占位符 → 不给 title）', async () => {
+  it('真件读回：封面 + 内容 + 自动结尾页，一页一张卡（产出器不写标题占位符 → 不给 title）', async () => {
     const { data, slides } = await renderPptx({
       title: '汇报',
       slides: [{ title: '进展', bullets: ['第一条', '第二条'] }]
@@ -241,10 +241,13 @@ describe('extractPptx：PPT → 逐页文字提要', () => {
 
     const result = extractPptx(data)
 
-    expect(slides).toBe(2)
+    // round 62：create_ppt 自动补一页结尾页（封面 + 内容 + 结尾 = 3 页）；正文要点带「●」圆点
+    // 前缀（主题化版式的点缀），封面外每页含页脚（文档标题 + 页码）——预览如实读全部文本。
+    expect(slides).toBe(3)
     expect(result.slides).toEqual([
       { index: 1, lines: ['汇报'] },
-      { index: 2, lines: ['进展', '第一条', '第二条'] }
+      { index: 2, lines: ['进展', '● 第一条', '● 第二条', '汇报', '2'] },
+      { index: 3, lines: ['谢谢观看', '汇报', '3'] }
     ])
     expect(result.truncated).toBe(false)
   })

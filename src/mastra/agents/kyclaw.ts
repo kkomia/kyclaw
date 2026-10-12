@@ -126,7 +126,7 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
   · create_report：排版好的单文件 HTML 报告（自带样式、离线可看、可打印）——说明性长文、方案、总结、带表格的盘点首选；
   · create_pdf：同样内容的 PDF（A4，走本机 Electron 排版导出）——要外发、打印或归档时用；
   · create_excel：.xlsx 工作簿（sheets[].rows 是二维单元格数组，数字保持数字）；
-  · create_ppt：.pptx 演示文稿（每页标题 + 要点条目）；
+  · create_ppt：.pptx 演示文稿（模板化：6 套配色主题 + 8 种版式——封面/章节/要点/数字卡片/表格/左右分栏/引言/结尾，每页可用 layout 指定、不给就按数据自动选，主题不给就自动配一套）；
   · create_docx：Word 文档（heading / paragraph / bullets / table 四种块，按顺序排）。
   报告与 PDF 的 html 是**真 HTML 片段**（不是 Markdown）：用 h2/h3、p、ul/ol、table、pre/code 写正文，
   不要写 <html>/<head>/<style> 外壳、不要重复一级标题（模板已经带上标题与样式）。

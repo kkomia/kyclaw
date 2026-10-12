@@ -169,7 +169,7 @@ describe('renderXlsx：真解包 + 同库读回', () => {
 })
 
 describe('renderPptx：真解包', () => {
-  it('解包：16:9 演示文稿，封面 + 每页一张 slide，文字进 slideN.xml', async () => {
+  it('解包：16:9 演示文稿，封面 + 每页一张 slide + 自动结尾页，文字进 slideN.xml', async () => {
     const { data: bytes, slides } = await renderPptx({
       title: '季度汇报',
       slides: [
@@ -180,8 +180,8 @@ describe('renderPptx：真解包', () => {
       ]
     })
 
-    // 页数按"实际写入"算：封面 + 两页有内容的（空对象那页被跳过）
-    expect(slides).toBe(3)
+    // 页数按"实际写入"算：封面 + 两页有内容的（空对象那页被跳过）+ 自动结尾页
+    expect(slides).toBe(4)
 
     const entries = readZipEntries(bytes)
     const names = [...entries.keys()]
@@ -190,7 +190,8 @@ describe('renderPptx：真解包', () => {
     expect(names).toContain('ppt/slides/slide1.xml')
     expect(names).toContain('ppt/slides/slide2.xml')
     expect(names).toContain('ppt/slides/slide3.xml')
-    expect(names).not.toContain('ppt/slides/slide4.xml')
+    expect(names).toContain('ppt/slides/slide4.xml')
+    expect(names).not.toContain('ppt/slides/slide5.xml')
 
     expect(zipText(entries, 'ppt/slides/slide1.xml')).toContain('季度汇报')
     const second = zipText(entries, 'ppt/slides/slide2.xml')
@@ -198,6 +199,8 @@ describe('renderPptx：真解包', () => {
     expect(second).toContain('营收增长 12%')
     expect(second).toContain('成本持平')
     expect(zipText(entries, 'ppt/slides/slide3.xml')).toContain('下一步：扩产')
+    // 最后一页是自动结尾页（round 62：老形状 cover → content → closing）
+    expect(zipText(entries, 'ppt/slides/slide4.xml')).toContain('谢谢观看')
     // 页尺寸按 16:9 落（LAYOUT_16x9 = 10in × 5.625in @914400 EMU/in）
     expect(zipText(entries, 'ppt/presentation.xml')).toContain('sldSz')
   })
@@ -209,16 +212,14 @@ describe('renderPptx：真解包', () => {
     })
 
     const entries = readZipEntries(data)
-    // 封面 / 页标题 / 要点块三处 addText 都要开 fit:'shrink'
-    for (const name of ['ppt/slides/slide1.xml', 'ppt/slides/slide2.xml']) {
-      const xml = zipText(entries, name)
-      const boxes = xml.match(/<a:normAutofit\b/g) ?? []
-      expect(boxes.length, `${name} 的文本框都应带 normAutofit`).toBeGreaterThan(0)
-    }
-    // 一页两处（标题 + 要点），一共两个
-    expect(
-      (zipText(entries, 'ppt/slides/slide2.xml').match(/<a:normAutofit\b/g) ?? []).length
-    ).toBe(2)
+    const boxes = (name: string): number =>
+      (zipText(entries, name).match(/<a:normAutofit\b/g) ?? []).length
+
+    // 封面一处（大标题）；正文页四处（页标题、要点块、页脚左右两格）
+    expect(boxes('ppt/slides/slide1.xml')).toBe(1)
+    expect(boxes('ppt/slides/slide2.xml')).toBe(4)
+    // 自动结尾页三处（结尾语、页脚左右两格）
+    expect(boxes('ppt/slides/slide3.xml')).toBe(3)
   })
 
   it('内容全空：仍然产出一页占位（不能是零页演示文稿）', async () => {
