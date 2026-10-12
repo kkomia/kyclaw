@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { Link, MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
@@ -110,6 +110,35 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.queryByTestId('work-panel-toggle')).not.toBeInTheDocument()
     // 面板本体仍在（只是没有开关入口；窄窗自动收的逻辑不受影响）
     expect(screen.getByTestId('work-panel')).toBeInTheDocument()
+  })
+
+  it('离开对话路由自动收起工作台（round 48 用户口径）：设置/插件等页不残留打开的面板', () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <AppShell />
+        <Link to="/plugins" data-testid="go-plugins">
+          插件
+        </Link>
+        <Link to="/chat" data-testid="go-chat">
+          对话
+        </Link>
+      </MemoryRouter>
+    )
+
+    // 对话页：开面板 + 全屏
+    fireEvent.click(screen.getByTestId('work-panel-toggle'))
+    fireEvent.click(screen.getByTestId('workbench-fullscreen'))
+    expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
+
+    // 切到插件页：面板与全屏一并收起
+    fireEvent.click(screen.getByTestId('go-plugins'))
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
+
+    // 回到对话：不自动展开（由用户再开）
+    fireEvent.click(screen.getByTestId('go-chat'))
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
   })
 
   it('对话路由：开关在（/chat；/ 会被重定向到 /chat）', () => {

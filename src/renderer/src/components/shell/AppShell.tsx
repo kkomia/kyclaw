@@ -40,6 +40,9 @@ function collapseWidthThreshold(): number {
  *
  * round 39：工作台宽度由 shell-store 给（WorkPanel 拖拽调宽），全屏时中列挂 `hidden`
  * 让位但不卸载（聊天状态要留）；面板关掉时全屏状态在 store 里一并复位。
+ *
+ * round 48（用户口径）：工作台面板属于对话区——切到对话以外的页面（设置/插件等）自动收起，
+ * 面板状态与标签保留，回到对话由用户再自己展开。
  */
 export function AppShell(): React.JSX.Element {
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
@@ -69,6 +72,12 @@ export function AppShell(): React.JSX.Element {
       observer.disconnect()
     }
   }, [setWorkPanelOpen])
+
+  // round 48（用户口径）：工作台面板属于对话区——切到对话以外的页面（设置/插件/记忆等）一律收起；
+  // 面板状态与标签保留，回到对话由用户再自己展开。
+  useEffect(() => {
+    if (!inChat) setWorkPanelOpen(false)
+  }, [inChat, setWorkPanelOpen])
 
   return (
     <div
