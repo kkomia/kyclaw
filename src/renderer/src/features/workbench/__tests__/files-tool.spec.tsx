@@ -25,6 +25,7 @@ function rootOf(): WorkbenchRoot {
     rootPath: 'D:\\工作区',
     rootName: '工作区',
     ready: true,
+    settling: false,
     notice: null,
     workbench: bed.bridge.workbench,
     terminal: bed.bridge.terminal

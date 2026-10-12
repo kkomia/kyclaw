@@ -16,12 +16,15 @@ function installFakeServer(initial: MappingRow[] = []): {
   calls: { method: string; path: string; body: unknown }[]
   putStatus: number
   failNextGet: Error | null
+  /** PUT 卡住用（在飞期间的观察）：非 null 时先 await 它再回包 */
+  putWait: Promise<void> | null
 } {
   const server = {
     rows: [...initial],
     calls: [] as { method: string; path: string; body: unknown }[],
     putStatus: 200,
-    failNextGet: null as Error | null
+    failNextGet: null as Error | null,
+    putWait: null as Promise<void> | null
   }
 
   vi.stubGlobal(
@@ -46,6 +49,7 @@ function installFakeServer(initial: MappingRow[] = []): {
         })
       }
       if (method === 'PUT') {
+        await server.putWait
         if (server.putStatus !== 200) return new Response('{}', { status: server.putStatus })
         const { threadId, projectId } = body as { threadId: string; projectId: string | null }
         server.rows = server.rows.filter((row) => row.threadId !== threadId)
@@ -160,5 +164,41 @@ describe('projects-store：写映射', () => {
 
     expect(useProjectsStore.getState().mappings).toEqual({ t2: 'p2' })
     expect(server.rows).toEqual([{ threadId: 't2', projectId: 'p2' }])
+  })
+})
+
+describe('projects-store：在写标记（pending，round 49）', () => {
+  it('写映射期间标 pending，回执落地后清掉 —— 工作台据此先不按根开工', async () => {
+    const server = installFakeServer()
+    let release: () => void = () => undefined
+    server.putWait = new Promise((resolve) => {
+      release = () => resolve()
+    })
+
+    const writing = useProjectsStore.getState().assignSession('t1', 'p1')
+
+    // 本地立刻可见（侧栏/标题要跟手）——但服务端还没回执，主进程还按旧口径解析根
+    expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p1' })
+    expect(useProjectsStore.getState().pending).toEqual({ t1: true })
+
+    release()
+    await writing
+
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(server.rows).toEqual([{ threadId: 't1', projectId: 'p1' }])
+  })
+
+  it('写失败也清 pending（回滚后两边口径又一致了）', async () => {
+    const server = installFakeServer([{ threadId: 't1', projectId: 'p1' }])
+    await useProjectsStore.getState().ensureLoaded()
+    server.putStatus = 500
+
+    const writing = useProjectsStore.getState().assignSession('t1', 'p2')
+    expect(useProjectsStore.getState().pending).toEqual({ t1: true })
+
+    await writing
+
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p1' })
   })
 })

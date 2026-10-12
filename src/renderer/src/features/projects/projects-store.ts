@@ -28,6 +28,15 @@ let loadPromise: Promise<void> | null = null
 export interface ProjectsState {
   /** 会话 id → 项目 id（服务端镜像 + 本地乐观补丁） */
   mappings: Record<string, string>
+  /**
+   * 本地乐观补丁里**服务端还没回执**的那些会话（threadId 集合）。
+   *
+   * 会话根的唯一解析者在主进程（sessionRoots 读服务端的映射镜像）：PUT 落地之前它还按旧口径
+   * 解析——渲染端却已经把"这个会话属于哪个项目"画出来了。工作台三件按根开工的工具
+   * （文件树 / Git / 终端）据此推迟第一次请求，否则会按**兜底根**先列一次目录、起一个 cwd
+   * 在别的目录上的 shell，而那次结果之后不会再刷新（round 49 用户实报"切换对话后文件区路径没刷新"）。
+   */
+  pending: Record<string, true>
   /** 初次加载是否结束（成功或失败都算结束） */
   loaded: boolean
   /** 最近一次失败的文案（侧栏显示；成功后清空） */
@@ -45,6 +54,7 @@ export interface ProjectsState {
 
 export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   mappings: {},
+  pending: {},
   loaded: false,
   error: null,
 
@@ -82,7 +92,11 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
 
   assignSession: async (threadId, projectId) => {
     const previous = get().mappings[threadId] ?? null
-    set((state) => ({ mappings: withMapping(state.mappings, threadId, projectId), error: null }))
+    set((state) => ({
+      mappings: withMapping(state.mappings, threadId, projectId),
+      pending: withPending(state.pending, threadId, true),
+      error: null
+    }))
     try {
       await putSessionProject(threadId, projectId)
     } catch (error) {
@@ -92,6 +106,9 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
         mappings: withMapping(state.mappings, threadId, previous),
         error: messageOf(error)
       }))
+    } finally {
+      // 回执到（成功或失败）＝主进程那边的映射口径与渲染端对齐了，工作台工具可以开工
+      set((state) => ({ pending: withPending(state.pending, threadId, false) }))
     }
   },
 
@@ -136,9 +153,22 @@ function withMapping(
   return next
 }
 
+/** 挂上/摘掉一条"服务端还没回执"的标记（不变更时原样回同一引用，免得白重渲染） */
+function withPending(
+  pending: Record<string, true>,
+  threadId: string,
+  active: boolean
+): Record<string, true> {
+  if (active) return pending[threadId] === true ? pending : { ...pending, [threadId]: true }
+  if (pending[threadId] !== true) return pending
+  const next = { ...pending }
+  delete next[threadId]
+  return next
+}
+
 /** 测试用：回到初始状态（模块级 store 不随 render 重置） */
 export function resetProjectsStore(): void {
   loadPromise = null
   pendingPatch = {}
-  useProjectsStore.setState({ mappings: {}, loaded: false, error: null })
+  useProjectsStore.setState({ mappings: {}, pending: {}, loaded: false, error: null })
 }

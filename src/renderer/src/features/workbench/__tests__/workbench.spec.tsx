@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from '@shared/settings'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useShellStore } from '@renderer/lib/shell-store'
+import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { WorkPanel } from '@renderer/components/shell/WorkPanel'
 import { tick } from '@renderer/components/ui/__tests__/tick'
@@ -91,6 +92,24 @@ describe('Workbench 标签页', () => {
     expect(kinds()).toEqual(['files'])
 
     await waitFor(() => expect(bed.bridge.workbench.listDir).toHaveBeenCalledWith('thread-1', ''))
+  })
+
+  it('归属还在写（settling）：三件按根开工的工具先不挂（不列目录、不起 PTY）；落定后才挂（round 49 回归）', async () => {
+    useProjectsStore.setState({ pending: { 'thread-1': true } })
+    render(<Workbench />)
+    await newTab('terminal')
+
+    // 主进程此刻还按兜底根解析：先列目录 / 先起 PTY 都会落在别的文件夹上，而且不会自己重来
+    expect(screen.getAllByTestId('workbench-settling')).toHaveLength(2)
+    expect(bed.bridge.workbench.listDir).not.toHaveBeenCalled()
+    expect(bed.bridge.terminal.start).not.toHaveBeenCalled()
+
+    // 回执落地（主进程认这条映射了）：真工具挂上，这次才开工
+    act(() => useProjectsStore.setState({ pending: {} }))
+
+    await waitFor(() => expect(bed.bridge.workbench.listDir).toHaveBeenCalledWith('thread-1', ''))
+    await waitFor(() => expect(bed.bridge.terminal.start).toHaveBeenCalled())
+    expect(screen.queryByTestId('workbench-settling')).not.toBeInTheDocument()
   })
 
   it('新建终端：新开一个标签并激活，文件标签不卸载（只隐藏 + inert）', async () => {

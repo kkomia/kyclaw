@@ -16,6 +16,9 @@
  * 共用 workbench-actions 的同一张表 —— 显示了就必须能用。监听挂在 window 上（面板收起也生效：
  * Workbench 随 WorkPanel 常驻，收起只是宽 0），但**焦点在 `<webview>` 里时收不到**（客人是
  * 独立上下文），不承诺跨 webview 生效。
+ *
+ * round 49：会话根由主进程按服务端映射解析，而渲染端的映射是**乐观**的（本地先补、PUT 在飞）——
+ * 那段窗口（`settling`）里三件按根开工的工具先不挂，只给一圈 spinner（见 renderTool）。
  */
 import {
   FolderTree,
@@ -33,6 +36,7 @@ import { useEffect, useRef } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
+import { Spinner } from '@renderer/components/ui/spinner'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { EmptyActions } from './EmptyActions'
 import { matchWorkbenchShortcut } from './workbench-actions'
@@ -269,6 +273,11 @@ function renderTool(
   root: WorkbenchRoot,
   active: boolean
 ): React.JSX.Element {
+  // 会话根由主进程按服务端映射解析，而渲染端的映射是乐观的：归属还在写（settling）时主进程
+  // 还按兜底根解析 —— 三件按根开工的工具**先别挂**（文件树会列到别的文件夹、终端会把 cwd
+  // 起在兜底根上、Git 读的不是这个会话的仓库），而且它们都不会自己重来一次。
+  // 浏览器与根无关，照常挂。回执落地后 settling 翻假，这里换成真工具（一次干净的挂载）。
+  if (root.settling && kind !== 'browser') return <ToolSettling />
   switch (kind) {
     case 'browser':
       return <BrowserTool />
@@ -279,6 +288,18 @@ function renderTool(
     case 'terminal':
       return <TerminalTool root={root} active={active} />
   }
+}
+
+/** 归属还在写期间的占位：与三件工具自己的加载态同一观感（面板正中一圈 spinner） */
+function ToolSettling(): React.JSX.Element {
+  return (
+    <div
+      data-testid="workbench-settling"
+      className="flex min-h-0 flex-1 items-center justify-center"
+    >
+      <Spinner label="加载中" className="text-ink-tertiary" />
+    </div>
+  )
 }
 
 /**

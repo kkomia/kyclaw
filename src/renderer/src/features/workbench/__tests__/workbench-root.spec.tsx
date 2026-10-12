@@ -2,9 +2,14 @@
 /**
  * 换项目后工作台必须换根（回归）。
  *
- * 根因存档：`useWorkbenchRoot` 曾只选 `state.projectOf`（函数引用恒定）——`mappings` 变了
- * （"移至项目" / 快照迟到）**不会触发重渲染** → 树还是旧项目的目录名与清单，而主进程已按
+ * 根因存档（round 42）：`useWorkbenchRoot` 曾只选 `state.projectOf`（函数引用恒定）——`mappings`
+ * 变了（"移至项目" / 快照迟到）**不会触发重渲染** → 树还是旧项目的目录名与清单，而主进程已按
  * 新根解析 → 点文件夹报"这个文件夹不在磁盘上了"。修法 = 订阅 `mappings` 并现算 projectOf。
+ *
+ * 根因存档（round 49，用户第二次报"切换对话后文件区路径没刷新"）：渲染端的映射是**乐观**的
+ * （本地先补、PUT 还在飞），主进程（会话根的唯一解析者）此刻还按兜底根解析 —— 按根开工的工具
+ * 在那段窗口里列出来的目录 / 起来的 shell cwd 都是别的文件夹，而且**不会再重来一次**。
+ * 修法 = `pending` 标记 + `settling`（工具据此推迟第一次请求）。
  */
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -63,5 +68,28 @@ describe('useWorkbenchRoot：换项目换根（响应式）', () => {
 
     expect(result.current.rootPath).toBeNull()
     expect(result.current.rootName).toBeNull()
+  })
+})
+
+describe('useWorkbenchRoot：归属还在写（settling，round 49）', () => {
+  it('本会话的映射还没回执 → settling 为真；回执落地翻假（根路径不动）', () => {
+    useProjectsStore.setState({ mappings: { 'thread-1': 'p1' }, pending: { 'thread-1': true } })
+    const { result } = renderHook(() => useWorkbenchRoot())
+
+    // 渲染端已经把根画成项目目录了（乐观），但主进程此刻还会给出兜底根 → 工具先别开工
+    expect(result.current.rootPath).toBe('D:\\乙区')
+    expect(result.current.settling).toBe(true)
+
+    act(() => useProjectsStore.setState({ pending: {} }))
+
+    expect(result.current.settling).toBe(false)
+    expect(result.current.rootPath).toBe('D:\\乙区')
+  })
+
+  it('在写的是别的会话：本会话不算 settling（只挡自己那条）', () => {
+    useProjectsStore.setState({ mappings: { 'thread-1': 'p1' }, pending: { 'thread-9': true } })
+    const { result } = renderHook(() => useWorkbenchRoot())
+
+    expect(result.current.settling).toBe(false)
   })
 })
