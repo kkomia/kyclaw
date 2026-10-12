@@ -79,7 +79,10 @@ export interface ComposerProps {
   compactBusy?: boolean
   /** 压缩不可用（流式 / 等审批）：命令行可见但不可点 */
   compactDisabled?: boolean
-  /** 压压缩结果的一行 notice（由上层给：成功/失败/降级）；与附件等内部 notice 合并显示 */
+  /**
+   * 压缩的**操作反馈** notice（由上层给：失败 / 没有可压缩的旧消息）；与附件等内部 notice 合并显示。
+   * round 59：压缩成功与进行中不再是输入框的事（对话流里的分界线说），这里只留给失败反馈。
+   */
   externalNotice?: ComposerNotice | null
   /**
    * round 57：上下文用量的**取数刷新信号**（上层每轮结束 +1）——透给上下文环那侧的

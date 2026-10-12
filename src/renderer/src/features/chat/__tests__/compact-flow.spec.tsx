@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { UIMessage } from 'ai'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
@@ -15,8 +16,10 @@ import { createMockTransport, type MockTransport } from './mock-transport'
  *   - 自动触发：最近一轮用量 ≥ 阈值（contextPct × contextWindow）→ 先压缩再发送；
  *     压缩失败照发 + 一行警示；低于阈值不压缩；
  *   - busy 语义：压缩中再次发送排入队列（照既有"流式中发送"口径）；
- *   - 顶部标记：有记录显示「上下文已压缩」（默认折叠，点开见摘要）；压缩中显示「上下文压缩中…」；
- *   - 「/」命令分区：首条「压缩上下文」带使用率；选中立即压缩并给 notice；流式中禁用；
+ *   - round 59：压缩是**对话流里的一件事** —— 有记录渲染一条分界线（左右发丝线 + 居中标签
+ *     「上下文已压缩（before → ~after tokens）」+ 强调色「查看摘要」），位置按"压缩时刻之后
+ *     到达的第一条消息"定位；压缩中同一位置显示「正在压缩上下文…」；
+ *   - 「/」命令分区：首条「压缩上下文」带使用率；选中立即压缩（成功不再占用输入框 notice）；流式中禁用；
  *   - 压缩后编辑重发（truncate → 重发）不受影响；
  *   - round 57：作曲栏那枚「压缩上下文」胶囊（用量 ≥ 80% 时出现、点即压缩；每轮结束重取用量，
  *     低于出现线不渲染、没有数据不渲染、流式中禁用）。
@@ -70,7 +73,25 @@ const RECORD = {
   summary: '## 要点\n- 压缩出来的要点',
   summarized: 4,
   kept: 10,
-  createdAt: '2026-10-11T02:00:00.000Z'
+  createdAt: '2026-10-11T02:00:00.000Z',
+  // round 59：记录新增两个 token 字段（分界线标签的数字；after 是服务端的估算值）
+  tokensBefore: 527_000,
+  tokensAfter: 53_700
+}
+
+/** round 59：老记录（压缩时还没记 token 数）—— 标签只留「上下文已压缩」，括号整段不显示 */
+const RECORD_WITHOUT_TOKENS = { ...RECORD, tokensBefore: null, tokensAfter: null }
+
+/** 压缩记录时刻（用例里按它算"压缩前 / 压缩后"的存储时间戳） */
+const AT = Date.parse(RECORD.createdAt)
+
+/**
+ * round 59：有压缩记录的会话在现实里**一定有消息**（保留窗口 ≥ 2 条，被摘要的旧消息才删掉）——
+ * 空会话画的是初始页（见 welcome-hero.spec），分界线要有对话流才出现。这里给一句**带时间戳**的
+ * 存储历史（压缩之前落库的），把会话摆成常态。
+ */
+function storedHistory(): UIMessage[] {
+  return [messageOf('h0', 'user', '压之前聊过一句', AT - 60_000)]
 }
 
 function contextOf(lastInput: number | null): {
@@ -115,6 +136,39 @@ async function renderSession(control: MockTransport, runtime: ThreadChatRuntime)
     </MemoryRouter>
   )
   await screen.findByTestId('composer-input')
+}
+
+/**
+ * 回灌一条带时间的消息（round 59）：时间挂在 `metadata.createdAt` 上 —— 与 message-map 把存储
+ * part 的 createdAt 映射出来的形态一致（不带时间 = 本轮新发的消息那种"未知时间"）。
+ */
+function messageOf(
+  id: string,
+  role: 'user' | 'assistant',
+  text: string,
+  createdAt?: number
+): UIMessage {
+  return {
+    id,
+    role,
+    parts: [{ type: 'text', text }],
+    ...(createdAt === undefined ? {} : { metadata: { createdAt } })
+  }
+}
+
+/** 消息列里的 DOM 顺序（Message 根节点与分界线的 testid；本轮新发消息的 id 是生成的，按位断言） */
+function columnOrder(): string[] {
+  const column = screen.getByTestId('message-list').firstElementChild as HTMLElement
+  return Array.from(column.children).map((child) => child.getAttribute('data-testid') ?? '')
+}
+
+/** 直接给一批 UI 消息当历史（makeRuntime 那边只造纯文本 + 不带时间） */
+function runtimeOf(control: MockTransport, messages: UIMessage[]): ThreadChatRuntime {
+  return {
+    transport: control.transport,
+    loadHistory: vi.fn(async () => messages),
+    onTurnEnd: vi.fn()
+  }
 }
 
 function type(text: string): void {
@@ -182,8 +236,10 @@ describe('自动触发（发送路径预检）', () => {
 
     expect(events).toEqual(['compact', 'send'])
     expect(control.requests).toHaveLength(1)
-    // 压缩成功：顶部标记随记录出现
-    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
+    // 压缩成功：分界线随记录出现在对话流里（数字口径 = before → ~after tokens）
+    expect(screen.getByTestId('compaction-marker')).toHaveTextContent(
+      '上下文已压缩（527k → ~53.7k tokens）'
+    )
   })
 
   it('用量低于阈值：不压缩，直接发送', async () => {
@@ -238,8 +294,9 @@ describe('自动触发（发送路径预检）', () => {
     await act(async () => {
       send('第一条')
     })
-    // 压缩中：标记显示进行中；第一条还没发出去
-    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文压缩中…')
+    // 压缩中：同一位置显示"正在压缩"；第一条还没发出去
+    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('正在压缩上下文…')
+    expect(screen.getByTestId('compaction-marker')).toHaveAttribute('data-compacting', 'true')
     expect(control.requests).toHaveLength(0)
 
     await act(async () => {
@@ -266,39 +323,196 @@ describe('自动触发（发送路径预检）', () => {
   })
 })
 
-describe('顶部「上下文已压缩」标记', () => {
-  it('有记录：默认折叠（摘要不在 DOM），点开展开摘要与元数据；再点收起', async () => {
+describe('round 59 · 对话流里的「上下文已压缩」分界线', () => {
+  it('一条分界线：左右发丝线 + 居中标签（before → ~after tokens）+ 强调色「查看摘要」', async () => {
     const control = createMockTransport()
     vi.mocked(fetchThreadCompaction).mockResolvedValue(RECORD)
 
-    await renderSession(control, makeRuntime(control))
-    await screen.findByTestId('compaction-marker')
-    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
-    expect(screen.queryByTestId('compaction-summary')).not.toBeInTheDocument()
+    await renderSession(control, runtimeOf(control, storedHistory()))
+    const marker = await screen.findByTestId('compaction-marker')
+    expect(marker).toHaveTextContent('上下文已压缩（527k → ~53.7k tokens）')
+    // 分界线形态：细线在文字左右两侧（两段发丝线，装饰性）
+    expect(marker.querySelectorAll('.bg-hairline')).toHaveLength(2)
 
-    fireEvent.click(screen.getByTestId('compaction-toggle'))
+    // 默认折叠：摘要不在 DOM；点「查看摘要」展开（内容与元数据行沿用 round 19）
+    expect(screen.queryByTestId('compaction-summary')).not.toBeInTheDocument()
+    const view = screen.getByTestId('compaction-view-summary')
+    expect(view).toHaveTextContent('查看摘要')
+    expect(view).toHaveClass('text-accent-text')
+    expect(view).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(view)
     expect(screen.getByTestId('compaction-summary')).toHaveTextContent('压缩出来的要点')
     expect(screen.getByTestId('compaction-summary')).toHaveTextContent('已压缩 4 条消息')
-    expect(screen.getByTestId('compaction-toggle')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('compaction-view-summary')).toHaveTextContent('收起摘要')
+    expect(screen.getByTestId('compaction-view-summary')).toHaveAttribute('aria-expanded', 'true')
 
-    fireEvent.click(screen.getByTestId('compaction-toggle'))
-    expect(screen.getByTestId('compaction-toggle')).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(screen.getByTestId('compaction-view-summary'))
+    expect(screen.getByTestId('compaction-view-summary')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('没有记录：不渲染标记', async () => {
+  it('老记录（没有 token 数）：括号整段不显示，只留「上下文已压缩」', async () => {
     const control = createMockTransport()
-    await renderSession(control, makeRuntime(control))
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(RECORD_WITHOUT_TOKENS)
+
+    await renderSession(control, runtimeOf(control, storedHistory()))
+    const marker = await screen.findByTestId('compaction-marker')
+    expect(marker).toHaveTextContent('上下文已压缩')
+    expect(marker).not.toHaveTextContent('tokens')
+  })
+
+  it('没有记录：不渲染分界线', async () => {
+    const control = createMockTransport()
+    await renderSession(control, runtimeOf(control, storedHistory()))
     expect(screen.queryByTestId('compaction-marker')).not.toBeInTheDocument()
+  })
+
+  it('位置 = 压缩时刻之后到达的第一条消息之前（重开会话按时间重算）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(RECORD)
+
+    await renderSession(
+      control,
+      runtimeOf(control, [
+        messageOf('h1', 'user', '压之前的老问题', AT - 60_000),
+        messageOf('h2', 'assistant', '压之后的新回答', AT + 1_000)
+      ])
+    )
+    await screen.findByTestId('message-h2')
+
+    expect(columnOrder()).toEqual(['message-h1', 'compaction-marker', 'message-h2'])
+  })
+
+  it('刚压完（消息都在压缩时刻之前）：分界线落在列表末尾（贴近输入框）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(RECORD)
+
+    await renderSession(
+      control,
+      runtimeOf(control, [
+        messageOf('h1', 'user', '问题', AT - 60_000),
+        messageOf('h2', 'assistant', '回答', AT - 30_000)
+      ])
+    )
+    await screen.findByTestId('message-h2')
+
+    expect(columnOrder()).toEqual(['message-h1', 'message-h2', 'compaction-marker'])
+  })
+
+  it('重开会话后本轮新发一条：分界线停在它之前（未知时间按"不早于压缩"算）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(RECORD)
+
+    // 真实形态：回灌的存储消息都早于压缩时刻（压缩保留了它们），本轮新发的没有时间戳
+    await renderSession(
+      control,
+      runtimeOf(control, [
+        messageOf('h1', 'user', '压之前的老问题', AT - 60_000),
+        messageOf('h2', 'assistant', '压缩后保留的回答', AT - 30_000)
+      ])
+    )
+    await screen.findByTestId('message-h2')
+    expect(columnOrder()).toEqual(['message-h1', 'message-h2', 'compaction-marker'])
+
+    await act(async () => {
+      send('重开后的新问题')
+    })
+    // 新消息排在分界线**下面**（旧的"继承前一条已知时间"会把分界线一路漂到末尾、盖住新消息）
+    const order = columnOrder()
+    expect(order.slice(0, 3)).toEqual(['message-h1', 'message-h2', 'compaction-marker'])
+    expect(order).toHaveLength(4)
+    expect(order[3]).toMatch(/^message-/)
+  })
+
+  it('本轮先发过消息再手动压缩：分界线锚在"压缩那一刻在手的消息之后"，之后新发仍排在它下面', async () => {
+    const control = createMockTransport()
+    vi.mocked(compactThread).mockResolvedValue({ compacted: true, compaction: RECORD })
+
+    await renderSession(
+      control,
+      runtimeOf(control, [
+        messageOf('h1', 'user', '压之前的老问题', AT - 60_000),
+        messageOf('h2', 'assistant', '压之前的老回答', AT - 30_000)
+      ])
+    )
+    // 先跑一轮：本轮新发的消息在客户端**没有时间戳**（真实形态），但它们确实存在于压缩之前
+    await act(async () => {
+      send('本地新发的一句')
+    })
+    await act(async () => {
+      control.push('答一')
+      control.finish()
+    })
+
+    // 手动压缩（「/」→ 压缩上下文）
+    typeAt('/')
+    await screen.findByTestId('suggest-command:compact')
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+    })
+    await screen.findByTestId('compaction-marker')
+
+    // 两条历史 + 本轮新发的 user/assistant 都在压缩之前 → 分界线钉在它们之后（锚点冻结）
+    const frozen = columnOrder()
+    expect(frozen).toHaveLength(5)
+    expect(frozen[0]).toBe('message-h1')
+    expect(frozen[4]).toBe('compaction-marker')
+
+    // 之后新发的消息排在分界线下面（锚点不动）
+    await act(async () => {
+      send('压完再发一句')
+    })
+    const grown = columnOrder()
+    expect(grown).toHaveLength(6)
+    expect(grown[4]).toBe('compaction-marker')
+    expect(grown[5]).toMatch(/^message-/)
+  })
+
+  it('压缩后编辑重发（消息变少）：锚点 clamp 到当前条数，分界线不会被挤出列表', async () => {
+    const control = createMockTransport()
+    vi.mocked(compactThread).mockResolvedValue({ compacted: true, compaction: RECORD })
+
+    await renderSession(
+      control,
+      runtimeOf(control, [
+        messageOf('h1', 'user', '旧问题', AT - 60_000),
+        messageOf('h2', 'assistant', '旧回答', AT - 30_000)
+      ])
+    )
+    // 手动压缩 → 锚点 = 当时 2 条
+    typeAt('/')
+    await screen.findByTestId('suggest-command:compact')
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+    })
+    await screen.findByTestId('compaction-marker')
+    expect(columnOrder()).toEqual(['message-h1', 'message-h2', 'compaction-marker'])
+
+    // 编辑重发 h1：服务端截断 + 客户端只剩改过的那条（1 条 < 锚点 2）
+    fireEvent.click(screen.getByTestId('message-edit'))
+    fireEvent.change(screen.getByTestId('message-edit-input'), {
+      target: { value: '改过的问题' }
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('message-edit-save'))
+    })
+    await waitFor(() => {
+      expect(vi.mocked(truncateThread)).toHaveBeenCalledWith(THREAD_ID, 'h1')
+    })
+
+    const order = columnOrder()
+    expect(order[order.length - 1]).toBe('compaction-marker')
+    expect(order.filter((id) => id === 'compaction-marker')).toHaveLength(1)
   })
 })
 
 describe('「/」命令分区（手动入口）', () => {
-  it('首条「压缩上下文」带当前使用率；选中立即压缩并给成功 notice', async () => {
+  it('首条「压缩上下文」带当前使用率；选中立即压缩（成功进对话流，不占输入框 notice）', async () => {
     const control = createMockTransport()
     vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(64_000)) // 64000/128000 = 50%
     vi.mocked(compactThread).mockResolvedValue({ compacted: true, compaction: RECORD })
 
-    await renderSession(control, makeRuntime(control))
+    await renderSession(control, runtimeOf(control, storedHistory()))
     typeAt('/')
 
     const row = await screen.findByTestId('suggest-command:compact')
@@ -313,11 +527,11 @@ describe('「/」命令分区（手动入口）', () => {
     })
     // 命令行不是引用标记：触发段整段移除，不插任何标记文本
     expect(screen.getByTestId('composer-input')).toHaveValue('')
+    // round 59：成功的表现是对话流里那条分界线 —— 输入框区**没有**任何提示行
     await waitFor(() => {
-      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '已压缩历史上下文（保留最近 10 条）'
-      )
+      expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
     })
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
   })
 
   it('流式中：命令行可见但禁用（点了/回车都没有动作）', async () => {
@@ -357,7 +571,7 @@ describe('round 57 · 作曲栏「压缩上下文」胶囊（不输入也能压�
     vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(110_000)) // 110000/128000 ≈ 86%
     vi.mocked(compactThread).mockResolvedValue({ compacted: true, compaction: RECORD })
 
-    await renderSession(control, makeRuntime(control))
+    await renderSession(control, runtimeOf(control, storedHistory()))
     const chip = await screen.findByTestId('composer-compact')
     expect(chip).toHaveTextContent('压缩上下文')
     expect(chip).toBeEnabled()
@@ -367,13 +581,11 @@ describe('round 57 · 作曲栏「压缩上下文」胶囊（不输入也能压�
     await waitFor(() => {
       expect(vi.mocked(compactThread)).toHaveBeenCalledWith(THREAD_ID)
     })
+    // round 59：分界线随记录出现在对话流里；输入框区没有提示行；全程一条消息都没发出去
     await waitFor(() => {
-      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '已压缩历史上下文（保留最近 10 条）'
-      )
+      expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
     })
-    // 顶部标记随记录更新；全程一条消息都没发出去
-    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
     expect(control.requests).toHaveLength(0)
   })
 

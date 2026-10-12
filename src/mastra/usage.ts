@@ -256,6 +256,35 @@ function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
   }
 }
 
+/**
+ * round 59：一条会话的 token 读数（**唯一口径**：/api/usage/context 与压缩记录的 tokensBefore
+ * 都从这里来，别在两处各算一套）。
+ *
+ * 口径同 listByThread 的排序：按 created_at 升序，**末行** = 最近一轮、**首行** = 首轮基线
+ * （首行 ≈ 系统提示 + 工具定义的基线，见 shared/usage 的 usageThreadContextSchema 注释）。
+ * 空会话三个字段都是 null（不假装 0）。`lastCachedInput` 一起回：路由的 hover 明细要它，
+ * 与其再查一次同一张表，不如一次读完（压缩侧只用前两个字段）。
+ */
+export interface ThreadTokenReadout {
+  lastInput: number | null
+  lastCachedInput: number | null
+  baselineInput: number | null
+}
+
+export async function threadTokenReadout(
+  store: UsageStore,
+  threadId: string
+): Promise<ThreadTokenReadout> {
+  const rows = await store.listByThread(threadId)
+  const first = rows[0]
+  const last = rows[rows.length - 1]
+  return {
+    lastInput: last?.tokens.input ?? null,
+    lastCachedInput: last?.cachedInput ?? null,
+    baselineInput: first?.tokens.input ?? null
+  }
+}
+
 /** 窗口起点：today = 本地零点；month = 本地 1 号零点（"本地日历"口径，与用户看到的对得上） */
 export function rangeStart(range: UsageRange, now: Date): Date {
   const start = new Date(now)

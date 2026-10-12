@@ -39,6 +39,7 @@ import {
   createCompactionService,
   createCompactionStore,
   DEFAULT_KEEP_MESSAGES,
+  estimateTokens,
   KEEP_MIN,
   transcriptLine,
   type CompactionStore,
@@ -187,7 +188,10 @@ describe('压缩服务（假 memory + 假模型）', () => {
       summary: '上一次的摘要',
       summarized: 5,
       kept: 2,
-      createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString()
+      createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString(),
+      // round 59：老记录（round 58 之前压的）没有 token 读数——两个字段就是 null
+      tokensBefore: null,
+      tokensAfter: null
     }
     const { memory, deleteMessages } = fakeMemory([
       storedMessage('m1', 'user', 'a'),
@@ -264,7 +268,9 @@ describe('压缩服务（假 memory + 假模型）', () => {
       summary: '## 要点\n- 上一轮定下用 libsql 存摘要',
       summarized: 4,
       kept: 2,
-      createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString()
+      createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString(),
+      tokensBefore: 41_000,
+      tokensAfter: 6_500
     }
     const { memory, deleteMessages } = fakeMemory([
       storedMessage('m1', 'user', '旧问题'),
@@ -381,6 +387,152 @@ describe('压缩服务（假 memory + 假模型）', () => {
     expect(run.cost).not.toBeNull()
     expect(pricingFor('deepseek-flash')).not.toBeNull()
   })
+
+  it('round 59：记录带压缩前后 token——before = 最近一轮实测输入，after = 基线 + 摘要与保留段的字符折算', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ]
+    const { memory } = fakeMemory(messages)
+    const store = memoryStore()
+    const summary = '## 要点\n- 前两轮聊过天气'
+    const asked: string[] = []
+    const service = createCompactionService({
+      memory,
+      store,
+      resolveModel,
+      usageOf: async (threadId) => {
+        asked.push(threadId)
+        return { lastInput: 527_000, baselineInput: 12_000 }
+      },
+      generate: async () => ({ text: summary })
+    })
+
+    const outcome = await service.compact('thread-token')
+
+    expect(outcome.compacted).toBe(true)
+    expect(asked).toEqual(['thread-token'])
+    // 期望值在断言里按同一口径重算一遍：保留段（m3/m4）用素材同一套抽取口径逐条取字符数
+    const keptChars = messages
+      .slice(2)
+      .map((message) => transcriptLine(message) ?? '')
+      .join('\n\n').length
+    expect(outcome.compaction).toMatchObject({
+      summarized: 2,
+      kept: 2,
+      tokensBefore: 527_000,
+      tokensAfter: 12_000 + estimateTokens(summary.length + keptChars)
+    })
+  })
+
+  it('round 59：读数在摘要用量落库**之前**取（否则会把摘要那一轮当成"最近一轮"）', async () => {
+    const { memory } = fakeMemory([
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ])
+    const usage = fakeUsageStore()
+    const order: string[] = []
+    const service = createCompactionService({
+      memory,
+      store: memoryStore(),
+      resolveModel,
+      usage: {
+        ...usage,
+        insert: async (run) => {
+          order.push('usage.insert')
+          await usage.insert(run)
+        }
+      },
+      usageOf: async () => {
+        order.push('usageOf')
+        return { lastInput: 100, baselineInput: 10 }
+      },
+      generate: async () => ({
+        text: '摘要正文',
+        usage: { inputTokens: 11, outputTokens: 111 }
+      })
+    })
+
+    await service.compact('thread-order', 2)
+    expect(order).toEqual(['usageOf', 'usage.insert'])
+  })
+
+  it('round 59：读数拿不到（未注入 / 回 null / 抛错）→ 两个字段都落 null，压缩照常', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ]
+    const compactWith = async (
+      usageOf?: (threadId: string) => Promise<{
+        lastInput: number | null
+        baselineInput: number | null
+      } | null>
+    ): Promise<ThreadCompaction | null> => {
+      const { memory } = fakeMemory(messages)
+      const service = createCompactionService({
+        memory,
+        store: memoryStore(),
+        resolveModel,
+        generate: async () => ({ text: '摘要正文' }),
+        ...(usageOf === undefined ? {} : { usageOf })
+      })
+      return (await service.compact('thread-null', 2)).compaction
+    }
+
+    // 没注入读数（测试里的窄构造、未来的别的调用方）
+    expect(await compactWith()).toMatchObject({ tokensBefore: null, tokensAfter: null })
+    // 读数是 null（例如这张会话在 usage_runs 里一行都没有）
+    expect(await compactWith(async () => null)).toMatchObject({
+      tokensBefore: null,
+      tokensAfter: null
+    })
+    // 读数抛错：只留空这两个字段，不让压缩跟着挂（告警静音掉，免得刷测试输出）
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const thrown = await compactWith(async () => {
+      throw new Error('查库炸了')
+    })
+    warn.mockRestore()
+    expect(thrown).toMatchObject({
+      summary: '摘要正文',
+      tokensBefore: null,
+      tokensAfter: null
+    })
+  })
+
+  it('round 59：lastInput 拿不到而基线有值 → before null、after 照算', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ]
+    const { memory } = fakeMemory(messages)
+    const summary = '## 要点\n- 旧的'
+    const service = createCompactionService({
+      memory,
+      store: memoryStore(),
+      resolveModel,
+      usageOf: async () => ({ lastInput: null, baselineInput: 9_000 }),
+      generate: async () => ({ text: summary })
+    })
+
+    const outcome = await service.compact('thread-half', 2)
+
+    const keptChars = messages
+      .slice(2)
+      .map((message) => transcriptLine(message) ?? '')
+      .join('\n\n').length
+    expect(outcome.compaction).toMatchObject({
+      tokensBefore: null,
+      tokensAfter: 9_000 + estimateTokens(summary.length + keptChars)
+    })
+  })
 })
 
 describe('摘要素材渲染（transcriptLine / buildTranscript）', () => {
@@ -418,7 +570,9 @@ describe('注入处理器（输入处理器）', () => {
     summary: '## 要点\n- 之前聊过缓存',
     summarized: 4,
     kept: 10,
-    createdAt: new Date(2026, 9, 11, 9, 0, 0).toISOString()
+    createdAt: new Date(2026, 9, 11, 9, 0, 0).toISOString(),
+    tokensBefore: 88_000,
+    tokensAfter: 21_000
   }
 
   it('有记录：把摘要加成系统消息（前缀 = COMPACTION_PREFIX_TAG + 摘要原文，普通消息不动）', async () => {
@@ -494,7 +648,10 @@ describe('压缩存储（真 libsql）', () => {
       summary: '第一次摘要',
       summarized: 4,
       kept: 10,
-      createdAt: new Date(2026, 9, 11, 10, 0, 0).toISOString()
+      createdAt: new Date(2026, 9, 11, 10, 0, 0).toISOString(),
+      // round 59：两个 token 列真的落库、真的读回来（不是只在内存里）
+      tokensBefore: 527_000,
+      tokensAfter: 53_700
     }
     await store.save(first)
     expect(await store.get('t1')).toEqual(first)
@@ -505,6 +662,72 @@ describe('压缩存储（真 libsql）', () => {
 
     await store.clear('t1')
     expect(await store.get('t1')).toBeNull()
+  })
+
+  // round 59：老库（round 58 及更早）没有 tokens_before / tokens_after 两列——ensureTable 要补上，
+  // 旧行读出来归一成 null（不编造 0）。这里手工造一张老形状的表来走这条路。
+  it('round 59 列迁移：老表补两列、旧行读出 null、迁移后的表能读写新列（重复迁移不报错）', async () => {
+    const legacyDir = mkdtempSync(join(tmpdir(), 'kyclaw-compaction-legacy-'))
+    const legacyStorage = new LibSQLStore({
+      id: 'kyclaw-compaction-legacy',
+      url: `file:${join(legacyDir, 'kyclaw.db').replace(/\\/g, '/')}`
+    })
+    try {
+      const client = compactionSqlClient(legacyStorage)
+      await client.execute(
+        `CREATE TABLE "${COMPACTION_TABLE}" (
+          "thread_id" TEXT PRIMARY KEY,
+          "summary" TEXT NOT NULL,
+          "summarized" INTEGER NOT NULL,
+          "kept" INTEGER NOT NULL,
+          "created_at" TEXT NOT NULL
+        )`
+      )
+      await client.execute({
+        sql: `INSERT INTO "${COMPACTION_TABLE}"
+          ("thread_id", "summary", "summarized", "kept", "created_at") VALUES (?, ?, ?, ?, ?)`,
+        args: ['legacy', '老摘要', 4, 2, new Date(2026, 9, 11, 10, 0, 0).toISOString()]
+      })
+
+      const store = createCompactionStore(client)
+      await store.ensureTable() // 迁移在这一步发生
+      expect(await store.get('legacy')).toEqual({
+        threadId: 'legacy',
+        summary: '老摘要',
+        summarized: 4,
+        kept: 2,
+        createdAt: new Date(2026, 9, 11, 10, 0, 0).toISOString(),
+        tokensBefore: null,
+        tokensAfter: null
+      })
+
+      // 迁移后的表：新列能写能读
+      const fresh: ThreadCompaction = {
+        threadId: 'legacy',
+        summary: '新摘要',
+        summarized: 6,
+        kept: 2,
+        createdAt: new Date(2026, 9, 11, 11, 0, 0).toISOString(),
+        tokensBefore: 120_000,
+        tokensAfter: 30_000
+      }
+      await store.save(fresh)
+      expect(await store.get('legacy')).toEqual(fresh)
+
+      // 再建一个 store 走一遍 ensureTable（列已存在的那条分支）：不该报错，数据也不动
+      await createCompactionStore(client).ensureTable()
+      expect(await store.get('legacy')).toEqual(fresh)
+    } finally {
+      await legacyStorage.close()
+      try {
+        rmSync(legacyDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      } catch {
+        console.warn(
+          '[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）：',
+          legacyDir
+        )
+      }
+    }
   })
 })
 
@@ -557,7 +780,9 @@ describe('压缩路由（Hono + 压缩服务：多数假件，一条真接线）
         summary: '摘要',
         summarized: 4,
         kept: 10,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        tokensBefore: 527_000,
+        tokensAfter: 53_700
       }
     }))
     const app = makeApp({ compact })
@@ -635,7 +860,10 @@ describe('压缩路由（Hono + 压缩服务：多数假件，一条真接线）
       summary: '摘要',
       summarized: 3,
       kept: 10,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      // round 59：回包要带上分界线用的两个 token 字段（strict schema：少了就 parse 报错）
+      tokensBefore: 527_000,
+      tokensAfter: 53_700
     }
     const withRecord = makeApp({ of: async () => record })
     const response = await withRecord.request(`/api/threads/${THREAD_ID}/compaction`)
@@ -773,6 +1001,27 @@ describe('真服务集成（chat + compact + 注入 + 截断）', () => {
       .join('\n')
   }
 
+  /**
+   * round 59：等该会话的"最近一轮输入"读数到位（记账在流收尾处，可能比 HTTP 回包晚一点）。
+   * 到了才往下走；超时也断言一次——真没等到就是回归，不该悄悄跳过。
+   */
+  async function waitForLastInput(threadId: string, expected: number): Promise<void> {
+    const deadline = Date.now() + 5000
+    for (;;) {
+      const response = await fetch(
+        `${server.baseUrl}/api/usage/context?threadId=${encodeURIComponent(threadId)}`,
+        authed()
+      )
+      expect(response.status).toBe(200)
+      const { lastInput } = (await response.json()) as { lastInput: number | null }
+      if (lastInput === expected || Date.now() > deadline) {
+        expect(lastInput).toBe(expected)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
   beforeAll(async () => {
     chatPrompts = []
     summaryPrompts = []
@@ -816,6 +1065,8 @@ describe('真服务集成（chat + compact + 注入 + 截断）', () => {
     ])
 
     // —— 压缩（keep=2：保留最后一轮问答）——
+    // round 59：先等"压缩前最近一轮"的读数落库（每轮 mock input = 1），下面才验证 tokensBefore
+    await waitForLastInput(threadId, 1)
     const compactResponse = await fetch(
       `${server.baseUrl}/api/threads/${threadId}/compact`,
       authed({ method: 'POST', body: JSON.stringify({ keep: 2 }) })
@@ -825,6 +1076,12 @@ describe('真服务集成（chat + compact + 注入 + 截断）', () => {
     expect(outcome.compacted).toBe(true)
     expect(outcome.compaction).toMatchObject({ threadId, summarized: 4, kept: 2 })
     expect(outcome.compaction?.summary).toContain('用户前几轮都在聊天气')
+    // round 59：before = 压缩**之前**最近一轮的实测输入（1）；摘要那轮记的是 11 —— 若读数取在
+    // 摘要落库之后，这里会是 11 而不是 1（顺带证明 index.ts 的 usageOf 真接上了、时机也对）
+    expect(outcome.compaction?.tokensBefore).toBe(1)
+    // after 是估算：基线 1 + 摘要与保留段的字符折算（mock 里压缩前输入只有 1 token，
+    // 所以这组数字不体现"变小"——变小要在真模型上才看得到，这里只验公式接通了）
+    expect(outcome.compaction?.tokensAfter).toBeGreaterThan(1)
     // 摘要调用的素材 = 被裁掉的前四条消息文本（generateText 的 prompt 是消息数组，序列化后断言）
     expect(JSON.stringify(summaryPrompts[0] ?? null)).toContain('第一问：天气怎样')
 

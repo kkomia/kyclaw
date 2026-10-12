@@ -72,7 +72,13 @@ import type { WebSearchDeps } from './search/backends'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
-import { createUsageRecorder, createUsageStore, usageSqlClient, type UsageStore } from './usage'
+import {
+  createUsageRecorder,
+  createUsageStore,
+  threadTokenReadout,
+  usageSqlClient,
+  type UsageStore
+} from './usage'
 
 /** libsql 库文件名（落在 dataDir 下） */
 export const AGENT_DB_FILE = 'kyclaw.db'
@@ -305,7 +311,9 @@ export async function createKyclawMastra(options: {
     memory,
     store: compactionStore,
     resolveModel: options.resolveModel,
-    usage
+    usage,
+    // round 59：压缩前读一次该会话的 token 读数（与 /api/usage/context 同一口径，见 usage.ts）
+    usageOf: (threadId) => threadTokenReadout(usage, threadId)
   })
   // 追踪（T17）：默认关——没配齐（或建不起来）就没有 observability，Mastra 自己走 no-op
   const observability = await langfuseObservabilityQuietly(options.langfuse?.() ?? null)

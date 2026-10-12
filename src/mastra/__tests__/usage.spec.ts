@@ -31,8 +31,10 @@ import {
   pricingFor,
   rangeStart,
   summarizeUsage,
+  threadTokenReadout,
   usageSqlClient,
-  type UsageRun
+  type UsageRun,
+  type UsageStore
 } from '../usage'
 
 const USAGE = {
@@ -158,6 +160,36 @@ describe('价目与花费计算', () => {
     expect(summarizeUsage([run({ model: 'x', cost: null })], 'today')).toMatchObject({
       cost: null,
       costIncomplete: true
+    })
+  })
+})
+
+describe('会话 token 读数（round 59）', () => {
+  it('按 created_at 升序取首末：末行 = 最近一轮、首行 = 基线；空会话三个字段全 null', async () => {
+    const rows = [
+      run({ model: 'm', threadId: 't', input: 100, output: 5, at: new Date(2026, 9, 15, 9, 0, 0) }),
+      run({
+        model: 'm',
+        threadId: 't',
+        input: 400,
+        output: 5,
+        cachedInput: 300,
+        at: new Date(2026, 9, 15, 10, 0, 0)
+      })
+    ]
+    const store = { listByThread: async () => rows } as unknown as UsageStore
+    // 这个口径同时喂 /api/usage/context 与压缩记录的 tokensBefore（同一处实现，不各算一套）
+    expect(await threadTokenReadout(store, 't')).toEqual({
+      lastInput: 400,
+      lastCachedInput: 300,
+      baselineInput: 100
+    })
+
+    const empty = { listByThread: async () => [] } as unknown as UsageStore
+    expect(await threadTokenReadout(empty, 't')).toEqual({
+      lastInput: null,
+      lastCachedInput: null,
+      baselineInput: null
     })
   })
 })

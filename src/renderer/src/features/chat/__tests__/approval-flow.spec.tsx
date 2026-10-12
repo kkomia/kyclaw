@@ -804,9 +804,15 @@ describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重
       summary: '## 要点\n- 之前聊过写文件',
       summarized: 4,
       kept: 10,
-      createdAt: '2026-10-11T02:00:00.000Z'
+      createdAt: '2026-10-11T02:00:00.000Z',
+      // round 59：记录新增两个必填 token 字段（这条只验审批链路，取 null）
+      tokensBefore: null,
+      tokensAfter: null
     })
-    await renderSession(control)
+    await renderSession(control, true, THREAD_ID, [
+      // round 59：分界线要有对话流才画（空会话画的是初始页）；有压缩记录的会话现实里也有消息
+      { id: 'h0', role: 'user', parts: [{ type: 'text', text: '之前聊过写文件' }] }
+    ])
     expect(await screen.findByTestId('compaction-marker')).toBeInTheDocument()
 
     await send('写个文件')

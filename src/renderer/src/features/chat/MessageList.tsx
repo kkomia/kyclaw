@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
 import { CompactionMarker } from './CompactionMarker'
+import { compactionRowIndex } from './compaction-line'
 import { Message } from './Message'
 import { MessageRail } from './MessageRail'
 
@@ -15,15 +16,25 @@ import { MessageRail } from './MessageRail'
  *
  * round 29：审批入口搬到输入框上方（ApprovalDock），这里不再透传审批回调与工作区列表 ——
  * 消息流只把"等审批"如实画成只读状态行。
+ *
+ * round 59：压缩分界线不再是"列顶一行"，而是对话流里的一个**时间点** —— 按 compaction-line.ts
+ * 的定位规则插到"压缩时刻之后的第一条消息"之前；压缩进行中则画在"现在"（列表末尾）。
+ * `compactionIndex` 是上层冻结的锚点（手动压缩时在手的本轮新发消息要算在压缩之前，光靠时间戳
+ * 判不出来，见 ChatPage 的 compactionAnchor）：给了就用它，不给就自己按时间戳规则算。
  */
 export interface MessageListProps {
   messages: UIMessage[]
   status: ChatStatus
   onEdit?: (messageId: string, text: string) => void
-  /** round 19：顶部「上下文已压缩」标记的数据（null = 不渲染标记） */
+  /** round 19：压缩记录（null = 不渲染分界线） */
   compaction?: ThreadCompaction | null
-  /** 压缩进行中（标记显示「上下文压缩中…」） */
+  /** 压缩进行中（同一位置显示「正在压缩上下文…」） */
   compacting?: boolean
+  /**
+   * round 59：分界线的固定下标（压缩完成那一刻冻结的锚点；undefined = 自己按时间戳算）。
+   * 压缩进行中不用它（进行中画在"现在"）。
+   */
+  compactionIndex?: number
 }
 
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
@@ -51,7 +62,8 @@ export function MessageList({
   status,
   onEdit,
   compaction = null,
-  compacting = false
+  compacting = false,
+  compactionIndex
 }: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
@@ -59,6 +71,15 @@ export function MessageList({
   const viewRef = useRef<HTMLDivElement>(null)
   const stickyRef = useRef(true)
   const tail = tailSignature(messages)
+
+  /**
+   * round 59：分界线插在第几条消息之前（null = 不画）。
+   * 压缩进行中画在"现在"（列表末尾）——正在发生的事就在时间轴的最新一点；压完按上层的锚点
+   * 定位（手动压缩那一刻冻结，见 ChatPage），没有锚点（重开会话）就按时间戳规则算。
+   */
+  const markerIndex = compacting
+    ? messages.length
+    : (compactionIndex ?? compactionRowIndex(messages, compaction))
 
   useEffect(() => {
     const view = viewRef.current
@@ -84,15 +105,22 @@ export function MessageList({
         }}
       >
         <div className="flex w-full flex-col gap-6 py-6 pr-14 pl-4">
-          <CompactionMarker compaction={compaction} compacting={compacting} />
-          {messages.map((message) => (
-            <Message
-              key={message.id}
-              message={message}
-              streaming={status === 'streaming' && message.id === lastAssistantId}
-              onEdit={onEdit}
-            />
+          {messages.map((message, index) => (
+            <Fragment key={message.id}>
+              {index === markerIndex ? (
+                <CompactionMarker compaction={compaction} compacting={compacting} />
+              ) : null}
+              <Message
+                message={message}
+                streaming={status === 'streaming' && message.id === lastAssistantId}
+                onEdit={onEdit}
+              />
+            </Fragment>
           ))}
+          {/* 落在末尾（含"一条消息都没有"）：列表末尾那一份分界线 */}
+          {markerIndex === messages.length ? (
+            <CompactionMarker compaction={compaction} compacting={compacting} />
+          ) : null}
         </div>
       </div>
       {/* 导览轨挂在滚动区外：它自己固定在聊天区右缘，不跟着消息滚 */}

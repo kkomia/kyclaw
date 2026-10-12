@@ -27,6 +27,17 @@
  *     审批续跑 resume 不走输入处理器，用快照，不受影响）；
  *   - 摘要 run 的 finishReason 是 error/aborted 时 AI SDK 抛错，这里不记 usage；
  *     正常返回才记账（与 chat 一轮的记账口径一致）。
+ *   - 压缩前后 token（round 59）：记录带 tokensBefore / tokensAfter，给对话流里的
+ *     「上下文已压缩（before → after tokens）」分界线用。
+ *     tokensBefore = 压缩**之前**该会话最近一轮的实测输入 token（usage_runs 里那一行的 input，
+ *     与 /api/usage/context 的 lastInput **同一口径**，共用 usage.ts 的 threadTokenReadout），
+ *     必须在摘要用量落库之前读出来——摘要那一行也带 threadId，落库后再读就把摘要这轮当成了
+ *     "最近一轮"（读数是压缩后的，分界线会说谎）；
+ *     tokensAfter = **估算**：baselineInput（该会话首轮基线，取不到按 0）+ estimateTokens(
+ *     摘要字符数 + 保留段字符数)。保留段按**与摘要素材同一套抽取口径**逐条算（transcriptLine），
+ *     但**不套**素材的 48k 总长上限——它是要原样留在上下文里的那一段，不该被素材上限砍；
+ *     usageOf 未注入 / 回 null / 抛错 → 两个字段都落 null（界面上如实不显示，不编造 0）；
+ *     usageOf 成功但 lastInput 拿不到：before = null、after 照算。
  */
 import { randomUUID } from 'node:crypto'
 import type { LibSQLStore, SqliteClient } from '@mastra/libsql'
@@ -75,6 +86,17 @@ export const TRANSCRIPT_TOOL_RESULT_MAX_CHARS = 400
 /** 摘要素材总长上限（超出从**最旧**一端截掉：近期历史对后续对话更有用） */
 export const TRANSCRIPT_MAX_CHARS = 48_000
 
+/**
+ * round 59：字符数 → token 的**估算**（中英混排约 3 字符/token 的经验折算）。
+ *
+ * 只用来给「压缩后上下文」一个量级（写进 thread_compactions.tokens_after）：压缩后的上下文
+ * 还没真的跑过一轮，没有实测值可用；真实数字由 provider 的 usage 记账给出（见 usage.ts）。
+ * 它是估算不是测量——别拿它当 token 精确值做判断。
+ */
+export function estimateTokens(chars: number): number {
+  return Math.ceil(chars / 3)
+}
+
 /** 给模型的摘要素材指令：结构化四段（与 UI 标记展开里的摘要同构） */
 export const COMPACT_INSTRUCTIONS = `你是会话压缩器。下面是 AI 助手与用户对话中「较早的部分」（这段原文将在压缩后删除，只有你的摘要会被保留）。
 素材开头若有一段以「【此前摘要】」开头的内容，那是上一次压缩留下的摘要：请把它与后面的新素材合并成一份完整摘要，不要丢掉其中的要点。
@@ -107,6 +129,14 @@ export interface CompactionStore {
   clear(threadId: string): Promise<void>
 }
 
+/** libsql 列值 → number|null（NULL / 读不出数字 = null；round 59 的两个 token 列用） */
+function nullableInt(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const parsed = typeof value === 'bigint' ? Number(value) : value
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed)) return null
+  return Math.trunc(parsed)
+}
+
 export function createCompactionStore(client: SqliteClient): CompactionStore {
   let ready: Promise<void> | null = null
 
@@ -118,9 +148,20 @@ export function createCompactionStore(client: SqliteClient): CompactionStore {
           "summary" TEXT NOT NULL,
           "summarized" INTEGER NOT NULL,
           "kept" INTEGER NOT NULL,
-          "created_at" TEXT NOT NULL
+          "created_at" TEXT NOT NULL,
+          "tokens_before" INTEGER,
+          "tokens_after" INTEGER
         )`
       )
+      // round 59 列迁移：round 58 及更早建的库里没有这两列，读/写都会炸——先查现状再补。
+      // 不用"ALTER 失败就当列已存在"的 catch 兜底：那会把真正的失败也吞掉（列查得到才不补）
+      const columns = await client.execute(`PRAGMA table_info("${COMPACTION_TABLE}")`)
+      const existing = new Set(columns.rows.map((row) => String(row.name)))
+      for (const column of ['tokens_before', 'tokens_after']) {
+        if (!existing.has(column)) {
+          await client.execute(`ALTER TABLE "${COMPACTION_TABLE}" ADD COLUMN "${column}" INTEGER`)
+        }
+      }
     })().catch((error: unknown) => {
       ready = null // 失败不缓存：下一次调用再试一遍（同 usage.ts）
       throw error
@@ -134,15 +175,23 @@ export function createCompactionStore(client: SqliteClient): CompactionStore {
       await ensureTable()
       await client.execute({
         sql: `INSERT OR REPLACE INTO "${COMPACTION_TABLE}"
-          ("thread_id", "summary", "summarized", "kept", "created_at")
-          VALUES (?, ?, ?, ?, ?)`,
-        args: [record.threadId, record.summary, record.summarized, record.kept, record.createdAt]
+          ("thread_id", "summary", "summarized", "kept", "created_at", "tokens_before", "tokens_after")
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          record.threadId,
+          record.summary,
+          record.summarized,
+          record.kept,
+          record.createdAt,
+          record.tokensBefore,
+          record.tokensAfter
+        ]
       })
     },
     async get(threadId) {
       await ensureTable()
       const result = await client.execute({
-        sql: `SELECT "thread_id", "summary", "summarized", "kept", "created_at"
+        sql: `SELECT "thread_id", "summary", "summarized", "kept", "created_at", "tokens_before", "tokens_after"
           FROM "${COMPACTION_TABLE}" WHERE "thread_id" = ?`,
         args: [threadId]
       })
@@ -153,7 +202,10 @@ export function createCompactionStore(client: SqliteClient): CompactionStore {
         summary: String(row.summary),
         summarized: Number(row.summarized),
         kept: Number(row.kept),
-        createdAt: String(row.created_at)
+        createdAt: String(row.created_at),
+        // 旧行这两列是 NULL → null（round 59 之前的记录没有 token 读数，不编造 0）
+        tokensBefore: nullableInt(row.tokens_before),
+        tokensAfter: nullableInt(row.tokens_after)
       }
     },
     async clear(threadId) {
@@ -327,10 +379,7 @@ export function transcriptLine(message: { role?: unknown; content?: unknown }): 
 export function buildTranscript(
   messages: ReadonlyArray<{ role?: unknown; content?: unknown }>
 ): string {
-  const lines = messages.flatMap((message) => {
-    const line = transcriptLine(message)
-    return line === null ? [] : [line]
-  })
+  const lines = transcriptLines(messages)
   const joined = lines.join('\n\n')
   if (joined.length <= TRANSCRIPT_MAX_CHARS) return joined
   let kept: string[] = []
@@ -344,10 +393,39 @@ export function buildTranscript(
   return kept.join('\n\n')
 }
 
+/** 逐条渲染成素材行（坏数据 / 思考过程跳过）——buildTranscript 与 transcriptChars 共用这一套口径 */
+function transcriptLines(messages: ReadonlyArray<{ role?: unknown; content?: unknown }>): string[] {
+  return messages.flatMap((message) => {
+    const line = transcriptLine(message)
+    return line === null ? [] : [line]
+  })
+}
+
+/**
+ * round 59：保留下来的那段消息按**与摘要素材同一套抽取口径**拼起来的字符数（估 tokensAfter 用）。
+ * 与 buildTranscript 的唯一差别：**不套** TRANSCRIPT_MAX_CHARS 上限——保留段是要原样留在
+ * 上下文里的那一段，估上下文体积时不该被素材上限砍掉。
+ */
+function transcriptChars(messages: ReadonlyArray<{ role?: unknown; content?: unknown }>): number {
+  const lines = transcriptLines(messages)
+  return lines.length === 0 ? 0 : lines.join('\n\n').length
+}
+
 /** 摘要失败能给用户看的那一行文案（ProviderConfigError 原文就是人话；其余不暴露后端细节） */
 export function compactionErrorText(error: unknown): string {
   if (error instanceof ProviderConfigError) return error.message
   return '压缩没能完成：模型这次没跑通，请稍后重试。'
+}
+
+/**
+ * round 59：压缩记录要的 token 读数（压缩**之前**取一次）。
+ * 形状对齐 usage.ts 的 threadTokenReadout / /api/usage/context 的同一口径。
+ */
+export interface CompactionTokenReadout {
+  /** 该会话最近一轮的实测输入 token（拿不到 = null） */
+  lastInput: number | null
+  /** 该会话首轮输入的基线（拿不到 = null） */
+  baselineInput: number | null
 }
 
 export interface CreateCompactionServiceOptions {
@@ -357,11 +435,31 @@ export interface CreateCompactionServiceOptions {
   resolveModel: ModelResolver
   /** 摘要调用的 token 记账（并入 round 18 口径；缺省 = 不记） */
   usage?: UsageStore
+  /**
+   * round 59：压缩前的 token 读数（生产 = usage.ts 的 threadTokenReadout；缺省 = 记录里留 null）。
+   * 调用时机在摘要用量落库**之前**，理由见头注。
+   */
+  usageOf?: (threadId: string) => Promise<CompactionTokenReadout | null>
   /** 测试注入；缺省走 ai 的 generateText */
   generate?: CompactGenerate
   now?: () => Date
   /** 测试注入（缩短超时）；缺省 60s */
   timeoutMs?: number
+}
+
+/** round 59：取一次读数；没注入 / 查库失败都算"拿不到"（两个字段留 null，不编造） */
+async function readTokenReadout(
+  usageOf: CreateCompactionServiceOptions['usageOf'],
+  threadId: string
+): Promise<CompactionTokenReadout | null> {
+  if (usageOf === undefined) return null
+  try {
+    return await usageOf(threadId)
+  } catch (error) {
+    // 旁路纪律同用量记账：读数读不到只让分界线少两个数字，绝不拖累压缩本身
+    console.warn('[kyclaw] 压缩前读会话 token 读数失败（记录里这两个字段留空）', error)
+    return null
+  }
 }
 
 export function createCompactionService(
@@ -381,6 +479,10 @@ export function createCompactionService(
       )
       // 已有摘要（重压要带上，见下）+ 一次读出来：无操作分支也要回它
       const previous = await options.store.get(threadId)
+      // round 59：压缩前的 token 读数与 previous **一起在开头读**——摘要用量也是往 usage_runs
+      // 写一行（threadId 照记），落库之后再读就把摘要那一轮当成了"最近一轮"，tokensBefore 会
+      // 记成压缩后的数（分界线说反话）。这里读到的才是"压缩前最近一轮的实测输入"。
+      const readout = await readTokenReadout(options.usageOf, threadId)
       const { messages } = await options.memory.recall({ threadId, perPage: false })
       // round 58 自适应：条数够就按 requested 保留；条数比 requested 还少（"条数少、体量大"
       // 的会话：几轮输入几十万 token）就收窄到 max(2, 条数 - 2)，也就是至少压掉 2 条、
@@ -392,6 +494,8 @@ export function createCompactionService(
       }
 
       const older = messages.slice(0, messages.length - effective)
+      // 保留段 = older 之外的后半段（tokensAfter 里按字符折算计入）
+      const keptMessages = messages.slice(older.length)
       // 摘要只数本轮真实消息（summarized/kept 同口径）；空素材判定也只看新素材
       const material = buildTranscript(older)
       if (material === '') {
@@ -421,7 +525,14 @@ export function createCompactionService(
         summary,
         summarized: older.length,
         kept: messages.length - older.length,
-        createdAt: now().toISOString()
+        createdAt: now().toISOString(),
+        // round 59：读数读不到（没注入 / 查库失败）两个字段都 null；只有 lastInput 缺时 after 照算
+        tokensBefore: readout?.lastInput ?? null,
+        tokensAfter:
+          readout === null
+            ? null
+            : (readout.baselineInput ?? 0) +
+              estimateTokens(summary.length + transcriptChars(keptMessages))
       }
       // 先落记录、后删消息：中途失败宁可"摘要 + 旧消息都在"，也不丢历史
       await options.store.save(record)

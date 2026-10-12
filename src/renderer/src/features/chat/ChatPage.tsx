@@ -3,6 +3,7 @@ import { useChat } from '@ai-sdk/react'
 import type { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
+import { cn } from '@renderer/components/ui/cn'
 import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
 import { compactThread, fetchThreadCompaction, truncateThread } from '@renderer/lib/threads-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
@@ -27,6 +28,7 @@ import { ChatHeader } from './ChatHeader'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { MessageList } from './MessageList'
+import { WelcomeHero } from './WelcomeHero'
 
 /**
  * 对话页（T7 起，T9 接会话）。
@@ -39,6 +41,10 @@ import { MessageList } from './MessageList'
  * "编辑重发"（R2）：先调服务端 truncate（把这轮及之后的存储消息删掉），再走 useChat 的
  * 客户端截断重发；两边顺序不能反——服务端记忆是权威，反了旧的回答会留在历史里。
  * "重试"同理：先删掉上一条助手回复再 regenerate（否则新回复会被合并进旧消息）。
+ *
+ * round 59：内容区（ActiveChat）改成三格弹性布局（消息区 / 初始页标题 / 页脚 + 底部弹性占位）——
+ * 空会话时消息区与占位等分剩余高度，输入框落到竖直中位、标题在它上方居中偏上；首条消息到达后
+ * 占位收到 0，输入框平滑落回常规底部（不重挂、不硬切）。口径见 ActiveChat 的 `hero`。
  */
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
@@ -289,11 +295,33 @@ function ActiveChat({
   const [queuedCount, setQueuedCount] = useState(0)
   /** 服务端截断失败时的重试素材（不静默丢） */
   const [pendingSync, setPendingSync] = useState<PendingSync | null>(null)
-  /** round 19：压缩记录（顶部「上下文已压缩」标记的数据面） */
+  /** round 19：压缩记录（对话流里那条「上下文已压缩」分界线的数据面） */
   const [compaction, setCompaction] = useState<ThreadCompaction | null>(null)
+  /**
+   * round 59 修正：分界线的**冻结锚点** —— 压缩成功且真压了的那一刻记下（记录时间 + 当时的消息条数）。
+   *
+   * 为什么非得冻结：手动压缩时列表里已经有**本轮新发**的消息（客户端消息不带时间戳），它们其实
+   * 存在于压缩之前（会被算进保留窗口）——只按时间戳判会把分界线插到它们前面（错位）。真实时间轴
+   * 只有两个来源，锚点在手的这一段由锚点说了算：压缩那一刻在手的消息全在分界线之上，之后到达的
+   * 消息全在它之下。
+   *
+   * 失效口径：`createdAt` 与当前记录不一致（记录被换了一轮）、或 `threadId` 变了（切会话）→ 忽略
+   * 锚点，回落成时间戳规则；重开会话本来就没有锚点，位置由时间戳算出来（不漂移）。
+   */
+  const [compactionAnchor, setCompactionAnchor] = useState<{
+    threadId: string
+    createdAt: string
+    index: number
+  } | null>(null)
+  /** 当前消息条数的实时值（压缩回调里要取"那一刻"的条数，不能吃闭包旧值） */
+  const messageCountRef = useRef(0)
   /** 压缩进行中（自动触发 / 手动入口共用；发送会按 busy 语义排队） */
   const [compacting, setCompacting] = useState(false)
-  /** 压缩结果的一行 notice（成功/失败/降级；交给 Composer 显示） */
+  /**
+   * 压缩的**操作反馈** notice（交给 Composer 显示）。
+   * round 59 起只装"操作失败"这一类：失败 / 没有可压缩的旧消息；成功与进行中是对话流里的事件
+   * （分界线），不再占用输入框那一行。
+   */
   const [compactNotice, setCompactNotice] = useState<ComposerNotice | null>(null)
   /**
    * round 57：上下文用量的取数信号（每 +1 让上下文环与「压缩上下文」胶囊重取一次）。
@@ -327,7 +355,12 @@ function ActiveChat({
   /** "永久允许"没写进设置（只在本次对话生效）：露一行给用户，不静默当成永久生效 */
   const [permissionError, setPermissionError] = useState<string | null>(null)
 
-  /** 压缩记录随会话挂载读一次（顶部标记的数据面；取不到就停在无标记态，不打扰对话） */
+  /** 消息条数的实时值：压缩回调里要取"那一刻"的条数（useCallback 闭包里的是旧值） */
+  useEffect(() => {
+    messageCountRef.current = messages.length
+  }, [messages.length])
+
+  /** 压缩记录随会话挂载读一次（分界线的数据面；取不到就停在无分界线态，不打扰对话） */
   useEffect(() => {
     let alive = true
     void fetchThreadCompaction(threadId).then(
@@ -358,6 +391,18 @@ function ActiveChat({
       // round 57：真压了 → 服务端的用量随之变了，让环与「压缩上下文」胶囊重取一次
       // （压到线下就自己收起来，不把一枚已经没意义的按钮留在工具条上）
       if (result.compacted) setUsageVersion((version) => version + 1)
+      /**
+       * round 59 修正：真压了就**冻结锚点** —— 分界线钉在"压缩那一刻在手的消息之后"
+       * （手动压缩时列表里的本轮新发消息也算在压缩之前，光看时间戳判不出来，见上方注释）。
+       * 条数从 ref 取（这个回调是 useCallback，闭包里的 messages 是旧值）。
+       */
+      if (result.compacted && result.compaction !== null) {
+        setCompactionAnchor({
+          threadId,
+          createdAt: result.compaction.createdAt,
+          index: messageCountRef.current
+        })
+      }
       return { ok: true, compacted: result.compacted, compaction: result.compaction }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -583,7 +628,11 @@ function ActiveChat({
     }
   }, [editResend, pendingSync, retry])
 
-  /** 「/」→「压缩上下文」（round 19）：立即压缩并给 notice；流式/等审批/压缩中命令行为禁用态 */
+  /**
+   * 「/」→「压缩上下文」（round 19）：立即压缩；流式/等审批/压缩中命令行为禁用态。
+   * round 59：**成功不在这里报**——压缩是对话流里的一件事（分界线自己会说），输入框区只留
+   * 操作失败的反馈（失败 / 没有可压缩的旧消息）。
+   */
   const compactManually = useCallback(() => {
     if (busy || waitingApproval || compacting) return
     setCompactNotice(null)
@@ -592,11 +641,6 @@ function ActiveChat({
         setCompactNotice({ tone: 'danger', text: `压缩失败：${outcome.error}` })
       } else if (!outcome.compacted) {
         setCompactNotice({ tone: 'warning', text: '当前没有可压缩的旧消息' })
-      } else {
-        setCompactNotice({
-          tone: 'success',
-          text: `已压缩历史上下文（保留最近 ${outcome.compaction?.kept ?? 0} 条）`
-        })
       }
     })
   }, [busy, waitingApproval, compacting, runCompact])
@@ -605,62 +649,115 @@ function ActiveChat({
     ? new Error('会话历史没能在服务端同步，已取消发送（重试会重做这一步）')
     : null
 
+  /**
+   * round 59：初始页（空会话）—— 消息为空、没有错误、没有待审批时，输入框居中 + 品牌标题。
+   *
+   * 两条口径（都写在这里，免得后面来回猜）：
+   *   1. **初始页优先于完成态分界线**：消息为空就没有"对话流里的时间点"可放，有压缩记录也不画
+   *      （记录本身没丢，首条消息到达后按定位规则出现在流里；现实里保留窗口 ≥ 2 条，
+   *      "空会话 + 记录"只有测试造得出来）；
+   *   2. **"正在压缩"是例外**：它是正在发生的事，首条消息发出前的自动预压也得让用户看得见
+   *      （那一步可能挺久），所以压缩中不按初始页算 —— 输入框正常落位、分界线显示进行中。
+   */
+  const hero = messages.length === 0 && !error && !waitingApproval && !compacting
+
+  /**
+   * round 59：分界线的固定下标（锚点在手时用；否则 undefined = MessageList 自己按时间戳算）。
+   * `Math.min` 那一下是**截断后的兜底**：编辑重发会把这轮之后的消息删掉，锚点可能超出当前条数
+   * ——不 clamp 的话分界线既落不到任何消息之前、也不等于列表长度，整行就消失了。
+   */
+  const compactionIndex =
+    compactionAnchor !== null &&
+    compactionAnchor.threadId === threadId &&
+    compactionAnchor.createdAt === compaction?.createdAt
+      ? Math.min(compactionAnchor.index, messages.length)
+      : undefined
+
   return (
-    <>
-      {/* round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列 */}
-      <MessageList
-        messages={messages}
-        status={status}
-        // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
-        // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
-        // round 19：压缩进行中也不给（两边都动同一批消息）
-        onEdit={busy || waitingApproval || compacting ? undefined : editResend}
-        compaction={compaction}
-        compacting={compacting}
-      />
-      {error ? (
-        <div className="px-4 pt-2">
-          <ErrorCard error={toError(error)} onRetry={retry} />
-        </div>
-      ) : null}
-      {syncError ? (
-        <div className="px-4 pt-2">
-          <ErrorCard error={syncError} onRetry={retryPendingSync} />
-        </div>
-      ) : null}
-      {permissionError === null ? null : (
-        <p data-testid="approval-permanent-error" className="px-4 pt-2 text-c1 text-danger">
-          {permissionError}
-        </p>
-      )}
-      {/* round 33：轮末提示（被步数预算截停 / 输出被截断）——输入框上方一行，随新轮开始清除 */}
-      {turnNotice === null ? null : (
-        <p
-          data-testid="turn-notice"
-          role="status"
-          className="animate-fade-in px-4 pt-2 text-b2 text-warning"
-        >
-          {turnNotice}
-        </p>
-      )}
-      <div className="shrink-0 px-4 pt-4 pb-6">
-        {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
-        <ApprovalDock requests={dockApprovals} workspaces={workspaces} onDecide={decideApproval} />
-        <Composer
-          threadId={threadId}
-          busy={busy}
-          queuedCount={queuedCount}
-          onSend={submit}
-          onStop={() => {
-            void stop()
-          }}
-          onCompact={compactManually}
-          compactBusy={compacting}
-          compactDisabled={busy || waitingApproval}
-          externalNotice={compactNotice}
-          usageVersion={usageVersion}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 消息区：常规布局里占满剩余高度；初始页里消息为空，它只是上半格的弹性占位。
+          round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列 */}
+      <div className="min-h-0 flex-1">
+        <MessageList
+          messages={messages}
+          status={status}
+          // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
+          // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
+          // round 19：压缩进行中也不给（两边都动同一批消息）
+          onEdit={busy || waitingApproval || compacting ? undefined : editResend}
+          compaction={hero ? null : compaction}
+          compacting={compacting}
+          compactionIndex={compactionIndex}
         />
       </div>
-    </>
+
+      {/* round 59：初始页的品牌标题（空会话才出现；离场走收合，不硬切） */}
+      <WelcomeHero active={hero} />
+
+      {/* 初始页的页脚浮起（淡入 + 上浮，比标题晚 80ms 起步）；
+          切常规布局时这几条类名被摘掉，元素本身**不重挂**——输入框全程可用（draft/焦点不丢） */}
+      <div
+        data-testid="chat-footer"
+        className={cn('shrink-0', hero && 'animate-message-in [animation-delay:80ms]')}
+      >
+        {error ? (
+          <div className="px-4 pt-2">
+            <ErrorCard error={toError(error)} onRetry={retry} />
+          </div>
+        ) : null}
+        {syncError ? (
+          <div className="px-4 pt-2">
+            <ErrorCard error={syncError} onRetry={retryPendingSync} />
+          </div>
+        ) : null}
+        {permissionError === null ? null : (
+          <p data-testid="approval-permanent-error" className="px-4 pt-2 text-c1 text-danger">
+            {permissionError}
+          </p>
+        )}
+        {/* round 33：轮末提示（被步数预算截停 / 输出被截断）——输入框上方一行，随新轮开始清除 */}
+        {turnNotice === null ? null : (
+          <p
+            data-testid="turn-notice"
+            role="status"
+            className="animate-fade-in px-4 pt-2 text-b2 text-warning"
+          >
+            {turnNotice}
+          </p>
+        )}
+        <div className="shrink-0 px-4 pt-4 pb-6">
+          {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
+          <ApprovalDock
+            requests={dockApprovals}
+            workspaces={workspaces}
+            onDecide={decideApproval}
+          />
+          <Composer
+            threadId={threadId}
+            busy={busy}
+            queuedCount={queuedCount}
+            onSend={submit}
+            onStop={() => {
+              void stop()
+            }}
+            onCompact={compactManually}
+            compactBusy={compacting}
+            compactDisabled={busy || waitingApproval}
+            externalNotice={compactNotice}
+            usageVersion={usageVersion}
+          />
+        </div>
+      </div>
+
+      {/* round 59：初始页的下半格弹性占位 —— 与消息区等分剩余高度，标题与输入框因此落在竖直中位；
+          首条消息到达时它收到 0（flex-grow 过渡，主档 .3s），输入框平滑落到常规底部，不硬切 */}
+      <div
+        data-testid="welcome-spacer"
+        className={cn(
+          'h-0 basis-0 transition-[flex-grow] duration-(--motion-main) ease-main motion-reduce:transition-none',
+          hero ? 'grow' : 'grow-0'
+        )}
+      />
+    </div>
   )
 }

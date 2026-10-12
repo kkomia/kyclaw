@@ -491,6 +491,16 @@
   }
 }
 
+/* ===== 对话初始页的品牌标题（round 59）=====
+   UI 里唯一一处"展示级"字号：正文 15px 的约两倍，但**不写死 px** —— 跟着 [data-font-size]
+   的三档缩放走（16 / 18 / 20 → 28.8 / 32.4 / 36）。行高收紧，避免大字把初始页顶得过高。 */
+@layer components {
+  .welcome-title {
+    font-size: calc(var(--ui-T1-font-size) * 1.8);
+    line-height: 1.15;
+  }
+}
+
 /* 第二层 reduced-motion（第一层 = 文件末尾的全局兜底；第三层 = TSX 的 motion-reduce: 前缀）：
    本域折叠与流光整档停掉 —— 状态照样变，只是看不出过程。 */
 @media (prefers-reduced-motion: reduce) {

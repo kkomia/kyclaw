@@ -104,7 +104,17 @@ export const threadCompactionSchema = z.strictObject({
   /** 保留的最近消息条数（压缩时刻） */
   kept: z.number().int().min(0),
   /** ISO 时间串（压缩完成时刻） */
-  createdAt: z.string()
+  createdAt: z.string(),
+  /**
+   * round 59：压缩前的上下文 token（该会话最近一轮输入的实测值；拿不到 = null）。
+   * 与 tokensAfter 一起给对话流里的「上下文已压缩（before → after tokens）」分界线用。
+   */
+  tokensBefore: z.number().int().min(0).nullable(),
+  /**
+   * round 59：压缩后的上下文 token（**估算**：真实基线 + 摘要与保留消息的字符折算；
+   * 公式与理由见 src/mastra/compaction.ts 的 estimateTokens 注释；拿不到 = null）。
+   */
+  tokensAfter: z.number().int().min(0).nullable()
 })
 
 export type ThreadCompaction = z.infer<typeof threadCompactionSchema>

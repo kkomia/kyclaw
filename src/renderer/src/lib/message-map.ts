@@ -17,6 +17,10 @@
  * 认不出的 part 跳过、坏工具调用跳过、content 不是 parts 结构就当空消息，
  * 绝不让一条脏存储数据把整个会话回灌炸掉。
  *
+ * 时间（round 59）：存储的 part 上带 `createdAt`（epoch ms，T9 实机探查确认），这里取该消息各 part
+ * 的**最大值**挂成 UIMessage 的 `metadata.createdAt` —— 压缩分界线要按"压缩时刻之后的第一条消息"
+ * 定位（见 features/chat/compaction-line.ts）。一个 part 都没时间就不挂这个字段（未知 ≠ 现在）。
+ *
  * 审批态（T13）：
  *   - `state='output-denied'`（用户拒绝）→ 按"已拒绝"回放（工具卡显示红签，不再误报"调用中"）；
  *   - `state='call'` 且消息 metadata 里有 `pendingToolApprovals` 登记（服务端挂起等审批）→
@@ -191,11 +195,31 @@ function mapPart(part: unknown, approvals: Map<string, PendingApprovalRef>): Par
   }
 }
 
+/** 存储 part 上的 createdAt（epoch ms）—— 认数才是数，别的一律当没有 */
+function partCreatedAt(part: unknown): number | null {
+  if (!isRecord(part)) return null
+  const createdAt = part.createdAt
+  return typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : null
+}
+
+/** 一条存储消息的时间：各 part 的 createdAt 取最大（一条消息的多个 part 是同一时刻前后落下） */
+function messageCreatedAt(content: unknown): number | null {
+  if (!isRecord(content) || !Array.isArray(content.parts)) return null
+  let latest: number | null = null
+  for (const part of content.parts) {
+    const createdAt = partCreatedAt(part)
+    if (createdAt === null) continue
+    if (latest === null || createdAt > latest) latest = createdAt
+  }
+  return latest
+}
+
 /**
  * 存储消息数组 → UI 消息数组（只保留 user/assistant；system/signal 不上屏）。
  * 纯函数、无副作用：存储里有什么就映射什么，坏数据跳过而不是抛。
  * 挂起审批（metadata.pendingToolApprovals）在每条消息内先解析出来，供该消息的
  * `call` 态工具调用回放成 `approval-requested`（重开后审批卡恢复可见）。
+ * round 59：消息时间挂到 `metadata.createdAt`（压缩分界线的定位锚点）。
  */
 export function mapStoredMessages(stored: readonly StoredMessage[]): UIMessage[] {
   const messages: UIMessage[] = []
@@ -212,8 +236,14 @@ export function mapStoredMessages(stored: readonly StoredMessage[]): UIMessage[]
             return mapped === null ? [] : [mapped]
           })
         : []
+    const createdAt = messageCreatedAt(content)
 
-    messages.push({ id: message.id, role: message.role, parts })
+    messages.push({
+      id: message.id,
+      role: message.role,
+      parts,
+      ...(createdAt === null ? {} : { metadata: { createdAt } })
+    })
   }
 
   return messages

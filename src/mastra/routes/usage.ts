@@ -11,7 +11,7 @@
  */
 import { Hono } from 'hono'
 import { usageRangeSchema, usageResponseSchema, usageThreadContextSchema } from '../../shared/usage'
-import { rangeStart, summarizeUsage, type UsageStore } from '../usage'
+import { rangeStart, summarizeUsage, threadTokenReadout, type UsageStore } from '../usage'
 
 export interface UsageRouterOptions {
   store: UsageStore
@@ -41,9 +41,12 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
     const threadId = typeof raw === 'string' ? raw.trim() : ''
     if (threadId === '') return context.json(badRequest('threadId'), 400)
 
-    const rows = await options.store.listByThread(threadId)
-    const first = rows[0]
-    const last = rows[rows.length - 1]
+    // round 59：lastInput / baselineInput / lastCachedInput 统一走 usage.ts 的 threadTokenReadout
+    // （压缩记录的 tokensBefore 用的是同一口径，两处不能各算一套）
+    const { lastInput, lastCachedInput, baselineInput } = await threadTokenReadout(
+      options.store,
+      threadId
+    )
     const today = await options.store.listSince(rangeStart('today', now()))
 
     let todayInput = 0
@@ -56,9 +59,9 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
     return context.json(
       usageThreadContextSchema.parse({
         threadId,
-        lastInput: last?.tokens.input ?? null,
-        lastCachedInput: last?.cachedInput ?? null,
-        baselineInput: first?.tokens.input ?? null,
+        lastInput,
+        lastCachedInput,
+        baselineInput,
         todayInput,
         todayCachedInput
       })
