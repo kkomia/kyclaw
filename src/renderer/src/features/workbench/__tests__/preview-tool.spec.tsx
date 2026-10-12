@@ -130,7 +130,7 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     render(<PreviewTool root={rootOf()} relative="docs/说明.md" />)
 
     const icon = screen.getByTestId('preview-icon')
-    expect(icon.querySelector('svg')?.getAttribute('class')).toContain('lucide-book-text')
+    expect(icon.querySelector('svg')?.getAttribute('data-file-icon')).toBe('markdown')
     expect(screen.getByTestId('preview-name')).toHaveTextContent('说明.md')
     expect(screen.getByTestId('preview-name')).toHaveClass('text-b1')
     expect(screen.getByTestId('preview-path')).toHaveTextContent('docs/说明.md')
@@ -144,19 +144,19 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     expect(screen.queryByTestId('preview-path')).not.toBeInTheDocument()
   })
 
-  it('头部图标随后缀换：pdf / 图片 / 表格各是各的', async () => {
+  it('头部图标随后缀换：pdf / 图片 / 表格 / 代码各是各的', async () => {
     const cases: Array<[string, string]> = [
-      ['报告.pdf', 'lucide-file-text'],
-      ['assets/logo.png', 'lucide-file-image'],
-      ['台账.xlsx', 'lucide-file-spreadsheet'],
-      ['src/index.ts', 'lucide-file-code']
+      ['报告.pdf', 'pdf'],
+      ['assets/logo.png', 'image'],
+      ['台账.xlsx', 'excel'],
+      ['src/index.ts', 'js']
     ]
-    for (const [relative, iconClass] of cases) {
+    for (const [relative, kind] of cases) {
       const { unmount } = render(<PreviewTool root={rootOf()} relative={relative} />)
       expect([
         relative,
-        screen.getByTestId('preview-icon').querySelector('svg')?.getAttribute('class')
-      ]).toEqual([relative, expect.stringContaining(iconClass)])
+        screen.getByTestId('preview-icon').querySelector('svg')?.getAttribute('data-file-icon')
+      ]).toEqual([relative, kind])
       unmount()
     }
   })

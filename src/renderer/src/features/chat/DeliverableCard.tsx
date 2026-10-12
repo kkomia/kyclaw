@@ -1,8 +1,10 @@
-import { ChevronDown, Copy, FileText, FolderSearch } from 'lucide-react'
+import { ChevronDown, Copy, FolderSearch } from 'lucide-react'
+import { createElement } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { absoluteOf, useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatBytes } from '@renderer/features/workbench/format'
+import { fileIconOf } from '@renderer/features/workbench/preview/file-icon'
 import { useWorkbenchStore } from '@renderer/features/workbench/workbench-store'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useShellStore } from '@renderer/lib/shell-store'
@@ -10,7 +12,8 @@ import type { Deliverable } from './deliverable'
 
 /**
  * 交付卡（deliver_file 的工具结果；形态照 Kimi 的文件卡）：
- * 左 = 文件图标块（纸感底 + FileText），中 = 文件名 + 副行（大小 · 交付说明），
+ * 左 = 文件图标块（纸感底 + 按交付文件类型的彩色图标，见 workbench/preview/file-icon.ts），
+ * 中 = 文件名 + 副行（大小 · 交付说明），
  * 右 = 「预览」主按钮 + ▾ 菜单（复制路径 / 在文件资源管理器中定位）。
  *
  * 为什么单开一张卡、而不是留在工具行里：交付是**给用户看东西**的动作，产出物不该埋在
@@ -80,12 +83,13 @@ export function DeliverableCard({ deliverable }: DeliverableCardProps): React.JS
       data-path={deliverable.path}
       className="animate-message-in flex items-center gap-3 rounded-panel border-(length:--hairline-width) border-hairline bg-secondary px-3 py-2.5"
     >
-      {/* 图标块用底色分层，不再套第二层框线（雷点 7） */}
+      {/* 图标块用底色分层，不再套第二层框线（雷点 7）；图标是彩色的（自带 fill），
+          不再套 `text-ink-tertiary` 那层灰 */}
       <span
         aria-hidden="true"
         className="flex size-9 shrink-0 items-center justify-center rounded-control bg-surface"
       >
-        <FileText className="size-[18px] text-ink-tertiary" />
+        {createElement(fileIconOf(deliverable.path), { className: 'size-[18px]' })}
       </span>
 
       <span className="min-w-0 flex-1">

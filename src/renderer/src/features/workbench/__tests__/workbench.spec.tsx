@@ -284,10 +284,13 @@ describe('Workbench 标签页', () => {
     await tick()
 
     expect(screen.getByRole('tab', { name: 'notes.txt' })).toBeInTheDocument()
-    // round 52：预览标签的图标按文件类型（与预览头部那块图标同一张表）——.txt 落"其它"档
+    // round 52：预览标签的图标按文件类型（与预览头部那块图标同一张表）——.txt 落纯文本档
     expect(
-      screen.getByRole('tab', { name: 'notes.txt' }).querySelector('svg')?.getAttribute('class')
-    ).toContain('lucide-file')
+      screen
+        .getByRole('tab', { name: 'notes.txt' })
+        .querySelector('svg')
+        ?.getAttribute('data-file-icon')
+    ).toBe('txt')
     const panel = panelOf('preview')
     expect(panel).toHaveAttribute('data-active', 'true')
     // 数据走既有文本通道（会话 + 工作区相对路径），正文进面板
@@ -348,18 +351,21 @@ describe('Workbench 标签页', () => {
     act(() => useWorkbenchStore.getState().openPreviewTab('docs/说明.md'))
     await tick()
 
+    // 预览标签：iconfont 那套彩色图标（`data-file-icon` 是档），.md → markdown
     const iconOf = (name: string): string =>
-      screen.getByRole('tab', { name }).querySelector('svg')?.getAttribute('class') ?? ''
-    expect(iconOf('说明.md')).toContain('lucide-book-text')
+      screen.getByRole('tab', { name }).querySelector('svg')?.getAttribute('data-file-icon') ?? ''
+    expect(iconOf('说明.md')).toBe('markdown')
 
-    // 四种工具那四个固定图标没被牵动
+    // 四种工具那四个固定图标没被牵动（仍是 lucide，类名在）
+    const classOf = (name: string): string =>
+      screen.getByRole('tab', { name }).querySelector('svg')?.getAttribute('class') ?? ''
     act(() => {
       useWorkbenchStore.getState().openTab('files')
       useWorkbenchStore.getState().openTab('terminal')
     })
     await tick()
-    expect(iconOf('工作区')).toContain('lucide-folder-tree')
-    expect(iconOf('终端')).toContain('lucide-square-terminal')
+    expect(classOf('工作区')).toContain('lucide-folder-tree')
+    expect(classOf('终端')).toContain('lucide-square-terminal')
   })
 
   it('round 53 · 同一根下开两份不同文件的预览：面板各挂各的（key 带上路径，不撞）', async () => {

@@ -47,7 +47,7 @@ import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { EmptyActions } from './EmptyActions'
-import { fileIconOf } from './preview/file-icon'
+import { fileIconOf, type FileIconComponent } from './preview/file-icon'
 import { matchWorkbenchShortcut, WORKBENCH_ACTIONS } from './workbench-actions'
 import { useWorkbenchRoot, type WorkbenchRoot } from './use-workbench-root'
 import {
@@ -83,7 +83,7 @@ const TAB_ICON: Record<Exclude<WorkbenchTabKind, 'preview'>, LucideIcon> = {
  * 标签图标：预览标签按**文件类型**给（`fileIconOf` 是唯一出处 —— 与预览头部那个图标块同一张表），
  * 其余四种各是各的固定图标。
  */
-function tabIconOf(tab: WorkbenchTab): LucideIcon {
+function tabIconOf(tab: WorkbenchTab): FileIconComponent {
   return tab.kind === 'preview' ? fileIconOf(tab.path ?? '') : TAB_ICON[tab.kind]
 }
 

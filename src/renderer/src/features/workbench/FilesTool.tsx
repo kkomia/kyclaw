@@ -23,11 +23,14 @@
  * round 50：**双击文件**（或右键「在新标签页中查看」）把这份文件开成一个**预览标签**
  * （FilesTool 的单击内联预览原样不动）。开标签由 workbench-store 的 `openPreviewTab` 去重，
  * 开面板由这里顺带做（store 不碰 shell-store）。
+ *
+ * round 56：**文件行**与**搜索结果行**的图标按文件类型给（彩色 iconfont 图标，唯一出处
+ * `preview/file-icon.ts`，与预览标签 / 预览头部 / 交付卡同一张表）；目录行仍是展开箭头 +
+ * lucide 文件夹。
  */
 import {
   ChevronRight,
   Copy,
-  File as FileIcon,
   FileText,
   Folder,
   FolderOpen,
@@ -36,7 +39,7 @@ import {
   Search,
   X
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, createElement, useCallback, useEffect, useRef, useState } from 'react'
 import {
   SEARCH_QUERY_MIN,
   type DirEntry,
@@ -55,6 +58,7 @@ import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bit
 import { ContextMenu, type ContextMenuState } from './ContextMenu'
 import { PreviewBody } from './preview/PreviewBody'
 import { baseNameOf, readPreviewState, sourceTextOf, type PreviewState } from './preview/fetch'
+import { fileIconOf } from './preview/file-icon'
 import { SelectionContextMenu } from './preview/SelectionContextMenu'
 import { previewModeOf } from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
@@ -562,7 +566,12 @@ function Row({
       style={{ paddingInlineStart: 8 + depth * 12 + 18 }}
       className="flex h-8 w-full cursor-default items-center gap-1.5 pr-2 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
     >
-      <FileIcon aria-hidden="true" className="size-(--icon-size-sm) shrink-0 text-ink-tertiary" />
+      {/* 行内图标按文件类型（`fileIconOf` 是唯一出处；用 createElement —— 见 PreviewTool 头注
+          那条 React 编译器规则：不把渲染里查出来的组件当 JSX 类型用） */}
+      {createElement(fileIconOf(relative), {
+        'aria-hidden': true,
+        className: 'size-(--icon-size-sm) shrink-0'
+      })}
       <span className="truncate">{entry.name}</span>
       <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{formatBytes(entry.size)}</span>
     </button>
@@ -664,7 +673,11 @@ function SearchHitRow({
       className="flex w-full cursor-default flex-col gap-0.5 px-3 py-1.5 text-left transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
     >
       <span className="flex w-full items-center gap-1.5">
-        <FileIcon aria-hidden="true" className="size-(--icon-size-sm) shrink-0 text-ink-tertiary" />
+        {/* 命中行也按文件类型给图标（`hit.path` 就是相对路径，与树上的行同一口径） */}
+        {createElement(fileIconOf(hit.path), {
+          'aria-hidden': true,
+          className: 'size-(--icon-size-sm) shrink-0'
+        })}
         <span className="truncate text-b2 text-ink">{hit.name}</span>
         {hit.line === undefined ? null : (
           <span className="ml-auto shrink-0 text-c1 text-ink-tertiary tabular-nums">

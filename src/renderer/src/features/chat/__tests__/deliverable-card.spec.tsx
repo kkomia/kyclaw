@@ -132,6 +132,10 @@ describe('DeliverableCard：卡的样子与「预览」', () => {
     expect(screen.getByTestId('deliverable-meta')).toHaveTextContent('2.0 KB')
     expect(screen.getByTestId('deliverable-preview')).toHaveTextContent('预览')
     expect(screen.getByTestId('deliverable-more')).toBeInTheDocument()
+    // round 56：图标块画的是交付文件类型那张彩色图标（.md → markdown；不再是写死的 FileText）
+    expect(
+      screen.getByTestId('deliverable-card').querySelector('svg')?.getAttribute('data-file-icon')
+    ).toBe('markdown')
     // 零 emoji（雷点 1）
     expect(screen.getByTestId('deliverable-card').textContent).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u)
   })

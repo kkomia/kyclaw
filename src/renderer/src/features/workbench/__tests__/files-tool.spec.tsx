@@ -66,6 +66,11 @@ describe('FilesTool：目录树', () => {
     expect(rows[0]).toHaveAttribute('data-relative', 'src')
     expect(rows[1]).toHaveAttribute('data-kind', 'file')
     expect(within(rows[1] as HTMLElement).getByText('9 B')).toBeInTheDocument()
+    // round 56：文件行按文件类型给彩色图标（`data-file-icon` 是档）；目录行原样不动
+    // （展开箭头 + lucide 文件夹，两个都不是 data-file-icon）
+    expect(rows[1].querySelector('svg')?.getAttribute('data-file-icon')).toBe('markdown')
+    expect(rows[0].querySelectorAll('[data-file-icon]')).toHaveLength(0)
+    expect(rows[0].querySelectorAll('svg')[1]?.getAttribute('class')).toContain('lucide-folder')
   })
 
   it('展开目录才列子层（懒加载），收起不改状态', async () => {
@@ -528,6 +533,8 @@ describe('round 44 · 搜索', () => {
     const hit = await screen.findByTestId('file-search-hit')
     expect(within(hit).getByText('中文名.txt')).toBeInTheDocument()
     expect(within(hit).getByTestId('file-search-path')).toHaveTextContent('src/deep/中文名.txt')
+    // 命中行的图标也按文件类型（`hit.path` 就是相对路径）
+    expect(hit.querySelector('svg')?.getAttribute('data-file-icon')).toBe('txt')
 
     fireEvent.click(hit)
     await waitFor(() =>
