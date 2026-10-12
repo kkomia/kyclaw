@@ -1,6 +1,6 @@
 {
   "name": "kyclaw",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "description": "kyclaw：Kimi 风格三栏桌面应用（Electron + React + 内嵌 Mastra agent）",
   "main": "./out/main/index.js",
   "author": "kkomia",
