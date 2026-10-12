@@ -11,6 +11,13 @@ import { create } from 'zustand'
  *   - `title`：浏览器标签的显示标题（页面标题 → 网址主机名），其余三种的标题渲染时算
  *     （文件 = 根目录名、Git = 改动、终端 = 终端）。
  *
+ * round 49（用户补充口径）：
+ *   - **启动是空态**：不再默认开一个「文件」标签（原话"保持什么都没有得状态就可以了"；
+ *     空态区自己给四个新建入口）。`closeTab` 关到最后一个就已经是空态，不需要兜底标签；
+ *   - **标签按根记忆**：换根（切项目 / 移至项目 / 默认工作区变化）时把当前标签存进**旧根的存根**、
+ *     装上新根上次离开时的样子（没有存根 = 空态）——"打开了一个网页一个终端，切走再切回来还要有"。
+ *     存根只在内存里：**重启不恢复**（启动一律空态，与上一条同一个口径）。
+ *
  * 为什么不放 shell-store：那是"三栏骨架"的开关，这里是右栏内容自己的状态，改由谁都不用动骨架。
  */
 export const WORKBENCH_KINDS = ['browser', 'files', 'git', 'terminal'] as const
@@ -25,16 +32,30 @@ export interface WorkbenchTab {
   title?: string
 }
 
+/** 一个根"上次离开时"的标签样子（内存态；见头注的 round 49 口径） */
+interface WorkbenchSnapshot {
+  tabs: WorkbenchTab[]
+  activeTabId: string
+}
+
 export interface WorkbenchState {
   tabs: WorkbenchTab[]
   activeTabId: string
+  /** 当前根（`''` = 还没有根/判不出）——switchRoot 据此存旧、取新 */
+  currentRoot: string
+  /** 每个根上次离开时的存根（不持久化；重启即空） */
+  stash: Record<string, WorkbenchSnapshot>
   /** 新建标签：文件/Git 已开就激活它，浏览器/终端每次都新开一个窗口 */
   openTab: (kind: WorkbenchTabKind) => void
   closeTab: (id: string) => void
   selectTab: (id: string) => void
   setTabTitle: (id: string, title: string) => void
-  /** 回默认（一个「文件」标签）—— 换会话根时用；全关光的状态不自动兜底，由空态区给新建入口 */
-  resetWorkbench: () => void
+  /**
+   * 换根：把当前标签存进旧根、装上新根上次的样子（没有 = 空态）；同根调用是空操作。
+   * `null`（判不出根）按空键处理——"没有会话"也是一档状态，一样记住。
+   * 面板收起不在这里（那是 shell-store 的事，Workbench 的变根 effect 一并做）。
+   */
+  switchRoot: (nextRoot: string | null) => void
 }
 
 /** 标签 id 计数器（模块级：先 files-1，之后顺序往后；测试用 resetWorkbenchStore 归零） */
@@ -45,13 +66,14 @@ function nextTabId(kind: WorkbenchTabKind): string {
   return `${kind}-${seq}`
 }
 
-function defaultState(): Pick<WorkbenchState, 'tabs' | 'activeTabId'> {
-  const tab: WorkbenchTab = { id: nextTabId('files'), kind: 'files' }
-  return { tabs: [tab], activeTabId: tab.id }
+function emptySnapshot(): WorkbenchSnapshot {
+  return { tabs: [], activeTabId: '' }
 }
 
 export const useWorkbenchStore = create<WorkbenchState>()((set) => ({
-  ...defaultState(),
+  ...emptySnapshot(),
+  currentRoot: '',
+  stash: {},
   openTab: (kind) =>
     set((state) => {
       if (kind === 'files' || kind === 'git') {
@@ -77,7 +99,17 @@ export const useWorkbenchStore = create<WorkbenchState>()((set) => ({
     set((state) => ({
       tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, title } : tab))
     })),
-  resetWorkbench: () => set(defaultState())
+  switchRoot: (nextRoot) =>
+    set((state) => {
+      const key = nextRoot ?? ''
+      if (state.currentRoot === key) return {}
+      const stash = {
+        ...state.stash,
+        [state.currentRoot]: { tabs: state.tabs, activeTabId: state.activeTabId }
+      }
+      const restored = stash[key] ?? emptySnapshot()
+      return { ...restored, stash, currentRoot: key }
+    })
 }))
 
 /** 浏览器标签的显示标题：页面标题优先，没有就用网址的主机名，再没有才是「浏览器」 */
@@ -96,5 +128,5 @@ export function browserTabTitle(title: string, url: string): string {
 /** 测试用：回到初始状态（模块级 store 与 id 计数器都不随 render 重置） */
 export function resetWorkbenchStore(): void {
   seq = 0
-  useWorkbenchStore.setState(defaultState())
+  useWorkbenchStore.setState({ ...emptySnapshot(), currentRoot: '', stash: {} })
 }

@@ -14,38 +14,36 @@ beforeEach(() => {
 })
 
 describe('workbench-store：标签页模型', () => {
-  it('默认一个「文件」标签；文件/Git 复用，浏览器/终端每次新开', () => {
+  it('启动空态（无默认标签）；文件/Git 复用，浏览器/终端每次新开', () => {
     const initial = useWorkbenchStore.getState()
-    expect(initial.tabs.map((tab) => tab.kind)).toEqual(['files'])
-    expect(initial.activeTabId).toBe(initial.tabs[0]?.id)
+    expect(initial.tabs).toEqual([])
+    expect(initial.activeTabId).toBe('')
 
     useWorkbenchStore.getState().openTab('terminal')
     useWorkbenchStore.getState().openTab('terminal')
     useWorkbenchStore.getState().openTab('browser')
     useWorkbenchStore.getState().openTab('browser')
     let tabs = useWorkbenchStore.getState().tabs
-    expect(tabs.map((tab) => tab.kind)).toEqual([
-      'files',
-      'terminal',
-      'terminal',
-      'browser',
-      'browser'
-    ])
+    expect(tabs.map((tab) => tab.kind)).toEqual(['terminal', 'terminal', 'browser', 'browser'])
     // 新开的那个是当前标签
-    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[4]?.id)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[3]?.id)
 
     // 文件 / Git 是世界状态：已开着就只激活，不重复开
     useWorkbenchStore.getState().openTab('git')
     useWorkbenchStore.getState().openTab('git')
     useWorkbenchStore.getState().openTab('files')
+    useWorkbenchStore.getState().openTab('files')
     tabs = useWorkbenchStore.getState().tabs
     expect(tabs.filter((tab) => tab.kind === 'files')).toHaveLength(1)
     expect(tabs.filter((tab) => tab.kind === 'git')).toHaveLength(1)
-    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(
+      tabs.find((tab) => tab.kind === 'files')?.id
+    )
   })
 
   it('关标签：接左边的邻居；全关光 = 空态（activeTabId 空串）；未知 id 不误伤', () => {
     const { openTab, closeTab, selectTab } = useWorkbenchStore.getState()
+    openTab('files')
     openTab('terminal')
     openTab('git')
     const [files, terminal, git] = useWorkbenchStore.getState().tabs
@@ -73,18 +71,41 @@ describe('workbench-store：标签页模型', () => {
     expect(useWorkbenchStore.getState().activeTabId).toBe('')
   })
 
-  it('resetWorkbench：回默认单「文件」；浏览器标题按页面标题 → 主机名 → 兜底名', () => {
+  it('switchRoot：标签按根记忆——换根装新存根（没有=空态）、切回来还在；同根是空操作', () => {
+    // 启动空态；进第一个根（还没有存根）
+    useWorkbenchStore.getState().switchRoot('D:\\项目A')
+    expect(useWorkbenchStore.getState().tabs).toEqual([])
+
     useWorkbenchStore.getState().openTab('browser')
-    const browser = useWorkbenchStore.getState().tabs[1]
+    const browser = useWorkbenchStore.getState().tabs[0]
     if (browser === undefined) throw new Error('浏览器标签没开出来')
     useWorkbenchStore.getState().setTabTitle(browser.id, '示例站点')
-    expect(useWorkbenchStore.getState().tabs[1]?.title).toBe('示例站点')
+    useWorkbenchStore.getState().openTab('terminal')
 
-    useWorkbenchStore.getState().resetWorkbench()
-    const tabs = useWorkbenchStore.getState().tabs
-    expect(tabs.map((tab) => tab.kind)).toEqual(['files'])
-    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+    // 换到项目 B：B 还没存根 = 空态；A 的标签被存起来
+    useWorkbenchStore.getState().switchRoot('D:\\项目B')
+    expect(useWorkbenchStore.getState().tabs).toEqual([])
 
+    useWorkbenchStore.getState().openTab('files')
+    const bTabs = useWorkbenchStore.getState().tabs
+
+    // 切回项目 A：上次的浏览器（标题还在）与终端原样回来
+    useWorkbenchStore.getState().switchRoot('D:\\项目A')
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual([
+      'browser',
+      'terminal'
+    ])
+    expect(useWorkbenchStore.getState().tabs[0]?.title).toBe('示例站点')
+
+    // 再回项目 B：文件标签还在；同根再调一次 = 空操作（引用都不换）
+    useWorkbenchStore.getState().switchRoot('D:\\项目B')
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['files'])
+    expect(useWorkbenchStore.getState().tabs).toBe(bTabs)
+    useWorkbenchStore.getState().switchRoot('D:\\项目B')
+    expect(useWorkbenchStore.getState().tabs).toBe(bTabs)
+  })
+
+  it('浏览器标题：页面标题 → 主机名 → 兜底名', () => {
     expect(browserTabTitle('页面标题', 'https://a.b/c')).toBe('页面标题')
     expect(browserTabTitle('   ', 'https://example.com/a?b=1')).toBe('example.com')
     expect(browserTabTitle('', 'about:blank')).toBe('浏览器')

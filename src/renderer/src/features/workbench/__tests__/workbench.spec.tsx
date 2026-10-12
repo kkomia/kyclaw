@@ -69,9 +69,11 @@ function kinds(): Array<string | undefined> {
   return screen.queryAllByTestId('workbench-panel').map((element) => element.dataset.kind)
 }
 
-/** 关掉唯一那个「文件」标签 → 落到空态（render 之后调） */
+/** 收干净到空态（round 49 起启动就是空态；开过标签的用例调它把标签都关掉，render 之后用） */
 function toEmpty(): void {
-  fireEvent.click(screen.getByRole('button', { name: '关闭 工作区' }))
+  for (const close of screen.queryAllByRole('button', { name: /^关闭 / })) {
+    fireEvent.click(close)
+  }
 }
 
 /** 某行的键帽文本（按显示顺序） */
@@ -81,22 +83,21 @@ function keyCapsOf(kind: string): string[] {
 }
 
 describe('Workbench 标签页', () => {
-  it('默认：一个「文件」标签（标题 = 根目录名），只挂着它', async () => {
+  it('启动空态：没有默认标签，空态区给四个入口（round 49 用户口径）', () => {
     render(<Workbench />)
 
-    expect(screen.getAllByRole('tab')).toHaveLength(1)
-    const files = screen.getByRole('tab', { name: '工作区' })
-    expect(files).toHaveAttribute('aria-selected', 'true')
-    expect(panelOf('files')).toHaveAttribute('data-active', 'true')
-    // 没建过的工具不挂载（各工具的 IPC 订阅因此只在用时建立）
-    expect(kinds()).toEqual(['files'])
-
-    await waitFor(() => expect(bed.bridge.workbench.listDir).toHaveBeenCalledWith('thread-1', ''))
+    expect(screen.queryAllByRole('tab')).toHaveLength(0)
+    expect(screen.getByTestId('workbench-empty')).toBeInTheDocument()
+    expect(screen.getAllByTestId(/^workbench-empty-action-/)).toHaveLength(4)
+    expect(kinds()).toEqual([])
+    // 不挂任何工具（各工具的 IPC 订阅因此只在用时建立；listDir 会在真挂文件树时才调）
+    expect(bed.bridge.terminal.start).not.toHaveBeenCalled()
   })
 
   it('归属还在写（settling）：三件按根开工的工具先不挂（不列目录、不起 PTY）；落定后才挂（round 49 回归）', async () => {
     useProjectsStore.setState({ pending: { 'thread-1': true } })
     render(<Workbench />)
+    await newTab('files')
     await newTab('terminal')
 
     // 主进程此刻还按兜底根解析：先列目录 / 先起 PTY 都会落在别的文件夹上，而且不会自己重来
@@ -114,7 +115,7 @@ describe('Workbench 标签页', () => {
 
   it('新建终端：新开一个标签并激活，文件标签不卸载（只隐藏 + inert）', async () => {
     render(<Workbench />)
-
+    await newTab('files')
     await newTab('terminal')
 
     expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['files', 'terminal'])
@@ -133,7 +134,7 @@ describe('Workbench 标签页', () => {
 
   it('浏览器/终端每次新开；文件/Git 已开就激活那一个（不重复开）', async () => {
     render(<Workbench />)
-
+    await newTab('files')
     await newTab('browser')
     await newTab('browser')
     await newTab('terminal')
@@ -164,6 +165,7 @@ describe('Workbench 标签页', () => {
 
   it('关标签：卸载（终端随之 dispose 会话）；关掉当前标签接到左边', async () => {
     render(<Workbench />)
+    await newTab('files')
     await newTab('terminal')
     await waitFor(() => expect(bed.bridge.terminal.start).toHaveBeenCalled())
 
@@ -178,6 +180,8 @@ describe('Workbench 标签页', () => {
   it('全关光：空态给居中四行动作（浏览器 / 文件 / 改动 / 终端），头部 ＋ 保留', async () => {
     render(<Workbench />)
 
+    // round 49：启动就是空态；开一个再关掉，回到同样的空态
+    await newTab('files')
     fireEvent.click(screen.getByRole('button', { name: '关闭 工作区' }))
 
     expect(screen.getByTestId('workbench-empty')).toBeInTheDocument()
@@ -228,7 +232,7 @@ describe('Workbench 标签页', () => {
     )
   })
 
-  it('换会话根（切项目 / 移至项目）：面板收起 + 标签回默认，终端随之 dispose', async () => {
+  it('换会话根（切项目 / 移至项目）：面板收起 + 标签换到新根的存根（首次 = 空态）；终端 dispose', async () => {
     render(<Workbench />)
     await newTab('terminal')
     await waitFor(() => expect(bed.bridge.terminal.start).toHaveBeenCalled())
@@ -241,16 +245,21 @@ describe('Workbench 标签页', () => {
     useSettingsStore.setState({ settings, loaded: true })
 
     await waitFor(() => expect(useShellStore.getState().workPanelOpen).toBe(false))
-    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['files'])
-    expect(kinds()).toEqual(['files'])
+    // round 49：旧根的标签被存起来、新根还没存根 = 空态（不再兜底塞一个「文件」标签）
+    expect(useWorkbenchStore.getState().tabs).toEqual([])
+    expect(kinds()).toEqual([])
     expect(bed.bridge.terminal.dispose).toHaveBeenCalledWith('term-1')
-    // 新根的文件树（不是拿旧根继续用）
+    expect(screen.getByTestId('workbench-empty')).toBeInTheDocument()
+
+    // 在新根开一个文件标签：树读的是新根（不是拿旧根继续用），标题 = 新根目录名
+    await newTab('files')
     await waitFor(() => expect(bed.bridge.workbench.listDir).toHaveBeenCalledWith('thread-1', ''))
     expect(screen.getByRole('tab', { name: '另一个工作区' })).toBeInTheDocument()
   })
 
   it('同根内切会话：面板不关、标签不动（文件/Git/终端按会话重挂清态）', async () => {
     render(<Workbench />)
+    await newTab('files')
     await newTab('git')
 
     // 同一个根下的另一个会话：threadId 变、rootPath 不变

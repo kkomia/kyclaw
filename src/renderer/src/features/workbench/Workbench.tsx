@@ -19,6 +19,8 @@
  *
  * round 49：会话根由主进程按服务端映射解析，而渲染端的映射是**乐观**的（本地先补、PUT 在飞）——
  * 那段窗口（`settling`）里三件按根开工的工具先不挂，只给一圈 spinner（见 renderTool）。
+ * 同轮（用户补充口径）：启动不再兜底一个「文件」标签（空态 = EmptyActions）；变根时标签不是清空，
+ * 而是**按根存取**（switchRoot：旧根存起来、新根取上次的样子）——"切走再切回来还要有"。
  */
 import {
   FolderTree,
@@ -75,7 +77,7 @@ export function Workbench(): React.JSX.Element {
   const openTab = useWorkbenchStore((state) => state.openTab)
   const closeTab = useWorkbenchStore((state) => state.closeTab)
   const selectTab = useWorkbenchStore((state) => state.selectTab)
-  const resetWorkbench = useWorkbenchStore((state) => state.resetWorkbench)
+  const switchRoot = useWorkbenchStore((state) => state.switchRoot)
   const fullscreen = useShellStore((state) => state.workPanelFullscreen)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
   const toggleFullscreen = useShellStore((state) => state.toggleWorkPanelFullscreen)
@@ -83,16 +85,18 @@ export function Workbench(): React.JSX.Element {
   const root = useWorkbenchRoot()
   const rootPath = root.rootPath
 
-  // A5（用户实报）：**变根**（切项目 / 移至项目 / 默认工作区变化）→ 面板收起 + 标签回默认。
+  // A5（用户实报）+ round 49（用户补充口径）：**变根**（切项目 / 移至项目 / 默认工作区变化）→
+  // 面板收起 + 标签换到新根的存根（没有存根 = 空态；旧根的标签存起来，切回来还在）。
   // 同根内切会话不走这里（面板不关；文件/Git/终端靠下面带根路径的 key 重挂清态）。
-  // 首次渲染不触发（初始值就是当前根），否则会平白把用户刚打开的面板关掉。
-  const lastRootRef = useRef(rootPath)
+  // 首次进入那一下只对齐 currentRoot（启动一律空态），不算"变根"——不收起面板。
+  const lastRootRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     if (lastRootRef.current === rootPath) return
+    const first = lastRootRef.current === undefined
     lastRootRef.current = rootPath
-    setWorkPanelOpen(false)
-    resetWorkbench()
-  }, [rootPath, resetWorkbench, setWorkPanelOpen])
+    switchRoot(rootPath)
+    if (!first) setWorkPanelOpen(false)
+  }, [rootPath, switchRoot, setWorkPanelOpen])
 
   // 空态那列键帽对应的快捷键（表在 workbench-actions：显示的组合就是这里接的组合）。
   // 挂在 window 上而不是面板容器上：面板收起也生效（Workbench 常驻，收起只是宽 0）。
