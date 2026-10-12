@@ -26,6 +26,13 @@ export function usagePercentOf(
   return Math.min(100, Math.round((usedInput / thresholdTokens) * 100))
 }
 
+/**
+ * round 57：「压缩上下文」作曲栏按钮的出现线 —— 上下文用量 ≥ 80% 时出现。
+ * 口径与环同一份 `usedPct`（最近一轮 `lastInput` / `thresholdTokensOf(...)`，四舍五入、封顶 100）；
+ * 对齐 Kimi Code 桌面版的那枚 chip（`pct >= 80` 才 `ir`）。取不到数据时 `usedPct = 0`，自然不出现。
+ */
+export const COMPACT_CHIP_PCT = 80
+
 /** 自动压缩触发条件：最近一轮用量 ≥ 阈值（用量/阈值取不到时不触发） */
 export function shouldCompact(
   lastInput: number | null | undefined,

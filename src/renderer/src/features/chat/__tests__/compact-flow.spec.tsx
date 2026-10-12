@@ -17,7 +17,9 @@ import { createMockTransport, type MockTransport } from './mock-transport'
  *   - busy 语义：压缩中再次发送排入队列（照既有"流式中发送"口径）；
  *   - 顶部标记：有记录显示「上下文已压缩」（默认折叠，点开见摘要）；压缩中显示「上下文压缩中…」；
  *   - 「/」命令分区：首条「压缩上下文」带使用率；选中立即压缩并给 notice；流式中禁用；
- *   - 压缩后编辑重发（truncate → 重发）不受影响。
+ *   - 压缩后编辑重发（truncate → 重发）不受影响；
+ *   - round 57：作曲栏那枚「压缩上下文」胶囊（用量 ≥ 80% 时出现、点即压缩；每轮结束重取用量，
+ *     低于出现线不渲染、没有数据不渲染、流式中禁用）。
  *
  * 底层全走注入的假 transport 与假 runtime；threads-api / usage-api 整体 mock（真服务端行为
  * 由 mastra/__tests__/compaction.spec.ts 真跑）。
@@ -346,6 +348,116 @@ describe('「/」命令分区（手动入口）', () => {
     await waitFor(() => {
       expect(screen.getByTestId('composer-notice')).toHaveTextContent('当前没有可压缩的旧消息')
     })
+  })
+})
+
+describe('round 57 · 作曲栏「压缩上下文」胶囊（不输入也能压缩）', () => {
+  it('用量 ≥ 80%：胶囊出现；点一下就走压缩（不用在输入框打字）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(110_000)) // 110000/128000 ≈ 86%
+    vi.mocked(compactThread).mockResolvedValue({ compacted: true, compaction: RECORD })
+
+    await renderSession(control, makeRuntime(control))
+    const chip = await screen.findByTestId('composer-compact')
+    expect(chip).toHaveTextContent('压缩上下文')
+    expect(chip).toBeEnabled()
+
+    fireEvent.click(chip)
+
+    await waitFor(() => {
+      expect(vi.mocked(compactThread)).toHaveBeenCalledWith(THREAD_ID)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
+        '已压缩历史上下文（保留最近 10 条）'
+      )
+    })
+    // 顶部标记随记录更新；全程一条消息都没发出去
+    expect(screen.getByTestId('compaction-marker')).toHaveTextContent('上下文已压缩')
+    expect(control.requests).toHaveLength(0)
+  })
+
+  it('用量 < 80%：不出现；一轮结束后用量越过出现线才露面（每轮结束重取一次）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(64_000)) // 64000/128000 = 50%
+
+    await renderSession(control, makeRuntime(control))
+    await act(async () => {})
+    expect(vi.mocked(fetchThreadContext)).toHaveBeenCalled()
+    expect(screen.queryByTestId('composer-compact')).not.toBeInTheDocument()
+
+    // 又跑一轮：服务端用量涨到 86%（< 阈值 100%，不触发自动压缩），这一轮里按钮还不该出现
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(110_000))
+    await act(async () => {
+      send('再聊一轮')
+    })
+    expect(screen.queryByTestId('composer-compact')).not.toBeInTheDocument()
+
+    // 轮结束 → 取数刷新 → 用量越过 80% → 按钮露面
+    await act(async () => {
+      control.push('答一')
+      control.finish()
+    })
+    expect(await screen.findByTestId('composer-compact')).toBeInTheDocument()
+  })
+
+  it('还没有用量记录（lastInput = null）：不出现', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(null))
+
+    await renderSession(control, makeRuntime(control))
+    await act(async () => {})
+
+    expect(vi.mocked(fetchThreadContext)).toHaveBeenCalled()
+    expect(screen.queryByTestId('composer-compact')).not.toBeInTheDocument()
+  })
+
+  it('取数失败（服务没起来 / 单测未装桥）：不出现（不闪假状态）', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadContext).mockRejectedValue(new Error('no bridge'))
+
+    await renderSession(control, makeRuntime(control))
+    await act(async () => {})
+
+    expect(screen.queryByTestId('composer-compact')).not.toBeInTheDocument()
+  })
+
+  it('压缩进行中：胶囊显示「压缩中…」并禁用；压完回到常态', async () => {
+    const control = createMockTransport()
+    const gate = deferred<{ compacted: boolean; compaction: typeof RECORD }>()
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(110_000))
+    vi.mocked(compactThread).mockImplementation(() => gate.promise)
+
+    await renderSession(control, makeRuntime(control))
+    fireEvent.click(await screen.findByTestId('composer-compact'))
+
+    const busy = await screen.findByTestId('composer-compact')
+    expect(busy).toHaveTextContent('压缩中…')
+    expect(busy).toBeDisabled()
+
+    await act(async () => {
+      gate.resolve({ compacted: true, compaction: RECORD })
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-compact')).toHaveTextContent('压缩上下文')
+    })
+  })
+
+  it('流式中（compactDisabled）：胶囊可见但禁用，点了没有动作', async () => {
+    const control = createMockTransport()
+    vi.mocked(fetchThreadContext).mockResolvedValue(contextOf(110_000)) // 86% < 阈值：不走自动压缩
+
+    await renderSession(control, makeRuntime(control))
+    await screen.findByTestId('composer-compact')
+
+    await act(async () => {
+      send('先跑一轮')
+    })
+
+    const chip = screen.getByTestId('composer-compact')
+    expect(chip).toBeDisabled()
+    fireEvent.click(chip)
+    expect(vi.mocked(compactThread)).not.toHaveBeenCalled()
   })
 })
 

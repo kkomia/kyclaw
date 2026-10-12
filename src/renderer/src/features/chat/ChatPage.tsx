@@ -295,6 +295,11 @@ function ActiveChat({
   const [compacting, setCompacting] = useState(false)
   /** 压缩结果的一行 notice（成功/失败/降级；交给 Composer 显示） */
   const [compactNotice, setCompactNotice] = useState<ComposerNotice | null>(null)
+  /**
+   * round 57：上下文用量的取数信号（每 +1 让上下文环与「压缩上下文」胶囊重取一次）。
+   * 原来环只在挂载 / 换会话 / 点开时取数，轮结束不刷 → 用量越过 80% 了按钮也不露面。
+   */
+  const [usageVersion, setUsageVersion] = useState(0)
   /** 发送预检进行中（取用量 → 也许压缩）的防抖锁：status 更新前的小窗口里防连按双发 */
   const sending = useRef(false)
 
@@ -350,6 +355,9 @@ function ActiveChat({
     try {
       const result = await compactThread(threadId)
       if (result.compaction !== null) setCompaction(result.compaction)
+      // round 57：真压了 → 服务端的用量随之变了，让环与「压缩上下文」胶囊重取一次
+      // （压到线下就自己收起来，不把一枚已经没意义的按钮留在工具条上）
+      if (result.compacted) setUsageVersion((version) => version + 1)
       return { ok: true, compacted: result.compacted, compaction: result.compaction }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -497,12 +505,15 @@ function ActiveChat({
    * onFinish 在构造时就绑给了完成通知那条路；这里只关心"忙完了、队列还排着没有"。
    * 出错收尾状态是 'error'（不是 ready），不自动补发——等用户决定重试还是改主意。
    * 还停在等审批（挂起轮）也不补发：用户还没做决策，替他往前跑只会把审批流搅乱。
+   * round 57：同一处顺手把用量取数信号 +1（新一轮用量已落库 → 环与「压缩上下文」胶囊刷新）。
    */
   const previousStatus = useRef(status)
   useEffect(() => {
     const wasBusy = previousStatus.current === 'submitted' || previousStatus.current === 'streaming'
     previousStatus.current = status
-    if (wasBusy && status === 'ready' && !waitingApproval) flushNext()
+    if (!wasBusy || status !== 'ready') return
+    setUsageVersion((version) => version + 1)
+    if (!waitingApproval) flushNext()
   }, [status, flushNext, waitingApproval])
 
   /**
@@ -647,6 +658,7 @@ function ActiveChat({
           compactBusy={compacting}
           compactDisabled={busy || waitingApproval}
           externalNotice={compactNotice}
+          usageVersion={usageVersion}
         />
       </div>
     </>

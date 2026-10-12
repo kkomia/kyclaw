@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AtSign,
   Paperclip,
@@ -17,6 +17,7 @@ import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Skeleton } from '@renderer/components/ui/skeleton'
 import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { COMPACT_CHIP_PCT } from '@renderer/lib/compact'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { PendingImageTile } from './PendingImageTile'
 import {
@@ -45,7 +46,8 @@ import type { ReferenceKind } from './reference-markers'
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
  *   - `ContextChip`：上下文环（round 42 二轮从 ModelChip 里拆出来的**独立组件**）——环自己点了开明细卡、
- *     hover 也出同一张卡；与模型名只是相邻，不共用按钮；
+ *     hover 也出同一张卡；与模型名只是相邻，不共用按钮；round 57 起用量 ≥ 80% 时环左边多一枚
+ *     「压缩上下文」胶囊（同层兄弟，点即压缩，不用在输入框里打 `/`）；
  *   - `ModelChip`：模型切换（只列 T8 已配置的 provider，含 isDefault 语义；不带小字说明）；
  *     弹层 = 模型列表 + 思考强度 + 对话长度（round 42 二轮起**不含**上下文明细）；
  *   - `PendingChips`：附件 / 引用卡行（可移除；round 42 二轮的摘选是「引用卡」）。
@@ -470,8 +472,15 @@ function ContextSlider({
 /**
  * 上下文明细的取数（round 42 二轮：从 ModelChip 里拆出来给独立的 `ContextChip` 用）。
  * 口径与 round 41 完全一致（`ContextCardBody` 那份数字），只是取数挪到环自己的组件里。
+ *
+ * round 57：多一个外部刷新信号 `usageVersion`（上层每轮结束 +1）—— 原来只有"挂载 + 换会话 +
+ * 环菜单打开"才取数，轮结束不刷，环与「压缩上下文」按钮会停在上一轮的数字上。版本号只当
+ * "该重取了"的信号（值本身不参与请求），换会话同样经由它重取。
  */
-function useContextStats(threadId: string | null): {
+function useContextStats(
+  threadId: string | null,
+  usageVersion = 0
+): {
   stats: ContextStats
   pending: boolean
   refresh: () => void
@@ -491,14 +500,23 @@ function useContextStats(threadId: string | null): {
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
   const windowTokens = contextTokensFor(current?.model, pct, probed)
 
+  /** 最近一次发起的取数标识（会话 + 轮次号）：晚回的旧响应不许覆盖新一轮的数字 */
+  const lastRequest = useRef('')
   const refresh = useCallback((): void => {
     if (threadId === null || threadId === '') return
+    const request = `${threadId}\u0000${usageVersion}`
+    lastRequest.current = request
     void fetchThreadContext(threadId).then(
-      (next) => setContext(next),
+      (next) => {
+        if (lastRequest.current === request) setContext(next)
+      },
       // 取不到（服务没起来 / 还没记录）：记下这条会话取不到，卡里如实画 0%，不打扰输入
-      () => setFailedThreadId(threadId)
+      () => {
+        if (lastRequest.current === request) setFailedThreadId(threadId)
+      }
     )
-  }, [threadId])
+  }, [threadId, usageVersion])
+  // 挂载 / 换会话 / 每轮结束（usageVersion 变）= 上面那个 refresh 换新 → 重取一次
   useEffect(() => {
     refresh()
   }, [refresh])
@@ -545,6 +563,17 @@ function useContextStats(threadId: string | null): {
 export interface ContextChipProps {
   /** 当前会话（上下文按这条会话的 usage 取数；null = 不取，环停在空态） */
   threadId?: string | null
+  /**
+   * round 57：用量 ≥ `COMPACT_CHIP_PCT` 时在环**左侧**多一枚「压缩上下文」胶囊（点即压缩）。
+   * 不给（组件级使用 / 不需要这条入口）就不渲染这枚胶囊，环的表现一字不变。
+   */
+  onCompact?: () => void
+  /** 压缩进行中：胶囊显示「压缩中…」并禁用 */
+  compactBusy?: boolean
+  /** 压缩不可用（流式 / 等审批）：胶囊可见但不可点（与 `/` 命令行同一口径） */
+  compactDisabled?: boolean
+  /** 外部取数刷新信号（上层每轮结束 +1）：环与胶囊的数字跟着最新用量走 */
+  usageVersion?: number
 }
 
 /**
@@ -553,54 +582,81 @@ export interface ContextChipProps {
  * 环自己是**独立的目标**：点击 → 弹出明细卡（复用 menu.tsx 的顶层 custom：只读区块，不装 menuitem）；
  * hover → 同一张卡（Tooltip）。它和模型名只是**相邻**：不共用按钮、不互相嵌套在对方弹层里，
  * 也不在一个按钮里（模型名那侧是 ModelChip，见下）。
+ *
+ * round 57：「压缩上下文」胶囊是环**左边**的兄弟节点（同层、不嵌套；环仍然只干"看用量"这一件事）——
+ * 用量够高时出现，点一下就走压缩，不用在输入框里打 `/`（对齐 Kimi Code 桌面版的那枚 chip）。
+ * 出现走既有入场过渡（animate-fade-in），消失随条件渲染收起；没有用量数据（取数失败 / 还没记录）
+ * 时按 0% 处理 → 不出现。
  */
-export function ContextChip({ threadId = null }: ContextChipProps): React.JSX.Element {
-  const { stats, pending, refresh } = useContextStats(threadId)
+export function ContextChip({
+  threadId = null,
+  onCompact,
+  compactBusy = false,
+  compactDisabled = false,
+  usageVersion = 0
+}: ContextChipProps): React.JSX.Element {
+  const { stats, pending, refresh } = useContextStats(threadId, usageVersion)
+  // 没数据 / 还在取数时不出按钮（不闪一个假的"该压缩了"出来）
+  const showCompact = onCompact !== undefined && !pending && stats.usedPct >= COMPACT_CHIP_PCT
 
   return (
-    <Menu
-      trigger={
-        // 32px 圆形 hover 底（与 ＋ / 权限 chip 同一档）；图标本身就是上下文环
+    <>
+      {showCompact ? (
         <button
           type="button"
-          data-testid="composer-context"
-          aria-label="上下文"
-          className={ICON_TRIGGER_CLASS}
+          data-testid="composer-compact"
+          aria-label="压缩上下文"
+          disabled={compactBusy || compactDisabled}
+          onClick={() => onCompact?.()}
+          className="animate-fade-in inline-flex h-8 shrink-0 items-center rounded-control px-2 text-b2 text-warning transition-colors duration-(--motion-fast) ease-main hover:bg-hover disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
         >
-          <Tooltip
-            side="top"
-            align="start"
-            className="w-72 p-3"
-            label={
-              <div data-testid="context-card" className="text-left">
+          {compactBusy ? '压缩中…' : '压缩上下文'}
+        </button>
+      ) : null}
+      <Menu
+        trigger={
+          // 32px 圆形 hover 底（与 ＋ / 权限 chip 同一档）；图标本身就是上下文环
+          <button
+            type="button"
+            data-testid="composer-context"
+            aria-label="上下文"
+            className={ICON_TRIGGER_CLASS}
+          >
+            <Tooltip
+              side="top"
+              align="start"
+              className="w-72 p-3"
+              label={
+                <div data-testid="context-card" className="text-left">
+                  <ContextCardBody stats={stats} loading={pending} />
+                </div>
+              }
+            >
+              <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
+                <ContextRing percent={stats.usedPct} warning={stats.overThreshold} />
+              </span>
+            </Tooltip>
+          </button>
+        }
+        items={[
+          {
+            id: 'context-usage',
+            type: 'custom',
+            content: (
+              <div data-testid="context-menu-card" className="w-72">
                 <ContextCardBody stats={stats} loading={pending} />
               </div>
-            }
-          >
-            <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
-              <ContextRing percent={stats.usedPct} warning={stats.overThreshold} />
-            </span>
-          </Tooltip>
-        </button>
-      }
-      items={[
-        {
-          id: 'context-usage',
-          type: 'custom',
-          content: (
-            <div data-testid="context-menu-card" className="w-72">
-              <ContextCardBody stats={stats} loading={pending} />
-            </div>
-          )
-        }
-      ]}
-      side="top"
-      align="start"
-      onOpenChange={(open) => {
-        // 点开就重取一次（上一次可能是很久以前；取不到也照常画 0%，不挡弹层）
-        if (open) refresh()
-      }}
-    />
+            )
+          }
+        ]}
+        side="top"
+        align="start"
+        onOpenChange={(open) => {
+          // 点开就重取一次（上一次可能是很久以前；取不到也照常画 0%，不挡弹层）
+          if (open) refresh()
+        }}
+      />
+    </>
   )
 }
 

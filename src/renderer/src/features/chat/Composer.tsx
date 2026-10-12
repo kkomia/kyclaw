@@ -37,6 +37,7 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 底部工具条（48）：左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档
  * ask|full，当前会话工作区）；右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
  * （T8 已配置 provider 的默认项；round 8 按用户实拍从左侧组移到右侧、发送钮之前）+ 发送/停止。
+ * round 57：用量 ≥ 80% 时 ContextChip 会在环**左边**多渲染一枚「压缩上下文」胶囊（点即压缩）。
  *
  * 高度按 Kimi 实况页（a84af355 截图：单行输入 + 一行工具条），默认单行时紧凑，
  * 不再固定三段 "40 + 111 + 49" —— 那是首屏形态，常态下多出来的空白正是用户点名的"过高"。
@@ -80,6 +81,11 @@ export interface ComposerProps {
   compactDisabled?: boolean
   /** 压压缩结果的一行 notice（由上层给：成功/失败/降级）；与附件等内部 notice 合并显示 */
   externalNotice?: ComposerNotice | null
+  /**
+   * round 57：上下文用量的**取数刷新信号**（上层每轮结束 +1）——透给上下文环那侧的
+   * 「压缩上下文」胶囊，让它在用量越过出现线时及时露面（环自己也跟着变新）。
+   */
+  usageVersion?: number
 }
 
 let uidCounter = 0
@@ -120,7 +126,8 @@ export function Composer({
   onCompact,
   compactBusy = false,
   compactDisabled = false,
-  externalNotice = null
+  externalNotice = null,
+  usageVersion = 0
 }: ComposerProps): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -645,10 +652,17 @@ export function Composer({
           ) : null}
         </span>
 
-        {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放 */}
+        {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放；
+            round 57：环左边那枚「压缩上下文」胶囊由 ContextChip 自己按用量决定出不出（同层兄弟） */}
         {settings.providers.length === 0 ? null : (
           <>
-            <ContextChip threadId={threadId} />
+            <ContextChip
+              threadId={threadId}
+              onCompact={onCompact}
+              compactBusy={compactBusy}
+              compactDisabled={compactDisabled}
+              usageVersion={usageVersion}
+            />
             <ModelChip onNotice={setNotice} />
           </>
         )}
