@@ -18,7 +18,7 @@
  */
 import type { Tool } from '@mastra/core/tools'
 import { classifyToolCall, type ToolClass } from '../main/permission/classify'
-import type { ToolClassifier } from './tools/guard'
+import { approvalSessionOf, type ToolClassifier } from './tools/guard'
 import type { McpServerConfig } from '../shared/settings'
 import {
   isHttpUrl,
@@ -31,6 +31,7 @@ import {
   type McpToolInfo
 } from '../shared/mcp'
 import type { MastraMCPServerDefinition } from '@mastra/mcp'
+import type { NeedsApprovalContext } from '@mastra/core/tools'
 
 /** 工具名的拼装/解析实现在 shared/mcp.ts（round 14 搬过去给渲染端复用）；这里 re-export 保持既有调用方 */
 export { MCP_TOOL_PREFIX, mcpToolName, parseMcpToolName }
@@ -116,8 +117,10 @@ export function serverDefinition(
   }
 }
 
-/** 工具调用的审批判定入口（agent 装配把它接到 guard.needsApproval 上） */
-export type McpToolGate = (tool: string, input: unknown) => boolean
+/** 工具调用的审批判定入口（agent 装配把它接到 guard.needsApproval 上）。
+ *  `session` = 审批回调里取到的线程 id（round 46，见 guard.approvalSessionOf）；缺省 = 回调里
+ *  拿不到会话，按老口径（整份授权列表）判——与内置工具同一条规则。 */
+export type McpToolGate = (tool: string, input: unknown, session?: string) => boolean
 
 /**
  * listToolsets 的结果 → agent 的工具表：只取**启用中**的 server；命名 `mcp__<server>__<tool>`；
@@ -142,7 +145,11 @@ export function collectMcpTools(options: {
       const name = mcpToolName(server.id, toolName)
       tool.id = name
       tool.requireApproval = true
-      tool.needsApprovalFn = (args: unknown) => options.gate(name, args)
+      // round 46：core 把审批上下文摊平后作为第二参交给 needsApprovalFn（`{ args, requestContext,
+      // workspace }`，见 guard.approvalSessionOf 头注），线程 id 在 requestContext 里 —— 取出来
+      // 透传给 gate，让"没有显式目标"的 MCP 工具也能按会话根判 full（老口径：拿不到就整份列表）
+      tool.needsApprovalFn = (args: unknown, approval?: NeedsApprovalContext) =>
+        options.gate(name, args, approvalSessionOf(approval))
       collected[name] = tool
     }
   }

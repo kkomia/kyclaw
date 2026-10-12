@@ -29,7 +29,7 @@ import {
 } from '../search/backends'
 import { createMcpClient, type McpClient } from '../search/mcp-client'
 import { clipText } from './exec'
-import { needsApproval, type ToolContext } from './guard'
+import { approvalSessionOf, needsApproval, type ToolContext } from './guard'
 
 /** 后端原文透传的上限（解析不出结构化结果时的兜底） */
 export const SEARCH_RAW_LIMIT_BYTES = 32 * 1024
@@ -104,7 +104,8 @@ export async function createWebSearchTool(
       '执行前会请求用户批准。',
     inputSchema: webSearchInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'web_search', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'web_search', input, approvalSessionOf(approval)),
     execute: async (input) => {
       const outcome = await runWebSearch(
         {

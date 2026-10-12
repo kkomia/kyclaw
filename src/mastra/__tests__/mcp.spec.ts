@@ -240,6 +240,30 @@ describe('mcp.ts：命名与分级', () => {
     expect(enabled['mcp__echo__echo'].needsApprovalFn?.({}, {})).toBe(true)
     expect(enabled['mcp__echo__echo'].needsApprovalFn?.(1, {})).toBe(false)
   })
+
+  it('collectMcpTools：needsApprovalFn 把回调里的线程 id 透传给 gate（round 46）', () => {
+    const sessions: Array<string | undefined> = []
+    const gate = (_tool: string, _input: unknown, session?: string): boolean => {
+      sessions.push(session)
+      return false
+    }
+    const collected = collectMcpTools({
+      toolsets: { echo: { echo: { id: 'echo_echo', description: '' } } } as never,
+      servers: [stdioConfig()],
+      gate
+    })
+    const needsApprovalFn = collected['mcp__echo__echo'].needsApprovalFn
+
+    // 实证形状（core 的 buildToolApprovalContext 摊平后的第二参）：线程 id 在 MastraMemory.thread.id
+    expect(
+      needsApprovalFn?.({}, { requestContext: { MastraMemory: { thread: { id: 't-9' } } } })
+    ).toBe(false)
+    expect(sessions).toEqual(['t-9'])
+    // 回调里拿不到会话（没挂记忆 / 假 ctx）→ undefined，gate 按老口径（整份授权列表）判
+    expect(needsApprovalFn?.({}, { requestContext: {} })).toBe(false)
+    expect(needsApprovalFn?.({}, undefined)).toBe(false)
+    expect(sessions).toEqual(['t-9', undefined, undefined])
+  })
 })
 
 describe('mcp.ts：真 stdio 子进程', () => {

@@ -42,6 +42,7 @@ import { resolveInsideWorkspace } from '../../main/permission/realpath'
 import { currentShell, SHELL_MISSING, type ResolvedShell } from '../../main/git-bash'
 import { formatSeconds, MAX_OUTPUT_BYTES, runProcess, type RunResult } from './exec'
 import {
+  approvalSessionOf,
   needsApproval,
   NO_WORKSPACE_REASON,
   sessionKey,
@@ -170,7 +171,10 @@ export async function createBashTool(
     description,
     inputSchema: bashInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'bash', input),
+    // 审批按会话判（round 46）：回调第二参带得到线程 id → 没给 cwd 时按会话根判 full，
+    // 见 guard.approvalSessionOf / noTargetFullExempt
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'bash', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const shell = resolve()
       if (shell === null) throw new Error(SHELL_MISSING)

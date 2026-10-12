@@ -10,7 +10,14 @@
 import { relative } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 export const deleteInputSchema = z.object({
   path: z.string().min(1).describe('要删除的文件或目录（工作区内）'),
@@ -32,7 +39,8 @@ export async function createDeleteTool(ctx: ToolContext): Promise<Tool<DeleteInp
       '这是危险操作：每次都会请求用户批准（没有"以后都别问"的豁免）。',
     inputSchema: deleteInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'delete', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'delete', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const { abs, workspace } = toolTarget(ctx, input.path, sessionKey(context))
       if (relative(workspace.path, abs) === '') {

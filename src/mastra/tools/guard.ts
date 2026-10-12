@@ -137,11 +137,19 @@ export class ToolState {
 
 /**
  * 授权工作区来源：数组，或"按会话现取"的取值函数（T18：会话的项目/默认工作区中途变，下一轮就跟着变）。
- * 取值函数收到 `session === undefined` 时给的是**审批口径**——实现方（agents/kyclaw.ts）给的是
- * **整份授权列表**（超集）。为什么审批不按会话收窄：Mastra 的 `requireApproval` 回调只拿得到
- * `(input, { requestContext, workspace })`，**没有线程 id**，判不了"这个会话的项目是哪个"。
- * 取超集只可能多问，不会漏问——真正能落盘的写必须经执行层的会话根（子集）解析，
- * 所以不存在"审批放行、执行越界"的组合（方向判据见 needsApproval 头注）。
+ * 取值函数收到 `session === undefined` 时给的是**整份授权列表**（超集，实现方是 agents/kyclaw.ts）。
+ * 审批侧什么时候用哪一份，见下面 round 46 的口径。
+ *
+ * round 46：审批**能**按会话收窄了。core 的 `buildToolApprovalContext` 把 requestContext 摊平成
+ * plain object 交给 `needsApprovalFn(input, ctx)`，agent 每轮写进去的 `MastraMemory` 原样在里面
+ * （线程 id = `MastraMemory.thread.id`，实证见 approvalSessionOf 头注）。所以：
+ *   - **无显式目标**的判定（能力类工具的缺省分支、外部/未知工具档）按**会话根**判 full ——
+ *     与执行层同口径（执行层用的就是会话根，见 tools/bash.ts 的 resolveBashCwd）；
+ *   - **显式目标**与"永久允许"规则照旧走整份授权列表：目标是模型给的字符串，落在哪个工作区
+ *     与"哪个会话在跑"无关；规则按 (工具 × 工作区) 绑定，也没有会话维度。
+ * 会话根是授权列表的子集（sessionRoots 的契约），所以"审批放行、执行越界"的组合依旧不存在
+ * （方向判据见 needsApproval 头注）。回调里拿不到会话（无记忆运行、外部调用）时退回整份列表
+ * 这条保守口径 —— 旧行为原样。
  */
 export type WorkspaceRoots =
   readonly Workspace[] | ((session: string | undefined) => readonly Workspace[])
@@ -182,6 +190,37 @@ export function sessionKey(context: unknown): string {
   const agent = (context as { agent?: { threadId?: unknown } } | undefined)?.agent
   const threadId = agent?.threadId
   return typeof threadId === 'string' && threadId !== '' ? threadId : DEFAULT_SESSION
+}
+
+/**
+ * 审批回调里的会话（round 46，`sessionKey` 的审批侧对应物）：core 每次工具调用前算审批结论
+ * （`resolveToolApprovalVerdict`），回调第二参是
+ * `{ args, requestContext: Object.fromEntries([...requestContext.entries()]) , workspace }`
+ * —— `requestContext` 被**摊平成 plain object**（没有 `.get`），但键值原样带着 agent 每轮写进去
+ * 的那一份。实测（src/mastra/__tests__/approval-session-chain.spec.ts，真 mastra agent + 真 chatRoute
+ * 跑一轮探针工具）该对象**只有 `MastraMemory` 一个键**：
+ *   `{ MastraMemory: { thread: <thread 对象，thread.id = 当前线程>, resourceId, memoryConfig, runState } }`
+ * 所以线程 id 从 `MastraMemory.thread.id` 取（与 compaction 的 `threadIdOfRequestContext` 同源）。
+ * `mastra__threadId`（core 的 MASTRA_THREAD_ID_KEY）在这条路径上**不存在**，留作兜底 ——
+ * core 在别的装配方式下可能补上它，两条都认没有坏处。
+ *
+ * 取不到（没挂 Memory 的运行、单测里的假 ctx）→ undefined，调用方按"拿不到会话"的保守口径判
+ * （整份授权列表，见 WorkspaceRoots 头注）。
+ */
+export function approvalSessionOf(approvalCtx: unknown): string | undefined {
+  if (typeof approvalCtx !== 'object' || approvalCtx === null) return undefined
+  const requestContext = (approvalCtx as { requestContext?: unknown }).requestContext
+  if (typeof requestContext !== 'object' || requestContext === null) return undefined
+  const flat = requestContext as Record<string, unknown>
+
+  const memory = flat.MastraMemory as { thread?: { id?: unknown } } | undefined
+  const fromMemory = memory?.thread?.id
+  if (typeof fromMemory === 'string' && fromMemory.trim() !== '') return fromMemory.trim()
+
+  const direct = flat.mastra__threadId
+  if (typeof direct === 'string' && direct.trim() !== '') return direct.trim()
+
+  return undefined
 }
 
 export const NO_WORKSPACE_REASON = '还没有授权工作区：请先在「设置 → 工作区」里添加一个文件夹'
@@ -261,18 +300,19 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *       · **能力类工具**（round28：bash / fetch / git_add / git_commit；round45 增加 web_search）：
  *         按它们的"显式目标"
  *         字段（bash=cwd、fetch=save_to、git=path）解析；没给目标时执行层的根 = 会话根，
- *         审批层拿不到会话 —— 单工作区就绑它，多工作区只有**全部 full** 才免审（有一条 ask
- *         就说不清执行会落哪）。**full 对四种能力都生效**（round28 用户口径修正：开着
- *         「完全访问」的文件夹里跑 bash / 发 fetch 不该再弹卡），规则照旧可豁免。
+ *         所以**审批也按会话根判**（round 46，见 approvalSessionOf）：会话单根 full → 免审；
+ *         会话多根只有**全部 full** 才免审（有一条 ask 就说不清执行会落哪，保守口径不变）；
+ *         回调里拿不到会话就退回整份授权列表这条旧口径。**full 对四种能力都生效**（round28
+ *         用户口径修正：开着「完全访问」的文件夹里跑 bash / 发 fetch 不该再弹卡），规则照旧可豁免。
  *         目标给了解析不出去：bash 的执行层**允许**在工作区外跑（这正是它的用途）→ 问；
  *         fetch/git 的目标过引擎、执行层会 fail closed → 不问（批了也不执行，弹卡是噪音）。
  *       · **其它写类**（MCP 外部工具、未知工具）：执行不走我们的引擎，无法证明"只碰这个工作区"
  *         （入参里的 path 可能根本不是文件路径）。**round 36 用户裁定：完全访问不该弹** ——
  *         所以"要不要问"接上与 bash/fetch 同一套 full 判定：目标是我们的显式字段且解析得到时
- *         按那个工作区判（full → 免审）；MCP 工具没有这种字段，走"无显式目标"分支（单工作区
- *         full → 免审、多工作区全 full → 免审、混合档问）。full 之外是旧口径：目标能解析进某个
- *         工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，用户对这张卡显式批准过）
- *         才放行；目标解析不到 → 问（绑不上工作区，规则不生效）。
+ *         按那个工作区判（full → 免审）；MCP 工具没有这种字段，走"无显式目标"分支（round 46
+ *         起按会话根判：单根 full → 免审、多根全 full → 免审、混合档问）。full 之外是旧口径：
+ *         目标能解析进某个工作区、且该工作区上有一条按**全名**命中的"永久允许"规则（T13，
+ *         用户对这张卡显式批准过）才放行；目标解析不到 → 问（绑不上工作区，规则不生效）。
  *
  * 为什么旧论证（"执行不走我们的引擎 → 一律问，full 也不适用"）被推翻（round 36 用户口径）：
  * 那条论证只证明了"MCP 工具的行为没法被工作区约束"，推不出"该一直弹卡"。而 full 是用户对这台
@@ -289,22 +329,33 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *
  * 能力类工具（bash/fetch/git_*）按**整名**识别：`mcp__shell__bash` 不会被认成内置 bash，
  * 走的是外部工具那一档（round 36 起与内置同名工具同一套 full 判定；除此之外靠全名规则放行）。
- * "问一次后可永久允许"的出口对它们是 (工具, 工作区) 规则；没给显式目标时单工作区可绑、
- * 多工作区全部 full 才免审，混合档问。
+ * "问一次后可永久允许"的出口对它们是 (工具, 工作区) 规则；**规则判定仍用整份授权列表**
+ * （round 46 只把"无显式目标的 full 免审"按会话根收窄，规则那条路与显式目标一样不动）。
  *
- * T18（会话根）与这一层的关系：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)`
- * 不传 session）。执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts
- * 的 sessionRoots）——两者是"超集 / 子集"关系：任何能落盘的写都落在审批看过的那条工作区条目上
- * （同一条目决定 mode 与规则），所以审批不会比执行松；反过来，用户批准一次不在会话范围内的写
+ * T18（会话根）与这一层的关系：
+ *   - **显式目标**：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)` 不传 session）；
+ *   - **无显式目标**（能力类缺省分支 / 外部工具档）：执行层的根 = 会话根，审批按**会话根**判 full
+ *     （round 46；拿不到会话时退回整份列表）。
+ * 执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts 的 sessionRoots）；
+ * 会话根是整份列表的子集，所以方向判据不变：任何能落盘的写都落在审批看过的那条工作区条目上
+ * （同一条目决定 mode 与规则），审批不会比执行松；反过来，用户批准一次不在会话范围内的写
  * 会以工具错误收场（fail closed，不落盘），不会静默越界。
+ *
+ * `session` 由调用方（各工具的 requireApproval）从回调第二参取：`approvalSessionOf(approval)`。
+ * 不传 = 拿不到会话（老口径：整份授权列表）—— 工具单测、无记忆运行都走这支。
  */
-export function needsApproval(ctx: ToolContext, tool: string, input: unknown): boolean {
+export function needsApproval(
+  ctx: ToolContext,
+  tool: string,
+  input: unknown,
+  session?: string
+): boolean {
   const toolClass = ctx.classify(tool, input)
   if (toolClass === 'read') return false
   if (toolClass === 'dangerous') return true
 
   const capability = capabilityOf(tool)
-  if (capability !== null) return capabilityNeedsApproval(ctx, capability, tool, input)
+  if (capability !== null) return capabilityNeedsApproval(ctx, capability, tool, input, session)
 
   const target = inputPath(input)
   const resolved = target === null ? null : resolveTarget(ctx, target)
@@ -317,9 +368,9 @@ export function needsApproval(ctx: ToolContext, tool: string, input: unknown): b
       if (resolved.workspace.mode === 'full') return false
       return !isAllowedByRules(ctx.permissionRules(), tool, resolved.workspace.path)
     }
-    // 无目标 / 目标解析不到：MCP 工具没有"显式目标"这种字段，按无显式目标分支判 full；
-    // 没被 full 免审就照旧问（规则绑不上工作区，不生效）
-    return !noTargetFullExempt(ctx)
+    // 无目标 / 目标解析不到：MCP 工具没有"显式目标"这种字段，按无显式目标分支判 full
+    // （round 46 起按会话根判）；没被 full 免审就照旧问（规则绑不上工作区，不生效）
+    return !noTargetFullExempt(ctx, session)
   }
 
   // 内置文件工具：目标解析不到 → 不问（执行即 fail closed）；full 与规则照旧
@@ -336,7 +387,8 @@ function capabilityOf(tool: string): Capability | null {
     case 'bash':
       return 'shell'
     // round 45：web_search 与 fetch 同属"网络出站"这一档 —— 它没有 save_to 那种显式目标，
-    // 走的就是 fetch 不带 save_to 的同一条判定（单工作区 full / 全 full → 免审；单工作区规则放行）
+    // 走的就是 fetch 不带 save_to 的同一条判定（会话单根 full / 会话多根全 full → 免审，
+    // round 46 起按会话根；单工作区规则放行）
     case 'fetch':
     case 'web_search':
       return 'network'
@@ -360,7 +412,8 @@ function capabilityNeedsApproval(
   ctx: ToolContext,
   capability: Capability,
   tool: string,
-  input: unknown
+  input: unknown,
+  session?: string
 ): boolean {
   const target = capabilityTarget(capability, input)
   if (target !== null) {
@@ -375,9 +428,9 @@ function capabilityNeedsApproval(
     return capability === 'shell'
   }
 
-  // 没给显式目标：先看 full 免审（与外部工具同一处判定，见 noTargetFullExempt），
-  // 再做单工作区上的规则判定
-  if (noTargetFullExempt(ctx)) return false
+  // 没给显式目标：先看 full 免审（与外部工具同一处判定，见 noTargetFullExempt）—— 有会话就
+  // 按会话根判（round 46），再做单工作区上的规则判定（规则仍按整份授权列表，见 needsApproval 头注）
+  if (noTargetFullExempt(ctx, session)) return false
   const roots = workspaceRoots(ctx)
   if (roots.length === 1) return !isAllowedByRules(ctx.permissionRules(), tool, roots[0].path)
   return true
@@ -385,12 +438,17 @@ function capabilityNeedsApproval(
 
 /**
  * "无显式目标"时的 full 免审（bash 没给 cwd / fetch 没给 save_to / git 没给 path，以及
- * MCP 与未知工具这种没有显式目标字段的）：执行层的根 = 会话根，而审批层拿不到会话 ——
- * 恰好一个工作区就绑它；多个工作区只有**全部 full** 才免审（有一条 ask 就说不清执行会落哪
- * → 问，保守方向）。**只判 full，不判规则**：规则按 (工具 × 工作区) 绑定，没有目标就绑不上。
+ * MCP 与未知工具这种没有显式目标字段的）：执行层的根 = 会话根。
+ *
+ * round 46：给了 `session`（回调里取到了线程 id）就用**会话根**判 —— 会话单根 full → 免审
+ * （这是用户实报的那张卡：多工作区里会话根是「完全访问」，却没给 cwd 就弹审批）；
+ * 会话多根（没有项目也没指认默认工作区，会话根 = 整份授权列表）只有**全部 full** 才免审。
+ * 拿不到会话（`session === undefined`）= 旧口径：整份授权列表上判，恰好一个就绑它、
+ * 多个只有全 full 才免审（有一条 ask 就说不清执行会落哪 → 问，保守方向）。
+ * **只判 full，不判规则**：规则按 (工具 × 工作区) 绑定，没有目标就绑不上。
  */
-function noTargetFullExempt(ctx: ToolContext): boolean {
-  const roots = workspaceRoots(ctx)
+function noTargetFullExempt(ctx: ToolContext, session?: string): boolean {
+  const roots = session === undefined ? workspaceRoots(ctx) : workspaceRoots(ctx, session)
   if (roots.length === 1) return roots[0].mode === 'full'
   return roots.length > 1 && roots.every((workspace) => workspace.mode === 'full')
 }

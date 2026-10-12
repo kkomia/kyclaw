@@ -21,7 +21,7 @@ import {
   saveArtifact,
   type ArtifactInput
 } from './artifacts'
-import { sessionKey, type ToolContext } from './guard'
+import { approvalSessionOf, sessionKey, type ToolContext } from './guard'
 
 /** 输入上限（依据：模块 4 报告 §六.6 登记的"输入规模无上限"）：超限让模型知道怎么改 */
 const MAX_SHEETS = 50
@@ -142,8 +142,15 @@ export async function createExcelTool(ctx: ToolContext): Promise<Tool<ExcelInput
       '执行前会请求用户批准。',
     inputSchema: excelInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) =>
-      artifactNeedsApproval(ctx, 'create_excel', planInput(input), 'xlsx', '表格'),
+    requireApproval: (input, approval) =>
+      artifactNeedsApproval(
+        ctx,
+        'create_excel',
+        planInput(input),
+        'xlsx',
+        '表格',
+        approvalSessionOf(approval)
+      ),
     execute: async (input, context) => {
       const session = sessionKey(context)
       const abs = artifactTarget(ctx, planInput(input), 'xlsx', '表格', session)

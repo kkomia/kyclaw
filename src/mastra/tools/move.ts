@@ -13,7 +13,14 @@
 import { dirname, isAbsolute, relative } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 export const moveInputSchema = z.object({
   path: z.string().min(1).describe('要移动 / 重命名的源路径（工作区内）'),
@@ -36,7 +43,8 @@ export async function createMoveTool(ctx: ToolContext): Promise<Tool<MoveInput, 
       '（要覆盖传 overwrite: true；目标为目录时一律拒绝）。这是危险操作：每次都会请求用户批准。',
     inputSchema: moveInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'move', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'move', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const session = sessionKey(context)
       const source = toolTarget(ctx, input.path, session)

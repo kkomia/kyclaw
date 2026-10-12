@@ -18,6 +18,7 @@ import { z } from '../../shared/zod'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
 import { formatSeconds, runProcess, type RunResult } from './exec'
 import {
+  approvalSessionOf,
   needsApproval,
   scanRoot,
   sessionKey,
@@ -115,7 +116,8 @@ export async function createGitTools(
       '查看工作区 git 仓库的短格式状态（当前分支 + 变更清单，只读）。仓库目录缺省 = 会话工作区。',
     inputSchema: gitStatusInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'git_status', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'git_status', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
       return await runGitCommand(resolveGit, timeoutMs, repo.abs, [
@@ -133,7 +135,8 @@ export async function createGitTools(
     description: '查看工作区 git 仓库的改动 diff（缺省未暂存；staged=true 看已暂存；只读）。',
     inputSchema: gitDiffInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'git_diff', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'git_diff', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
       const args = [
@@ -154,7 +157,8 @@ export async function createGitTools(
     description: '查看工作区 git 仓库的提交历史（--oneline，缺省 20 条，只读）。',
     inputSchema: gitLogInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'git_log', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'git_log', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
       return await runGitCommand(resolveGit, timeoutMs, repo.abs, [
@@ -175,7 +179,8 @@ export async function createGitTools(
       '执行前会请求用户批准）。',
     inputSchema: gitAddInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'git_add', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'git_add', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
       const specs = input.paths.map((spec) => resolveSpec(repo, spec))
@@ -196,7 +201,8 @@ export async function createGitTools(
       '本工具不 push（需要推到远端请让用户自己做）。',
     inputSchema: gitCommitInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'git_commit', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'git_commit', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
       return await runGitCommand(resolveGit, timeoutMs, repo.abs, ['commit', '-m', input.message])

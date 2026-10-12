@@ -16,7 +16,14 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 /** 用了 CRLF 兜底时回执里的说明（测试与模型都看得见） */
 export const EDIT_CRLF_NOTE = '按 CRLF 行尾匹配'
@@ -38,7 +45,8 @@ export async function createEditTool(ctx: ToolContext): Promise<Tool<EditInput, 
       '对工作区内的文本文件做精确替换：oldText 必须与文件内容逐字匹配（含空白/换行）且只出现一处。先 read 再改；改整个文件用 write。',
     inputSchema: editInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'edit', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'edit', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const session = sessionKey(context)
       const { abs } = toolTarget(ctx, input.path, session)

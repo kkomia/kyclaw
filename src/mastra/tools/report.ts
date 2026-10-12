@@ -20,7 +20,7 @@ import {
   saveArtifact,
   type PdfPrinter
 } from './artifacts'
-import { sessionKey, type ToolContext } from './guard'
+import { approvalSessionOf, sessionKey, type ToolContext } from './guard'
 
 /** 标题缺省时的兜底（渲染进 <title> 与页首；文件名也会用它派生） */
 const FALLBACK_TITLE = '报告'
@@ -84,8 +84,15 @@ export async function createReportTool(ctx: ToolContext): Promise<Tool<ReportInp
       '执行前会请求用户批准。',
     inputSchema: reportInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) =>
-      artifactNeedsApproval(ctx, 'create_report', input, 'html', FALLBACK_TITLE),
+    requireApproval: (input, approval) =>
+      artifactNeedsApproval(
+        ctx,
+        'create_report',
+        input,
+        'html',
+        FALLBACK_TITLE,
+        approvalSessionOf(approval)
+      ),
     execute: async (input, context) => {
       const session = sessionKey(context)
       const abs = artifactTarget(ctx, input, 'html', FALLBACK_TITLE, session)
@@ -110,8 +117,15 @@ export async function createPdfTool(
       '执行前会请求用户批准。',
     inputSchema: pdfInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) =>
-      artifactNeedsApproval(ctx, 'create_pdf', input, 'pdf', FALLBACK_TITLE),
+    requireApproval: (input, approval) =>
+      artifactNeedsApproval(
+        ctx,
+        'create_pdf',
+        input,
+        'pdf',
+        FALLBACK_TITLE,
+        approvalSessionOf(approval)
+      ),
     execute: async (input, context) => {
       const session = sessionKey(context)
       // 先解析路径（批了再写不进去的目标，不该白跑一次打印）

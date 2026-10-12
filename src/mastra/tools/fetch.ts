@@ -23,7 +23,14 @@ import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import { WEB_SEARCH_PRESET, readerTargetUrl } from '../../shared/search'
 import { clipText, formatSeconds } from './exec'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 /** 默认超时（毫秒） */
 export const FETCH_DEFAULT_TIMEOUT_MS = 30_000
@@ -105,7 +112,8 @@ export async function createFetchTool(
       '（走阅读服务抓 Markdown，只支持 GET）。执行前会请求用户批准。',
     inputSchema: fetchInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'fetch', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'fetch', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const url = parseHttpUrl(input.url)
       const method = input.method ?? 'GET'

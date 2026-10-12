@@ -9,7 +9,14 @@
 import { StringDecoder } from 'node:string_decoder'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 /** read 的输出上限：超过就截断（spec §5.1"输出截断限额"） */
 export const READ_MAX_BYTES = 256 * 1024
@@ -31,7 +38,8 @@ export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, 
       '读取授权工作区内的文本文件。offset/limit 按行取窗口（从 1 开始）；文件超过 256KB 时只返回前 256KB 并注明截断。改动文件前先用它看原文。',
     inputSchema: readInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'read', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'read', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const { abs } = toolTarget(ctx, input.path, sessionKey(context))
       const fileStat = await statOrNull(ctx, abs)

@@ -90,18 +90,29 @@ export function artifactPath(input: ArtifactInput, ext: string, fallbackTitle: s
   return defaultArtifactName(title === '' ? fallbackTitle : title, ext)
 }
 
-/** 审批口径（写类，同 write；判定细节见 guard.needsApproval） */
+/**
+ * 审批口径（写类，同 write；判定细节见 guard.needsApproval）。
+ * `session` 来自回调第二参（round 46）：产出物的路径总会派生出一个显式目标，所以这一档走的
+ * 是"显式目标"分支（目标落在哪个工作区判 full / 规则），会话只影响"无目标"的档位；
+ * 仍然透传，与大工具集保持同一写法（缺省 undefined = 老口径）。
+ */
 export function artifactNeedsApproval(
   ctx: ToolContext,
   tool: string,
   input: ArtifactInput,
   ext: string,
-  fallbackTitle: string
+  fallbackTitle: string,
+  session?: string
 ): boolean {
-  return needsApproval(ctx, tool, {
-    title: input.title,
-    path: artifactPath(input, ext, fallbackTitle)
-  })
+  return needsApproval(
+    ctx,
+    tool,
+    {
+      title: input.title,
+      path: artifactPath(input, ext, fallbackTitle)
+    },
+    session
+  )
 }
 
 /** 执行口径：解析到会话根的绝对路径（越界抛中文人话，目标只认引擎给的 abs） */

@@ -9,6 +9,7 @@ import { isAbsolute, join } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import {
+  approvalSessionOf,
   insideWorkspace,
   needsApproval,
   scanRoot,
@@ -40,7 +41,8 @@ export async function createGlobTool(ctx: ToolContext): Promise<Tool<GlobInput, 
       '按 glob 模式列出授权工作区内的文件路径（** 递归、* 不跨目录），最多 200 条。找文件内容用 grep。',
     inputSchema: globInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'glob', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'glob', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const base = scanRoot(ctx, input.path, sessionKey(context))
       const baseStat = await statOrNull(ctx, base.abs)

@@ -8,7 +8,14 @@
 import { dirname } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
-import { needsApproval, sessionKey, statOrNull, toolTarget, type ToolContext } from './guard'
+import {
+  approvalSessionOf,
+  needsApproval,
+  sessionKey,
+  statOrNull,
+  toolTarget,
+  type ToolContext
+} from './guard'
 
 export const writeInputSchema = z.object({
   path: z.string().min(1).describe('文件路径；相对路径以授权工作区为基准'),
@@ -26,7 +33,8 @@ export async function createWriteTool(ctx: ToolContext): Promise<Tool<WriteInput
       '在授权工作区内创建或整体覆盖一个文本文件（父目录会自动创建）。覆盖已有文件前先用 read 看内容；改动旧文件优先用 edit 做精确替换。',
     inputSchema: writeInputSchema,
     outputSchema: z.string(),
-    requireApproval: (input) => needsApproval(ctx, 'write', input),
+    requireApproval: (input, approval) =>
+      needsApproval(ctx, 'write', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const { abs } = toolTarget(ctx, input.path, sessionKey(context))
 
