@@ -4,15 +4,19 @@
  * 谁在用：agent 的动态工具集（agents/kyclaw.ts 的 tools 函数）每次对话前问它要一遍 MCP 工具；
  * 它负责保证"设置里启用中的 server 是连着的"，并把发现到的工具交给 mcp.ts 命名 + 挂权限 gate。
  *
- * 四条纪律：
- *   1. **随应用启停**：client（stdio 子进程的持有者）在第一次需要工具时建立；`stop()`（应用退出、
- *      服务收尾）一定断开——子进程随 transport 关闭而下线。停掉以后 `tools()` 恒为空，不再重连。
+ * 五条纪律：
+ *   1. **随应用启停**：client（stdio 子进程的持有者）在服务启动预热（round 54：service 起完
+ *      立即后台发现一次）或第一次需要工具时建立；`stop()`（应用退出、服务收尾）一定断开——
+ *      子进程随 transport 关闭而下线。停掉以后 `tools()` 恒为空，不再重连。
  *   2. **设置现读**：每次 `tools()` 比一次"启用中 server 的连接指纹"（id/transport/command/args/url/headers/env，
  *      name 与 readOnlyTools 不影响连接）。变了就整体换一条连接——旧连接断开、失败/重启计数清零。
  *   3. **崩溃重启 ≤ maxRestarts（缺省 2）**：发现失败、或工具调用报连接类错误时，记一条日志、
  *      尝试重连；同一个 server **连续**失败用满次数就"暂停使用"（工具从下一轮消失，不再反复拉起）。
  *      任何一次成功（发现成功 / 调用成功）把计数清零——上限管的是"连续崩溃"，不是服务器的一生。
  *   4. **失败不静默**：连不上只记日志并从工具表里拿掉（该 server 的工具消失），不挡这一轮对话。
+ *   5. **发现不拖对话**（round 54 首字延迟实测：不可达 HTTP server 的启动重试 ≈86s，全记在
+ *      SSE 首字节之前）：`tools()`/`refresh()` 最多等 `discoveryBudgetMs`（缺省 5s），超时先把
+ *      当前结果交出去（缺的工具下一轮补上），发现继续在后台跑完——重启/暂停逻辑照常走。
  *
  * 客户端可注入（测试用假件钉顺序与计数）；真件是 @mastra/mcp 的 MCPClient（ESM-only，动态 import）。
  */
@@ -37,6 +41,13 @@ export type McpClient = Pick<MCPClient, 'listToolsetsWithErrors' | 'reconnectSer
 /** 缺省的重启上限：连续崩溃只拉两次，之后暂停（brief 的 ≤2） */
 export const MCP_MAX_RESTARTS = 2
 
+/**
+ * 单次应用会话里「等发现」的总预算（毫秒）：超了就不等——发现转后台继续（round 54）。
+ * 为什么以"会话"计提：预算按发现任务自己的开始时刻算，同一轮对话里 Mastra 会问两次工具
+ * （guidance 与 prepare-tools），第二次的剩余预算自然归零，一轮的总等待不会翻倍。
+ */
+export const MCP_DISCOVERY_BUDGET_MS = 5_000
+
 export interface McpLifecycleOptions {
   /** 现读设置里的 server 列表（生产 = dataDir/settings.json） */
   servers: () => readonly McpServerConfig[]
@@ -48,6 +59,8 @@ export interface McpLifecycleOptions {
   maxRestarts?: number
   /** 每个 server 的发现超时（缺省 MCP_TIMEOUT_MS） */
   timeoutMs?: number
+  /** 一次"等发现"的总预算（缺省 MCP_DISCOVERY_BUDGET_MS；测试用小值） */
+  discoveryBudgetMs?: number
 }
 
 /** 已挂过监督包装的工具（重挂会套娃，WeakSet 去重） */
@@ -79,6 +92,7 @@ export class McpLifecycle {
   private readonly log: (line: string) => void
   private readonly maxRestarts: number
   private readonly timeoutMs: number
+  private readonly discoveryBudgetMs: number
 
   private client: McpClient | undefined
   /** 当前连接对应的"连接指纹"（undefined = 还没连过；'' = 一条启用的 server 都没有） */
@@ -88,14 +102,15 @@ export class McpLifecycle {
   private readonly failed = new Set<string>()
   private clientCounter = 0
   private stopped = false
-  /** 同一时刻只跑一次同步（并发对话不该重复建连接） */
-  private syncing: Promise<void> | undefined
+  /** 正在跑的一轮后台发现（同时只跑一轮：并发对话不重复建连接）；结算后清空 */
+  private discovery: { promise: Promise<void>; startedAt: number } | undefined
 
   constructor(options: McpLifecycleOptions) {
     this.serversFor = options.servers
     this.log = options.log ?? ((line) => console.warn(`[kyclaw] ${line}`))
     this.maxRestarts = Math.max(0, options.maxRestarts ?? MCP_MAX_RESTARTS)
     this.timeoutMs = options.timeoutMs ?? MCP_TIMEOUT_MS
+    this.discoveryBudgetMs = Math.max(0, options.discoveryBudgetMs ?? MCP_DISCOVERY_BUDGET_MS)
     this.createClient =
       options.createClient ??
       (async (configs) => {
@@ -124,11 +139,12 @@ export class McpLifecycle {
   /**
    * 当前可用的 MCP 工具（`mcp__<server>__<tool>` → Tool，已挂权限 gate）。
    * 发现失败/暂停中的 server 不出现在结果里；设置变了会先换连接。
+   * 等发现最多用满本轮预算（round 54）：超时就先把现状交出去，发现转后台继续。
    */
   async tools(gate: McpToolGate): Promise<Record<string, McpTool>> {
     if (this.stopped) return {}
     const enabled = this.enabled()
-    await this.sync(enabled)
+    await this.awaitDiscovery(enabled)
     if (this.client === undefined) return {}
 
     const toolsets: Record<string, Record<string, McpTool>> = {}
@@ -151,30 +167,59 @@ export class McpLifecycle {
     this.stopped = true
     this.toolsets.clear()
     this.key = undefined
+    // 在飞的后台发现随断连自然失败收尾（日志照记），不再复用到下一轮
+    this.discovery = undefined
     await this.disposeClient()
   }
 
   /**
    * 与设置对齐（不取工具）：设置页改完立即调用——启停/删除当场生效（子进程下线/上线），
-   * 不用等下一次对话。配置没变时是空操作（不会多余地重连或重新发现）。
+   * 不用等下一次对话；慢/不可达的发现最多等预算，其余转后台（round 54）。
+   * 配置没变时是空操作（不会多余地重连或重新发现）。
    */
   async refresh(): Promise<void> {
     if (this.stopped) return
-    await this.sync(this.enabled())
+    await this.awaitDiscovery(this.enabled())
   }
 
-  /** 与设置对齐：指纹变了换连接（旧连接断开、计数清零），然后把还没发现的启用 server 发现一遍 */
-  private async sync(enabled: readonly McpServerConfig[]): Promise<void> {
-    if (this.syncing !== undefined) return this.syncing
-    this.syncing = this.syncNow(enabled)
-      // 对齐失败不泄给调用方（工具表只是少几条，对话照走；下一轮会再对齐）
-      .catch((error) => {
-        this.log(`MCP 连接对齐失败（本轮跳过，下一轮再试）：${firstLine(errorText(error))}`)
+  /**
+   * 开始（或复用）一轮后台发现；告诉本轮调用方"最多还能等多久"。
+   * 预算按发现任务自己的开始时刻计提：同一轮里 Mastra 会问两次工具（guidance 与
+   * prepare-tools），第二次的剩余预算自然归零——一轮对话的总等待不会翻倍。
+   */
+  private startDiscovery(enabled: readonly McpServerConfig[]): {
+    promise: Promise<void>
+    remainingMs: number
+  } {
+    if (this.discovery === undefined) {
+      const promise = this.syncNow(enabled)
+        // 对齐失败不泄给调用方（工具表只是少几条，对话照走；下一轮会再对齐）
+        .catch((error) => {
+          this.log(`MCP 连接对齐失败（本轮跳过，下一轮再试）：${firstLine(errorText(error))}`)
+        })
+        .finally(() => {
+          if (this.discovery?.promise === promise) this.discovery = undefined
+        })
+      this.discovery = { promise, startedAt: Date.now() }
+    }
+    const elapsed = Date.now() - this.discovery.startedAt
+    return {
+      promise: this.discovery.promise,
+      remainingMs: Math.max(0, this.discoveryBudgetMs - elapsed)
+    }
+  }
+
+  /** 等发现完成，但最多等到本轮预算用完（超时 = 后台继续，调用方先走） */
+  private async awaitDiscovery(enabled: readonly McpServerConfig[]): Promise<void> {
+    const { promise, remainingMs } = this.startDiscovery(enabled)
+    if (remainingMs <= 0) return
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, remainingMs)
+      void promise.then(() => {
+        clearTimeout(timer)
+        resolve()
       })
-      .finally(() => {
-        this.syncing = undefined
-      })
-    return this.syncing
+    })
   }
 
   private async syncNow(enabled: readonly McpServerConfig[]): Promise<void> {

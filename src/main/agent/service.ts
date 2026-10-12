@@ -429,6 +429,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     })
   }
 
+  // 启动预热（round 54 首字延迟修复）：把 MCP 发现挪到应用启动后的后台做——可达的 server 在
+  // 用户敲字时已经就绪；不可达的在这里走完重试上限、标成暂停使用，不占任何一轮对话的等待预算。
+  // refresh 自己吞错（对齐失败只记日志），不会冒未处理 rejection。
+  void mcpLifecycle.refresh()
+
   let stopped = false
   return {
     baseUrl: `http://${HOST}:${port}`,

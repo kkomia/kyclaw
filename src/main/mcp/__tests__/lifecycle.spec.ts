@@ -372,3 +372,125 @@ describe('connectionKey：只含影响"怎么连"的字段（round 12）', () =>
     expect(connectionKey([config({ enabled: false })])).toBe(connectionKey([config()]))
   })
 })
+
+describe('McpLifecycle：发现不拖对话（round 54，等待预算 + 后台继续）', () => {
+  type ToolsetsResult = Awaited<ReturnType<McpClient['listToolsetsWithErrors']>>
+
+  /** 慢失败 client：每次发现都拖 delayMs 后才报"连不上"（复刻不可达 HTTP server 的 28.6s，压到毫秒级） */
+  class SlowFailClient {
+    listCalls = 0
+    readonly reconnects: string[] = []
+    disconnects = 0
+
+    constructor(private readonly delayMs: number) {}
+
+    async listToolsetsWithErrors(): Promise<ToolsetsResult> {
+      this.listCalls += 1
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs))
+      return {
+        toolsets: {},
+        errors: { echo: '一直连不上' },
+        errorDetails: { echo: { code: 'CONNECTION_CLOSED', message: '一直连不上' } }
+      }
+    }
+
+    async reconnectServer(name: string): Promise<void> {
+      this.reconnects.push(name)
+    }
+
+    async disconnect(): Promise<void> {
+      this.disconnects += 1
+    }
+  }
+
+  /** 闸门 client：发现挂起，由测试放行（模拟"慢但活着"的 server） */
+  class GatedClient {
+    listCalls = 0
+    readonly gates: Array<(value: ToolsetsResult) => void> = []
+
+    async listToolsetsWithErrors(): Promise<ToolsetsResult> {
+      this.listCalls += 1
+      return await new Promise<ToolsetsResult>((resolve) => {
+        this.gates.push(resolve)
+      })
+    }
+
+    async reconnectServer(): Promise<void> {
+      /* 闸门用例的重连是空操作 */
+    }
+
+    async disconnect(): Promise<void> {
+      /* 闸门用例的断开是空操作 */
+    }
+  }
+
+  it('发现慢于预算：tools() 先交现状（不等挂起的发现）；后台放行后下一轮带上工具，且不重复发现', async () => {
+    const client = new GatedClient()
+    const lifecycle = new McpLifecycle({
+      servers: () => [config()],
+      createClient: async () => client as unknown as McpClient,
+      log: () => {},
+      discoveryBudgetMs: 30
+    })
+
+    const started = Date.now()
+    expect(await lifecycle.tools(gateTrue)).toEqual({})
+    const waited = Date.now() - started
+    expect(waited).toBeGreaterThanOrEqual(25) // 等过预算
+    expect(waited).toBeLessThan(500) // 但没等挂起的发现
+    expect(client.gates).toHaveLength(1)
+
+    // 同一轮第二次问（Mastra 的 prepare-tools）：剩余预算归零 → 立即返回，不再等
+    const again = Date.now()
+    expect(await lifecycle.tools(gateTrue)).toEqual({})
+    expect(Date.now() - again).toBeLessThan(100)
+
+    // refresh 也走同一条预算语义（此刻任务在飞、预算已用完 → 立即回来）
+    const refreshAt = Date.now()
+    await lifecycle.refresh()
+    expect(Date.now() - refreshAt).toBeLessThan(100)
+
+    // 放行：后台把发现做完，下一轮拿到工具；发现只发生过一次
+    client.gates[0]({ toolsets: { echo: { echo: makeTool() } }, errors: {}, errorDetails: {} })
+    await vi.waitFor(
+      async () => {
+        const tools = await lifecycle.tools(gateTrue)
+        expect(Object.keys(tools)).toEqual(['mcp__echo__echo'])
+      },
+      { timeout: 3000, interval: 25 }
+    )
+    expect(client.listCalls).toBe(1)
+  })
+
+  it('发现失败循环转后台：预算内先返回；后台照常走满重启并暂停，之后不再拉起', async () => {
+    const client = new SlowFailClient(300)
+    const logs: string[] = []
+    const lifecycle = new McpLifecycle({
+      servers: () => [config()],
+      createClient: async () => client as unknown as McpClient,
+      log: (line) => logs.push(line),
+      discoveryBudgetMs: 40
+    })
+
+    const started = Date.now()
+    expect(await lifecycle.tools(gateTrue)).toEqual({})
+    const waited = Date.now() - started
+    expect(waited).toBeGreaterThanOrEqual(30)
+    expect(waited).toBeLessThan(250) // 一次 300ms 的尝试都没等到，更别说整轮三次
+    expect(client.listCalls).toBe(1)
+
+    // 后台继续：三次尝试（初始 + 重启 2 次）都失败后暂停使用
+    await vi.waitFor(() => expect(client.listCalls).toBe(3), { timeout: 5000, interval: 50 })
+    await vi.waitFor(() => expect(logs.some((line) => line.includes('暂停使用'))).toBe(true), {
+      timeout: 3000,
+      interval: 25
+    })
+    expect(client.reconnects).toEqual(['echo', 'echo'])
+
+    // 暂停后：下一轮立即返回（不再等、也不再发起发现）
+    const after = Date.now()
+    expect(await lifecycle.tools(gateTrue)).toEqual({})
+    expect(Date.now() - after).toBeLessThan(100)
+    expect(client.listCalls).toBe(3)
+  })
+})
