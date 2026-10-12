@@ -507,6 +507,20 @@ export function attachmentsApiStub(): AttachmentsApiStub {
 }
 
 /**
+ * 本地文件小桥（round 53）：File → 磁盘绝对路径。
+ * 默认回 `''`（jsdom 里没有真的 Electron —— 与"桥给不出路径"同一档，正好让用例走无路径兜底）；
+ * 需要路径引用的用例用 `mockImplementation` 注入"这个 File → 路径"的映射
+ * （按 `file.name` 或 `File` 身份都行）。
+ */
+export interface FilesApiStub {
+  pathForFile: Mock<(file: File) => string>
+}
+
+export function filesApiStub(): FilesApiStub {
+  return { pathForFile: vi.fn(() => '') }
+}
+
+/**
  * 联网搜索面（round 45）：三档 Key 的写/清/状态，桩里"有状态"（写/清之后状态跟着变）
  * —— 与主进程口径一致（明文只在写方向出现一次，读方向只有"有没有"）。
  */
@@ -589,6 +603,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   translate: TranslateApiStub
   search: SearchApiStub
   attachments: AttachmentsApiStub
+  files: FilesApiStub
 }
 
 /** 装桥并返回各面的 spy（settings / workspace / projects / telemetry 共享同一份设置副本） */
@@ -607,6 +622,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const translate = translateApiStub()
   const search = searchApiStub()
   const attachments = attachmentsApiStub()
+  const files = filesApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -616,6 +632,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     projects,
     agent: agentApiStub(),
     attachments,
+    files,
     updates,
     telemetry,
     plugins,
@@ -639,7 +656,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     localModels,
     translate,
     search,
-    attachments
+    attachments,
+    files
   }
 }
 

@@ -257,7 +257,11 @@ describe('readFileBytes：办公三件与表格（抽结构那条路）', () => 
 })
 
 describe('readFileBytes：按格式分桶的上限', () => {
-  it('图片超过 8MB → too-large（连字节都不传）', async () => {
+  it('图片预览上限 = 30MB（round 53 起独立于发送口径的 8MB，别合并回去）', () => {
+    expect(PREVIEW_IMAGE_MAX_BYTES).toBe(30 * 1024 * 1024)
+  })
+
+  it('图片超过 30MB → too-large（连字节都不传）', async () => {
     const name = '大图.png'
     const file = join(root, name)
     writeFileSync(file, Buffer.concat([PNG, Buffer.alloc(PREVIEW_IMAGE_MAX_BYTES)]))
@@ -268,7 +272,7 @@ describe('readFileBytes：按格式分桶的上限', () => {
     expect(result.size).toBe(PREVIEW_IMAGE_MAX_BYTES + PNG.length)
   })
 
-  it('PDF / office 的上限更宽（32MB）：8MB 的 PDF 仍然读得回来', async () => {
+  it('PDF / office 的上限更宽（32MB）：30MB 的 PDF 仍然读得回来', async () => {
     const name = '大报告.pdf'
     writeFileSync(join(root, name), Buffer.concat([PDF, Buffer.alloc(PREVIEW_IMAGE_MAX_BYTES + 1)]))
     const result = await readFileBytes(root, name)

@@ -1,5 +1,5 @@
 /**
- * composer 附件的口径（round 7 起；模块 2 扩成三类：文本 / 图片 / PDF）。
+ * composer 附件的口径（round 7 起；模块 2 扩成三类；round 53 第三类改走**路径引用**）。
  *
  * 为什么不再"一律文本内联"（round 7 的历史结论要更新）：当年实测的是 **file part 里的文本**
  * 走真服务时 provider 看不到内容，于是附件退回"把内容写进消息文本"。模块 2 用**真栈**重新验了
@@ -11,7 +11,12 @@
  *     vision=false → **人话拒收**（不假装收下，也不偷偷转成文字描述）。上限 8MB；
  *   - **PDF**：所有模型统一走**主进程文本抽取**（pdfjs，见 main/pdf.ts），抽出的文本按【附件】
  *     围栏内联（带页码标记）。扫描件（无文字层）给人话。**PDF 渲染成图留 v2**；
- *   - **文本类**：口径不变（≤16KB，读成文本内联）。
+ *   - **其余文件**（round 53）：**载荷 = 路径引用**（`【附件】<路径>`），不读内容、不按大小/二进制拒收。
+ *     本地文件本来就躺在磁盘上，模型有 bash / 读文件工具，给路径比灌内容更省上下文也更有用
+ *     （用户原话："作为本地文件，给大模型发的肯定是文件路径链接"）。路径口径见 prepareAttachment：
+ *     会话根内 → **工作区相对路径**（与文件树 / @ 引用同口径）；根外（比如 Downloads）→ **原样绝对路径**
+ *     （read 工具只认工作区，根外那条模型用 bash 读）。拿不到路径（桥缺失/回空）时兜底旧行为：
+ *     文本 ≤16KB 仍内联，否则旧拒收文案 —— 保底，不让流程断。
  */
 import {
   ATTACHMENT_MAX_BYTES,
@@ -28,17 +33,25 @@ export interface PendingAttachment {
   id: string
   name: string
   size: number
-  /** 文本内容（文本类原文 / PDF 抽取结果 / 摘选）；图片没有 */
+  /** 文本内容（PDF 抽取结果 / 摘选 / 无路径时的文本内联）；图片与路径引用没有 */
   text?: string
   /** 图片：随消息真发的 data URL 与 MIME（vision=true 才有） */
   image?: { url: string; mediaType: string }
   /** PDF 抽取信息（气泡上显示页数；truncated = 触到上限） */
   pdf?: { pages: number; truncated: boolean }
   /**
-   * 相对会话根的路径（round 42）：文件树 / 预览那条路才有（＋ 上传与拖拽没有）。
+   * 相对会话根的路径（round 42）：文件树 / 预览那条路才有（＋ 上传与拖拽走 `path`）。
    * 内容进消息时用它当抬头——不把路径丢掉，模型看得到"这是哪个文件"。
    */
   relative?: string
+  /**
+   * **路径引用**（round 53）：＋ 上传 / 拖拽 / 粘贴来的非图片非 PDF 文件的载荷 ——
+   * 不读内容，进消息时只发 `【附件】<path>` 抬头。会话根内是工作区相对路径（与文件树引用同口径），
+   * 根外是绝对路径。与 `text` 互斥（有路径就不读内容）。
+   */
+  path?: string
+  /** 拿得到路径时的那条**绝对路径**（chip 的 tooltip 用完整路径；判相对/绝对也是从它算的） */
+  absolute?: string
   /** 摘选（round 42 二轮）：载荷头用「【引用】文件：…」，卡片也按引用卡画；没有就是普通【附件】块 */
   quote?: boolean
   /** 摘选在源文里的行号区间（1 基闭区间；定位不到就不给——不瞎编） */
@@ -154,8 +167,9 @@ export function isPdfFile(file: File): boolean {
 export const NO_VISION_MESSAGE = '已自动检测：当前模型不支持看图'
 
 /**
- * 能不能收（不能收给出简短原因，调用方原样展示）。
- * 图片要看模型的视觉能力；PDF 只拦大小（能不能读出文字由抽取那一步决定）。
+ * 能不能收（不能收给出简短原因，调用方原样展示）。图片与 PDF 各自的闸门；
+ * **非图片非 PDF 的文件只在"拿不到路径"的兜底路上还走这里**（round 53 起有路径就是路径引用，
+ * 不读内容、不看大小/二进制）——兜底口径 = 旧行为：≤16KB 的文本类内联，其余按这两句拒收。
  */
 export function attachmentProblem(file: File, options: { vision: boolean }): string | null {
   const mediaType = imageMediaTypeOf(file)
@@ -200,23 +214,62 @@ export function readDataUrl(file: File): Promise<string> {
 /** 一个文件读完的结果：要么是待发附件，要么是一句"为什么没收" */
 export type PreparationResult = { attachment: PendingAttachment } | { problem: string }
 
+/** 反斜杠都换成正斜杠（Windows 路径归一；相对路径的写法与文件树 / @ 引用同口径） */
+function slashPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
+/**
+ * 绝对路径 → 会话根内的**工作区相对路径**（正斜杠）；根外 / 根自己 / 判不出根 → null。
+ *
+ * 口径与文件树 / @ 引用一致（`sessionRoots` 那条路给的就是相对路径）：
+ *   - 大小写不敏感（Windows 的 D:\ws 与 d:\WS 是同一个目录）；
+ *   - 按**路径段边界**比较（`D:/ws` 不该把 `D:/ws2/a` 当成自家文件）；
+ *   - 尾部分隔符先去掉（根写成 `D:\ws\` 也认）。
+ * 根外的不在这里拦：调用方**原样保留绝对路径**（模型用 bash 读得到；read 工具只认工作区，
+ * 这点写在注释里就够了，不因为这个拒收）。
+ */
+export function relativeInRoot(absolute: string, root: string | null | undefined): string | null {
+  if (root === null || root === undefined || root === '') return null
+  const abs = slashPath(absolute).replace(/\/+$/, '')
+  const base = slashPath(root).replace(/\/+$/, '')
+  if (abs === '' || base === '') return null
+  const lowerAbs = abs.toLowerCase()
+  const lowerBase = base.toLowerCase()
+  if (lowerAbs === lowerBase) return null
+  if (!lowerAbs.startsWith(`${lowerBase}/`)) return null
+  return abs.slice(base.length + 1)
+}
+
+/** prepareAttachment 的可选接线（不传 = 旧行为；单测直接给假件） */
+export interface PrepareAttachmentOptions {
+  vision: boolean
+  extractPdf: PdfExtractor
+  id: string
+  /** 会话根的绝对路径（判"根内 → 相对"用）；判不出/没有 = 一切路径都按绝对引用 */
+  rootPath?: string | null
+  /** File → 绝对路径（preload 的 webUtils 桥）；缺失或回空 = 走无路径兜底 */
+  pathForFile?: (file: File) => string
+}
+
 /**
  * 读一个文件，翻成待发附件（或拒收原因）。**这是附件口径的唯一入口**——
- * 拖拽与 ＋ 上传两条路都调它，两条入口的行为就一定是同一套。
+ * 拖拽、＋ 上传与粘贴三条路都调它，三条入口的行为就一定是同一套。
  *
  * 图片：读 data URL（大小与视觉能力已在 attachmentProblem 判过）；
  * PDF：整份丢给主进程抽文字层（扫描件/加密都在这返回人话）；
- * 文本：读原文。
+ * **其余文件：先问路径**（`pathForFile`，preload 的 webUtils）——拿得到就是**路径引用**
+ * （根内相对 / 根外绝对，见 relativeInRoot），不读内容、不看大小/二进制（exe、10MB 大文件都收）；
+ * 拿不到路径（浏览器 / 单测未装桥 / 内存里造的 File）：兜底旧行为——文本 ≤16KB 读原文，否则旧拒收文案。
  */
 export async function prepareAttachment(
   file: File,
-  options: { vision: boolean; extractPdf: PdfExtractor; id: string }
+  options: PrepareAttachmentOptions
 ): Promise<PreparationResult> {
-  const problem = attachmentProblem(file, { vision: options.vision })
-  if (problem !== null) return { problem }
-
   const mediaType = imageMediaTypeOf(file)
   if (mediaType !== null) {
+    const problem = attachmentProblem(file, { vision: options.vision })
+    if (problem !== null) return { problem }
     try {
       const url = await readDataUrl(file)
       return {
@@ -228,6 +281,8 @@ export async function prepareAttachment(
   }
 
   if (isPdfFile(file)) {
+    const problem = attachmentProblem(file, { vision: options.vision })
+    if (problem !== null) return { problem }
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
       const result = await options.extractPdf(bytes)
@@ -246,6 +301,23 @@ export async function prepareAttachment(
     }
   }
 
+  const absolute = options.pathForFile?.(file) ?? ''
+  if (absolute !== '') {
+    const relative = relativeInRoot(absolute, options.rootPath ?? null)
+    return {
+      attachment: {
+        id: options.id,
+        name: file.name,
+        size: file.size,
+        // 根内给相对路径（与文件树引用同口径），根外原样绝对路径
+        path: relative ?? absolute,
+        absolute
+      }
+    }
+  }
+
+  const problem = attachmentProblem(file, { vision: options.vision })
+  if (problem !== null) return { problem }
   try {
     const text = await readTextFile(file)
     return { attachment: { id: options.id, name: file.name, size: file.size, text } }
@@ -269,12 +341,13 @@ function fenceFor(text: string): string {
 }
 
 /**
- * 附件块的抬头（round 42：内容进消息时**带上来源路径与位置**）：
+ * 附件块的抬头（round 42：内容进消息时**带上来源路径与位置**；round 53 起路径引用同一条口径）：
  *   - 摘选 → `【引用】文件：<相对路径>（第 X–Y 行）`（行号定位不到就不写那半截，不瞎编）；
- *   - 整文件 → `【附件】<相对路径>`（没有路径的 ＋ 上传与拖拽仍是文件名，行为不变）。
+ *   - 整文件 → `【附件】<路径>`：路径引用给 `path`（根内相对 / 根外绝对），文件树那条路给
+ *     `relative`；两者都没有（无路径兜底的文本内联）才是文件名。
  */
 function attachmentHeaderOf(attachment: PendingAttachment): string {
-  const label = attachment.relative ?? attachment.name
+  const label = attachment.path ?? attachment.relative ?? attachment.name
   if (attachment.quote === true) {
     return attachment.lines === undefined
       ? `【引用】文件：${label}`
@@ -286,6 +359,7 @@ function attachmentHeaderOf(attachment: PendingAttachment): string {
 /**
  * 发送时的组装（round 14：引用已改为输入框内联标记，不再单独成段）：正文 → 附件块
  * （附件内容包在围栏里，模型按原文读）。图片不进来——它不走文本，走 file part。
+ * 路径引用（round 53）也没有内容可包：只发抬头那一行，模型按路径自己读（不假装给了内容）。
  */
 export function composeOutgoingText(input: {
   text: string
@@ -296,7 +370,10 @@ export function composeOutgoingText(input: {
   const trimmed = text.trim()
   if (trimmed !== '') blocks.push(trimmed)
   for (const attachment of attachments) {
-    if (attachment.text === undefined) continue
+    if (attachment.text === undefined) {
+      if (attachment.path !== undefined) blocks.push(attachmentHeaderOf(attachment))
+      continue
+    }
     const content = attachment.text.replace(/\n+$/, '')
     const fence = fenceFor(content)
     blocks.push(`${attachmentHeaderOf(attachment)}\n${fence}\n${content}\n${fence}`)

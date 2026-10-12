@@ -14,7 +14,7 @@ import { IMAGE_MIME, previewModeOf } from '@renderer/features/workbench/preview/
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import type { PdfExtractResult } from '@shared/attachments'
 import type { FileByteFormat, FileBytesResult, FilePreview } from '@shared/workbench'
-import { ATTACHMENT_MAX_BYTES, NO_VISION_MESSAGE, formatBytes } from './composer-attachments'
+import { ATTACHMENT_MAX_BYTES, NO_VISION_MESSAGE } from './composer-attachments'
 import type { PdfExtractor, PendingAttachment } from './composer-attachments'
 
 /** 一条"添加到上下文"的请求（v1 两种形状；`threadId` 让订阅方丢掉不属于自己会话的事件） */
@@ -85,6 +85,8 @@ const TEXT_LIMIT_LABEL = `${ATTACHMENT_MAX_BYTES / 1024}KB`
  * 把一个请求解析成附件（或拒收原因）。**唯一的读文件入口**：
  * 文本走 `readFile`（有界文本通道），图片 / PDF 走 `readBytes`（按格式的字节通道），
  * 摘选直接用事件里带的文字（不读文件）。
+ * round 53：文本通道装不下的（二进制 / 超大 / 超 16KB）退回**相对路径引用**，不再拒收；
+ * 小文本照旧内联（这条路的既有行为不动）。
  */
 export async function resolveContextItem(
   item: ContextItem,
@@ -122,7 +124,11 @@ function selectionAttachment(
   }
 }
 
-/** 文本类：读有界文本通道；上限与 ＋ 上传一致（超了拒收，不做半截事） */
+/**
+ * 文本类：读有界文本通道。装得下的照旧内联（文件树那条路既有的行为不动）；
+ * 装不下的（二进制 / 超大 / 超 16KB）**不再拒收** —— round 53 起退回**路径引用**
+ * （相对路径本就在手上；与 ＋ 上传 / 拖拽的非图片非 PDF 口径一致，见 composer-attachments.ts）。
+ */
 async function textAttachment(
   item: Extract<ContextItem, { source: 'file' }>,
   options: ResolveContextOptions,
@@ -134,11 +140,20 @@ async function textAttachment(
   } catch (error) {
     return { problem: unwrapIpcError(error) }
   }
-  if (preview.kind === 'binary') return { problem: CONTEXT_UNSUPPORTED }
-  if (preview.kind === 'too-large') {
-    return { problem: `文件太大（${formatBytes(preview.size)}），不适合加入上下文` }
+  if (
+    preview.kind === 'binary' ||
+    preview.kind === 'too-large' ||
+    preview.size > ATTACHMENT_MAX_BYTES
+  ) {
+    return {
+      attachment: {
+        id: options.id,
+        name: item.name,
+        size: preview.size,
+        path: item.relative
+      }
+    }
   }
-  if (preview.size > ATTACHMENT_MAX_BYTES) return { problem: `超过 ${TEXT_LIMIT_LABEL}` }
   return {
     attachment: {
       id: options.id,

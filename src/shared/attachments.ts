@@ -13,7 +13,12 @@ import { z } from './zod'
 /** 文本类附件的内联上限（byte）：内容会进消息文本与气泡，避免一条消息膨胀成几 MB */
 export const ATTACHMENT_MAX_BYTES = 16 * 1024
 
-/** 图片附件上限（byte）：vision=true 时随消息真发（data URL），太大就先别发 */
+/**
+ * 图片附件上限（byte）：vision=true 时随消息真发（data URL），太大就先别发。
+ * **与预览上限是两回事**（round 53）：工作台"点开看"的图片上限是 shared/workbench.ts 的
+ * PREVIEW_IMAGE_MAX_BYTES（30MB，只过本机 IPC，不进请求体）；这里管的是**要进模型请求体**的那张，
+ * 仍是 8MB。别把两个数合并。
+ */
 export const IMAGE_MAX_BYTES = 8 * 1024 * 1024
 
 /** 认得出的图片 MIME（都要走 data URL 真发；别的一律按"不是文本文件"拒收） */

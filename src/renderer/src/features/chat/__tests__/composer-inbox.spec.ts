@@ -211,7 +211,7 @@ describe('round 42 · 解析：文本文件', () => {
     expect(channelStub.readBytes).not.toHaveBeenCalled()
   })
 
-  it('超过 16KB 拒收（与 ＋ 上传同一句话），不偷偷截断', async () => {
+  it('超过 16KB 不再拒收：退回路径引用（round 53），内容不进消息', async () => {
     const result = await resolve(FILE_ITEM, {
       channel: channel({
         readFile: async () => ({
@@ -223,19 +223,30 @@ describe('round 42 · 解析：文本文件', () => {
       })
     })
 
-    expect(result).toEqual({ problem: '超过 16KB' })
+    expect(result).toEqual({
+      attachment: {
+        id: 'a1',
+        name: 'notes.txt',
+        size: 64 * 1024,
+        path: 'src/notes.txt'
+      }
+    })
   })
 
-  it('二进制给人话；超大给人话（带实际大小）', async () => {
+  it('二进制与超大也是路径引用（带实际大小），不再给人话拒收', async () => {
     const binary = await resolve(FILE_ITEM, {
       channel: channel({ readFile: async () => ({ kind: 'binary', size: 2048 }) })
     })
-    expect(binary).toEqual({ problem: CONTEXT_UNSUPPORTED })
+    expect(binary).toEqual({
+      attachment: { id: 'a1', name: 'notes.txt', size: 2048, path: 'src/notes.txt' }
+    })
 
     const huge = await resolve(FILE_ITEM, {
       channel: channel({ readFile: async () => ({ kind: 'too-large', size: 100 * 1024 * 1024 }) })
     })
-    expect('problem' in huge && huge.problem).toContain('文件太大')
+    expect(huge).toEqual({
+      attachment: { id: 'a1', name: 'notes.txt', size: 100 * 1024 * 1024, path: 'src/notes.txt' }
+    })
   })
 
   it('读不了（通道抛错）：剥掉 IPC 包装，只留人话', async () => {

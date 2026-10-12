@@ -13,12 +13,14 @@ const mocks = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   invoke: vi.fn(),
   on: vi.fn(),
-  removeListener: vi.fn()
+  removeListener: vi.fn(),
+  getPathForFile: vi.fn<(file: File) => string>(() => '')
 }))
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: mocks.exposeInMainWorld },
-  ipcRenderer: { invoke: mocks.invoke, on: mocks.on, removeListener: mocks.removeListener }
+  ipcRenderer: { invoke: mocks.invoke, on: mocks.on, removeListener: mocks.removeListener },
+  webUtils: { getPathForFile: mocks.getPathForFile }
 }))
 
 type PreloadModule = typeof import('../index')
@@ -34,6 +36,8 @@ beforeEach(() => {
   mocks.invoke.mockReset()
   mocks.on.mockReset()
   mocks.removeListener.mockReset()
+  mocks.getPathForFile.mockReset()
+  mocks.getPathForFile.mockReturnValue('')
 })
 
 /** 取 ipcRenderer.on 注册进去的监听器 */
@@ -770,5 +774,22 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
     expect(onExit).toHaveBeenCalledWith({ id: 'term-1', exitCode: 3 })
     lastListener()({}, { id: 'term-1', exitCode: 'x' })
     expect(onExit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('preload：window.kyclaw.files（round 53，File → 绝对路径的小桥）', () => {
+  it('pathForFile 走 webUtils.getPathForFile；抛异常（不是真文件）回空串，不打断上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    const file = new File(['x'], 'a.txt', { type: 'text/plain' })
+
+    mocks.getPathForFile.mockReturnValueOnce('D:\\Downloads\\a.txt')
+    expect(kyclawApi.files.pathForFile(file)).toBe('D:\\Downloads\\a.txt')
+    expect(mocks.getPathForFile).toHaveBeenLastCalledWith(file)
+
+    // 内存里造的 / 跨进程来的 File：electron 侧会抛 —— 这里回 ''，调用方按"拿不到"兜底
+    mocks.getPathForFile.mockImplementationOnce(() => {
+      throw new Error('file is not a real file')
+    })
+    expect(kyclawApi.files.pathForFile(file)).toBe('')
   })
 })

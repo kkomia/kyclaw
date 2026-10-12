@@ -7,7 +7,8 @@ import {
   isPdfFile,
   NO_VISION_MESSAGE,
   PDF_MAX_BYTES,
-  prepareAttachment
+  prepareAttachment,
+  relativeInRoot
 } from '@renderer/features/chat/composer-attachments'
 import type { PdfExtractor, PendingAttachment } from '@renderer/features/chat/composer-attachments'
 import { IMAGE_MAX_BYTES } from '@shared/attachments'
@@ -120,7 +121,7 @@ describe('模块 2 · 附件路由（vision × 类别）', () => {
     expect(attachmentProblem(big, { vision: false })).toBe('超过 64MB')
   })
 
-  it('文本类口径不变：≤16KB、认文本 MIME 与常见扩展名；其余不是文本文件', () => {
+  it('文本类（无路径兜底闸门）：≤16KB、认文本 MIME 与常见扩展名；其余不是文本文件', () => {
     const ok = new File(['hello'], 'note.txt', { type: 'text/plain' })
     expect(attachmentProblem(ok, { vision: false })).toBeNull()
     // 空 MIME 按扩展名兜底
@@ -233,5 +234,149 @@ describe('模块 2 · composeOutgoing（正文与"真发的文件"分道）', ()
     const imageOnly = composeOutgoing({ text: '   ', attachments: [image] })
     expect(imageOnly.text).toBe('')
     expect(imageOnly.files).toHaveLength(1)
+  })
+})
+
+describe('round 53 · 路径引用（非图片非 PDF 的载荷 = 路径，不读内容）', () => {
+  /** 一个"文件名 → 绝对路径"的假桥（不在表里的回空 = 拿不到路径） */
+  function paths(map: Record<string, string>): (file: File) => string {
+    return (file) => map[file.name] ?? ''
+  }
+
+  /** 三件共用的基础观测（`rootPath` 与 `pathForFile` 各用例自己给） */
+  const base = { vision: false, extractPdf: extractor(), id: 'f1' }
+
+  it('根内：载荷 = 工作区相对路径（正斜杠）；绝对路径另存一份（chip 的 tooltip）', async () => {
+    const result = await prepareAttachment(new File(['x'], 'note.txt', { type: 'text/plain' }), {
+      ...base,
+      rootPath: 'D:\\工作区',
+      pathForFile: paths({ 'note.txt': 'D:\\工作区\\src\\note.txt' })
+    })
+
+    expect(result).toEqual({
+      attachment: {
+        id: 'f1',
+        name: 'note.txt',
+        size: 1,
+        path: 'src/note.txt',
+        absolute: 'D:\\工作区\\src\\note.txt'
+      }
+    })
+  })
+
+  it('根外（比如 Downloads）：原样绝对路径（不拦 —— 模型用 bash 读得到）', async () => {
+    const result = await prepareAttachment(new File(['x'], 'a.bin', { type: '' }), {
+      ...base,
+      rootPath: 'D:\\工作区',
+      pathForFile: paths({ 'a.bin': 'C:\\Users\\me\\Downloads\\a.bin' })
+    })
+
+    expect(result).toEqual({
+      attachment: {
+        id: 'f1',
+        name: 'a.bin',
+        size: 1,
+        path: 'C:\\Users\\me\\Downloads\\a.bin',
+        absolute: 'C:\\Users\\me\\Downloads\\a.bin'
+      }
+    })
+  })
+
+  it('exe / 10MB 大文件：不再按大小或二进制拒收（旧口径在这里说"超过 16KB"）', async () => {
+    const exe = new File([new Uint8Array(10 * 1024 * 1024)], 'mediacreationtool.exe', {
+      type: 'application/x-msdownload'
+    })
+    const result = await prepareAttachment(exe, {
+      ...base,
+      rootPath: 'D:\\工作区',
+      pathForFile: paths({ 'mediacreationtool.exe': 'C:\\Downloads\\mediacreationtool.exe' })
+    })
+
+    expect('attachment' in result).toBe(true)
+    if (!('attachment' in result)) return
+    expect(result.attachment.path).toBe('C:\\Downloads\\mediacreationtool.exe')
+    expect(result.attachment.text).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('太大')
+    expect(JSON.stringify(result)).not.toContain('不是文本文件')
+  })
+
+  it('有路径就一个字节都不读（FileReader 不被碰）', async () => {
+    const spy = vi.spyOn(FileReader.prototype, 'readAsText')
+    const result = await prepareAttachment(new File(['正文'], 'note.txt', { type: 'text/plain' }), {
+      ...base,
+      pathForFile: paths({ 'note.txt': 'D:\\ws\\note.txt' })
+    })
+    spy.mockRestore()
+
+    expect('attachment' in result).toBe(true)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('拿不到路径（桥缺失 / 回空）：兜底旧行为（≤16KB 文本内联；大文件旧拒收文案）', async () => {
+    const inline = await prepareAttachment(new File(['正文'], 'note.txt', { type: 'text/plain' }), {
+      ...base
+    })
+    expect(inline).toEqual({ attachment: { id: 'f1', name: 'note.txt', size: 6, text: '正文' } })
+
+    const empty = await prepareAttachment(new File(['x'], 'a.zip', { type: 'application/zip' }), {
+      ...base,
+      pathForFile: paths({})
+    })
+    expect(empty).toEqual({ problem: '不是文本文件' })
+  })
+})
+
+describe('round 53 · relativeInRoot（根内 → 相对；根外/根自己/判不出 → null）', () => {
+  it('大小写不敏感、正反斜杠都认、尾部分隔符无所谓', () => {
+    expect(relativeInRoot('D:\\WS\\src\\a.ts', 'd:/ws')).toBe('src/a.ts')
+    expect(relativeInRoot('D:/ws/src/a.ts', 'D:\\ws\\')).toBe('src/a.ts')
+  })
+
+  it('按路径段比较：相邻前缀不算根内（D:\\ws 不吃 D:\\ws2\\a）', () => {
+    expect(relativeInRoot('D:\\ws2\\a.ts', 'D:\\ws')).toBeNull()
+  })
+
+  it('根自己 / 根外 / 没有根：null（调用方原样保留绝对路径）', () => {
+    expect(relativeInRoot('D:\\ws', 'D:\\ws')).toBeNull()
+    expect(relativeInRoot('C:\\other\\a.ts', 'D:\\ws')).toBeNull()
+    expect(relativeInRoot('D:\\ws\\a.ts', null)).toBeNull()
+    expect(relativeInRoot('D:\\ws\\a.ts', '')).toBeNull()
+  })
+})
+
+describe('round 53 · composeOutgoingText：路径引用只发抬头那一行', () => {
+  const exe: PendingAttachment = {
+    id: 'e1',
+    name: 'mediacreationtool.exe',
+    size: 10 * 1024 * 1024,
+    path: 'C:\\Downloads\\mediacreationtool.exe',
+    absolute: 'C:\\Downloads\\mediacreationtool.exe'
+  }
+
+  it('没有围栏、没有内容（不假装给了内容）；正文与它之间仍空行分隔', () => {
+    expect(composeOutgoingText({ text: '看看这个', attachments: [exe] })).toBe(
+      '看看这个\n\n【附件】C:\\Downloads\\mediacreationtool.exe'
+    )
+    expect(composeOutgoingText({ text: '', attachments: [exe] })).toBe(
+      '【附件】C:\\Downloads\\mediacreationtool.exe'
+    )
+  })
+
+  it('与文本附件混排：文本那份照旧进围栏，路径那份只落抬头', () => {
+    const text: PendingAttachment = { id: 't1', name: 'note.md', size: 4, text: '内容' }
+    expect(composeOutgoingText({ text: '', attachments: [text, exe] })).toBe(
+      '【附件】note.md\n```\n内容\n```\n\n【附件】C:\\Downloads\\mediacreationtool.exe'
+    )
+  })
+
+  it('根内相对路径的引用：抬头就是相对路径（与文件树引用同一条口径）', () => {
+    const relative: PendingAttachment = {
+      id: 'r1',
+      name: 'note.txt',
+      size: 3,
+      path: 'src/note.txt',
+      absolute: 'D:\\ws\\src\\note.txt'
+    }
+    expect(composeOutgoingText({ text: '', attachments: [relative] })).toBe('【附件】src/note.txt')
   })
 })

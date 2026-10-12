@@ -10,7 +10,6 @@
  * 同一套 containment 口径（渲染端传不了任意绝对路径）。zod schema 与类型同源，preload 双向都用它。
  */
 import { z } from './zod'
-import { IMAGE_MAX_BYTES } from './attachments'
 
 /** 会话根解析不出来 / 不唯一时给渲染端的人话（工作台各工具的空态与错误行共用） */
 export const WORKBENCH_NO_WORKSPACE = '这个会话还没有工作区：先在设置里添加一个文件夹'
@@ -79,8 +78,15 @@ export const fileByteFormatSchema = z.enum([
 ])
 export type FileByteFormat = z.infer<typeof fileByteFormatSchema>
 
-/** 图片预览上限：与附件口径一致（8MB），超过就给人话 */
-export const PREVIEW_IMAGE_MAX_BYTES = IMAGE_MAX_BYTES
+/**
+ * 图片预览上限（byte）：round 53 起**独立**于附件口径，放宽到 30MB（用户点名）。
+ *
+ * 为什么可以和发送上限不一样：预览只是一趟"本机 → IPC → 画出来"（data URL 膨胀 ~33%，
+ * 30MB 图 = 约 40MB 字符串，可以接受），不进模型请求体；而随消息真发的图片上限仍是
+ * `IMAGE_MAX_BYTES`（8MB，见 shared/attachments）——那张图要进 provider 请求体，是另一回事。
+ * 别把这两个数再合并回去。
+ */
+export const PREVIEW_IMAGE_MAX_BYTES = 30 * 1024 * 1024
 
 /**
  * PDF 预览上限（自定）：文本档的 5MB 对带图 PDF 偏紧，这里放宽到 32MB

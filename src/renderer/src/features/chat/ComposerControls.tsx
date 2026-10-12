@@ -815,7 +815,8 @@ function QuoteCard({
  * 模块 2：图片把回形针换成**缩略图**（发送前就能确认是哪张）；PDF 额外印一截页数（数据，不是说明小字）。
  * round 42 二轮：摘选画成**引用卡**（路径 + 行号 + 摘要 + 字数），整文件仍是原来的 chip。
  * round 50：**图片改走磁贴**（PendingImageTile：64px 缩略图 + hover 删除/@ 提及 + 点开放大预览）；
- * 非图片与摘选保持原样（口径不动）。
+ * 非图片与摘选保持原样（口径不动；round 53 起路径引用的整文件 chip 照旧印名字 + 大小，
+ * 完整路径进 `title`——chip 上不铺长路径）。
  */
 export function PendingChips({
   attachments,
@@ -860,6 +861,8 @@ export function PendingChips({
           <span
             key={attachment.id}
             data-testid={`composer-attachment-${attachment.name}`}
+            // 完整路径放 tooltip（round 53）：路径引用的附件 chip 上只印文件名，hover 才看得出是哪个文件
+            title={attachment.absolute ?? attachment.path ?? attachment.relative ?? attachment.name}
             className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
           >
             <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />

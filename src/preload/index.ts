@@ -6,7 +6,7 @@
  * 渲染端是"不可信输入"侧，所以主进程侧还要再校验一遍入参（main/ipc/window.ts）；
  * 反方向（主进程推送）在这里用同一份 schema 解析，结构不对就不交给上层。
  */
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   agentEndpointSchema,
   connectionTestResultSchema,
@@ -26,6 +26,7 @@ import {
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawAttachmentsApi,
+  type KyclawFilesApi,
   type KyclawLocalModelsApi,
   type KyclawMemoryApi,
   type KyclawPluginsApi,
@@ -233,6 +234,23 @@ const attachmentsApi: KyclawAttachmentsApi = {
     )
     if (!parsed.success) throw new Error('[kyclaw] PDF 抽取响应结构不合法')
     return parsed.data
+  }
+}
+
+/**
+ * 本地文件小桥（round 53）：File → 磁盘绝对路径。
+ * 渲染端（contextIsolation）拿不到 electron 模块、`File.path` 也退役了，只有 preload 能调
+ * `webUtils.getPathForFile`；官方推荐的就是"在 preload 里暴露一个接收 File 的函数"这个形状
+ * （contextBridge 会把 File 克隆过来，路径跟着克隆件走）。
+ * 非真文件（内存里造的、跨进程来的）会抛或给空串 —— 一律回 `''`，调用方按"拿不到"兜底。
+ */
+const filesApi: KyclawFilesApi = {
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   }
 }
 
@@ -566,6 +584,7 @@ export const kyclawApi: KyclawApi = {
   projects: projectsApi,
   agent: agentApi,
   attachments: attachmentsApi,
+  files: filesApi,
   updates: updatesApi,
   telemetry: telemetryApi,
   plugins: pluginsApi,

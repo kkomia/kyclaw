@@ -43,8 +43,10 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  * 字号/提示不做小字说明（雷点 2）：键盘行为靠肌肉记忆与按钮语义，不写提示行；
  * 附件/引用的内容（名字/大小）是数据，不是解释性小字。
  *
- * 附件（round 7 起；模块 2 扩三类）：文本类 ≤16KB 读成文本内联；**图片**在当前模型 vision=true 时
- * 随消息真发（vision=false 人话拒收，不假装收下）；**PDF** 统一由主进程抽文字层再内联（扫描件给人话）。
+ * 附件（round 7 起；模块 2 扩三类；round 53 第三类改走路径引用）：**图片**在当前模型 vision=true 时
+ * 随消息真发（vision=false 人话拒收，不假装收下）；**PDF** 统一由主进程抽文字层再内联（扫描件给人话）；
+ * **其余文件**（exe、10MB 大文件、小文本都一样）不再读内容 —— 载荷 = `【附件】<路径>`（会话根内相对、
+ * 根外绝对，路径来自 preload 的 webUtils 桥；拿不到路径才兜底旧的 ≤16KB 文本内联）。
  * 拖拽、＋ 上传与**粘贴**（round 50：截图工具贴的图 / 资源管理器贴的文件）走同一个 pickFiles ——
  * 几条入口的行为必须是同一套。口径见 composer-attachments.ts 头注。
  * 图片在附件条上是**磁贴**（round 50，PendingImageTile：hover 删除/@ 提及、点空白放大预览）；
@@ -352,14 +354,26 @@ export function Composer({
   }, [])
 
   /**
-   * 收下一批文件（＋ 上传与拖拽共用这一条路）：逐个试收，收下的进附件条、
+   * 收下一批文件（＋ 上传、拖拽与粘贴共用这一条路）：逐个试收，收下的进附件条、
    * 没收的攒成一句话（档位与原因见 composer-attachments.ts）。
+   *
+   * round 53：非图片非 PDF 的文件走**路径引用**——路径从 preload 的
+   * `files.pathForFile`（webUtils）取；会话根内转相对路径、根外留绝对路径。
+   * 桥缺失 / 拿不到路径时 prepareAttachment 自己兜底旧行为（≤16KB 文本内联，否则旧拒收文案）。
    */
   const pickFiles = async (files: File[]): Promise<void> => {
     const rejected: string[] = []
     const accepted: PendingAttachment[] = []
+    // 通道缺失（浏览器 / 单测未装桥）不在这里报错：拿不到路径就走旧兜底，流程不断
+    const pathForFile = window.kyclaw?.files?.pathForFile
     for (const file of files) {
-      const result = await prepareAttachment(file, { vision, extractPdf, id: uid() })
+      const result = await prepareAttachment(file, {
+        vision,
+        extractPdf,
+        id: uid(),
+        rootPath: rootWorkspace?.path ?? null,
+        pathForFile
+      })
       if ('problem' in result) rejected.push(`${file.name}（${result.problem}）`)
       else accepted.push(result.attachment)
     }

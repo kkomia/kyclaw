@@ -537,7 +537,7 @@ describe('round 15 · / 插件与技能浮窗', () => {
 })
 
 describe('round 7 · 添加文件（最小可用：文本 ≤16KB，内容随消息发出）', () => {
-  it('选文本文件 → 附件 chip（名字 + 大小）；发送时内容内联进消息文本', async () => {
+  it('无路径兜底（桥拿不到路径）：选文本文件 → 附件 chip（名字 + 大小）；内容内联进消息文本', async () => {
     const { onSend } = setup()
 
     const file = new File(['hello 附件'], 'note.txt', { type: 'text/plain' })
@@ -565,7 +565,7 @@ describe('round 7 · 添加文件（最小可用：文本 ≤16KB，内容随消
     expect(sentText(onSend)).toBe('【附件】only.txt\n```\n只发文件\n```')
   })
 
-  it('非文本 / 超大明确提示不收（不假装附加成功）', async () => {
+  it('无路径兜底时非文本 / 超大才明确提示不收（不假装附加成功）', async () => {
     setup()
 
     const binary = new File(['x'], 'archive.zip', { type: 'application/zip' })
@@ -591,6 +591,116 @@ describe('round 7 · 添加文件（最小可用：文本 ≤16KB，内容随消
 
     fireEvent.click(screen.getByLabelText('移除 note.txt'))
     expect(screen.queryByTestId('composer-attachment-note.txt')).not.toBeInTheDocument()
+  })
+})
+
+describe('round 53 · 非图片非 PDF 的附件走路径引用（路径优先，不读内容）', () => {
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  /** 装一个会话根 = D:\ws 的环境；`map` 给"文件名 → 绝对路径"（不在表里的回 ''，走无路径兜底） */
+  function mountWithPaths(map: Record<string, string> = {}): ReturnType<typeof vi.fn> {
+    const initial: AppSettings = {
+      ...defaultSettings(),
+      workspaces: [{ path: 'D:\\ws', mode: 'ask' }]
+    }
+    const bridge = installKyclawBridge(initial)
+    bridge.files.pathForFile.mockImplementation((file: File) => map[file.name] ?? '')
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const { onSend } = setup({ threadId: 't1' })
+    return onSend
+  }
+
+  function pick(file: File): void {
+    fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [file] } })
+  }
+
+  it('根内：载荷 = 工作区相对路径（正斜杠，与文件树引用同口径），连内容都不读', async () => {
+    const onSend = mountWithPaths({ 'note.txt': 'D:\\ws\\src\\note.txt' })
+
+    pick(new File(['hello'], 'note.txt', { type: 'text/plain' }))
+
+    const chip = await screen.findByTestId('composer-attachment-note.txt')
+    expect(chip).toHaveTextContent('note.txt')
+    // tooltip = 完整（绝对）路径
+    expect(chip).toHaveAttribute('title', 'D:\\ws\\src\\note.txt')
+
+    type('看这个文件')
+    fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+    expect(sentText(onSend)).toBe('看这个文件\n\n【附件】src/note.txt')
+  })
+
+  it('根外（比如 Downloads）：原样绝对路径；exe 照收，没有"文件太大"', async () => {
+    const onSend = mountWithPaths({
+      'mediacreationtool.exe': 'C:\\Users\\me\\Downloads\\mediacreationtool.exe'
+    })
+
+    pick(
+      new File([new Uint8Array(10 * 1024 * 1024)], 'mediacreationtool.exe', {
+        type: 'application/x-msdownload'
+      })
+    )
+
+    const chip = await screen.findByTestId('composer-attachment-mediacreationtool.exe')
+    expect(chip).toHaveTextContent('10.0 MB')
+    expect(chip).toHaveAttribute('title', 'C:\\Users\\me\\Downloads\\mediacreationtool.exe')
+    // 10MB 的 exe：一个 Notice 都不该有（旧口径会在这里回"超过 16KB"）
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】C:\\Users\\me\\Downloads\\mediacreationtool.exe')
+    expect(sentText(onSend)).not.toContain('文件太大')
+  })
+
+  it('判不出会话根（没有工作区）：路径按绝对引用（不硬造相对路径）', async () => {
+    const initial = defaultSettings()
+    const bridge = installKyclawBridge(initial)
+    bridge.files.pathForFile.mockImplementation(() => 'D:\\其它\\a.bin')
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const { onSend } = setup()
+
+    pick(new File(['x'], 'a.bin', { type: 'application/octet-stream' }))
+    await screen.findByTestId('composer-attachment-a.bin')
+
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】D:\\其它\\a.bin')
+  })
+
+  it('桥拿不到路径（回空）：兜底旧行为 —— 文本内联 / 大文件仍旧拒收', async () => {
+    const onSend = mountWithPaths({}) // 什么都不映射 → 全部回空
+
+    pick(new File(['内联的内容'], 'small.txt', { type: 'text/plain' }))
+    const chip = await screen.findByTestId('composer-attachment-small.txt')
+    expect(chip).toHaveAttribute('title', 'small.txt')
+
+    // 等第一份收完再放第二份：两次并发跑的话 notice 谁后到说不准（一次 pickFiles 没这个竞态）
+    pick(new File([new Uint8Array(17 * 1024)], 'big.txt', { type: 'text/plain' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
+        '未附加：big.txt（超过 16KB）'
+      )
+    )
+    expect(screen.queryByTestId('composer-attachment-big.txt')).not.toBeInTheDocument()
+
+    // 小文本仍旧内联（旧行为逐字不变）
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】small.txt\n```\n内联的内容\n```')
+  })
+
+  it('拖拽与粘贴走同一条路：都变成路径引用', async () => {
+    const onSend = mountWithPaths({ 'drop.bin': 'D:\\ws\\bin\\drop.bin' })
+
+    fireEvent.drop(screen.getByTestId('composer'), {
+      dataTransfer: {
+        files: [new File(['拖进来的'], 'drop.bin', { type: 'application/octet-stream' })]
+      }
+    })
+
+    await screen.findByTestId('composer-attachment-drop.bin')
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】bin/drop.bin')
   })
 })
 
@@ -1446,18 +1556,20 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
     expect(bridge.workbench.readFile).not.toHaveBeenCalled()
   })
 
-  it('不支持 / 超限 → notice 人话（与 ＋ 上传同一句形状）', async () => {
-    mount()
+  it('二进制 / 超限（round 53）：不再拒收 —— 退回**相对路径引用**（chip 照常进附件条）', async () => {
+    const onSend = mount()
     bridge.workbench.readFile.mockResolvedValue({ kind: 'binary', size: 2048 })
 
     publishContextItem({ source: 'file', threadId: 't1', relative: 'logo.ico', name: 'logo.ico' })
 
-    await waitFor(() =>
-      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '未附加：logo.ico（这个格式暂不支持加入上下文）'
-      )
-    )
-    expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
+    const chip = await screen.findByTestId('composer-attachment-logo.ico')
+    expect(chip).toHaveTextContent('logo.ico')
+    expect(chip).toHaveAttribute('title', 'logo.ico')
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
+
+    // 载荷是路径引用：只有抬头一行（没有内容围栏，模型按路径自己读）
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】logo.ico')
   })
 
   it('图片：vision=true 收下（缩略图 + 随消息真发）；vision=false 人话拒收', async () => {

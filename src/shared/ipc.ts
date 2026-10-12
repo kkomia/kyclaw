@@ -637,6 +637,19 @@ export interface KyclawAttachmentsApi {
 }
 
 /**
+ * preload 暴露给渲染端的**本地文件小桥**（round 53）：只有一件事 —— 把一个 `File` 换回它
+ * 在磁盘上的绝对路径（Electron `webUtils.getPathForFile`）。
+ *
+ * 为什么必须过 preload：`File.path` 在 Electron 32 起退役，而 `webUtils` 只存在于
+ * preload / 主进程侧（渲染端在 contextIsolation 下拿不到 electron 模块）。
+ * 拿不到路径的来源（内存里造的 File、跨进程塞来的 blob）一律回 `''`——调用方按"拿不到"兜底，
+ * 不抛（这条桥是同步的纯查询，异常只会打断附件管线）。
+ */
+export interface KyclawFilesApi {
+  pathForFile(file: File): string
+}
+
+/**
  * preload 暴露给渲染端的更新面（T17）：当前版本 + 状态 + 手动检查/安装。
  * 状态由主进程推（`updates:state-changed`，进度边走边推），所以这里有订阅；
  * 检查本身是异步长事（下载在后台继续），check() 只等到"检查"这一步落地。
@@ -777,6 +790,8 @@ export interface KyclawApi {
   agent: KyclawAgentApi
   /** 模块 2：附件能力（PDF 文字层抽取；抽取在主进程） */
   attachments: KyclawAttachmentsApi
+  /** round 53：本地文件小桥（File → 绝对路径；附件改走路径引用的取路径入口） */
+  files: KyclawFilesApi
   updates: KyclawUpdatesApi
   telemetry: KyclawTelemetryApi
   plugins: KyclawPluginsApi
