@@ -303,7 +303,9 @@ describe('文件族', () => {
       sheets: [{ name: '汇总', rows: [['项目'], ['房租']], truncated: false }],
       truncated: false
     })
-  })
+    // round 54：满载全跑里这条两次顶穿 5s 默认超时（单跑 <1s）——体内现导入 docx/exceljs 并真渲染，
+    // 与 round37 的同类去抖一致：给足超时，不放宽断言
+  }, 30_000)
 
   it('reveal：目录走 shell.openPath，文件走 showItemInFolder', async () => {
     await handlerOf(IPC_CHANNELS.workbench.reveal)(EVENT, 't', 'src')
