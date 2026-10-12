@@ -1,9 +1,9 @@
 /**
  * kyclaw agent 的装配（身份 + 模型 + 工具集 + 记忆）。
  *
- * 工具集（T11 + round28 模块 1 + 模块 4 + round45）：文件工具五件套（read/write/edit/glob/grep）+
+ * 工具集（T11 + round28 模块 1 + 模块 4 + round45 + round 50）：文件工具五件套（read/write/edit/glob/grep）+
  * bash / fetch / web_search / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit）
- * + 产出物五件（create_report/create_pdf/create_excel/create_ppt/create_docx），
+ * + 产出物五件（create_report/create_pdf/create_excel/create_ppt/create_docx）+ 交付一件（deliver_file），
  * 全部经 guard 装配——文件工具与产出物路径只认授权工作区（T10 的 realpath 引擎）；bash / fetch / git
  * 的"能力"审批在 guard.needsApproval 的 capability 分支（默认问；(工具×工作区) 规则与
  * mode='full' 工作区都可豁免 —— round28 用户口径：开了「完全访问」就不再为 bash/fetch 弹卡）；
@@ -14,8 +14,10 @@
  * 工具的根（T18）：**按会话**取 —— 会话属于某项目就用那个项目的路径，没项目用默认工作区，
  * 都没有才用整份授权列表（口径与判据见 main/projects.ts 的 sessionRoots；会话→项目 的映射
  * 由 libsql 的 session_projects 表给，经 projectOf 同步读内存镜像）。工具执行时把
- * `sessionKey(context)`（agent 线程 id）传给 guard；**审批那一层拿不到会话**，用的是整份
- * 授权列表（超集，见 guard 的 WorkspaceRoots / needsApproval 头注）。
+ * `sessionKey(context)`（agent 线程 id）传给 guard；**审批那一层（round 46 起）也按会话判**：
+ * requireApproval 回调的第二参里带着摊平的 requestContext，线程 id 从 `MastraMemory.thread.id`
+ * 取（`approvalSessionOf`），无显式目标的判定因此与执行层同口径；拿不到会话就退回整份授权列表
+ * （超集，保守）。口径与实证见 guard 的 WorkspaceRoots / approvalSessionOf 头注。
  *
  * MCP 外部工具（T12）：`tools` 用 Mastra 支持的**函数形态**（每轮现取），把
  * `mcpTools(gate)` 给的 `mcp__<server>__<tool>` 并进同一张工具表。审批走同一个 gate
@@ -51,6 +53,7 @@ import { currentShell, type ResolvedShell } from '../../main/git-bash'
 import { createToolContext, needsApproval } from '../tools/guard'
 import { createBashTool, shellGuidance } from '../tools/bash'
 import { createDeleteTool } from '../tools/delete'
+import { createDeliverFileTool } from '../tools/deliver'
 import { createDocxTool } from '../tools/docx'
 import { createEditTool } from '../tools/edit'
 import { createExcelTool } from '../tools/excel'
@@ -125,6 +128,9 @@ export const KYCLAW_INSTRUCTIONS = `你是 kyclaw，运行在用户自己电脑�
   · create_docx：Word 文档（heading / paragraph / bullets / table 四种块，按顺序排）。
   报告与 PDF 的 html 是**真 HTML 片段**（不是 Markdown）：用 h2/h3、p、ul/ol、table、pre/code 写正文，
   不要写 <html>/<head>/<style> 外壳、不要重复一级标题（模板已经带上标题与样式）。
+- 交付文件：产出物写完、或把材料整理成文件之后，用 deliver_file 把它交付给用户看 —— 对话里会出现一张
+  带「预览」的文件卡，用户点开就能在右侧工作台看，别只报一个路径。它只交付**已经在当前会话工作区里**的文件；
+  要交付工作区外的文件，先用 bash 复制进工作区再交付。
 - 写类操作（write / edit / delete / move / bash / fetch / web_search / git_add / git_commit / create_report / create_pdf / create_excel / create_ppt / create_docx）与 MCP 外部工具的调用执行前会弹给用户审批（工作区被设为「完全访问」时免审），也可能被拒绝——被拒绝就说清原因、换个做法，不要反复重试。删除 / 移动是危险操作，每次都会请求审批。
 - 改文件前先用 read 看原文；替换局部内容用 edit，整文件重写用 write。`
 
@@ -200,11 +206,14 @@ export async function createKyclawAgent(
     create_excel: await createExcelTool(ctx),
     create_ppt: await createPptTool(ctx),
     create_docx: await createDocxTool(ctx),
+    // round 50：交付（读类，免审批）——把工作区里的文件交给用户看，对话里出交付卡
+    deliver_file: await createDeliverFileTool(ctx),
     ...(await createGitTools(ctx))
   }
 
   // 内置与 MCP 共用同一个 gate：requireApproval 的判定是同一份 needsApproval
-  const gate: McpToolGate = (tool, input) => needsApproval(ctx, tool, input)
+  // （session = 审批回调里取到的线程 id；MCP 工具靠它按会话根判"无显式目标"的档，round 46）
+  const gate: McpToolGate = (tool, input, session) => needsApproval(ctx, tool, input, session)
   const mcpToolsFor = toolOptions?.mcpTools
 
   return new AgentClass({

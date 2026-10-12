@@ -251,3 +251,34 @@ describe('工具结果 → 第二轮生成（复现 15:42:56 的掐断面）', (
     expect(scripts.length).toBe(1)
   }, 30_000)
 })
+
+describe('交付链路（round 50）：deliver_file 的结构化结果过线', () => {
+  it('模型调 deliver_file：结果字段原样到客户端（渲染端交付卡读的就是它们）', async () => {
+    scripts.length = 0
+    scripts.push(() =>
+      toolCallScript('call-deliver', 'deliver_file', { path: 'alpha.txt', note: '交接材料' })
+    )
+    scripts.push(() => textScript('已经交给你了。'))
+
+    const parts = sseParts(await chat([user('把这份材料交付给我')], 'thread-roundtrip-deliver'))
+
+    const output = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'call-deliver'
+    )
+    expect(output).toBeDefined()
+    // 卡片要的字段一个不少（`path` 是相对会话工作区的写法，正斜杠）
+    expect(output?.output).toMatchObject({
+      path: 'alpha.txt',
+      name: 'alpha.txt',
+      size: 1,
+      mimeType: 'text/plain',
+      note: '交接材料'
+    })
+    // 交付是读类：不出审批挂起、也不出错误面
+    expect(parts.some((part) => part.type === 'tool-approval-request')).toBe(false)
+    expect(parts.some((part) => part.type === 'tool-output-error')).toBe(false)
+    expect(parts.filter((part) => part.type === 'text-delta').map((part) => part.delta)).toEqual([
+      '已经交给你了。'
+    ])
+  }, 30_000)
+})

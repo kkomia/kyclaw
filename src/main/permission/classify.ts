@@ -54,7 +54,11 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   create_pdf: 'write',
   create_excel: 'write',
   create_ppt: 'write',
-  create_docx: 'write'
+  create_docx: 'write',
+  // round 50：deliver_file 是"把工作区里已有的文件交付给用户看"，只 stat 元数据
+  // （不读内容、不写盘）——**真只读**，与 read/glob/grep 同档免审。
+  // 目标仍过 guard 的引擎（越界 fail closed），只是不需要用户为"看一眼文件"点卡。
+  deliver_file: 'read'
 }
 
 /** 没在表里的工具（含 MCP 里未标只读的那些）按写类处理：默认问一次，不静默放行 */

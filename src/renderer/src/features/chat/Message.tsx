@@ -2,10 +2,12 @@ import { useState } from 'react'
 import type { UIMessage } from 'ai'
 import { Paperclip } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
+import { DeliverableCard } from './DeliverableCard'
+import { deliverableOf, type Deliverable } from './deliverable'
 import { ReasoningPart } from './parts/ReasoningPart'
 import { TextPart } from './parts/TextPart'
 import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
-import { isToolPart } from './parts/tool-part'
+import { isToolPart, toToolCardPart } from './parts/tool-part'
 import { parseReferenceMarkers } from './reference-markers'
 import { ReferenceChip } from './reference-chip'
 
@@ -15,6 +17,8 @@ import { ReferenceChip } from './reference-chip'
  * 助手消息：左对齐的 part 流 —— 正文文本单出，**连续的过程 part（思考 / 工具调用）并成
  * 一个过程块**（round 6：TraceBlock，正文把块切开、块内保持原顺序）。
  * round 29：审批入口不在这条链上（待审批统一走输入框上方的 ApprovalDock，块内只留只读状态行）。
+ * round 50：交付（deliver_file 的结果）单出一张卡 —— 它是"给用户看的东西"，不埋进会收起的
+ * 过程块里（见 chunkParts 的头注）。
  */
 export interface MessageProps {
   message: UIMessage
@@ -49,10 +53,17 @@ function lastRenderableIndex(parts: UIMessage['parts']): number {
   return last
 }
 
-/** 助手消息的渲染块：文本一节，连续的过程 part 并成一个过程块 */
+/**
+ * 助手消息的渲染块：文本一节，连续的过程 part 并成一个过程块，**交付卡单出**。
+ *
+ * 交付卡为什么要从过程块里摘出来（round 50）：过程块这一轮跑完会自动收起，交付物埋在
+ * 折起来的"使用 N 个工具"里就等于没交付。摘出来之后它与正文平级、始终可见；
+ * 还在调用中的 deliver_file（没有结果）照旧走过程块里的普通工具行。
+ */
 type RenderChunk =
   | { kind: 'text'; part: TextPartType; index: number }
   | { kind: 'process'; entries: TraceBlockEntry[] }
+  | { kind: 'deliverable'; deliverable: Deliverable; index: number }
 
 function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[] {
   const lastIndex = lastRenderableIndex(parts)
@@ -63,6 +74,12 @@ function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[
       return
     }
     if (part.type === 'reasoning' || isToolPart(part)) {
+      const tool = toToolCardPart(part)
+      const deliverable = tool === null ? null : deliverableOf(tool)
+      if (deliverable !== null) {
+        chunks.push({ kind: 'deliverable', deliverable, index })
+        return
+      }
       const entry: TraceBlockEntry = { part, streaming: streaming && index === lastIndex }
       const previous = chunks[chunks.length - 1]
       if (previous?.kind === 'process') previous.entries.push(entry)
@@ -206,6 +223,11 @@ export function Message({ message, streaming = false, onEdit }: MessageProps): R
               text={chunk.part.text}
               streaming={streaming && chunk.index === lastIndex}
             />
+          )
+        }
+        if (chunk.kind === 'deliverable') {
+          return (
+            <DeliverableCard key={`deliverable-${chunk.index}`} deliverable={chunk.deliverable} />
           )
         }
         const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
