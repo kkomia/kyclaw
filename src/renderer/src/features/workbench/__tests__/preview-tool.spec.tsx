@@ -123,6 +123,55 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     expect(bed.bridge.workbench.readFile).toHaveBeenLastCalledWith('thread-1', 'notes.txt')
   })
 
+  /* round 52：头部不再是"一行光文件名"——类型图标块 + 文件名（醒目）+ 相对路径 */
+  it('头部：类型图标块 + 文件名 + 相对路径（图标按后缀，与 tab 图标同一张表）', async () => {
+    render(<PreviewTool root={rootOf()} relative="docs/说明.md" />)
+
+    const icon = screen.getByTestId('preview-icon')
+    expect(icon.querySelector('svg')?.getAttribute('class')).toContain('lucide-book-text')
+    expect(screen.getByTestId('preview-name')).toHaveTextContent('说明.md')
+    expect(screen.getByTestId('preview-name')).toHaveClass('text-b1')
+    expect(screen.getByTestId('preview-path')).toHaveTextContent('docs/说明.md')
+  })
+
+  it('头部图标随后缀换：pdf / 图片 / 表格各是各的', async () => {
+    const cases: Array<[string, string]> = [
+      ['报告.pdf', 'lucide-file-text'],
+      ['assets/logo.png', 'lucide-file-image'],
+      ['台账.xlsx', 'lucide-file-spreadsheet'],
+      ['src/index.ts', 'lucide-file-code']
+    ]
+    for (const [relative, iconClass] of cases) {
+      const { unmount } = render(<PreviewTool root={rootOf()} relative={relative} />)
+      expect([
+        relative,
+        screen.getByTestId('preview-icon').querySelector('svg')?.getAttribute('class')
+      ]).toEqual([relative, expect.stringContaining(iconClass)])
+      unmount()
+    }
+  })
+
+  it('「在文件资源管理器中定位」走既有 reveal 通道；失败了把话露在预览区（不静默）', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '正文\n',
+      size: 7,
+      truncated: false
+    })
+    bed.bridge.workbench.reveal.mockRejectedValue(new Error('这个文件不在磁盘上了'))
+    render(<PreviewTool root={rootOf()} relative="notes.txt" />)
+    await screen.findByTestId('file-preview-text')
+
+    fireEvent.click(screen.getByTestId('preview-reveal'))
+
+    await waitFor(() =>
+      expect(bed.bridge.workbench.reveal).toHaveBeenCalledWith('thread-1', 'notes.txt')
+    )
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
+      '这个文件不在磁盘上了'
+    )
+  })
+
   it('判不出工作区：空态给人话，不读盘', () => {
     const root: WorkbenchRoot = {
       ...rootOf(),

@@ -4,7 +4,10 @@
  * 渲染走 `preview/PreviewBody.tsx` 与它下面那批渲染器），数据走既有的
  * `workbench:read-file` / `workbench:read-bytes`（threadId + 工作区相对路径）。
  *
- * 顶部一行：文件名（点一下复制**绝对路径**）+ 重新读取（内容变了不用关标签重开）。
+ * 顶部一条（round 52 重做，对齐"别再是一行光文件名"那条用户要求）：**文件类型图标块 + 文件名 +
+ * 相对路径**——图标按后缀走 `preview/file-icon.ts`（与预览标签的 tab 图标同一张表，唯一出处）；
+ * 文件名点一下复制**绝对路径**；右侧「在文件资源管理器中定位」（既有 `workbench:reveal` 通道）与
+ * 「重新读取」（内容变了不用关标签重开）。
  *
  * 标签从哪来：`openPreviewTab(relPath)`（store 按 path 去重；见 workbench-store）。要看的相对路径
  * 由 Workbench 从标签上取下来传进来（**传进来的 `relative` 就是这份预览的根**：换个路径就是另一份
@@ -15,16 +18,23 @@
  * 换会话 / 换根由 Workbench 用 key 重挂（`preview:${rootPath}:${threadId}`）——重挂即重读，
  * 旧挂载的迟到响应落在已卸载的组件上（React 忽略）。
  */
-import { FileText, RotateCw } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { FileText, FolderSearch, RotateCw } from 'lucide-react'
+import { createElement, useCallback, useEffect, useState } from 'react'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
-import { ToolBar, ToolEmpty } from './bits'
+import { ToolEmpty } from './bits'
 import { PreviewBody } from './preview/PreviewBody'
 import { baseNameOf, readPreview, type LoadedPreview } from './preview/fetch'
+import { fileIconOf } from './preview/file-icon'
 import { previewModeOf } from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 
+/**
+ * 头部图标块那个图标：按后缀走唯一那张表（`preview/file-icon.ts`，与标签页图标同表）。
+ * 这里用 `createElement` 而不是 `const Icon = fileIconOf(...)`：`react-hooks/static-components`
+ * （React 编译器那套规则）会把"直接拿 `fileIconOf(...)` 的返回值当 JSX 组件用"判成
+ * "渲染中造组件"—— 它看不穿跨模块的映射表；`createElement` 传的是元素类型，不是新造的组件。
+ */
 export function PreviewTool({
   root,
   relative
@@ -63,11 +73,25 @@ export function PreviewTool({
     void navigator.clipboard?.writeText(absoluteOf(rootPath, relative))
   }, [rootPath, relative])
 
+  /** 在资源管理器里定位（既有 `workbench:reveal` 通道）。失败与"读不了这个文件"共用一个收口 */
+  const reveal = useCallback((): void => {
+    if (workbench === null || threadId === null) return
+    void workbench.reveal(threadId, relative).then(
+      () => undefined,
+      (error: unknown) =>
+        setState({ mode: previewModeOf(relative), status: 'error', error: unwrapIpcError(error) })
+    )
+  }, [threadId, relative, workbench])
+
   if (!ready) {
     return <ToolEmpty testId="preview-notice" icon={FileText} title={notice ?? '预览不可用'} />
   }
 
   const name = baseNameOf(relative)
+  const icon = createElement(fileIconOf(relative), {
+    'aria-hidden': true,
+    className: 'size-(--icon-size-md)'
+  })
 
   return (
     <div
@@ -75,17 +99,41 @@ export function PreviewTool({
       data-relative={relative}
       className="flex min-h-0 flex-1 flex-col"
     >
-      <ToolBar className="justify-between">
-        {/* 文件名（点一下复制绝对路径）——标题属性给全文，页内空间不够时不硬挤 */}
-        <button
-          type="button"
-          data-testid="preview-name"
-          title={rootPath === null ? relative : absoluteOf(rootPath, relative)}
-          onClick={copyPath}
-          className="min-w-0 cursor-default truncate rounded-control px-1 py-0.5 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+      {/* 文件类型图标块 + 文件名（醒目档）+ 相对路径（次要色、截断）：
+          一块圆角底色托图标，两层文字靠字号与颜色分层 —— 不叠框线（雷点 7） */}
+      <div className="flex shrink-0 items-center gap-2.5 px-3 py-2">
+        <span
+          data-testid="preview-icon"
+          className="flex size-9 shrink-0 items-center justify-center rounded-button-lg bg-secondary text-ink-secondary"
         >
-          {name === '' ? '预览' : name}
-        </button>
+          {icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          {/* 文件名（点一下复制绝对路径）——标题属性给全文，页内空间不够时不硬挤 */}
+          <button
+            type="button"
+            data-testid="preview-name"
+            title={rootPath === null ? relative : absoluteOf(rootPath, relative)}
+            onClick={copyPath}
+            className="block max-w-full cursor-default truncate rounded-control text-left text-b1 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+          >
+            {name === '' ? '预览' : name}
+          </button>
+          <p
+            data-testid="preview-path"
+            title={relative}
+            className="truncate text-b2 text-ink-tertiary"
+          >
+            {relative}
+          </p>
+        </div>
+        <IconButton
+          data-testid="preview-reveal"
+          label="在文件资源管理器中定位"
+          icon={<FolderSearch />}
+          onClick={reveal}
+          className="border-transparent hover:bg-hover"
+        />
         <IconButton
           data-testid="preview-refresh"
           label="重新读取"
@@ -93,7 +141,7 @@ export function PreviewTool({
           onClick={reload}
           className="border-transparent hover:bg-hover"
         />
-      </ToolBar>
+      </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         <PreviewBody relative={relative} state={state} mode={previewModeOf(relative)} />

@@ -305,7 +305,7 @@ describe('FilesTool：按格式路由', () => {
     bed.bridge.workbench.readBytes.mockResolvedValueOnce({
       kind: 'too-large',
       size: 40 * 1024 * 1024,
-      limit: 8 * 1024 * 1024
+      limit: 30 * 1024 * 1024
     })
     fireEvent.click(screen.getByText('b.jpg'))
     expect(await screen.findByTestId('file-preview-large')).toHaveTextContent('文件太大')
@@ -760,7 +760,7 @@ describe('round 42 · 右键「添加到上下文」', () => {
     expect(screen.queryByTestId('workbench-context-menu')).not.toBeInTheDocument()
   })
 
-  it('端到端：文本文件进输入卡的附件条；二进制给人话（复用输入卡的附件口径）', async () => {
+  it('端到端：文本文件进输入卡的附件条；二进制（round 53）退回路径引用、不再拒收', async () => {
     bed.bridge.workbench.readFile.mockResolvedValue({
       kind: 'text',
       text: 'export {}\n',
@@ -781,7 +781,7 @@ describe('round 42 · 右键「添加到上下文」', () => {
     const chip = await screen.findByTestId('composer-attachment-README.md')
     expect(chip).toHaveTextContent('10 B')
 
-    // 同一个文件换成二进制：不假装收下，把原因说在输入卡那行
+    // 同一个文件换成二进制：round 53 起不拒收——载荷退回**相对路径引用**（chip 照常进附件条，无 notice）
     bed.bridge.workbench.listDir.mockResolvedValue({
       entries: [{ name: 'logo.ico', kind: 'file', size: 2048 }],
       truncated: false
@@ -793,11 +793,10 @@ describe('round 42 · 右键「添加到上下文」', () => {
     fireEvent.contextMenu(screen.getByText('logo.ico'))
     fireEvent.click(screen.getByText('添加到上下文'))
 
-    await waitFor(() =>
-      expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '未附加：logo.ico（这个格式暂不支持加入上下文）'
-      )
-    )
+    const binaryChip = await screen.findByTestId('composer-attachment-logo.ico')
+    expect(binaryChip).toHaveTextContent('2.0 KB')
+    expect(binaryChip).toHaveAttribute('title', 'logo.ico')
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
   })
 })
 

@@ -8,6 +8,7 @@
  *
  * 标签标题：浏览器 = 页面标题（webview 的 page-title-updated）→ 网址主机名兜底；文件 = 根目录名；
  * Git = 「改动」；终端 = 「终端」；预览 = 文件名（见 tabLabel）。过长的 CSS 截断（ellipsis + title 属性）。
+ * 标签图标：四种工具各一个固定图标，**预览标签按文件类型**（见 tabIconOf / preview/file-icon.ts）。
  *
  * 面板底铺 `bg-surface`（与内容区同色，看不出差别）：万一 `<webview>` 这种原生客人不吃祖先的
  * visibility，后画的工具面板仍能把它盖住（浏览器是第一个标签，DOM 顺序在最后）。
@@ -27,7 +28,6 @@
  * 且同样受 settling 门约束（那段窗口里主进程还按兜底根解析，读回来的是别的文件夹里的同名文件）。
  */
 import {
-  FileText,
   FolderTree,
   GitBranch,
   Globe,
@@ -46,6 +46,7 @@ import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { EmptyActions } from './EmptyActions'
+import { fileIconOf } from './preview/file-icon'
 import { matchWorkbenchShortcut, WORKBENCH_ACTIONS } from './workbench-actions'
 import { useWorkbenchRoot, type WorkbenchRoot } from './use-workbench-root'
 import {
@@ -70,12 +71,19 @@ const TOOL_LABEL: Record<WorkbenchTabKind, string> = {
   preview: '预览'
 }
 
-const TAB_ICON: Record<WorkbenchTabKind, LucideIcon> = {
+const TAB_ICON: Record<Exclude<WorkbenchTabKind, 'preview'>, LucideIcon> = {
   browser: Globe,
   files: FolderTree,
   git: GitBranch,
-  terminal: SquareTerminal,
-  preview: FileText
+  terminal: SquareTerminal
+}
+
+/**
+ * 标签图标：预览标签按**文件类型**给（`fileIconOf` 是唯一出处 —— 与预览头部那个图标块同一张表），
+ * 其余四种各是各的固定图标。
+ */
+function tabIconOf(tab: WorkbenchTab): LucideIcon {
+  return tab.kind === 'preview' ? fileIconOf(tab.path ?? '') : TAB_ICON[tab.kind]
 }
 
 export function Workbench(): React.JSX.Element {
@@ -130,7 +138,7 @@ export function Workbench(): React.JSX.Element {
           {tabs.map((tab) => {
             const active = tab.id === activeTabId
             const label = tabLabel(tab, root)
-            const Icon = TAB_ICON[tab.kind]
+            const Icon = tabIconOf(tab)
             return (
               <div
                 key={tab.id}

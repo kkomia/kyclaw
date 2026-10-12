@@ -284,6 +284,10 @@ describe('Workbench 标签页', () => {
     await tick()
 
     expect(screen.getByRole('tab', { name: 'notes.txt' })).toBeInTheDocument()
+    // round 52：预览标签的图标按文件类型（与预览头部那块图标同一张表）——.txt 落"其它"档
+    expect(
+      screen.getByRole('tab', { name: 'notes.txt' }).querySelector('svg')?.getAttribute('class')
+    ).toContain('lucide-file')
     const panel = panelOf('preview')
     expect(panel).toHaveAttribute('data-active', 'true')
     // 数据走既有文本通道（会话 + 工作区相对路径），正文进面板
@@ -336,6 +340,26 @@ describe('Workbench 标签页', () => {
       expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'src/index.ts')
     )
     expect(screen.queryByTestId('workbench-settling')).not.toBeInTheDocument()
+  })
+
+  it('round 52 · 预览标签的图标按文件类型（与预览头部那块图标同一张表）', async () => {
+    render(<Workbench />)
+
+    act(() => useWorkbenchStore.getState().openPreviewTab('docs/说明.md'))
+    await tick()
+
+    const iconOf = (name: string): string =>
+      screen.getByRole('tab', { name }).querySelector('svg')?.getAttribute('class') ?? ''
+    expect(iconOf('说明.md')).toContain('lucide-book-text')
+
+    // 四种工具那四个固定图标没被牵动
+    act(() => {
+      useWorkbenchStore.getState().openTab('files')
+      useWorkbenchStore.getState().openTab('terminal')
+    })
+    await tick()
+    expect(iconOf('工作区')).toContain('lucide-folder-tree')
+    expect(iconOf('终端')).toContain('lucide-square-terminal')
   })
 
   it('头部图标簇：＋ 新建（四种都在）/ ⤢ 切全屏 / ▯ 收起面板（全屏一并复位）', async () => {
