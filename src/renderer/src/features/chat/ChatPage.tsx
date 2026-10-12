@@ -359,6 +359,24 @@ function ActiveChat({
   }, [threadId])
 
   /**
+   * round 49：草稿会话在**发送那一刻**先物化成真线程（POST /api/threads，与"首条消息建线程"
+   * 同一条存储路径）。为什么非做不可：镜像要等轮末（handleTurnEnd 的乐观插入 + refresh）才有它，
+   * 而侧栏的草稿行只在 activeId 还停在草稿上时渲染——发送后、AI 回复前切走会话，这一行两边都不在，
+   * 整个会话就从侧栏消失了（用户实报）。先落成真身（项目归属本来就在映射里），切走也还在。
+   * 顺序：**先 await 物化、再发**——服务端两处建线程都是 upsert，顺序化之后根本不并发；
+   * 物化失败**不挡发送**（原始 error 落控制台留底）：服务端首条消息照样建线程，
+   * 轮末 handleTurnEnd 还有乐观兜底，用户的消息不能因为这一下没落成而卡住。
+   */
+  const ensureMaterialized = useCallback(async (): Promise<void> => {
+    if (useSessionsStore.getState().threads.some((thread) => thread.id === threadId)) return
+    try {
+      await useSessionsStore.getState().materialize(threadId)
+    } catch (error) {
+      console.error('[kyclaw] 会话物化失败（照常发送）', error)
+    }
+  }, [threadId])
+
+  /**
    * 发送预检（round 19 自动触发）：最近一轮上下文用量 ≥ 阈值（contextPct × contextWindow）时
    * 先压一轮再发；压缩失败不阻塞——照常发送 + 一行警示。用量取不到（服务没起来 / usage 行
    * 还没落）就不压缩：如实降级，不假装判过（偏差见报告）。
@@ -366,6 +384,8 @@ function ActiveChat({
   const sendWithPreflight = useCallback(
     async (message: OutgoingMessage): Promise<void> => {
       setCompactNotice(null)
+      // round 49：物化在最前（压缩也要求线程已经在服务端，见路由的 404 口径）
+      await ensureMaterialized()
       try {
         const context = await fetchThreadContext(threadId)
         const threshold = thresholdTokensOf(useSettingsStore.getState().settings)
@@ -387,7 +407,7 @@ function ActiveChat({
         threadRequestOptions(threadId)
       )
     },
-    [runCompact, sendMessage, threadId]
+    [ensureMaterialized, runCompact, sendMessage, threadId]
   )
 
   /** 统一发送入口（submit 与队列补发都走它）：预检锁覆盖预检窗口，防双发 */

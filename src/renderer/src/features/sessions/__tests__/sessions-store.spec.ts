@@ -422,6 +422,24 @@ describe('round 26：草稿物化（materialize）与就地编辑', () => {
     expect(state.draftTitles[draftId]).toBe('草稿名')
   })
 
+  it('materialize 之后轮末：镜像里不重复插（物化已并入），标题生成与刷新照常', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+
+    // round 49：发送路径先物化 —— 轮末 handleTurnEnd 走的正是这条状态（草稿已经在镜像里）
+    await useSessionsStore.getState().materialize(draftId)
+    await useSessionsStore.getState().handleTurnEnd(draftId)
+
+    const threads = useSessionsStore.getState().threads
+    expect(threads.map((thread) => thread.id)).toEqual([draftId])
+    expect(threads[0]?.title).toBe('生成的标题')
+    // 刷新仍以服务端为准
+    expect(
+      server.calls.filter((call) => call.method === 'GET' && call.path === '/api/threads').length
+    ).toBeGreaterThan(1)
+  })
+
   it('草稿重命名：就地改本地标题（不发 PATCH）', async () => {
     const server = installFakeServer([])
     await useSessionsStore.getState().ensureLoaded()
