@@ -173,9 +173,12 @@ function main() {
     if (engineBytes < 30 * 1024 * 1024) {
       fail(`resources/llama 只有 ${(engineBytes / 1024 / 1024).toFixed(1)} MB——裁剪结果不完整？`)
     }
-    // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新
-    if (!existsSync(join(DIST_DIR, 'latest.yml'))) {
-      fail('dist/ 下没有 latest.yml（electron-builder.yml 的 publish 配置被改坏了？）')
+    // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新。
+    // 通道文件名跟着版本走：预发布（0.1.0-beta.N）是 beta.yml，正式版才是 latest.yml
+    // （electron-builder 的 channel 语义，与包内 app-update.yml 的 `channel: beta` 配对）。
+    const channelFile = String(projectManifest().version).includes('-') ? 'beta.yml' : 'latest.yml'
+    if (!existsSync(join(DIST_DIR, channelFile))) {
+      fail(`dist/ 下没有 ${channelFile}（electron-builder.yml 的 publish 配置被改坏了？）`)
     }
     if (!existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'app-update.yml'))) {
       fail('resources/app-update.yml 没有进包（publish 配置被改坏了？测试机不会检查更新）')
