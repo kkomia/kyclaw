@@ -61,6 +61,16 @@ describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
     expect(utility).not.toContain('var(--text-primary)')
     expect(utility).not.toContain('--accent')
   })
+
+  it('round 48：基础态就写死环色 —— 否则聚焦首帧会从 currentColor 过渡出一圈墨色/白色框线', () => {
+    const utility = /@utility focus-ring-container \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
+    // composer 卡片带 transition-colors，v4 的 transition-colors 含 outline-color：
+    // 颜色只在 :has(:focus-visible) 里给 → outline-color 从继承色（浅色近黑 / 暗色近白）
+    // 花 150ms 淡到分隔线灰，而 outline-style 是同一帧变 solid 的 → 用户实拍"闪一圈白/浅色框线"。
+    // 逐帧实证见 .superpowers/sdd/2026-10-10-kyclaw-mvp/_r48-flash-before/（暗色 0.84 白 → 0.12 白）。
+    const base = utility.split('&:has(:focus-visible)')[0]
+    expect(base).toContain('outline-color: var(--border-hairline);')
+  })
 })
 
 describe('壳 · 缺口角梯度（round 3：防静默回退）', () => {

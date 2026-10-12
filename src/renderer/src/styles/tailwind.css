@@ -236,6 +236,15 @@
    round 5 起同样是分隔线灰**（semantic 的 --focus-ring），条目类（菜单项等）改纯填充表达
    （见 menu.tsx 的 focus-visible:shadow-none）——全站不再出现墨色/纯黑/纯白描边。 */
 @utility focus-ring-container {
+  /* round 48（用户实拍"点输入卡闪一圈白/浅色框线"，快到截不到图）：环色必须在**非聚焦态**就写成同一个灰。
+     composer 卡片带 transition-colors，而 Tailwind v4 的 transition-colors **把 outline-color 也算进去**：
+     颜色若只在 :has(:focus-visible) 里出现，聚焦那一帧它就"从无到有"——出发值是未设值的继承色
+     currentColor（浅色近黑 / 暗色近白），于是画出来的是一整圈墨色/白色框线再淡成灰。
+     逐帧实证（_r48-flash-before）：暗色 0.84 白 → 0.12 白、浅色 0.9 黑 → 0.13 黑，历时 --motion-fast(150ms)；
+     outline-style/width/offset 不在过渡表里，是同一帧硬切的，所以那 150ms 里"环真的在画"。
+     写进基础态后聚焦前后同一个值 → 过渡无事可做，环出现的第一帧就是最终灰。 */
+  outline-color: var(--border-hairline);
+
   &:has(:focus-visible) {
     outline: 1px solid var(--border-hairline);
     outline-offset: -1px;
