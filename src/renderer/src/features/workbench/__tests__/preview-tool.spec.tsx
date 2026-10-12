@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Composer } from '@renderer/features/chat/Composer'
+import { subscribeContextItems, type ContextItem } from '@renderer/features/chat/composer-inbox'
 import type { WorkbenchRoot } from '../use-workbench-root'
 import { PreviewTool } from '../PreviewTool'
 import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
@@ -184,5 +186,146 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
 
     expect(screen.getByTestId('preview-notice')).toHaveTextContent('判不出这个会话的工作区')
     expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * round 53：预览标签里选中文字 → 右键 →「添加到上下文（摘选）」。
+ * 菜单与发布口径是**共享件**（preview/SelectionContextMenu，与文件树里单击的内联预览同一份）：
+ * 这里只验"新入口确实长在标签这一侧、路径用的是本标签的 relative"。
+ */
+describe('round 53 · 预览标签里选中文字的自绘右键菜单', () => {
+  let published: ContextItem[] = []
+  let unsubscribe: (() => void) | null = null
+
+  beforeEach(() => {
+    published = []
+    unsubscribe = subscribeContextItems((item) => published.push(item))
+  })
+
+  afterEach(() => {
+    unsubscribe?.()
+    unsubscribe = null
+  })
+
+  const TEXT = 'export const a = 1\nexport const b = 2\n'
+
+  /** 喂一份文本文件并等正文就绪（文本通道 → `file-preview-text`） */
+  async function openText(relative: string): Promise<void> {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: TEXT,
+      size: 44,
+      truncated: false
+    })
+    render(<PreviewTool root={rootOf()} relative={relative} />)
+    await screen.findByTestId('file-preview-text')
+  }
+
+  /** 把正文节点整块选上（真机上是拖选出来的，这里直接落一个 Range） */
+  function selectBody(): void {
+    const range = document.createRange()
+    range.selectNodeContents(screen.getByTestId('file-preview-text'))
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }
+
+  it('原生右键被拦掉（整块预览区都拦：正文与头部都不漏出浏览器菜单）', async () => {
+    await openText('src/notes.txt')
+
+    expect(fireEvent.contextMenu(screen.getByTestId('file-preview-text'))).toBe(false)
+    expect(fireEvent.contextMenu(screen.getByTestId('preview-name'))).toBe(false)
+  })
+
+  it('没有选区：菜单只有「全选」', async () => {
+    await openText('src/notes.txt')
+    window.getSelection()?.removeAllRanges()
+
+    fireEvent.contextMenu(screen.getByTestId('file-preview-text'))
+    const menu = screen.getByTestId('workbench-context-menu')
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual(['全选'])
+  })
+
+  it('有选区：[添加到上下文（摘选）/ 复制 / 全选]；点摘选发布的路径就是本标签那份文件', async () => {
+    await openText('src/notes.txt')
+    selectBody()
+
+    fireEvent.contextMenu(screen.getByTestId('file-preview-text'))
+    const menu = screen.getByTestId('workbench-context-menu')
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual(['添加到上下文（摘选）', '复制', '全选'])
+
+    fireEvent.click(within(menu).getByText('添加到上下文（摘选）'))
+
+    expect(published).toHaveLength(1)
+    const event = published[0]
+    expect(event.source).toBe('selection')
+    expect(event.threadId).toBe('thread-1')
+    expect(event.relative).toBe('src/notes.txt')
+    expect(event.name).toBe('notes.txt 摘选')
+    expect(event.source === 'selection' ? event.text : '').toContain('export const a = 1')
+    // 源文在手：位置在这一侧算好（整块选中的就是第 1–2 行）
+    expect(event.source === 'selection' ? event.lines : undefined).toEqual({ start: 1, end: 2 })
+    expect(screen.queryByTestId('workbench-context-menu')).not.toBeInTheDocument()
+  })
+
+  it('「全选」框的是正文（头部那两行文件名 / 路径不算）', async () => {
+    await openText('src/notes.txt')
+    window.getSelection()?.removeAllRanges()
+
+    fireEvent.contextMenu(screen.getByTestId('file-preview-text'))
+    fireEvent.click(screen.getByText('全选'))
+
+    const selected = window.getSelection()?.toString() ?? ''
+    expect(selected).toContain('export const b = 2')
+    expect(selected).not.toContain('notes.txt')
+
+    // 选区就绪 → 再右键出现摘选那两项
+    fireEvent.contextMenu(screen.getByTestId('file-preview-text'))
+    expect(screen.getByText('添加到上下文（摘选）')).toBeInTheDocument()
+  })
+
+  it('端到端：摘选进输入卡成引用卡（相对路径 + 行号），发送载荷是【引用】文件 + 围栏内容', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: 'export {}\n',
+      size: 10,
+      truncated: false
+    })
+    const onSend = vi.fn()
+    render(
+      <>
+        <PreviewTool root={rootOf()} relative="notes.txt" />
+        <Composer threadId="thread-1" onSend={onSend} onStop={vi.fn()} />
+      </>
+    )
+    await screen.findByTestId('file-preview-text')
+
+    // 走**真机那条鼠标路径**：右键 → pointerdown(菜单项) → click
+    selectBody()
+    fireEvent.contextMenu(screen.getByTestId('file-preview-text'))
+    const item = screen.getByText('添加到上下文（摘选）')
+    fireEvent.pointerDown(item)
+    fireEvent.click(item)
+
+    const card = await screen.findByTestId('composer-attachment-notes.txt 摘选')
+    expect(card).toHaveAttribute('data-quote', 'true')
+    expect(card).toHaveTextContent('notes.txt')
+    expect(screen.getByTestId('composer-quote-lines')).toHaveTextContent('第 1–1 行')
+    // 只拉过一次预览的文本通道（发布方没有额外读文件）
+    expect(bed.bridge.workbench.readFile).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(onSend.mock.calls[0]?.[0]).toMatchObject({
+      text: '【引用】文件：notes.txt（第 1–1 行）\n```\nexport {}\n```'
+    })
   })
 })

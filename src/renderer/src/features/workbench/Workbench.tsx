@@ -24,8 +24,9 @@
  * 而是**按根存取**（switchRoot：旧根存起来、新根取上次的样子）——"切走再切回来还要有"。
  *
  * round 50：第五种标签 `preview`（文件预览，双击文件 / 右键「在新标签页中查看」来开，见 FilesTool）
- * 也走上面那套 —— 按 `${kind}:${rootPath}:${threadId}` 重挂（换会话/换根即重读该文件，不留旧根的内容），
- * 且同样受 settling 门约束（那段窗口里主进程还按兜底根解析，读回来的是别的文件夹里的同名文件）。
+ * 也走上面那套 —— 按 `${kind}:${rootPath}:${threadId}:${path}` 重挂（换会话/换根即重读该文件，
+ * 不留旧根的内容；带路径的缘由见 panelKeyOf），且同样受 settling 门约束（那段窗口里主进程还按
+ * 兜底根解析，读回来的是别的文件夹里的同名文件）。
  */
 import {
   FolderTree,
@@ -230,12 +231,8 @@ export function Workbench(): React.JSX.Element {
                 // 依赖会话根的三件（文件/Git/终端）按**会话 + 根路径**重挂：换会话是现状（状态自然清空、
                 // 终端的 cwd 跟到新会话的根），换根（"移至项目"：threadId 不变而根变了）也重挂 ——
                 // 只按会话号缓存会留下旧目录的清单，就是用户报的"这个文件夹不在磁盘上"。
-                // 浏览器与根无关，按标签 id 保活。
-                key={
-                  tab.kind === 'browser'
-                    ? tab.id
-                    : `${tab.kind}:${rootPath ?? 'none'}:${root.threadId ?? 'none'}`
-                }
+                // 浏览器与根无关，按标签 id 保活；预览还要带上**看的哪份文件**（见 panelKeyOf）。
+                key={panelKeyOf(tab, rootPath, root.threadId)}
                 id={`workbench-panel-${tab.id}`}
                 role="tabpanel"
                 aria-labelledby={`workbench-tab-${tab.id}`}
@@ -258,6 +255,17 @@ export function Workbench(): React.JSX.Element {
       )}
     </div>
   )
+}
+
+/**
+ * 面板的重挂键（缘由见上面 section 那截注释）：浏览器与根无关，按标签 id 保活；其余按
+ * **会话 + 根路径**重挂。预览标签还要带上**看的哪份文件** —— 同根同会话下开两份不同文件的
+ * 预览时不带路径就撞 key（React 的 "two children with the same key"），切标签时两份面板互相顶。
+ */
+function panelKeyOf(tab: WorkbenchTab, rootPath: string | null, threadId: string | null): string {
+  if (tab.kind === 'browser') return tab.id
+  const base = `${tab.kind}:${rootPath ?? 'none'}:${threadId ?? 'none'}`
+  return tab.kind === 'preview' ? `${base}:${tab.path ?? ''}` : base
 }
 
 /** 标签标题：文件 = 根目录名（拿不到给「文件」），其余见 workbench-store 的说明 */

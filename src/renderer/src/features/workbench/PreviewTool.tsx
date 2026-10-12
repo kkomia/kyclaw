@@ -15,18 +15,23 @@
  *
  * 归属还在写（settling）时先别读盘：与文件/Git/终端同一个道理 —— 主进程此刻还按兜底根解析，
  * 读回来的是另一个文件夹里的同名文件，而且不会重来（Workbench 的 renderTool 统一给占位）。
- * 换会话 / 换根由 Workbench 用 key 重挂（`preview:${rootPath}:${threadId}`）——重挂即重读，
+ * 换会话 / 换根由 Workbench 用 key 重挂（`preview:${rootPath}:${threadId}:${path}`）——重挂即重读，
  * 旧挂载的迟到响应落在已卸载的组件上（React 忽略）。
+ *
+ * round 53：选中文字的自绘右键菜单与内联预览那一路**同一份共享件**
+ * （`preview/SelectionContextMenu`）：整块预览区（头部 + 正文）的原生右键都拦下，
+ * 「添加到上下文（摘选）」发布的路径就是本标签的 `relative`。
  */
 import { FileText, FolderSearch, RotateCw } from 'lucide-react'
-import { createElement, useCallback, useEffect, useState } from 'react'
+import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { ToolEmpty } from './bits'
 import { PreviewBody } from './preview/PreviewBody'
-import { baseNameOf, readPreview, type LoadedPreview } from './preview/fetch'
+import { baseNameOf, readPreview, sourceTextOf, type LoadedPreview } from './preview/fetch'
 import { fileIconOf } from './preview/file-icon'
 import { previewModeOf } from './preview/modes'
+import { SelectionContextMenu } from './preview/SelectionContextMenu'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 
 /**
@@ -73,6 +78,9 @@ export function PreviewTool({
     void navigator.clipboard?.writeText(absoluteOf(rootPath, relative))
   }, [rootPath, relative])
 
+  /** 「全选」的落点：正文滚动区（头部那两行文件名 / 路径不算 —— 与内联预览的口径一致） */
+  const bodyRef = useRef<HTMLDivElement>(null)
+
   /** 在资源管理器里定位（既有 `workbench:reveal` 通道）。失败与"读不了这个文件"共用一个收口 */
   const reveal = useCallback((): void => {
     if (workbench === null || threadId === null) return
@@ -99,53 +107,62 @@ export function PreviewTool({
       data-relative={relative}
       className="flex min-h-0 flex-1 flex-col"
     >
-      {/* 文件类型图标块 + 文件名（醒目档）+ 相对路径（次要色、截断）：
-          一块圆角底色托图标，两层文字靠字号与颜色分层 —— 不叠框线（雷点 7） */}
-      <div className="flex shrink-0 items-center gap-2.5 px-3 py-2">
-        <span
-          data-testid="preview-icon"
-          className="flex size-9 shrink-0 items-center justify-center rounded-button-lg bg-secondary text-ink-secondary"
-        >
-          {icon}
-        </span>
-        <div className="min-w-0 flex-1">
-          {/* 文件名（点一下复制绝对路径）——标题属性给全文，页内空间不够时不硬挤 */}
-          <button
-            type="button"
-            data-testid="preview-name"
-            title={rootPath === null ? relative : absoluteOf(rootPath, relative)}
-            onClick={copyPath}
-            className="block max-w-full cursor-default truncate rounded-control text-left text-b1 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+      {/* 整块（头部 + 正文）包进选区菜单：原生右键一律拦掉，选中文字后右键多一档
+          「添加到上下文（摘选）」——与文件树里单击的内联预览同一份共享件 */}
+      <SelectionContextMenu
+        threadId={threadId}
+        relative={relative}
+        sourceText={sourceTextOf(state)}
+        bodyRef={bodyRef}
+      >
+        {/* 文件类型图标块 + 文件名（醒目档）+ 相对路径（次要色、截断）：
+            一块圆角底色托图标，两层文字靠字号与颜色分层 —— 不叠框线（雷点 7） */}
+        <div className="flex shrink-0 items-center gap-2.5 px-3 py-2">
+          <span
+            data-testid="preview-icon"
+            className="flex size-9 shrink-0 items-center justify-center rounded-button-lg bg-secondary text-ink-secondary"
           >
-            {name === '' ? '预览' : name}
-          </button>
-          <p
-            data-testid="preview-path"
-            title={relative}
-            className="truncate text-b2 text-ink-tertiary"
-          >
-            {relative}
-          </p>
+            {icon}
+          </span>
+          <div className="min-w-0 flex-1">
+            {/* 文件名（点一下复制绝对路径）——标题属性给全文，页内空间不够时不硬挤 */}
+            <button
+              type="button"
+              data-testid="preview-name"
+              title={rootPath === null ? relative : absoluteOf(rootPath, relative)}
+              onClick={copyPath}
+              className="block max-w-full cursor-default truncate rounded-control text-left text-b1 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+            >
+              {name === '' ? '预览' : name}
+            </button>
+            <p
+              data-testid="preview-path"
+              title={relative}
+              className="truncate text-b2 text-ink-tertiary"
+            >
+              {relative}
+            </p>
+          </div>
+          <IconButton
+            data-testid="preview-reveal"
+            label="在文件资源管理器中定位"
+            icon={<FolderSearch />}
+            onClick={reveal}
+            className="border-transparent hover:bg-hover"
+          />
+          <IconButton
+            data-testid="preview-refresh"
+            label="重新读取"
+            icon={<RotateCw />}
+            onClick={reload}
+            className="border-transparent hover:bg-hover"
+          />
         </div>
-        <IconButton
-          data-testid="preview-reveal"
-          label="在文件资源管理器中定位"
-          icon={<FolderSearch />}
-          onClick={reveal}
-          className="border-transparent hover:bg-hover"
-        />
-        <IconButton
-          data-testid="preview-refresh"
-          label="重新读取"
-          icon={<RotateCw />}
-          onClick={reload}
-          className="border-transparent hover:bg-hover"
-        />
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-        <PreviewBody relative={relative} state={state} mode={previewModeOf(relative)} />
-      </div>
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto pb-2">
+          <PreviewBody relative={relative} state={state} mode={previewModeOf(relative)} />
+        </div>
+      </SelectionContextMenu>
     </div>
   )
 }

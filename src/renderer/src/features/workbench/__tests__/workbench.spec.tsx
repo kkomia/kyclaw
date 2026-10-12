@@ -362,6 +362,41 @@ describe('Workbench 标签页', () => {
     expect(iconOf('终端')).toContain('lucide-square-terminal')
   })
 
+  it('round 53 · 同一根下开两份不同文件的预览：面板各挂各的（key 带上路径，不撞）', async () => {
+    bed.bridge.workbench.readFile.mockImplementation(async (_threadId, relative) => ({
+      kind: 'text',
+      text: `${relative} 的正文\n`,
+      size: 20,
+      truncated: false
+    }))
+    // 撞 key 在 React 里只是 console.error 警告（不抛）：把它收进来当断言，回归的正是那条警告
+    const warnings: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(' '))
+    })
+    try {
+      render(<Workbench />)
+      act(() => useWorkbenchStore.getState().openPreviewTab('src/a.txt'))
+      await tick()
+      act(() => useWorkbenchStore.getState().openPreviewTab('src/b.txt'))
+      await tick()
+
+      expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['a.txt', 'b.txt'])
+      const tools = await screen.findAllByTestId('preview-tool')
+      expect(tools.map((tool) => tool.dataset.relative)).toEqual(['src/a.txt', 'src/b.txt'])
+      // 各自读到的正文对得上（两份面板都在窗口里：标签切走只是隐藏，不卸载）
+      expect(
+        await within(tools[0] as HTMLElement).findByTestId('file-preview-text')
+      ).toHaveTextContent('src/a.txt 的正文')
+      expect(within(tools[1] as HTMLElement).getByTestId('file-preview-text')).toHaveTextContent(
+        'src/b.txt 的正文'
+      )
+      expect(warnings.join('\n')).not.toContain('same key')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('头部图标簇：＋ 新建（四种都在）/ ⤢ 切全屏 / ▯ 收起面板（全屏一并复位）', async () => {
     render(<Workbench />)
 

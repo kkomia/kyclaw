@@ -44,6 +44,17 @@ export function baseNameOf(relative: string): string {
 }
 
 /**
+ * 预览手里能拿来比对位置的**源文**：只有文本通道有（markdown 也是这条通道，内容就是源文）。
+ * 字节通道（图片 / PDF）没有可比对的文本 → null（摘选的位置就省略）。
+ * 内联预览与预览标签都拿它喂给 `SelectionContextMenu`（见那件头注）。
+ */
+export function sourceTextOf(state: LoadedPreview): string | null {
+  const value = state.value
+  if (value === undefined || value.channel !== 'text' || value.preview.kind !== 'text') return null
+  return value.preview.text
+}
+
+/**
  * 读一份文件 → 一条已定稿的预览状态（`ready` / `error`）。
  * 旧版 Office 不读文件（同步就绪，没有 value）；其余按 `modes.ts` 的两条通道取内容。
  */

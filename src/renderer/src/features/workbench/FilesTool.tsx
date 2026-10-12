@@ -13,6 +13,9 @@
  * 走 composer-inbox 的事件通道进输入卡的附件条；这里只发布"哪个会话的哪个文件 / 哪段摘选"，
  * 读文件与上限判定都在订阅方（Composer）做。
  *
+ * round 53：预览区选中那一档菜单抽成共享件 `preview/SelectionContextMenu`（预览标签
+ * PreviewTool 共用同一份，行为逐字一致）；这里只剩一个「全选」落点的 ref 传进去。
+ *
  * round 44：工具条上的搜索钮把工具条与树之间展开一行搜索行（文件名 / 内容两种口径）。
  * 递归遍历、上限判定、大小写口径全在主进程（`workbench:search`），这里只管防抖、渲染与打开：
  * 查询（trim 后）不足 `SEARCH_QUERY_MIN` 个字符就回树；结果点击复用 `chooseFile` 那条预览链。
@@ -31,7 +34,6 @@ import {
   FolderSearch,
   MessageSquarePlus,
   Search,
-  TextSelect,
   X
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
@@ -46,13 +48,14 @@ import { cn } from '@renderer/components/ui/cn'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Input } from '@renderer/components/ui/input'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { linesOfSelection, publishContextItem } from '@renderer/features/chat/composer-inbox'
+import { publishContextItem } from '@renderer/features/chat/composer-inbox'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
-import { ContextMenu, type ContextMenuState, type ContextMenuItem } from './ContextMenu'
+import { ContextMenu, type ContextMenuState } from './ContextMenu'
 import { PreviewBody } from './preview/PreviewBody'
-import { baseNameOf, readPreviewState, type PreviewState } from './preview/fetch'
+import { baseNameOf, readPreviewState, sourceTextOf, type PreviewState } from './preview/fetch'
+import { SelectionContextMenu } from './preview/SelectionContextMenu'
 import { previewModeOf } from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 import { formatBytes } from './format'
@@ -264,71 +267,10 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
   )
 
   /**
-   * round 42：把预览里**选中的那段**交给输入卡（名称带「摘选」，与整份文件区分开）。
-   * 位置（行号区间）在这一侧算：只有预览手里有**源文**（订阅方只看得到选中的文字本身）。
-   * 算不出就不带 `lines`——不瞎编（口径见 composer-inbox.ts 的 linesOfSelection）。
+   * 「全选」的落点：预览体那一块（选区只框内容，标题条不算 —— 与 round 42 的口径一致）。
+   * 摘选菜单本身在共享件里（`preview/SelectionContextMenu`），它拿这个 ref 当「全选」目标。
    */
-  const addSelectionToContext = useCallback(
-    (state: PreviewState, text: string): void => {
-      if (threadId === null) return
-      const source = sourceTextOf(state)
-      const lines = source === null ? null : linesOfSelection(source, text)
-      publishContextItem({
-        source: 'selection',
-        threadId,
-        relative: state.relative,
-        name: `${baseNameOf(state.relative)} 摘选`,
-        text,
-        ...(lines === null ? {} : { lines })
-      })
-    },
-    [threadId]
-  )
-
-  /** 「全选」：把预览体的内容整体选上（选中后右键就是"有选区"那一档菜单） */
   const previewBodyRef = useRef<HTMLDivElement>(null)
-  const selectPreviewAll = useCallback((): void => {
-    const node = previewBodyRef.current
-    const selection = window.getSelection()
-    if (node === null || selection === null) return
-    const range = document.createRange()
-    range.selectNodeContents(node)
-    selection.removeAllRanges()
-    selection.addRange(range)
-  }, [])
-
-  /**
-   * 预览区的右键 = 自绘菜单（雷点 4：原生菜单一律拦掉——整块预览区都拦，不只是选中文字那一小块）。
-   * 有选区：[添加到上下文（摘选）/ 复制 / 全选]；没有：[全选]（最小集合，不摆点了没用的项）。
-   */
-  const onPreviewContextMenu = (event: React.MouseEvent, state: PreviewState): void => {
-    event.preventDefault()
-    const selected = window.getSelection()?.toString() ?? ''
-    const items: ContextMenuItem[] = []
-    if (selected.trim() !== '') {
-      items.push({
-        id: 'context',
-        label: '添加到上下文（摘选）',
-        icon: <MessageSquarePlus />,
-        onSelect: () => addSelectionToContext(state, selected)
-      })
-      items.push({
-        id: 'copy',
-        label: '复制',
-        icon: <Copy />,
-        onSelect: () => {
-          void navigator.clipboard?.writeText(selected)
-        }
-      })
-    }
-    items.push({
-      id: 'select-all',
-      label: '全选',
-      icon: <TextSelect />,
-      onSelect: selectPreviewAll
-    })
-    setMenu({ x: event.clientX, y: event.clientY, items })
-  }
 
   if (!ready) {
     return <ToolEmpty testId="files-notice" icon={FolderOpen} title={notice ?? '文件不可用'} />
@@ -459,9 +401,14 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
       </div>
 
       {preview === null ? null : (
-        // display: contents 的包装层：只为把整块预览区（含标题条）的右键都拦下来，
-        // 自己不产生盒子、不改布局（自绘菜单见 onPreviewContextMenu）
-        <div className="contents" onContextMenu={(event) => onPreviewContextMenu(event, preview)}>
+        // 共享件（preview/SelectionContextMenu）自带 display:contents 的包装层：整块预览区
+        // （含标题条）的原生右键都被拦下，它自己不产生盒子、不改布局
+        <SelectionContextMenu
+          threadId={threadId}
+          relative={preview.relative}
+          sourceText={sourceTextOf(preview)}
+          bodyRef={previewBodyRef}
+        >
           <BottomSheet
             testId="file-preview"
             title={baseNameOf(preview.relative)}
@@ -471,22 +418,12 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
               <PreviewBody relative={preview.relative} state={preview} mode={preview.mode} />
             </div>
           </BottomSheet>
-        </div>
+        </SelectionContextMenu>
       )}
 
       {menu === null ? null : <ContextMenu state={menu} onClose={() => setMenu(null)} />}
     </div>
   )
-}
-
-/**
- * 预览手里能拿来比对位置的**源文**：只有文本通道有（markdown 也是这条通道，内容就是源文）。
- * 字节通道（图片 / PDF）没有可比对的文本 → null（位置就省略）。
- */
-function sourceTextOf(state: PreviewState): string | null {
-  const value = state.value
-  if (value === undefined || value.channel !== 'text' || value.preview.kind !== 'text') return null
-  return value.preview.text
 }
 
 interface LevelProps {
