@@ -301,8 +301,11 @@ describe('AppShell · round 39（全屏 / 浮动钮让位）', () => {
 
     expect(useShellStore.getState().workPanelFullscreen).toBe(true)
     const panel = screen.getByTestId('work-panel')
+    expect(panel).toHaveAttribute('data-fullscreen', 'true')
     expect(panel).toHaveClass('is-open', 'flex-1')
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
+    // round 59：全屏让开可见左缘（这条变量就挂在壳根，见 AppShell/[data-sidebar]）
+    expect(panel).toHaveClass('ml-(--content-safe-left)')
     // 中列只是 hidden（聊天状态要留），不是卸载
     const main = screen.getByTestId('main-column')
     expect(main).toHaveClass('hidden')

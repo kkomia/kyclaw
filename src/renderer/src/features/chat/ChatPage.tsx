@@ -676,8 +676,11 @@ function ActiveChat({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 消息区：常规布局里占满剩余高度；初始页里消息为空，它只是上半格的弹性占位。
+          **必须自带 flex 列身份**（round 59 用户实拍回归）：MessageList 的 frame 是
+          `flex min-h-0 flex-1 flex-col`，包在块级父级里 flex-1 不生效、滚动区不受高度约束，
+          消息内容会溢到页脚（输入框）下面。
           round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列 */}
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col">
         <MessageList
           messages={messages}
           status={status}
@@ -691,15 +694,15 @@ function ActiveChat({
         />
       </div>
 
-      {/* round 59：初始页的品牌标题（空会话才出现；离场走收合，不硬切） */}
-      <WelcomeHero active={hero} />
-
       {/* 初始页的页脚浮起（淡入 + 上浮，比标题晚 80ms 起步）；
-          切常规布局时这几条类名被摘掉，元素本身**不重挂**——输入框全程可用（draft/焦点不丢） */}
+          切常规布局时这几条类名被摘掉，元素本身**不重挂**——输入框全程可用（draft/焦点不丢）。
+          round 59 修正：`relative` 是给初始页标题的挂点（标题绝对定位在输入框正上方，
+          **不占布局高度**，见 WelcomeHero）——上下两格因此等分剩余高度、输入框真正竖直居中。 */}
       <div
         data-testid="chat-footer"
-        className={cn('shrink-0', hero && 'animate-message-in [animation-delay:80ms]')}
+        className={cn('relative shrink-0', hero && 'animate-message-in [animation-delay:80ms]')}
       >
+        <WelcomeHero active={hero} />
         {error ? (
           <div className="px-4 pt-2">
             <ErrorCard error={toError(error)} onRetry={retry} />
@@ -749,8 +752,9 @@ function ActiveChat({
         </div>
       </div>
 
-      {/* round 59：初始页的下半格弹性占位 —— 与消息区等分剩余高度，标题与输入框因此落在竖直中位；
-          首条消息到达时它收到 0（flex-grow 过渡，主档 .3s），输入框平滑落到常规底部，不硬切 */}
+      {/* round 59：初始页的下半格弹性占位 —— 与消息区等分剩余高度，输入框因此落在**竖直中位**
+          （标题不占高度，见 WelcomeHero）；首条消息到达时它收到 0（flex-grow 过渡，主档 .3s），
+          输入框平滑落到常规底部，不硬切 */}
       <div
         data-testid="welcome-spacer"
         className={cn(

@@ -137,6 +137,16 @@ describe('活动会话落在限宽内容列（P0 回归）', () => {
     expect(within(column).getByTestId('composer')).toBeInTheDocument()
   })
 
+  it('消息区包裹层自带 flex 列身份（round 59 用户实拍回归：丢了这个 class 组合，消息会溢到输入框下面）', async () => {
+    const control = createMockTransport()
+    await renderSession(control, makeRuntime(control).runtime)
+
+    // jsdom 量不到真实布局，只能钉住"受限高度链"的类名（MessageList 的 frame 在里面靠它拿高度）
+    const frame = screen.getByTestId('message-list-frame')
+    const area = frame.parentElement as HTMLElement
+    expect(area).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col')
+  })
+
   it('顶栏在限宽列之外（round 27）：整幅 header 带、ml 让到内容卡可见左缘；标题 = 卡左缘 + 16', async () => {
     const control = createMockTransport()
     await renderSession(control, makeRuntime(control).runtime)
