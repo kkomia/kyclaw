@@ -37,6 +37,19 @@ describe('parseReferenceMarkers · 解析', () => {
     ])
   })
 
+  it('图片标记（round 50 的提及）：照常 chip 化，前后的字不粘进引用段', () => {
+    expect(parseReferenceMarkers('看这个【引用】图片：图2 再说')).toEqual([
+      { kind: 'text', text: '看这个' },
+      {
+        kind: 'reference',
+        refs: [{ kind: '图片', label: '图2' }],
+        start: 3,
+        raw: '【引用】图片：图2'
+      },
+      { kind: 'text', text: ' 再说' }
+    ])
+  })
+
   it('旧「；」合并格式（round 7-13 的发送形态）：一段里拆成多条 refs', () => {
     expect(parseReferenceMarkers('【引用】技能：读写文件；插件：回显服务；上下文：默认')).toEqual([
       {
@@ -92,5 +105,12 @@ describe('insertReferenceMarker · 光标处插入', () => {
   it('光标越界：夹回 [0, 长度]（不会抛，也不会丢字）', () => {
     expect(insertReferenceMarker('abc', 99, '插件', 'p').text).toBe('abc【引用】插件：p ')
     expect(insertReferenceMarker('abc', -3, '插件', 'p').text).toBe('【引用】插件：p abc')
+  })
+
+  it('图片 kind（round 50 的提及）：插入 `【引用】图片：图N` + 尾随空格', () => {
+    expect(insertReferenceMarker('', 0, '图片', '图2')).toEqual({
+      text: '【引用】图片：图2 ',
+      caret: '【引用】图片：图2 '.length
+    })
   })
 })

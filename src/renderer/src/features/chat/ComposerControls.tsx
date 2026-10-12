@@ -18,6 +18,7 @@ import { Skeleton } from '@renderer/components/ui/skeleton'
 import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
+import { PendingImageTile } from './PendingImageTile'
 import {
   contextTokensFor,
   contextWindowOf,
@@ -743,6 +744,8 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
 export interface PendingChipsProps {
   attachments: readonly PendingAttachment[]
   onRemoveAttachment: (id: string) => void
+  /** round 50：磁贴上的 @ 提及——把 `图片：图N` 引用插进输入框（图片本体仍在附件里，不重复携带载荷） */
+  onMentionAttachment: (attachment: PendingAttachment, index: number) => void
 }
 
 /** 引用卡的摘要长度（码点）：卡上只铺这么点，完整内容照样原样传出去 */
@@ -811,39 +814,55 @@ function QuoteCard({
  * round 14：引用不再走这里（改为输入框内联标记 + 镜像 pill，见 reference-markers.ts）。
  * 模块 2：图片把回形针换成**缩略图**（发送前就能确认是哪张）；PDF 额外印一截页数（数据，不是说明小字）。
  * round 42 二轮：摘选画成**引用卡**（路径 + 行号 + 摘要 + 字数），整文件仍是原来的 chip。
+ * round 50：**图片改走磁贴**（PendingImageTile：64px 缩略图 + hover 删除/@ 提及 + 点开放大预览）；
+ * 非图片与摘选保持原样（口径不动）。
  */
 export function PendingChips({
   attachments,
-  onRemoveAttachment
+  onRemoveAttachment,
+  onMentionAttachment
 }: PendingChipsProps): React.JSX.Element | null {
   if (attachments.length === 0) return null
 
+  // 图片按**当前顺序**编号（1 基）：磁贴徽章与「提及图片 N」共用这一个数
+  const imageIndexes = new Map<string, number>()
+  for (const attachment of attachments) {
+    if (attachment.image !== undefined) imageIndexes.set(attachment.id, imageIndexes.size + 1)
+  }
+
   return (
     <div data-testid="composer-pending" className="flex flex-wrap items-center gap-2 px-3 pt-3">
-      {attachments.map((attachment) =>
-        attachment.quote === true ? (
-          <QuoteCard
-            key={attachment.id}
-            attachment={attachment}
-            onRemove={() => onRemoveAttachment(attachment.id)}
-          />
-        ) : (
+      {attachments.map((attachment) => {
+        if (attachment.quote === true) {
+          return (
+            <QuoteCard
+              key={attachment.id}
+              attachment={attachment}
+              onRemove={() => onRemoveAttachment(attachment.id)}
+            />
+          )
+        }
+        if (attachment.image !== undefined) {
+          const image = attachment.image
+          const index = imageIndexes.get(attachment.id) ?? 1
+          return (
+            <PendingImageTile
+              key={attachment.id}
+              attachment={attachment}
+              image={image}
+              index={index}
+              onRemove={() => onRemoveAttachment(attachment.id)}
+              onMention={() => onMentionAttachment(attachment, index)}
+            />
+          )
+        }
+        return (
           <span
             key={attachment.id}
             data-testid={`composer-attachment-${attachment.name}`}
             className="inline-flex h-7 max-w-60 items-center gap-1.5 rounded-pill border-(length:--hairline-width) border-hairline pl-2.5 text-c1 text-ink-secondary"
           >
-            {attachment.image === undefined ? (
-              <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
-            ) : (
-              <img
-                data-testid={`composer-attachment-thumb-${attachment.name}`}
-                src={attachment.image.url}
-                alt=""
-                aria-hidden="true"
-                className="size-5 shrink-0 rounded-control object-cover"
-              />
-            )}
+            <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
             <span className="min-w-0 truncate">{attachment.name}</span>
             {attachment.pdf === undefined ? null : (
               <span className="shrink-0 text-ink-tertiary">
@@ -863,7 +882,7 @@ export function PendingChips({
             </button>
           </span>
         )
-      )}
+      })}
     </div>
   )
 }

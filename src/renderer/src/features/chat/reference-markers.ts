@@ -1,5 +1,5 @@
 /**
- * 引用标记（round 14）：`【引用】<kind>：<label>`（kind ∈ 技能 | 插件 | 上下文 | 文件）。
+ * 引用标记（round 14）：`【引用】<kind>：<label>`（kind ∈ 技能 | 插件 | 上下文 | 文件 | 图片）。
  *
  * 输入侧在**光标处内联插入**标记（用户口径："不要单独取顶格，会失去在输入文本中的位置"），
  * 发送后就是普通文本（模型看到的是原始标记，无额外协议）；气泡与输入框的 chip 层用**同一份解析**
@@ -8,10 +8,13 @@
  * 每段带 `start` / `raw`（round 21）：chip 的 × 删除按段精确替换；输入框覆盖层用 `raw` 做隐形占位，
  * 让 chip 的盒宽**恰等于原文宽度**（盖住底层字形、不挪动后面的字）。
  *
+ * `图片`（round 50）：磁贴上的 @ 提及插的就是这一种——只是**文字指路**（如 `图片：图1`），
+ * 图片本体仍作为附件随消息真发，不在这里重复携带载荷。
+ *
  * label 以空白 / `；` / 文末为界：标记插入时自带尾随空格，光标后面继续打的正文不会被吞进 chip
  * （代价：label 里含空格时尾段只按普通文本渲染，内容不变、复制不变）。
  */
-export const REFERENCE_KINDS = ['技能', '插件', '上下文', '文件'] as const
+export const REFERENCE_KINDS = ['技能', '插件', '上下文', '文件', '图片'] as const
 export type ReferenceKind = (typeof REFERENCE_KINDS)[number]
 
 export interface ReferenceItem {
@@ -32,7 +35,7 @@ export type MessageSegment =
 
 /** 一段标记 = 【引用】 前缀 + 一条或多条 `kind：label`（旧合并格式用 `；` 串联） */
 const MARKER =
-  /【引用】((?:技能|插件|上下文|文件)：[^\s；]+(?:；(?:技能|插件|上下文|文件)：[^\s；]+)*)/g
+  /【引用】((?:技能|插件|上下文|文件|图片)：[^\s；]+(?:；(?:技能|插件|上下文|文件|图片)：[^\s；]+)*)/g
 
 /** 文本 → 文本 / 引用段（没有标记时就回一段纯文本） */
 export function parseReferenceMarkers(text: string): MessageSegment[] {

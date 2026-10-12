@@ -45,9 +45,12 @@ import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
  *
  * 附件（round 7 起；模块 2 扩三类）：文本类 ≤16KB 读成文本内联；**图片**在当前模型 vision=true 时
  * 随消息真发（vision=false 人话拒收，不假装收下）；**PDF** 统一由主进程抽文字层再内联（扫描件给人话）。
- * 拖拽与 ＋ 上传走同一个 pickFiles —— 两条入口的行为必须是同一套。口径见 composer-attachments.ts 头注。
+ * 拖拽、＋ 上传与**粘贴**（round 50：截图工具贴的图 / 资源管理器贴的文件）走同一个 pickFiles ——
+ * 几条入口的行为必须是同一套。口径见 composer-attachments.ts 头注。
+ * 图片在附件条上是**磁贴**（round 50，PendingImageTile：hover 删除/@ 提及、点空白放大预览）；
+ * @ 提及只往输入里插一段可 chip 化的引用文字（`【引用】图片：图N`），本体照样随消息真发。
  *
- * 第三条入口（round 42）：工作台文件树的「添加到上下文」与预览区选中的「添加到上下文（摘选）」
+ * 另一条入口（round 42）：工作台文件树的「添加到上下文」与预览区选中的「添加到上下文（摘选）」
  * 走 composer-inbox 的事件通道进来，落进**同一个附件条**、同一套上限（解析在订阅方做）。
  *
  * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
@@ -81,6 +84,29 @@ let uidCounter = 0
 function uid(): string {
   uidCounter += 1
   return `c${uidCounter}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+/**
+ * 剪贴板里的文件（round 50 粘贴入口）：`files` 与 `items`（kind === 'file'）两处都看 ——
+ * 截图工具与资源管理器在不同平台上填的不是同一处，两处同源时按元数据去重。
+ * 一个文件都没有 = 纯文本粘贴：调用方**不拦截**，保持默认行为。
+ */
+function clipboardFilesOf(data: DataTransfer | null): File[] {
+  const keyOf = (file: File): string =>
+    `${file.name}\u0000${file.size}\u0000${file.type}\u0000${file.lastModified}`
+  if (data === null) return []
+  const files: File[] = Array.from(data.files ?? [])
+  const seen = new Set(files.map(keyOf))
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (file === null) continue
+    const key = keyOf(file)
+    if (seen.has(key)) continue
+    seen.add(key)
+    files.push(file)
+  }
+  return files
 }
 
 export function Composer({
@@ -421,6 +447,10 @@ export function Composer({
         onRemoveAttachment={(id) =>
           setAttachments((previous) => previous.filter((item) => item.id !== id))
         }
+        onMentionAttachment={(_attachment, index) =>
+          // 提及只是文字指路：插一段可 chip 化的引用（图片本体仍在附件里随消息真发）
+          addReference({ kind: '图片', label: `图${index}` })
+        }
       />
 
       {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
@@ -489,6 +519,15 @@ export function Composer({
           onSelect={(event) => {
             // 光标移动（点击 / 方向键）也可能让触发出现或消失
             refreshTrigger(event.currentTarget.value, event.currentTarget.selectionStart)
+          }}
+          onPaste={(event) => {
+            // 粘贴入口（round 50）：截图工具贴的图 / 资源管理器贴的文件 → 与拖拽、＋ 上传
+            // **同一条 pickFiles 管线**（同样的限额、vision=false 人话拒收、PDF 抽取）。
+            // 没有文件就是纯文本粘贴：不拦截，保持默认行为。
+            const files = clipboardFilesOf(event.clipboardData)
+            if (files.length === 0) return
+            event.preventDefault()
+            void pickFiles(files)
           }}
           onBlur={() => setSuggest(null)}
           onScroll={(event) => {
