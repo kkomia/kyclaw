@@ -1167,7 +1167,7 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
 })
 
 describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
-  /** 装一个"有默认 provider"的环境：模型名 + **探测结论**（round 46，没有手动开关）决定视觉能力 */
+  /** 装一个"有默认 provider"的环境：模型名 + **探测结论**（round 48，没有手动开关）决定视觉能力 */
   function mount(
     model: string,
     vision = false

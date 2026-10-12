@@ -152,7 +152,7 @@ export const modelPrefsSchema = z.strictObject({
 export type ModelPrefs = z.infer<typeof modelPrefsSchema>
 
 /**
- * 探测到的模型元数据（round 22；视觉探测 round 46 起合住同一条记录）：
+ * 探测到的模型元数据（round 22；视觉探测 round 48 起合住同一条记录）：
  * 键 = `<providerId>:<modelId>`（provider 的模型名原文，不归一——探测和消费两边同一个键函数
  * `probedKeyOf`）。两个来源各写各的字段：
  *   - `GET {baseUrl}/models`（main/model-probe.ts 的 probeProviderModels）→ contextWindow / 挡位；
@@ -171,7 +171,7 @@ export const probedModelSchema = z.strictObject({
   efforts: z.array(z.string().min(1)).optional(),
   /** 实测默认挡位（如 'high'；无效/没有 = `default`） */
   defaultEffort: z.string().min(1).optional(),
-  /** 视觉能力实测（round 46：真发图片探出来的结论；没有 = 还没探出来，按注册表回落） */
+  /** 视觉能力实测（round 48：真发图片探出来的结论；没有 = 还没探出来，按注册表回落） */
   vision: z.boolean().optional(),
   /** ISO 时间串（`GET /models` 的抓取时刻；没有 = 只有视觉判定，不当作元数据新鲜） */
   fetchedAt: z.string().optional()
@@ -323,7 +323,7 @@ export const appSettingsSchema = z.strictObject({
   modelPrefs: z.record(z.string(), modelPrefsSchema),
   /**
    * round 22 的模型实测缓存（`${providerId}:${model}` → 上下文/挡位/视觉；主进程探测，见 main/model-probe.ts）。
-   * round 46 起视觉能力也在这里（真发图片探出来的）——模块 2 的"用户覆盖"（旧的 modelCapabilities）
+   * round 48 起视觉能力也在这里（真发图片探出来的）——模块 2 的"用户覆盖"（旧的 modelCapabilities）
    * 已经删掉：能力只由探测说话（读盘时由 main/settings.ts 的迁移剥掉旧键）。
    */
   probedModels: z.record(z.string(), probedModelSchema),

@@ -157,7 +157,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     })
   })
 
-  it('round 46：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {
+  it('round 48：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {
     const file = settingsPath(dir)
     // appSettingsSchema 是 strictObject：不剥掉旧键的话，整份设置会被当成坏文件丢回默认值
     writeFileSync(

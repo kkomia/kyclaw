@@ -383,7 +383,7 @@ describe('思考翻译设置 schema（round 32：开关 + 模式 + 服务三项 
   })
 })
 
-describe('模型实测记录（round 22 元数据 + round 46 视觉）', () => {
+describe('模型实测记录（round 22 元数据 + round 48 视觉）', () => {
   it('形状：上下文/挡位/视觉都可选（两趟探测各写各的），取值随键走（不归一模型名）', () => {
     expect(
       appSettingsSchema.safeParse({

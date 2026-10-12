@@ -197,7 +197,7 @@ describe('round 22 · probed 实测优先（GET /models 的真实元数据盖过
   })
 })
 
-describe('视觉能力（模块 2；round 46：探测结论 > 注册表 > false）', () => {
+describe('视觉能力（模块 2；round 48：探测结论 > 注册表 > false）', () => {
   it('注册表：deepseek 全系没有视觉（如实标 false）；未知模型保守 false', () => {
     for (const model of [
       'deepseek-v4-pro',

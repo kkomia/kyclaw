@@ -1,10 +1,10 @@
 // @vitest-environment node
 /**
- * round 22 / 46 · 模型能力探测：
+ * round 22 / 48 · 模型能力探测：
  *   ① 元数据（GET /models）：解析纯函数（三种数组形态 / 缺字段 / 异常形状）、抓取（URL / Bearer 头 /
  *      非 200 / 无 baseUrl 跳过）、落盘（键 = `<providerId>:<modelId>`，并入现有记录、别的 provider 不动）、
  *      静默失败（不抛、只 warn）、启动批量（逐个 provider）；
- *   ② 视觉（round 46，真发一条带图 chat）：结论分类（2xx=true / 明确拒图=false / 其余不写）、
+ *   ② 视觉（round 48，真发一条带图 chat）：结论分类（2xx=true / 明确拒图=false / 其余不写）、
  *      两种协议的请求形态（openai 兼容的 image_url data URL、Anthropic 的 base64 image block）、
  *      落盘只写 `vision`（不动元数据字段）、没有密钥跳过、同 provider 并发去重。
  * 全部注入式：不碰 electron、不碰真网络；密钥读取用假件（本测试里"密钥"就是一条常量）。

@@ -1,11 +1,11 @@
 /**
- * 模型能力探测（round 22 起；视觉 round 46 补）——两趟请求，各写 `settings.probedModels` 的字段
+ * 模型能力探测（round 22 起；视觉 round 48 补）——两趟请求，各写 `settings.probedModels` 的字段
  * （键 `<providerId>:<modelId>`，与消费侧同一个 `probedKeyOf`）：
  *
  *   ① `GET {baseUrl}/models`（Bearer key）取**元数据实测值**：上下文长度（context_window）、
  *      最大输出（max_output_tokens）、思考挡位（effort.supported_levels / default_level）。
  *      为什么：round 18 的注册表按模型名**猜**（deepseek-flash 写 128K），官方端点实测是 1M。
- *   ② **一条真发图片的最小非流式 chat 请求**（round 46）取**视觉能力**：端点收下了 → `vision: true`；
+ *   ② **一条真发图片的最小非流式 chat 请求**（round 48）取**视觉能力**：端点收下了 → `vision: true`；
  *      明确拒图（400/415/422 且错误体点名 image/vision/modality）→ `vision: false`；
  *      其余（401/403/429/超时/网络/5xx）→ **不写**（不知道就不标，绝不误判成"不能看图"）。
  *      为什么：用户点名的"注册模型后自动探测多模态，不存在'有但我不开'"——手动开关整个删掉了。
@@ -198,7 +198,7 @@ export async function probeProviderModels(input: ProbeProviderInput): Promise<Ap
   const probedModels: Record<string, ProbedModel> = { ...current.probedModels }
   for (const [modelId, meta] of Object.entries(models)) {
     const key = probedKeyOf(input.providerId, modelId)
-    // 摊平在既有记录上：视觉判定是另一趟写的（round 46），这一趟不该把它抹掉
+    // 摊平在既有记录上：视觉判定是另一趟写的（round 48），这一趟不该把它抹掉
     probedModels[key] = { ...probedModels[key], ...meta, fetchedAt }
   }
   return updateSettings(input.file, { probedModels })

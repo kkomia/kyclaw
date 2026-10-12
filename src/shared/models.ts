@@ -1,11 +1,11 @@
 /**
  * 模型注册表（round 18；round 22 起**实测优先**）：模型名 → 上下文长度与思考挡位。
  *
- * 口径（round 22 更新；round 46 补视觉）：
+ * 口径（round 22 更新；round 48 补视觉）：
  *   - **取值优先级：probed（实测，settings.probedModels）→ 注册表 → 保守默认**——
  *     round 18 按名字猜的 deepseek-flash=128K 是臆测，官方端点实测是 1M（1048576）；
  *     每个取数函数都接受可选的 `probed` 参数按字段覆盖（probed 没给的字段才回落注册表）；
- *   - **视觉能力（模块 2）也在 probed 里**（round 46）：主进程真发一条带图请求探测出来的结论
+ *   - **视觉能力（模块 2）也在 probed 里**（round 48）：主进程真发一条带图请求探测出来的结论
  *     （见 main/model-probe.ts），没有探测结论时才回落注册表——用户不再有手动开关；
  *   - 匹配用「归一后的模型名前缀」（小写、去 `provider/` 前缀）——与 usage.ts 的 pricingFor 同口径；
  *   - `thinkingEfforts` 的 id 就是**要透传给供应商的值**（如 `low`/`high`/`max`），`default` 表示不传；
@@ -36,13 +36,13 @@ export interface ModelSpec {
   defaultEffort: string
   /**
    * 能不能看图（模块 2）：**只有明确知道才写** —— 注册表里标了的用它，没标的按 false 保守处理。
-   * round 46 起这只是"回落值"：真实能力由探测（真发一条带图请求）说了算，见 visionOf。
+   * round 48 起这只是"回落值"：真实能力由探测（真发一条带图请求）说了算，见 visionOf。
    */
   vision?: boolean
 }
 
 /**
- * 探测到的模型实测值（round 22；视觉判定 round 46 合住同一条记录，键 = `<providerId>:<modelId>`）。
+ * 探测到的模型实测值（round 22；视觉判定 round 48 合住同一条记录，键 = `<providerId>:<modelId>`）。
  * 字段按端点给多少存多少：两个来源各写各的字段，谁都没给的可选。
  */
 export interface ProbedModelSpec {
@@ -55,7 +55,7 @@ export interface ProbedModelSpec {
   /** 实测默认挡位（如 'high'；没有 = `default`） */
   defaultEffort?: string
   /**
-   * 视觉能力实测（round 46）：主进程真发一条带图请求得到的结论——
+   * 视觉能力实测（round 48）：主进程真发一条带图请求得到的结论——
    * `true` 收下了 / `false` 端点明确拒图；**没有** = 这次探不出结论（认证/限流/超时…），
    * 消费侧回落注册表（见 visionOf），绝不把"不知道"当成"不能"。
    */
@@ -200,7 +200,7 @@ export function modelSpecOf(model: string | null | undefined, probed?: ProbedMod
       ? probed.defaultEffort
       : 'default'
 
-  // 视觉：探测结论（round 46）压过注册表；没探出来才回落注册表那层
+  // 视觉：探测结论（round 48）压过注册表；没探出来才回落注册表那层
   const vision = typeof probed.vision === 'boolean' ? probed.vision : fallback.vision
 
   return { contextWindow, thinkingEfforts, defaultEffort, vision }
@@ -221,7 +221,7 @@ function registrySpecOf(model: string | null | undefined): ModelSpec {
 }
 
 /**
- * 这个模型能不能看图（模块 2）。生效口径（round 46）：**探测结论 > 注册表 > false（保守）**。
+ * 这个模型能不能看图（模块 2）。生效口径（round 48）：**探测结论 > 注册表 > false（保守）**。
  *
  * `probed` 就是 settings.probedModels 里这一条（键 `<providerId>:<model>`，见 probedKeyOf）：
  *   - `vision === true`  → 能看图（端点真收下过带图请求）；
