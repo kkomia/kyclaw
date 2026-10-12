@@ -326,6 +326,8 @@ test('走查A · 深色壳与聊天页（四角/缝/导览轨/composer/chips/工
     // Radix 菜单 Escape 关闭后紧接着再点触发器，第二次不弹——走查时踩到过一次）
     await page.getByTestId('nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
+    // round 48：已配置的模型默认折叠，编辑区要先点开那一行才有「保存」
+    await page.getByTestId('provider-deepseek').click()
     const darkSave = page.getByTestId('provider-deepseek-save')
     await expect(darkSave).toBeVisible()
     metrics.primaryButtonDark = await hoverFeedback(page, '[data-testid="provider-deepseek-save"]')
@@ -363,9 +365,16 @@ test('走查B · 浅色菜单玻璃与主按钮 hover（R9 / R11）', async () =
     await shotElement(page, '[role="menu"]', 'B2-浅色-菜单')
 
     // 浅色主按钮 hover（R11 走查项）：设置 → 模型 → 加一条自定义 provider，量保存钮的底色变化
+    // （round 48：渠道收进「新增」弹窗的渠道下拉里，不再铺在页面上）
     await page.getByTestId('nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
-    await page.getByTestId('add-custom-openai-compatible').click()
+    await page.getByTestId('model-add').click()
+    await page.getByTestId('model-add-channel').click()
+    await page.getByTestId('model-add-channel-custom-openai-compatible').click()
+    await page.getByTestId('model-add-model').fill('walkthrough-model')
+    await page.getByTestId('model-add-base-url').fill('https://example.com/v1')
+    await page.getByTestId('model-add-submit').click()
+    // 新行自动展开，保存钮就在眼前
     const save = page.getByTestId('provider-custom-1-save')
     await expect(save).toBeVisible()
     metrics.primaryButtonLight = await hoverFeedback(page, '[data-testid="provider-custom-1-save"]')
@@ -524,6 +533,8 @@ test('走查D · 换机解密失败抽查（密文解不开 → 需要重新录�
     await page.getByTestId('nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
     await expect(page.getByTestId('provider-deepseek')).toBeVisible()
+    // round 48：密钥状态与重录引导都在展开区里，先点开这一行
+    await page.getByTestId('provider-deepseek').click()
     // 密钥状态是异步读出来的：先等它从"读取中…"落定再取值（T16②：抓早会把加载态当结论）
     const keyStatus = page.getByTestId('provider-deepseek-key-status')
     await expect(keyStatus).toHaveText('需要重新录入', { timeout: 15_000 })

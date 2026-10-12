@@ -1,50 +1,32 @@
+import { Plus } from 'lucide-react'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
-import { Chip } from '@renderer/components/ui/chip'
-import { Input } from '@renderer/components/ui/input'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { ConnectionTestResult } from '@shared/ipc'
-import {
-  newCustomProvider,
-  providerConfigProblems,
-  providerFromPreset,
-  providerLabel,
-  providerPreset,
-  PROVIDER_PRESETS,
-  withDefaultProvider,
-  type ProviderConfig,
-  type ProviderKeyState,
-  type ProviderType
-} from '@shared/providers'
+import { probedKeyOf } from '@shared/models'
+import { withDefaultProvider, type ProviderConfig, type ProviderKeyState } from '@shared/providers'
+import { ModelAddDialog } from './ModelAddDialog'
+import { ProviderRow, type ProviderDraft } from './ModelProviderRow'
 
 /**
- * 设置页「模型」组（T8）：provider 配置 + 密钥 + 测试连接 + 默认通道。
+ * 设置页「模型」组（T8；round 48 换成"折叠列表 + 新增弹窗"的形态）。
  *
- * 分工：
+ * 分工（这几条都是既有口径，本轮不动）：
  *   - provider 配置（id/type/baseUrl/model/isDefault）落 settings.json，经 `saveProviders` 走 settings:update；
  *   - 密钥只在**写**的方向上经过渲染端（用户输入 → settings:set-provider-key），主进程加密后落
  *     safeStorage 密文；读回来的只有"已配置 / 需要重新录入"两个状态，界面永远不回显明文；
- *   - "测试连接"由主进程发一条最小请求（见 main/connection-test.ts），这里只展示延迟或错误文案。
- *   - **能力探测没有开关**（round 46）：模型注册/密钥保存/测试连接成功后，主进程自己发探测请求
+ *   - "测试连接"由主进程发一条最小请求（见 main/connection-test.ts），这里只展示延迟或错误文案；
+ *   - **能力探测没有开关**（round 48）：模型注册/密钥保存/测试连接成功后，主进程自己发探测请求
  *     （元数据 + 一条真带图的 chat，见 main/model-probe.ts）把结论写进 settings.probedModels；
- *     这一页不再提供"支持看图"的手动声明，全应用（composer 的收/拒、模型菜单的标记）都按探测结论走。
+ *     这一页不提供"支持看图"的手动声明，全应用（composer 的收/拒、模型菜单的标记）都按探测结论走。
  *
- * 半截配置（缺模型名 / 缺 Base URL / 缺密钥）行内给具体提示——文案与模型解析处是同一句
- * （shared/providers.providerConfigProblems），不静默回落 mock。
+ * 形态（round 48，用户两条口径）：一屏只列**最基本信息**（名字 / 上下文 / 能力图标 / 默认），
+ * 点行才展开编辑；新增不再把渠道铺在页面上（那排 chips 又长又不美观），改成右上角一个「新增」
+ * 开弹窗、渠道进下拉（见 ModelAddDialog）。半截配置（缺模型名 / 缺 Base URL / 缺密钥）行内给具体提示——
+ * 文案与模型解析处是同一句（shared/providers.providerConfigProblems），不静默回落 mock。
  */
-interface Draft {
-  model: string
-  baseUrl: string
-  /** 待写入的新密钥；保存成功后立刻清空（已存的密钥不回显） */
-  key: string
-}
-
 type Pending = 'saving' | 'testing'
-
-function draftOf(provider: ProviderConfig): Draft {
-  return { model: provider.model, baseUrl: provider.baseUrl ?? '', key: '' }
-}
 
 function messageOf(error: unknown): string {
   // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
@@ -58,19 +40,20 @@ function withoutKey<T>(record: Record<string, T>, id: string): Record<string, T>
   return next
 }
 
-/** 密钥状态还没读到时的显示：不猜"未配置"（免得一闪而过的误报） */
-function keyStatusText(state: ProviderKeyState | undefined): string {
-  if (!state) return '读取中…'
-  if (state.needsReentry) return '需要重新录入'
-  return state.hasKey ? '已配置' : '未配置'
+/** 按落盘值取一份编辑草稿（key 永远从空开始：已存的密钥不回显） */
+function draftOf(provider: ProviderConfig): ProviderDraft {
+  return { model: provider.model, baseUrl: provider.baseUrl ?? '', key: '' }
 }
 
 export function ModelSettings(): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
+  const probedModels = useSettingsStore((state) => state.settings.probedModels)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
   const removeProvider = useSettingsStore((state) => state.removeProvider)
 
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({})
+  const [addOpen, setAddOpen] = useState(false)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({})
   const [keyStates, setKeyStates] = useState<Record<string, ProviderKeyState>>({})
   const [pending, setPending] = useState<Record<string, Pending | undefined>>({})
   const [results, setResults] = useState<Record<string, ConnectionTestResult | undefined>>({})
@@ -94,12 +77,15 @@ export function ModelSettings(): React.JSX.Element {
     void refreshKeyStates()
   }, [refreshKeyStates, providerIds])
 
-  const patchDraft = useCallback((provider: ProviderConfig, patch: Partial<Draft>): void => {
-    setDrafts((previous) => ({
-      ...previous,
-      [provider.id]: { ...(previous[provider.id] ?? draftOf(provider)), ...patch }
-    }))
-  }, [])
+  const patchDraft = useCallback(
+    (provider: ProviderConfig, patch: Partial<ProviderDraft>): void => {
+      setDrafts((previous) => ({
+        ...previous,
+        [provider.id]: { ...(previous[provider.id] ?? draftOf(provider)), ...patch }
+      }))
+    },
+    []
+  )
 
   /** 保存一条 provider（配置 + 可选的新密钥）；失败把原因写进行内错误，调用方能据此决定要不要继续 */
   const save = useCallback(
@@ -171,32 +157,6 @@ export function ModelSettings(): React.JSX.Element {
     [drafts, save]
   )
 
-  const addPreset = useCallback(
-    async (id: string): Promise<void> => {
-      const preset = providerPreset(id)
-      if (!preset || providers.some((provider) => provider.id === id)) return
-      try {
-        await saveProviders([...providers, providerFromPreset(preset, providers)])
-        await refreshKeyStates()
-      } catch (error) {
-        setPageError(messageOf(error))
-      }
-    },
-    [providers, refreshKeyStates, saveProviders]
-  )
-
-  const addCustom = useCallback(
-    async (type: ProviderType): Promise<void> => {
-      try {
-        await saveProviders([...providers, newCustomProvider(providers, type)])
-        await refreshKeyStates()
-      } catch (error) {
-        setPageError(messageOf(error))
-      }
-    },
-    [providers, refreshKeyStates, saveProviders]
-  )
-
   const setDefault = useCallback(
     async (id: string): Promise<void> => {
       try {
@@ -215,6 +175,7 @@ export function ModelSettings(): React.JSX.Element {
         setDrafts((previous) => withoutKey(previous, id))
         setResults((previous) => withoutKey(previous, id))
         setErrors((previous) => withoutKey(previous, id))
+        setExpanded((previous) => withoutKey(previous, id))
         await refreshKeyStates()
       } catch (error) {
         setPageError(messageOf(error))
@@ -223,189 +184,69 @@ export function ModelSettings(): React.JSX.Element {
     [refreshKeyStates, removeProvider]
   )
 
+  /** 弹窗新建成功：把新行**自动展开**（用户接着就要补 key / 改模型），并刷一次密钥状态 */
+  const handleAdded = useCallback(
+    async (id: string): Promise<void> => {
+      // 读 store 现取：这条刚经 settings:update 落盘，不靠回调闭包里那份可能还没更新的列表
+      const added = useSettingsStore
+        .getState()
+        .settings.providers.find((provider) => provider.id === id)
+      if (added) setDrafts((previous) => ({ ...previous, [id]: draftOf(added) }))
+      setExpanded((previous) => ({ ...previous, [id]: true }))
+      await refreshKeyStates()
+    },
+    [refreshKeyStates]
+  )
+
+  const toggle = useCallback((id: string): void => {
+    setExpanded((previous) => ({ ...previous, [id]: !previous[id] }))
+  }, [])
+
   return (
     <div data-testid="model-settings" className="flex flex-col gap-4">
+      <div className="flex items-center justify-end">
+        <Button size="sm" data-testid="model-add" icon={<Plus />} onClick={() => setAddOpen(true)}>
+          新增
+        </Button>
+      </div>
       {providers.length === 0 ? (
         <p data-testid="model-empty" className="text-b2 text-ink-secondary">
-          还没有模型通道：从下面的预设里加一个，或选「自定义」。
+          还没有模型通道：点右上角「新增」加一个。
         </p>
       ) : (
-        providers.map((provider) => {
-          const draft = drafts[provider.id] ?? draftOf(provider)
-          const keyState = keyStates[provider.id]
-          // 密钥状态未知时不报"缺 API 密钥"（读不到宁可不说；配置层面的缺项照报）
-          const problems = providerConfigProblems(
-            provider,
-            keyState === undefined ? true : keyState.hasKey
-          )
-          const result = results[provider.id]
-          const busy = pending[provider.id]
-
-          return (
-            <section
-              key={provider.id}
-              data-testid={`provider-${provider.id}`}
-              className="flex flex-col gap-3 rounded-panel border border-hairline p-4"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-b1 font-medium text-ink">{providerLabel(provider)}</span>
-                {provider.isDefault ? (
-                  <span
-                    data-testid={`provider-${provider.id}-default-badge`}
-                    className="rounded-pill bg-selected px-2 py-0.5 text-c1 text-ink"
-                  >
-                    默认
-                  </span>
-                ) : null}
-                <span
-                  data-testid={`provider-${provider.id}-key-status`}
-                  className="text-c1 text-ink-tertiary"
-                >
-                  {keyStatusText(keyState)}
-                </span>
-              </div>
-
-              <label className="flex flex-col gap-1">
-                <span className="text-b2 text-ink-secondary">模型</span>
-                <Input
-                  data-testid={`provider-${provider.id}-model`}
-                  value={draft.model}
-                  placeholder="模型名，如 deepseek-flash"
-                  onChange={(event) => patchDraft(provider, { model: event.target.value })}
-                />
-              </label>
-
-              {provider.type === 'openai-compatible' ? (
-                <label className="flex flex-col gap-1">
-                  <span className="text-b2 text-ink-secondary">Base URL</span>
-                  <Input
-                    data-testid={`provider-${provider.id}-base-url`}
-                    value={draft.baseUrl}
-                    placeholder="https://…/v1"
-                    onChange={(event) => patchDraft(provider, { baseUrl: event.target.value })}
-                  />
-                </label>
-              ) : null}
-
-              <label className="flex flex-col gap-1">
-                <span className="text-b2 text-ink-secondary">API Key</span>
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  data-testid={`provider-${provider.id}-key`}
-                  value={draft.key}
-                  placeholder={keyState?.hasKey ? '已保存；要换就填新的' : '粘贴 API Key'}
-                  onChange={(event) => patchDraft(provider, { key: event.target.value })}
-                />
-              </label>
-
-              {keyState?.needsReentry ? (
-                <p
-                  data-testid={`provider-${provider.id}-reentry`}
-                  className="text-c1 text-ink-secondary"
-                >
-                  已存的密钥在这台机器上读不到，请重新录入。
-                </p>
-              ) : null}
-
-              {problems.length > 0 ? (
-                <p data-testid={`provider-${provider.id}-problems`} className="text-c1 text-danger">
-                  {problems.join('；')}
-                </p>
-              ) : null}
-
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  size="sm"
-                  data-testid={`provider-${provider.id}-save`}
-                  loading={busy === 'saving'}
-                  onClick={() => void save(provider)}
-                >
-                  保存
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid={`provider-${provider.id}-test`}
-                  loading={busy === 'testing'}
-                  onClick={() => void test(provider)}
-                >
-                  测试连接
-                </Button>
-                {provider.isDefault ? null : (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    data-testid={`provider-${provider.id}-set-default`}
-                    onClick={() => void setDefault(provider.id)}
-                  >
-                    设为默认
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid={`provider-${provider.id}-remove`}
-                  onClick={() => void remove(provider.id)}
-                >
-                  删除
-                </Button>
-              </div>
-
-              {result ? (
-                <p
-                  data-testid={`provider-${provider.id}-test-result`}
-                  className="text-c1 text-ink-secondary"
-                >
-                  {result.ok
-                    ? `连接正常，延迟 ${result.latencyMs} ms`
-                    : `连接失败：${result.message}`}
-                </p>
-              ) : null}
-
-              {errors[provider.id] ? (
-                <p data-testid={`provider-${provider.id}-error`} className="text-c1 text-danger">
-                  {errors[provider.id]}
-                </p>
-              ) : null}
-            </section>
-          )
-        })
-      )}
-
-      <div className="flex flex-col gap-2">
-        <span className="text-b2 text-ink-secondary">添加通道</span>
-        <div data-testid="provider-presets" className="flex flex-wrap gap-3">
-          {PROVIDER_PRESETS.map((preset) => {
-            const added = providers.some((provider) => provider.id === preset.id)
+        <div className="flex flex-col gap-1">
+          {providers.map((provider) => {
+            const draft = drafts[provider.id] ?? draftOf(provider)
             return (
-              <Chip
-                key={preset.id}
-                data-testid={`add-preset-${preset.id}`}
-                disabled={added}
-                onClick={() => void addPreset(preset.id)}
-              >
-                {added ? `${preset.label}（已添加）` : preset.label}
-              </Chip>
+              <ProviderRow
+                key={provider.id}
+                provider={provider}
+                open={expanded[provider.id] === true}
+                onToggle={() => toggle(provider.id)}
+                draft={draft}
+                onDraftChange={(patch) => patchDraft(provider, patch)}
+                keyState={keyStates[provider.id]}
+                probed={probedModels[probedKeyOf(provider.id, provider.model)]}
+                pending={pending[provider.id]}
+                result={results[provider.id]}
+                error={errors[provider.id]}
+                onSave={() => void save(provider)}
+                onTest={() => void test(provider)}
+                onSetDefault={() => void setDefault(provider.id)}
+                onRemove={() => void remove(provider.id)}
+              />
             )
           })}
-          <Chip
-            data-testid="add-custom-openai-compatible"
-            onClick={() => void addCustom('openai-compatible')}
-          >
-            自定义（OpenAI 兼容）
-          </Chip>
-          <Chip data-testid="add-custom-anthropic" onClick={() => void addCustom('anthropic')}>
-            自定义（Anthropic）
-          </Chip>
         </div>
-      </div>
+      )}
 
       {pageError ? (
         <p data-testid="model-page-error" className="text-c1 text-danger">
           {pageError}
         </p>
       ) : null}
+
+      <ModelAddDialog open={addOpen} onOpenChange={setAddOpen} onAdded={handleAdded} />
     </div>
   )
 }
