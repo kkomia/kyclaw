@@ -66,8 +66,9 @@ export const langfuseSettingsSchema = z.strictObject({
 })
 
 /**
- * 语义召回（长期记忆，round 28 模块 3）：跨会话的向量召回——新会话问起旧会话聊过的内容，
- * 助手能把那几轮找回来（Mastra Memory 的 semanticRecall，resource 作用域，见 mastra/index.ts）。
+ * 语义召回（round 28 模块 3；round 58 起按会话隔离）：**本会话**内的向量召回——同一个会话里
+ * 早先聊过、已经滑出历史窗口的内容，换个措辞问还能被找回来（Mastra Memory 的 semanticRecall，
+ * thread 作用域，见 mastra/index.ts）。跨会话召回不做：开几个会话就是为了隔离上下文。
  *
  * 嵌入接口统一为 **OpenAI 兼容 `/embeddings`**：baseURL + model（+ key）。命名刻意不带 "remote"
  * —— 将来「本机引擎」（llama.cpp 子进程，模块 3B）就长这个样子，接进来时只做两件事：
@@ -84,7 +85,7 @@ export const langfuseSettingsSchema = z.strictObject({
 export const SEMANTIC_RECALL_SOURCES = ['remote', 'localEngine'] as const
 
 export const semanticRecallSettingsSchema = z.strictObject({
-  /** 总开关（缺省开：长期记忆是这个产品的核心能力；起不来只是没有召回，不拦对话） */
+  /** 总开关（缺省开：会话内的语义召回是这个产品的能力之一；起不来只是没有召回，不拦对话） */
   enabled: z.boolean(),
   /**
    * 嵌入来源：`remote` = 任意 OpenAI 兼容的嵌入服务（baseURL + model + key）；
@@ -339,7 +340,7 @@ export const appSettingsSchema = z.strictObject({
   archivedProjects: z.array(archivedProjectSchema),
   /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema,
-  /** round 28 模块 3 的语义召回（长期记忆；开关 + 嵌入来源，远程 key 走 secrets.json） */
+  /** round 28 模块 3 的语义召回（round 58 起 thread 作用域，只召回本会话；开关 + 嵌入来源，远程 key 走 secrets.json） */
   semanticRecall: semanticRecallSettingsSchema,
   /** round 32 的思考翻译（默认关；服务地址/模型/目标语言 + 可选 key 走 secrets.json） */
   reasoningTranslate: reasoningTranslateSettingsSchema,

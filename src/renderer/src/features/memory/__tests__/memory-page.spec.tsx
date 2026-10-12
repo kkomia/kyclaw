@@ -1,11 +1,16 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { MemoryPage } from '../MemoryPage'
 
 /**
- * 记忆页（T14）：查看 / 编辑 / 清空三态，全部打在假服务上（HTTP 层断言方法+body）。
+ * 记忆页（T14；round 58 起按会话隔离）：查看 / 编辑 / 清空三态，全部打在假服务上
+ * （HTTP 层断言方法 + 查询串里的 threadId + body）。
  * 页面在四页壳里由路由挂载，这里只渲它自己（routes.spec 管壳）。
+ *
+ * 记忆跟着**当前活动会话**走（round 58）：所以每个用例先把会话 store 摆好——
+ * 有活动会话 = 列表里有它；草稿 / 没有会话 = 不发请求、给空态。
  */
 function json(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -15,16 +20,17 @@ function json(payload: unknown): Response {
 }
 
 interface FakeMemoryServer {
-  content: string | null
-  calls: { method: string; path: string; body: unknown }[]
+  /** 按会话存的内容（key = threadId） */
+  contents: Record<string, string | null>
+  calls: { method: string; path: string; threadId: string | null; body: unknown }[]
   /** 让下一次请求失败（按顺序消耗） */
   failNext(error: Error): void
 }
 
-function installFakeMemory(initial: string | null = null): FakeMemoryServer {
+function installFakeMemory(initial: Record<string, string> = {}): FakeMemoryServer {
   const failures: Error[] = []
   const server: FakeMemoryServer = {
-    content: initial,
+    contents: { ...initial },
     calls: [],
     failNext(error) {
       failures.push(error)
@@ -43,25 +49,28 @@ function installFakeMemory(initial: string | null = null): FakeMemoryServer {
           recall: { state: 'off', active: false, enabled: false, source: 'local', detail: '未开启' }
         })
       }
+      const threadId = url.searchParams.get('threadId')
       server.calls.push({
         method,
         path: url.pathname,
+        threadId,
         body: typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined
       })
       const failure = failures.shift()
       if (failure !== undefined) throw failure
 
       if (url.pathname !== '/api/memory') throw new Error(`假服务没实现：${method} ${url.pathname}`)
-      if (method === 'GET') return json({ content: server.content })
+      const key = threadId ?? ''
+      if (method === 'GET') return json({ content: server.contents[key] ?? null })
       if (method === 'PUT') {
         const body =
           init.body === undefined ? {} : (JSON.parse(String(init.body)) as { content?: unknown })
         const trimmed = String(body.content ?? '').trim()
-        server.content = trimmed === '' ? null : trimmed
-        return json({ content: server.content })
+        server.contents[key] = trimmed === '' ? null : trimmed
+        return json({ content: server.contents[key] })
       }
       if (method === 'DELETE') {
-        server.content = null
+        server.contents[key] = null
         return json({ ok: true })
       }
       throw new Error(`假服务没实现：${method} ${url.pathname}`)
@@ -70,19 +79,36 @@ function installFakeMemory(initial: string | null = null): FakeMemoryServer {
   return server
 }
 
+/** 把会话 store 摆成"当前会话 = threadId"（草稿 / 没有会话用下面那个） */
+function setActiveSession(threadId: string): void {
+  useSessionsStore.setState({
+    threads: [{ id: threadId, title: null, updatedAt: new Date().toISOString() }],
+    activeId: threadId,
+    loaded: true,
+    error: null
+  })
+}
+
+/** 草稿会话（还没落库、不在列表里）：记忆页按"没有会话"处理 */
+function setDraftSession(threadId: string): void {
+  useSessionsStore.setState({ threads: [], activeId: threadId, loaded: true, error: null })
+}
+
 beforeEach(() => {
   installKyclawBridge()
+  setActiveSession('thread-1')
 })
 
 afterEach(() => {
   clearKyclawBridge()
+  resetSessionsStore()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('记忆页：查看', () => {
-  it('载入中先给骨架，回来后显示记忆内容与两个动作', async () => {
-    installFakeMemory('# 用户信息\n- 姓名：张三\n- 城市：杭州')
+  it('有活动会话：按会话拉取（请求带 threadId），回来后显示内容与两个动作', async () => {
+    const server = installFakeMemory({ 'thread-1': '# 用户信息\n- 姓名：张三\n- 城市：杭州' })
     render(<MemoryPage />)
 
     expect(screen.getByTestId('memory-loading')).toBeInTheDocument()
@@ -90,10 +116,15 @@ describe('记忆页：查看', () => {
     expect(screen.getByTestId('memory-content')).toHaveTextContent('杭州')
     expect(screen.getByTestId('memory-edit')).toBeInTheDocument()
     expect(screen.getByTestId('memory-clear')).toBeEnabled()
+    expect(server.calls[0]).toMatchObject({
+      method: 'GET',
+      path: '/api/memory',
+      threadId: 'thread-1'
+    })
   })
 
   it('没有记忆时给空态；清空按钮此时不可点', async () => {
-    installFakeMemory(null)
+    installFakeMemory()
     render(<MemoryPage />)
 
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
@@ -101,8 +132,18 @@ describe('记忆页：查看', () => {
     expect(screen.getByTestId('memory-clear')).toBeDisabled()
   })
 
+  it('没有活动会话 / 草稿：给空态且一次请求都不发', async () => {
+    const server = installFakeMemory({ 'thread-1': '不该被读到的内容' })
+    setDraftSession('draft-1')
+    render(<MemoryPage />)
+
+    expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
+    expect(screen.queryByTestId('memory-edit')).not.toBeInTheDocument()
+    expect(server.calls).toHaveLength(0)
+  })
+
   it('载入失败：错误行 + 重试后成功', async () => {
-    const server = installFakeMemory('你好')
+    const server = installFakeMemory({ 'thread-1': '你好' })
     server.failNext(new Error('连接被拒绝'))
     render(<MemoryPage />)
 
@@ -113,11 +154,26 @@ describe('记忆页：查看', () => {
     expect(await screen.findByTestId('memory-content')).toHaveTextContent('你好')
     expect(screen.queryByTestId('memory-error')).not.toBeInTheDocument()
   })
+
+  it('切换会话：重拉并换成那个会话的记忆（编辑中的草稿作废）', async () => {
+    installFakeMemory({ 'thread-1': 'A 会话的记忆', 'thread-2': 'B 会话的记忆' })
+    render(<MemoryPage />)
+    expect(await screen.findByTestId('memory-content')).toHaveTextContent('A 会话的记忆')
+
+    // 编辑到一半切走：草稿属于上一个会话，不该带过去
+    fireEvent.click(screen.getByTestId('memory-edit'))
+    fireEvent.change(screen.getByTestId('memory-input'), { target: { value: '改到一半' } })
+
+    act(() => setActiveSession('thread-2'))
+
+    expect(await screen.findByTestId('memory-content')).toHaveTextContent('B 会话的记忆')
+    expect(screen.queryByTestId('memory-input')).not.toBeInTheDocument()
+  })
 })
 
 describe('记忆页：编辑', () => {
   it('点编辑进入编辑态（草稿 = 当前内容），保存打 PUT 并显示服务端回吐的内容', async () => {
-    const server = installFakeMemory('# 用户信息\n- 姓名：张三')
+    const server = installFakeMemory({ 'thread-1': '# 用户信息\n- 姓名：张三' })
     render(<MemoryPage />)
     await screen.findByTestId('memory-content')
 
@@ -132,6 +188,7 @@ describe('记忆页：编辑', () => {
     expect(server.calls.at(-1)).toMatchObject({
       method: 'PUT',
       path: '/api/memory',
+      threadId: 'thread-1',
       body: { content: '# 用户信息\n- 姓名：李四' }
     })
     expect(screen.getByTestId('memory-content')).toHaveTextContent('李四')
@@ -139,7 +196,7 @@ describe('记忆页：编辑', () => {
   })
 
   it('取消：丢弃草稿，内容不变，不发请求', async () => {
-    const server = installFakeMemory('# 用户信息\n- 姓名：张三')
+    const server = installFakeMemory({ 'thread-1': '# 用户信息\n- 姓名：张三' })
     render(<MemoryPage />)
     await screen.findByTestId('memory-content')
     const callsBefore = server.calls.length
@@ -153,7 +210,7 @@ describe('记忆页：编辑', () => {
   })
 
   it('保存失败：留在编辑态、草稿不丢、错误行给出原因', async () => {
-    const server = installFakeMemory('旧内容')
+    const server = installFakeMemory({ 'thread-1': '旧内容' })
     render(<MemoryPage />)
     await screen.findByTestId('memory-content')
 
@@ -170,7 +227,7 @@ describe('记忆页：编辑', () => {
 
 describe('记忆页：清空', () => {
   it('清空要先确认：取消不发请求；确认打 DELETE 并回到空态', async () => {
-    const server = installFakeMemory('# 用户信息\n- 姓名：张三')
+    const server = installFakeMemory({ 'thread-1': '# 用户信息\n- 姓名：张三' })
     render(<MemoryPage />)
     await screen.findByTestId('memory-content')
     const callsBefore = server.calls.length
@@ -183,11 +240,15 @@ describe('记忆页：清空', () => {
     fireEvent.click(screen.getByTestId('memory-clear-confirm'))
 
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
-    expect(server.calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/api/memory' })
+    expect(server.calls.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/memory',
+      threadId: 'thread-1'
+    })
   })
 
   it('清空失败：错误行给出原因，内容不动', async () => {
-    const server = installFakeMemory('还要留着')
+    const server = installFakeMemory({ 'thread-1': '还要留着' })
     render(<MemoryPage />)
     await screen.findByTestId('memory-content')
 

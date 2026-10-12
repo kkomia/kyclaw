@@ -1,6 +1,7 @@
 /**
- * 语义召回（长期记忆，round 28 模块 3）的嵌入解析：把「设置 + 密钥」翻成 Memory 能用的 embedder，
- * 并如实回答"这次启动到底有没有召回"（状态行见 shared/memory.ts 的 RecallStatus）。
+ * 语义召回（round 28 模块 3；round 58 起 thread 作用域 = 只召回本会话的消息）的嵌入解析：
+ * 把「设置 + 密钥」翻成 Memory 能用的 embedder，并如实回答"这次启动到底有没有召回"
+ * （状态行见 shared/memory.ts 的 RecallStatus）。
  *
  * 嵌入接口只有一条：**OpenAI 兼容 `/embeddings`**（baseURL + model + key）。它既能接外部服务，
  * 也正好是本机引擎（llama.cpp 子进程，模块 3B）的形状——3B 就是这么接进来的：

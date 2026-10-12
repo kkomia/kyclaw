@@ -3,7 +3,9 @@
  *
  * - 端点是现取的（随机端口 + 每次启动的 token），token 走 Authorization 头，不进 URL/日志；
  * - 回包过 shared/memory 的 zod schema（边界纪律同 IPC/线程）：格式不对就抛，
- *   由页面落到错误态，不把半截数据往 UI 里塞。
+ *   由页面落到错误态，不把半截数据往 UI 里塞；
+ * - **记忆按会话隔离（round 58）**：三个接口都要求会话 id（`?threadId=…`）——看/写/清的都是
+ *   那一个会话那一份（工作记忆 thread 作用域，见 mastra/index.ts 的装配）。
  */
 import type { z } from 'zod'
 import {
@@ -39,16 +41,21 @@ async function json<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
   return parsed.data
 }
 
-/** 当前 working memory（null = 还没写过 / 已被清空） */
-export async function fetchMemory(): Promise<string | null> {
-  const response = await authorized('/api/memory')
+/** 记忆接口的路径：会话 id 必填（round 58 记忆按会话隔离，服务端缺/空即 400） */
+function memoryPath(threadId: string): string {
+  return `/api/memory?threadId=${encodeURIComponent(threadId)}`
+}
+
+/** 某个会话的 working memory（null = 还没写过 / 已被清空） */
+export async function fetchMemory(threadId: string): Promise<string | null> {
+  const response = await authorized(memoryPath(threadId))
   const { content } = await json(response, workingMemoryResponseSchema)
   return content
 }
 
-/** 整块保存（返回服务端归一后的内容：全空白会回 null） */
-export async function saveMemory(content: string): Promise<string | null> {
-  const response = await authorized('/api/memory', {
+/** 某个会话的整块保存（返回服务端归一后的内容：全空白会回 null） */
+export async function saveMemory(threadId: string, content: string): Promise<string | null> {
+  const response = await authorized(memoryPath(threadId), {
     method: 'PUT',
     body: JSON.stringify({ content })
   })
@@ -56,14 +63,15 @@ export async function saveMemory(content: string): Promise<string | null> {
   return parsed.content
 }
 
-/** 清空（服务端幂等） */
-export async function clearMemory(): Promise<void> {
-  const response = await authorized('/api/memory', { method: 'DELETE' })
+/** 清空某个会话的记忆（服务端幂等） */
+export async function clearMemory(threadId: string): Promise<void> {
+  const response = await authorized(memoryPath(threadId), { method: 'DELETE' })
   await json(response, clearMemoryResponseSchema)
 }
 
 /**
- * 语义召回（长期记忆）的本次运行状态（round 28）：开关在设置里、状态在服务里——
+ * 语义召回（设置页标签是「会话记忆（语义召回）」）的本次运行状态（round 28）：
+ * 开关在设置里、状态在服务里——
  * 状态行必须说清"这次启动到底有没有召回"，所以这里读的是服务端的现读值，不是设置的期望值。
  */
 export async function fetchRecallStatus(): Promise<RecallStatus> {

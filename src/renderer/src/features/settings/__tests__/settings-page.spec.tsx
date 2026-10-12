@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { DEFAULT_SETTINGS, defaultSettings } from '@shared/settings'
 import { SettingsPage } from '../SettingsPage'
@@ -44,6 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearKyclawBridge()
+  resetSessionsStore()
   vi.restoreAllMocks()
 })
 
@@ -87,6 +89,13 @@ describe('设置页骨架（栏目页）', () => {
   })
 
   it('「记忆」/「用量」栏（round 5）：真实管理面（复用独立页的面板），不再是占位', async () => {
+    // round 58：记忆按会话隔离——先摆一个活动会话，面板才走取数分支（没有会话是空态、不发请求）
+    useSessionsStore.setState({
+      threads: [{ id: 'settings-memory-thread', title: null, updatedAt: new Date().toISOString() }],
+      activeId: 'settings-memory-thread',
+      loaded: true,
+      error: null
+    })
     const memoryView = render(
       <MemoryRouter initialEntries={['/settings/memory']}>
         <SettingsPage />

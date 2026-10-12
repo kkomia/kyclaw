@@ -1,12 +1,13 @@
 // @vitest-environment node
 /**
- * round 28 模块 3：语义召回（长期记忆，跨会话语义召回）的三层测试。
+ * round 28 模块 3：语义召回（长期记忆）的三层测试；round 58 起作用域是 **thread**（会话隔离）。
  *
  *   1. 解析层（resolveRecall）：开关 / 半截配置 / 端点不通 → **没有 embedder** 且状态是人话
  *      （失败＝加法）；本地模型准备（本地 http 源 → 6 个文件 → 整目录改名后才算就绪）。
  *   2. 服务层（startAgentServer + 真 libsql vector + mock 模型 + 假嵌入服务）：
- *      - **验收主用例**：会话 A 说一件事 → 新会话 B **换个措辞**问相关的事 →
- *        B 收到的那轮 prompt 里出现 A 的内容（这就是"长期记忆"的定义）；
+ *      - **验收主用例（round 58 是反断言）**：会话 A 说一件事 → 新会话 B **换个措辞**问相关的事 →
+ *        B 收到的那轮 prompt 里**不出现** A 的内容（开几个会话就是为了隔离上下文）；
+ *      - **同一会话内仍然召回**：本会话早先聊过、已经滑出历史窗口的内容，换措辞问还能找回来；
  *      - 删除清理：截断消息 / 删会话之后，向量里的嵌入随之消失，**不再召回已删内容**；
  *      - 失败降级：端点不通 / 挂上的 embedder 运行时抛错 → 对话照常（200 + 有正文）。
  *   3. 与压缩共处：POST /compact 删掉旧消息后，嵌入一起清（旧内容不再被召回），摘要照旧注入。
@@ -52,6 +53,11 @@ function textScript(text: string): StreamPart[] {
 /**
  * 概念轴：文本落在哪些概念上（不是关键词相等——同一根轴上的不同说法余弦就高）。
  * 这么挑是为了让"换个措辞问同一件事"真的能被召回：A 说"去过富士山"，B 问"那个户外活动"。
+ *
+ * 后面再挂一组**指纹轴**（round 58）：每段文本按内容散列点亮其中一根 —— 真嵌入里两段文本的
+ * 向量不会完全相同，而 libsql 的向量索引在"大量重复向量"下会退化（本机实测：42 条里 40 条同向时
+ * `vector_top_k` 只认得出其中 ~10 条，该召回的目标行被整条漏掉）。指纹轴让每条向量互不相同，
+ * 概念轴仍然主导相似度（同概念命中 ~0.6+，不同概念 ≤0.32）。
  */
 const CONCEPTS: Record<string, readonly string[]> = {
   mountain: ['山', '爬', '登', '户外', '远足', '峰', 'hike', 'mountain'],
@@ -60,15 +66,37 @@ const CONCEPTS: Record<string, readonly string[]> = {
   coding: ['代码', '函数', '重构', '测试', 'code']
 }
 
-const AXES: readonly string[] = [...Object.keys(CONCEPTS), 'other']
+/** 指纹轴根数（够把不同文本散开即可；多一根就把所有向量抬高一个维度，没别的含义） */
+const FINGERPRINT_AXES = 8
 
-/** 文本 → 概念计数向量（L2 归一；一个概念都没命中就落在 other 轴上，不留零向量） */
+const AXES: readonly string[] = [
+  ...Object.keys(CONCEPTS),
+  'other',
+  ...Array.from({ length: FINGERPRINT_AXES }, (_, index) => `fp${index}`)
+]
+
+/** 文本指纹：同一个文本永远同一根轴（不加密、不随机，只是"让向量互不相同"） */
+function fingerprintBucket(text: string): number {
+  let hash = 0
+  for (const char of text) hash = (hash * 31 + char.codePointAt(0)!) % 1_000_003
+  return hash % FINGERPRINT_AXES
+}
+
+/**
+ * 文本 → 概念计数 + 指纹 → L2 归一（一个概念都没命中就落在 other 轴上，不留零向量）。
+ * 概念分量的量级远大于指纹分量，所以"换个措辞"仍然按概念相近召回。
+ */
 function conceptVector(text: string): number[] {
   const counts = Object.keys(CONCEPTS).map(
     (key) => CONCEPTS[key].filter((word) => text.toLowerCase().includes(word)).length
   )
   const hits = counts.reduce((sum, count) => sum + count, 0)
-  const vector = hits === 0 ? [...counts.map(() => 0), 1] : [...counts, 0]
+  const concepts = hits === 0 ? [...counts.map(() => 0), 1] : [...counts, 0]
+  const bucket = fingerprintBucket(text)
+  const fingerprint = Array.from({ length: FINGERPRINT_AXES }, (_, index) =>
+    index === bucket ? 1 : 0
+  )
+  const vector = [...concepts, ...fingerprint]
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1
   return vector.map((value) => value / norm)
 }
@@ -300,7 +328,7 @@ async function recallStatus(): Promise<Record<string, unknown>> {
   return body.recall
 }
 
-describe('服务层：跨会话语义召回（长期记忆）', () => {
+describe('服务层：语义召回按会话隔离（thread 作用域）', () => {
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'kyclaw-recall-'))
     embedService = await startEmbedService()
@@ -356,29 +384,57 @@ describe('服务层：跨会话语义召回（长期记忆）', () => {
     expect(status).toMatchObject({ state: 'active', active: true, enabled: true, source: 'remote' })
   })
 
-  it('验收主用例：会话 A 说的事，新会话 B 换个措辞能召回', async () => {
+  it('验收主用例（round 58 反断言）：会话 A 说的事，新会话 B 收不到', async () => {
     // A：说一件事（用户消息 + 助手回复都落库、都嵌入）
     scripts.length = 0
     scripts.push(() => textScript('记下了：你上周末去爬了富士山。'))
     await chat('recall-thread-a', '我上周末去爬了富士山，天气很好')
     // 存的消息落库（+ 嵌入写进向量表）是异步的：等到"能问出来"为止
-    await waitFor(async () => (await vectorRows(dir, '山')).length > 0)
+    await waitFor(async () =>
+      (await vectorRows(dir, '山')).some((row) => row.metadata?.thread_id === 'recall-thread-a')
+    )
 
-    // B：**新会话**、**不同措辞**问相关的事
+    // B：**新会话**、**不同措辞**问相关的事 —— 记忆按会话隔离，A 的内容不该被召回（更不该出现在 prompt 里）
     const before = calls.length
     scripts.length = 0
-    scripts.push(() => textScript('你上周末去爬了富士山。'))
+    scripts.push(() => textScript('我没有关于这件事的记录。'))
     await chat('recall-thread-b', '我之前提过的那个户外活动是什么？')
 
     expect(calls.length).toBe(before + 1)
     const prompt = promptText(calls.length - 1)
-    // 召回注入：跨会话的系统消息里带着 A 的内容（且标着"来自之前的对话"）
-    expect(prompt).toContain('remembered_from_other_conversation')
-    expect(prompt).toContain('Message from previous conversation')
-    expect(prompt).toContain('富士山')
-    // 这一轮是会话 B 的：注入的那条不是它自己的历史（B 只有这一句提问）
     expect(prompt).toContain('我之前提过的那个户外活动是什么？')
+    expect(prompt).not.toContain('富士山')
+    // 跨会话注入那条系统消息（"来自之前的对话"）也不该出现
+    expect(prompt).not.toContain('remembered_from_other_conversation')
   }, 30_000)
+
+  it('同一会话内仍然召回：早先滑出历史窗口的内容，换个措辞还能被找回来', async () => {
+    const threadId = 'recall-thread-same'
+    // 第 1 轮：要记住的事（之后垫 20 轮无关对话，它就滑出 lastMessages=40 的窗口了）
+    scripts.length = 0
+    scripts.push(() => textScript('记下了：你上周末去爬了富士山。'))
+    await chat(threadId, '我上周末去爬了富士山，天气很好')
+    for (let round = 1; round <= 20; round++) {
+      scripts.push(() => textScript(`第 ${round} 轮：接着改那个重构函数。`))
+      await chat(threadId, `第 ${round} 轮：接着改那个重构函数`)
+    }
+    await waitFor(async () =>
+      (await vectorRows(dir, '山')).some((row) => row.metadata?.thread_id === threadId)
+    )
+
+    // 最后一问：措辞里没有"富士山"，历史窗口里也没有那两轮 —— prompt 里出现只能是本会话召回的
+    const before = calls.length
+    scripts.length = 0
+    scripts.push(() => textScript('你上周末去爬了富士山。'))
+    await chat(threadId, '我之前提过的那个户外活动是什么？')
+
+    expect(calls.length).toBe(before + 1)
+    const prompt = promptText(calls.length - 1)
+    expect(prompt).toContain('我之前提过的那个户外活动是什么？')
+    expect(prompt).toContain('富士山')
+    // 同一会话的召回不走"来自之前的对话"那条系统消息（那是跨会话才有的标注）
+    expect(prompt).not.toContain('remembered_from_other_conversation')
+  }, 60_000)
 
   it('删除清理：截断之后那条消息的嵌入随之消失，不再被召回', async () => {
     scripts.length = 0
@@ -404,11 +460,12 @@ describe('服务层：跨会话语义召回（长期记忆）', () => {
     const rows = await vectorRows(dir, '报税材料')
     expect(rows.map((row) => row.metadata?.message_id)).not.toContain(userMessage?.id)
 
-    // 再开一个新会话问同一件事：prompt 里不该出现已删内容
+    // 在**同一个会话**里再问同一件事：prompt 里不该出现已删内容
+    // （round 58 召回只在本会话里找；删了就找不回来了）
     const before = calls.length
     scripts.length = 0
     scripts.push(() => textScript('没有相关记录。'))
-    await chat('recall-thread-c-ask', '我上次说的那个报税的材料是什么？')
+    await chat('recall-thread-c', '我上次说的那个报税的材料是什么？')
     expect(calls.length).toBe(before + 1)
     expect(promptText(calls.length - 1)).not.toContain('报税材料')
   }, 30_000)
@@ -427,10 +484,12 @@ describe('服务层：跨会话语义召回（长期记忆）', () => {
       )
     )
 
+    // 在**同一个会话 id** 上再问（线程已删，这一轮把它重新建起来）：
+    // 删掉的那批嵌入不该被召回（round 58 召回只在本会话里找）
     const before = calls.length
     scripts.length = 0
     scripts.push(() => textScript('没有相关记录。'))
-    await chat('recall-thread-d-ask', '我上次说的那个喝的东西是什么？')
+    await chat('recall-thread-d', '我上次说的那个喝的东西是什么？')
     expect(calls.length).toBe(before + 1)
     expect(promptText(calls.length - 1)).not.toContain('手冲咖啡')
   }, 30_000)

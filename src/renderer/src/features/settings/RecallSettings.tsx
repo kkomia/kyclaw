@@ -14,7 +14,9 @@ import { LocalModelSettings } from './LocalModelSettings'
 import { recallStatusText } from './status-text'
 
 /**
- * 设置页「记忆」栏的语义召回组（round 28 模块 3）：长期记忆的开关与嵌入服务。
+ * 设置页「记忆」栏的语义召回组（round 28 模块 3）：会话记忆的开关与嵌入服务。
+ * round 58 起召回是 **thread 作用域**（只在本会话里找，见 mastra/index.ts）——所以标签从
+ * 「长期记忆」改成「会话记忆」；下面的记忆面板同理，看的是当前会话那一份。
  *
  * 分工（与「追踪」栏同一套）：开关 + 服务地址/模型是普通设置，经 settings:update 落 settings.json；
  * API Key 只经 memory:set-embedding-key 写方向过一次（主进程 safeStorage 落 secrets.json），
@@ -96,7 +98,7 @@ export function RecallStatusLine({ className }: { className?: string }): React.J
       className={cn('text-b2 text-ink-secondary', className)}
       title={error}
     >
-      长期记忆（语义召回）：{error === undefined ? recallStatusText(status, enabled) : error}
+      会话记忆（语义召回）：{error === undefined ? recallStatusText(status, enabled) : error}
     </p>
   )
 }
@@ -199,10 +201,10 @@ export function RecallSettings(): React.JSX.Element {
   return (
     <div data-testid="recall-settings" className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-b2 text-ink">长期记忆（语义召回）</span>
+        <span className="text-b2 text-ink">会话记忆（语义召回）</span>
         <Switch
           checked={settings.enabled}
-          label="长期记忆（语义召回）"
+          label="会话记忆（语义召回）"
           data-testid="recall-enabled"
           disabled={busy}
           onCheckedChange={toggle}

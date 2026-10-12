@@ -4,14 +4,16 @@
  * - storage 落 `dataDir/kyclaw.db`（生产即 %APPDATA%/kyclaw/kyclaw.db）：thread / resource 等
  *   持久化能力从这一层进来；Memory 的存储不单独配，走 Mastra 实例上这份（mastra.ai 文档口径）。
  * - agent 级 Memory（T9）：线程/消息持久化的本体；`lastMessages` 决定每轮给模型多少历史。
- * - working memory（T14）：resource 作用域的一份长期画像——记忆页读写的、助手在对话里更新的，
- *   都是它（`GET/PUT/DELETE /api/memory`）。
- * - **语义召回（round 28 模块 3）**：跨会话的长期记忆（新会话能想起旧会话聊过的相关内容）。
+ * - working memory（T14）：**每个会话一份**的画像（round 58：作用域从 resource 改成 thread）——
+ *   记忆页读写的、助手在对话里更新的，都是**当前会话**那一条
+ *   （`GET/PUT/DELETE /api/memory?threadId=…`）。用户口径：开几个会话就是为了隔离上下文，
+ *   跨会话共享一律不再做（库里旧的 resource 画像留在原处，改后不再被读）。
+ * - **语义召回（round 28 模块 3）**：把**本会话**早先聊过的相关内容找回来。
  *   `LibSQLVector` 与 storage **同库同文件**（`kyclaw.db`，@mastra/libsql 自带 vector 能力，
  *   不必引 LanceDB），embedder 由 mastra/embedding.ts 解析（OpenAI 兼容 `/embeddings`：baseURL +
  *   model + key；将来的本机引擎按同一形状接进来）。
- *   作用域固定 **resource**（单用户单 resource = 跨会话召回，这是"长期记忆"的定义；thread 口径
- *   只在本会话里找相似消息，不是这个需求）。起不来（服务不通 / 配置半截 / 启动自检不过）＝
+ *   作用域 **thread**（round 58 从 resource 改过来：召回只在本会话的消息里找，同记忆的隔离口径）。
+ *   起不来（服务不通 / 配置半截 / 启动自检不过）＝
  *   这一路没有召回，Memory 照常装配——失败只做加法（硬口径，见 embedding.ts 头注）。
  * - 用量记账（T14）：chat 路由的 `defaultOptions.onFinish` 从 run 收尾事件里取 usage，
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
@@ -115,8 +117,9 @@ export const CHAT_PROTOCOL_VERSION = 'v7'
  * 每轮喂给模型的历史消息条数上限（Mastra Memory 的 lastMessages，缺省 10）。
  * 个人桌面场景下多留一些（约几十轮对话），免得用户觉得"它怎么不记得了"。
  * 注意它数的是**存储消息**：一张工具调用+结果算两条。
- * 可调上限（以及长会话的分页/摘要）仍没做——T14 管的是 working memory（跨会话的画像），
- * 与这一项是两个开关，别把"记不住"的锅扣到记忆页上（见 task-14-report 的遗留）。
+ * 可调上限（以及长会话的分页/摘要）仍没做——T14 管的是 working memory（每个会话一份的画像，
+ * round 58 起按会话隔离），与这一项是两个开关，别把"记不住"的锅扣到记忆页上
+ * （见 task-14-report 的遗留）。
  */
 export const MEMORY_LAST_MESSAGES = 40
 
@@ -254,23 +257,25 @@ export async function createKyclawMastra(options: {
           }),
       options: {
         lastMessages: MEMORY_LAST_MESSAGES,
-        // working memory（T14）：resource 作用域（缺省档）= 跨会话共享的一份长期画像，
-        // 记忆页读写的与助手每轮系统提示里看到的是同一份（thread 档按会话隔离，不符合这个语义）
+        // working memory（T14）：**thread 作用域**（round 58 从 resource 改过来）= 每个会话一份，
+        // 记忆页读写的与助手每轮系统提示里看到的是**当前会话**那一份（库里落在该线程的
+        // metadata.workingMemory 上，见 @mastra/memory 的 getWorkingMemory / updateWorkingMemory）
         workingMemory: {
           enabled: true,
-          scope: 'resource',
+          scope: 'thread',
           template: KYCLAW_WORKING_MEMORY_TEMPLATE
         },
-        // 语义召回（round 28）：**resource 作用域 = 跨会话召回**（这是"长期记忆"的定义）。
-        // 实测该版本（@mastra/memory 1.36.0 + @mastra/libsql 1.25.1）resource 档受支持：
-        // 查询过滤 `{ resource_id }`，索引建表时按维度命名（如 memory_messages_1024）
+        // 语义召回（round 28）：**thread 作用域 = 只召回本会话的消息**（round 58 从 resource 改过来）。
+        // 实测该版本（@mastra/memory 1.36.0 + @mastra/libsql）：两档都受支持，查询过滤
+        // resource 档用 `{ resource_id }`、thread 档用 `{ thread_id }`
+        // （见其 SemanticRecall.performSemanticSearch）；工作记忆同理 thread 档写线程 metadata。
         ...(embedder === undefined
           ? {}
           : {
               semanticRecall: {
                 topK: SEMANTIC_RECALL_TOP_K,
                 messageRange: SEMANTIC_RECALL_MESSAGE_RANGE,
-                scope: 'resource' as const
+                scope: 'thread' as const
               }
             })
       }

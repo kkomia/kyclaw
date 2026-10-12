@@ -4,12 +4,13 @@
  *
  * 链路一头是 `resources/llama/llama-server.exe`（`pnpm fetch:llama` 落的 pinned 构建），
  * 另一头是 agent 服务的 chat 路由；中间是模型下载器、引擎管理、嵌入网关、
- * `mastra/embedding.ts` 的本机一支、Mastra Memory 的 semanticRecall（resource 作用域）。
+ * `mastra/embedding.ts` 的本机一支、Mastra Memory 的 semanticRecall（thread 作用域）。
  *
  * 断的四件事：
  *   1. **一次真 embeddings 请求**（经网关）：维度 512、向量 L2 归一到 1.0（归一化口径实测）；
  *   2. 消息真的进了向量库（`memory_messages_512` 能查出来）；
- *   3. **跨会话召回**：会话 A 说的事，新会话 B 换措辞问，B 那轮 prompt 里出现 A 的内容；
+ *   3. **会话隔离**（round 58）：会话 A 说的事，新会话 B 换措辞问，B 那轮 prompt 里
+ *      **不出现** A 的内容（召回只在本会话的消息里找）；
  *   4. 引擎是**按需起来**的（装配时还没有进程，第一条嵌入请求把它拉起来）。
  *
  * 依赖与环境：模型用**最小档**（bge-small-zh-v1.5 Q8_0，26MB，只下一次，缓存在
@@ -244,7 +245,7 @@ describe('本机引擎：端到端（真引擎 + 真小模型）', () => {
     expect(cosine(second!, first!)).toBeLessThan(0.99)
   }, 60_000)
 
-  it('消息真进了向量库（memory_messages_512），并且跨会话召回能把 A 的内容喂给 B', async (context: TestContext) => {
+  it('消息真进了向量库（memory_messages_512），且新会话收不到 A 的内容（round 58 会话隔离）', async (context: TestContext) => {
     if (skipReason !== null) {
       context.skip()
       return
@@ -274,16 +275,18 @@ describe('本机引擎：端到端（真引擎 + 真小模型）', () => {
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.some((row) => String(row.metadata?.thread_id) === 'local-e2e-a')).toBe(true)
 
-    // 会话 B（新会话、换措辞问同一件事）：A 的内容被召回进 B 这轮的 prompt
+    // 会话 B（新会话、换措辞问同一件事）：A 的内容不该被召回进 B 这轮的 prompt
+    // （问句里刻意不写"富士山"，prompt 里出现它只能是召回注入的）
     const before = calls.length
     scripts.length = 0
-    scripts.push(() => textScript('你上周末去爬了富士山。'))
-    await chat('local-e2e-b', '我之前说的富士山那次户外活动是什么？')
+    scripts.push(() => textScript('我这边没有关于这件事的记录。'))
+    await chat('local-e2e-b', '我之前说的那次户外活动是什么？')
     expect(calls.length).toBe(before + 1)
 
     const prompt = promptText(calls.length - 1)
-    expect(prompt).toContain('remembered_from_other_conversation')
-    expect(prompt).toContain('富士山')
-    expect(prompt).toContain('我之前说的富士山那次户外活动是什么？')
+    expect(prompt).toContain('我之前说的那次户外活动是什么？')
+    expect(prompt).not.toContain('富士山')
+    // 跨会话注入那条系统消息（"来自之前的对话"）也不该出现
+    expect(prompt).not.toContain('remembered_from_other_conversation')
   }, 120_000)
 })
