@@ -345,6 +345,11 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
 
     await waitFor(() => expect(control.requests).toHaveLength(3))
     expect(approvalIn(control, 2, 'call-b')).toMatchObject({ approved: true })
+    // round 62（P0）：自动放行走的是**同一条**回灌出口 —— 自动续跑那次请求同样带线程上下文，
+    // 否则服务端拿不到 memory.thread（round 51 修的是手动那条路，自动这条漏了同一处）
+    expect(control.requests[2].body).toEqual({
+      memory: { thread: THREAD_ID, resource: 'local-user' }
+    })
     await expectNoApproval()
 
     act(() => {

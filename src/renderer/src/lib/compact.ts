@@ -8,8 +8,15 @@
 import { contextTokensFor, probedKeyOf } from '@shared/models'
 import type { AppSettings } from '@shared/settings'
 
+/**
+ * 阈值的**依赖面**（round 62）：换算只用得上这三块 —— 默认模型来自 providers，上下文长度来自
+ * modelPrefs（用户挡位）与 probedModels（实测）。把它单独标出来，调用方就能只依赖这三块
+ * （比如输入卡的 `/` 浮窗：任何别的设置变更都不该白拉一次用量）。
+ */
+export type ThresholdSettings = Pick<AppSettings, 'providers' | 'modelPrefs' | 'probedModels'>
+
 /** 当前设置下"超阈值"的 token 数（没有 provider → null，不触发也不显示使用率） */
-export function thresholdTokensOf(settings: AppSettings): number | null {
+export function thresholdTokensOf(settings: ThresholdSettings): number | null {
   const provider = settings.providers.find((item) => item.isDefault) ?? settings.providers[0]
   if (provider === undefined) return null
   const probed = settings.probedModels[probedKeyOf(provider.id, provider.model)]

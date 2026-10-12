@@ -5,6 +5,7 @@ import type { UIMessage } from 'ai'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
+import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
 import { compactThread, fetchThreadCompaction, truncateThread } from '@renderer/lib/threads-api'
@@ -198,6 +199,8 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 beforeEach(() => {
   resetThreadChats()
+  // round 62：排队队列与会话镜像都是模块级状态 —— 每条用例从干净的一份开始
+  resetSessionsStore()
   vi.clearAllMocks()
   useSettingsStore.setState({
     settings: { ...defaultSettings(), providers: [PROVIDER] },
@@ -670,6 +673,69 @@ describe('round 57 · 作曲栏「压缩上下文」胶囊（不输入也能压�
     expect(chip).toBeDisabled()
     fireEvent.click(chip)
     expect(vi.mocked(compactThread)).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * round 62（P0）：`dispatch` 置 `sending.current = true` 之后，还要 await 物化、await 取用量、
+ * 可能整轮压缩，才真正 `sendMessage` —— 这段窗口里 `busy` 还是 false（动作行照旧画着、
+ * `/压缩上下文` 照旧可点），但撤回 / 编辑重发 / 压缩都要在服务端动历史，放行就会与在途的发送
+ * 并发写同一份历史。闸门因此多一档 `sending.current`（**执行时**现读的 ref；动作行的显隐仍由
+ * state 决定，观感不变）。
+ */
+describe('round 62 · 动作闸门（发送预检在途）', () => {
+  it('预检还没回来时点撤回 / 压缩：一个都不动服务端历史；预检放开后闸门恢复', async () => {
+    const control = createMockTransport()
+    await renderSession(control, makeRuntime(control))
+
+    // 先跑完一轮：消息动作行得有东西可点
+    await act(async () => {
+      send('第一问')
+    })
+    await act(async () => {
+      control.push('答一')
+      control.finish()
+    })
+    const firstUserId = control.requests[0].messages[0].id
+
+    // 第二次发送：把预检里那次用量取数挂住 —— dispatch 已置 sending.current，sendMessage 还没发
+    const gate = deferred<Awaited<ReturnType<typeof fetchThreadContext>>>()
+    vi.mocked(fetchThreadContext).mockReturnValueOnce(gate.promise)
+    await act(async () => {
+      send('第二问')
+    })
+    expect(control.requests).toHaveLength(1)
+
+    // 撤回：动作行还在（状态上不忙），但闸门挡住服务端截断
+    fireEvent.click(screen.getByTestId('message-undo'))
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('message-undo-confirm'))
+    })
+    expect(vi.mocked(truncateThread)).not.toHaveBeenCalled()
+
+    // `/` 命令里的「压缩上下文」：同样被挡住（命令行本身是可点的 —— 拦在执行时）
+    fireEvent.change(screen.getByTestId('composer-input'), { target: { value: '/' } })
+    fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
+    expect(vi.mocked(compactThread)).not.toHaveBeenCalled()
+
+    // 预检放开：这条消息照常发出（闸门拦的是"动历史"，不是发送本身）
+    await act(async () => {
+      gate.resolve(contextOf(null))
+    })
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+
+    // 轮末之后闸门恢复：撤回照常做（不是永久锁死）
+    await act(async () => {
+      control.push('答二')
+      control.finish()
+    })
+    fireEvent.click(screen.getAllByTestId('message-undo')[0] as HTMLElement)
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId('message-undo-confirm'))
+    })
+    await waitFor(() =>
+      expect(vi.mocked(truncateThread)).toHaveBeenCalledWith(THREAD_ID, firstUserId)
+    )
   })
 })
 

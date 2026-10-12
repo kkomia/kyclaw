@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import type { OutgoingMessage } from '@renderer/features/chat/composer-attachments'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { resetSessionsStore, useSessionsStore } from '../sessions-store'
 
@@ -464,5 +465,40 @@ describe('round 26：草稿物化（materialize）与就地编辑', () => {
     const state = useSessionsStore.getState()
     expect(state.activeId).not.toBe(draftId)
     expect(state.threads).toEqual([])
+  })
+})
+
+/**
+ * round 62（P0）：排队队列按会话存在 store 上（原来是对话页组件内的 ref，切会话就随卸载蒸发）。
+ * 这里钉住 store 这一层的基本语义：先进先出、取走即出队、跨会话各存各的、删会话连队列一起丢。
+ */
+describe('round 62：发送队列（按会话存，切会话不丢）', () => {
+  const message = (text: string): OutgoingMessage => ({ text, files: [] })
+
+  it('入队 / 出队：先进先出；取空后这一格也收掉（不攒空数组）', () => {
+    useSessionsStore.getState().enqueueMessage('t1', message('一'))
+    useSessionsStore.getState().enqueueMessage('t1', message('二'))
+    useSessionsStore.getState().enqueueMessage('t2', message('别的会话'))
+
+    expect(useSessionsStore.getState().queues.t1?.map((item) => item.text)).toEqual(['一', '二'])
+    expect(useSessionsStore.getState().takeQueuedMessage('t1')?.text).toBe('一')
+    expect(useSessionsStore.getState().takeQueuedMessage('t1')?.text).toBe('二')
+    expect(useSessionsStore.getState().takeQueuedMessage('t1')).toBeNull()
+    expect('t1' in useSessionsStore.getState().queues).toBe(false)
+    // 别的会话那一格不受影响
+    expect(useSessionsStore.getState().queues.t2?.map((item) => item.text)).toEqual(['别的会话'])
+  })
+
+  it('删除会话：它的排队内容一起丢掉（不会再有人去补发）', async () => {
+    installFakeServer(THREADS)
+    await useSessionsStore.getState().ensureLoaded()
+    useSessionsStore.getState().enqueueMessage('t-new', message('排队中'))
+    useSessionsStore.getState().enqueueMessage('t-old', message('别的会话的排队'))
+
+    await useSessionsStore.getState().remove('t-new')
+
+    const queues = useSessionsStore.getState().queues
+    expect('t-new' in queues).toBe(false)
+    expect(queues['t-old']?.map((item) => item.text)).toEqual(['别的会话的排队'])
   })
 })

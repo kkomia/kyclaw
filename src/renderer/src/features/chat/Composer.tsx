@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUp, Square, X } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
@@ -63,7 +63,8 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * ComposerSuggest.tsx），选中都把触发段替换成 `【引用】<kind>：<label>` 标记。
  *
  * 交互：Enter 发送 / Shift+Enter 换行（输入法合成中不拦截；**浮窗打开时** ↑/↓ 走条目、Enter 选中、
- * Esc 关浮窗）；流式中发送钮变停止（stop()）；流式中按下发送不丢内容 —— 交给上层排队（见 ChatPage）。
+ * Esc 关浮窗）；流式中发送钮变停止（stop()）；流式中按下发送不丢内容 —— 交给上层排队
+ * （round 62 起队列按会话挂在 sessions-store 上，切会话也不丢，见 ChatPage 的 submit / flushNext）。
  */
 export interface ComposerProps {
   /** 当前会话 id（权限 chip 判"会话的工作区根"用；判不出就不渲染权限入口） */
@@ -142,8 +143,13 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** 引用覆盖层（chip 的盖层）：与 textarea 同排版，随内容滚动（round 21 起在 textarea 之上） */
   const mirrorRef = useRef<HTMLDivElement>(null)
-  /** 插入标记后待落的光标位（渲染完再设 selection，避免用旧值越界） */
-  const pendingCaret = useRef<number | null>(null)
+  /**
+   * 插入标记后待落的光标位（渲染完再设 selection，避免用旧值越界）。
+   * round 62：从 ref 换成 state —— 原来那个落位 effect **没有依赖数组**（每次渲染都跑一遍、
+   * `pendingCaret.current` 非空就抢 focus），这里改成"值变了才落位"的显式信号：行为不变
+   * （渲染后落位一次），但不再每次渲染都去摸 DOM。null = 没有待办。
+   */
+  const [caretToken, setCaretToken] = useState<number | null>(null)
 
   const settings = useSettingsStore((state) => state.settings)
   // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
@@ -276,13 +282,28 @@ export function Composer({
     }
   }, [suggest?.kind, threadId, files, workspaceApi])
 
+  /**
+   * round 62：命令行那条使用率的**阈值**（依赖面收窄到 providers / modelPrefs / probedModels，
+   * 见 lib/compact 的 ThresholdSettings）。原来下面那个 effect 直接依赖整个 `settings`：
+   * 权限规则、工作区、视觉探测结论……任何一处变更，只要 `/` 浮窗还开着就白拉一次用量。
+   */
+  const thresholdTokens = useMemo(
+    () =>
+      thresholdTokensOf({
+        providers: settings.providers,
+        modelPrefs: settings.modelPrefs,
+        probedModels: settings.probedModels
+      }),
+    [settings.providers, settings.modelPrefs, settings.probedModels]
+  )
+
   /** 打开 `/` 时取一次使用率（命令行「压缩上下文」的次要位是数值展示，不是解释小字） */
   useEffect(() => {
     if (suggest?.kind !== 'slash' || threadId === null || threadId === '') return
     let alive = true
     void fetchThreadContext(threadId).then(
       (context) => {
-        if (alive) setUsagePercent(usagePercentOf(context.lastInput, thresholdTokensOf(settings)))
+        if (alive) setUsagePercent(usagePercentOf(context.lastInput, thresholdTokens))
       },
       () => {
         // 取不到（服务没起来 / 单测未装桥）：不显示数值，命令照常可用
@@ -292,14 +313,14 @@ export function Composer({
     return () => {
       alive = false
     }
-  }, [suggest?.kind, threadId, settings])
+  }, [suggest?.kind, threadId, thresholdTokens])
 
   /** 选中一条建议：命令行走"立即执行"（移除触发段）；引用行把触发段换成引用标记 */
   const pickSuggestion = (row: SuggestionRow): void => {
     if (suggest === null || row.disabled === true) return
     if (row.command === 'compact') {
       const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
-      pendingCaret.current = suggest.start
+      setCaretToken(suggest.start)
       setDraft(remaining)
       setSuggest(null)
       onCompact?.()
@@ -313,7 +334,7 @@ export function Composer({
       row.reference.kind,
       row.reference.label
     )
-    pendingCaret.current = inserted.caret
+    setCaretToken(inserted.caret)
     setDraft(inserted.text)
     setSuggest(null)
   }
@@ -326,7 +347,7 @@ export function Composer({
   const removeReferenceSegment = (segment: { start: number; raw: string }): void => {
     const start = Math.max(0, Math.min(segment.start, draft.length))
     const end = Math.min(draft.length, start + segment.raw.length)
-    pendingCaret.current = start
+    setCaretToken(start)
     setDraft(draft.slice(0, start) + draft.slice(end))
   }
 
@@ -347,19 +368,22 @@ export function Composer({
     const textarea = textareaRef.current
     const caret = textarea?.selectionStart ?? draft.length
     const inserted = insertReferenceMarker(draft, caret, reference.kind, reference.label)
-    pendingCaret.current = inserted.caret
+    setCaretToken(inserted.caret)
     setDraft(inserted.text)
   }
 
-  /** 插入标记后的光标落位（每次渲染后检查一次 pendingCaret；无待办就什么都不做） */
+  /**
+   * 插入标记后的光标落位（round 62：带依赖的 effect —— 只有 `caretToken` 变了才跑一次，
+   * 落完位就把它清回 null；渲染后落位一次的既有行为不变）。
+   */
   useEffect(() => {
-    if (pendingCaret.current === null) return
+    if (caretToken === null) return
     const textarea = textareaRef.current
     if (textarea === null) return
     textarea.focus()
-    textarea.setSelectionRange(pendingCaret.current, pendingCaret.current)
-    pendingCaret.current = null
-  })
+    textarea.setSelectionRange(caretToken, caretToken)
+    setCaretToken(null)
+  }, [caretToken])
 
   /** 主进程的 PDF 抽取（通道缺失=浏览器/单测环境：回一句人话，不抛） */
   const extractPdf = useCallback<PdfExtractor>(async (bytes) => {
@@ -404,7 +428,17 @@ export function Composer({
    * round 42：「添加到上下文」（文件树右键 / 预览选中）→ 附件条。
    * 事件只说"哪个会话的哪个文件"，读文件与判档在这里做（口径仍是 composer-attachments 那套，
    * 见 composer-inbox.ts）；别的会话的事件、自己没有会话时的事件都丢掉——不猜、不错挂。
+   *
+   * round 62：**订阅不依赖 `vision`** —— 视觉探测结论回来会改 vision，原来那会让这条订阅重挂
+   * （cleanup → 重新 subscribe），而通道是**同步派发、没有缓冲**（composer-inbox）：那次重挂的
+   * 窗口里发布的事件两头都不在，事件直接丢。改成 ref 现读最新值：订阅只跟会话走，判档永远用
+   * 当前结论（ref 在下面的小 effect 里跟着 vision 更新）。
    */
+  const visionRef = useRef(vision)
+  useEffect(() => {
+    visionRef.current = vision
+  }, [vision])
+
   useEffect(() => {
     if (threadId === null) return
     // 换会话 / 卸载时把这条订阅收掉：晚到的解析结果不再往新会话的附件条上挂（与 listFiles 同一套 alive 口径）
@@ -413,7 +447,7 @@ export function Composer({
       if (item.threadId !== threadId) return
       void resolveContextItem(item, {
         channel: window.kyclaw?.workbench ?? null,
-        vision,
+        vision: visionRef.current,
         extractPdf,
         id: uid()
       }).then((result) => {
@@ -430,19 +464,19 @@ export function Composer({
       alive = false
       unsubscribe()
     }
-  }, [threadId, vision, extractPdf])
+  }, [threadId, extractPdf])
 
   /**
    * round 61：「撤回」确认后把原文放回输入框（对话页 → 输入卡，见 composer-inbox 的草稿通道）。
-   * 只收本会话的事件；落草稿的同时把光标交回输入框末尾 —— 复用 pendingCaret 那套「渲染后落位」，
-   * 顺带把焦点从刚关掉的确认弹窗手里拿回来（那一下的落位在弹窗卸载之后，见下面的落位 effect）。
+   * 只收本会话的事件；落草稿的同时把光标交回输入框末尾 —— 复用「渲染后落位」那套，
+   * 顺带把焦点从刚关掉的确认弹窗手里拿回来（那一下的落位在弹窗卸载之后，见上面的落位 effect）。
    */
   useEffect(() => {
     if (threadId === null) return
     return subscribeDrafts((draft) => {
       if (draft.threadId !== threadId) return
       setDraft(draft.text)
-      pendingCaret.current = draft.text.length
+      setCaretToken(draft.text.length)
     })
   }, [threadId])
 

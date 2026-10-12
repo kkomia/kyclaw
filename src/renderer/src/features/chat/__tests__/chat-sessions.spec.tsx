@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
+import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { createMockTransport, type MockTransport } from './mock-transport'
 
 /**
@@ -97,6 +98,8 @@ async function send(text: string): Promise<void> {
 
 beforeEach(() => {
   resetThreadChats()
+  // round 62：排队队列挂在会话 store 上（模块级状态）—— 不复位会让上一条用例的排队漏进来
+  resetSessionsStore()
 })
 
 describe('流式中切走：不掐流、可收回', () => {
@@ -186,5 +189,60 @@ describe('流式中切走：不掐流、可收回', () => {
 
     expect(screen.queryByTestId('composer-stop')).not.toBeInTheDocument()
     expect(screen.getByTestId('message-list')).toHaveTextContent('半句')
+  })
+
+  /**
+   * round 62（P0）：排队队列原来在 ActiveChat 的组件内 ref 里，而对话页按 `key={activeId}` 挂
+   * 会话组件 —— 切会话就是卸载，队列与计数一起静默蒸发（Composer 那句"交给上层排队"的承诺落空）。
+   * 现在队列按 threadId 挂在 sessions-store 上：切走再切回原样还在，且切回来那一刻就补发。
+   */
+  it('流式中连发两条排队 → 切走再切回，队列还在且照常补发', async () => {
+    const control = createMockTransport()
+    const { runtime } = makeRuntime(control, false)
+    render(<HarnessView runtime={runtime} />)
+    await waitForComposer()
+
+    await send('A 的问题')
+    await send('排队一')
+    await send('排队二')
+    // 流式中：都进队列，不并发请求
+    expect(control.requests).toHaveLength(1)
+    expect(screen.getByTestId('composer-queue')).toHaveTextContent('已排队 2 条')
+
+    // 切到 B：A 的视图卸载（队列本体在 store 里，不跟着蒸发）
+    fireEvent.click(screen.getByTestId('go-b'))
+    await waitFor(() => expect(screen.queryByTestId('composer-queue')).not.toBeInTheDocument())
+
+    // 人在 B 时 A 的流收尾：A 那一挂不在了，补发留在切回来那一刻
+    await act(async () => {
+      control.push('答一')
+      control.finish()
+    })
+    expect(control.requests).toHaveLength(1)
+
+    // 切回 A：排队条数原样还在，并立刻补发第一条
+    fireEvent.click(screen.getByTestId('go-a'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(
+      control.requests[1].messages
+        .filter((message) => message.role === 'user')
+        .flatMap((message) => message.parts)
+        .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+    ).toEqual(['A 的问题', '排队一'])
+    expect(screen.getByTestId('composer-queue')).toHaveTextContent('已排队 1 条')
+
+    // 这一轮收尾 → 最后一条也补发出去；队列清空、提示收起
+    await act(async () => {
+      control.push('答二')
+      control.finish()
+    })
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    expect(
+      control.requests[2].messages
+        .filter((message) => message.role === 'user')
+        .flatMap((message) => message.parts)
+        .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+    ).toEqual(['A 的问题', '排队一', '排队二'])
+    expect(screen.queryByTestId('composer-queue')).not.toBeInTheDocument()
   })
 })

@@ -29,6 +29,7 @@ import {
   renameThread
 } from '../../lib/threads-api'
 import { dropThreadChat } from '../chat/thread-chats'
+import type { OutgoingMessage } from '../chat/composer-attachments'
 import { useProjectsStore } from '../projects/projects-store'
 
 /** 新建会话的草稿 id（第一轮请求带着它，服务端据此建线程） */
@@ -49,6 +50,16 @@ export interface SessionsState {
   notices: Record<string, true>
   /** round 26：草稿的本地标题（"就地重命名"写这里；物化时带给服务端，物化后由服务端标题接管） */
   draftTitles: Record<string, string>
+  /**
+   * round 62：**发送队列**（按会话存；`Record<threadId, OutgoingMessage[]>`）。
+   *
+   * 什么进这里：流式中 / 挂起等审批 / 压缩中 / 发送预检在途时发的消息 —— 先排队，轮末由对话页
+   * 逐条补发（口径见 ChatPage 的 submit / flushNext）。**为什么放 store 而不是对话页的组件内 ref**：
+   * 对话页按 `key={activeId}` 挂会话组件，切会话就是卸载 —— 排队内容与它的条数会随组件一起
+   * 蒸发（用户实报：切走再切回，排队发的消息没了，输入框也不再有提示）。挂到会话维度上之后，
+   * 切走再切回队列原样还在，轮末照常补发。
+   */
+  queues: Record<string, OutgoingMessage[]>
 
   ensureLoaded: () => Promise<void>
   refresh: () => Promise<void>
@@ -64,6 +75,10 @@ export interface SessionsState {
   startNew: (projectId?: string | null) => string
   /** round 26：就地改草稿标题（服务端还没有它，不落盘；物化时把这份标题带过去） */
   setDraftTitle: (threadId: string, title: string) => void
+  /** round 62：入队（尾部追加）—— 排队内容只有这一个写入口，读走 takeQueuedMessage */
+  enqueueMessage: (threadId: string, message: OutgoingMessage) => void
+  /** round 62：取出队首并**就地移除**（空队回 null）；轮末补发用，取走即不再留 */
+  takeQueuedMessage: (threadId: string) => OutgoingMessage | null
   /**
    * round 26：把草稿**物化**成真实线程（round 26 可用性收口：置顶/归档/移至项目先物化再执行）。
    * 走"首条消息建线程"同一条服务端路径（POST /api/threads → memory.createThread，只是不带消息）；
@@ -91,6 +106,7 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
   error: null,
   notices: {},
   draftTitles: {},
+  queues: {},
 
   ensureLoaded: () => {
     if (get().loaded) return Promise.resolve()
@@ -151,6 +167,26 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     set((state) => ({ draftTitles: { ...state.draftTitles, [threadId]: title } }))
   },
 
+  enqueueMessage: (threadId, message) => {
+    set((state) => ({
+      queues: { ...state.queues, [threadId]: [...(state.queues[threadId] ?? []), message] }
+    }))
+  },
+
+  takeQueuedMessage: (threadId) => {
+    const queue = get().queues[threadId] ?? []
+    const [next, ...rest] = queue
+    if (next === undefined) return null
+    // 取空了就把这一格也收掉（不给 store 留一堆空数组）
+    set((state) => ({
+      queues:
+        rest.length === 0
+          ? withoutKey(state.queues, threadId)
+          : { ...state.queues, [threadId]: rest }
+    }))
+    return next
+  },
+
   /**
    * round 26：草稿物化（置顶/归档/移至项目先走这一步）。与"首条消息建线程"同一条服务端路径；
    * 已在镜像里 = 空操作；本地草稿标题随创建带过去（物化后由服务端标题接管）。
@@ -187,6 +223,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       threads: remaining,
       draftTitles: withoutKey(state.draftTitles, threadId),
       notices: withoutKey(state.notices, threadId),
+      // round 62：会话没了，它的排队内容也一起丢掉（不会再有人去补发它）
+      queues: withoutKey(state.queues, threadId),
       activeId: state.activeId === threadId ? (remaining[0]?.id ?? newThreadId()) : state.activeId
     }))
     // 与服务端对齐排序/时间（草稿没有服务端那一半，不用刷）
@@ -267,6 +305,8 @@ export function resetSessionsStore(): void {
     loaded: false,
     error: null,
     notices: {},
-    draftTitles: {}
+    draftTitles: {},
+    // round 62：排队内容也是模块级状态 —— 不复位会让上一条用例的排队消息漏进下一条
+    queues: {}
   })
 }

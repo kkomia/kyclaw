@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 import { publishContextItem } from '@renderer/features/chat/composer-inbox'
@@ -1622,6 +1622,33 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
     )
     // 视觉不看，连字节都不去拉
     expect(bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('round 62：视觉结论中途回来（vision false → true）之后，事件照收且按最新结论判档', async () => {
+    mount(false) // 当前模型的探测结论：不看图
+    // 探测结论回来 → 设置更新（组件重渲染）。订阅**不该跟着重挂**：这条通道是同步派发、
+    // 没有缓冲（见 composer-inbox），重挂窗口里发的事件两头都不在。
+    await act(async () => {
+      useSettingsStore.setState({
+        settings: {
+          ...settingsWithProvider('deepseek-chat'),
+          probedModels: { 'p1:deepseek-chat': { vision: true } }
+        }
+      })
+    })
+    bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'image-png',
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      size: 4
+    })
+
+    publishContextItem({ source: 'file', threadId: 't1', relative: '图片.png', name: '图片.png' })
+
+    // 订阅还在（事件收下）且用的是**最新**结论（vision=true → 真去取字节、成缩略图）
+    await screen.findByTestId('composer-attachment-thumb-图片.png')
+    expect(bridge.workbench.readBytes).toHaveBeenCalledWith('t1', '图片.png')
+    expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
   })
 
   it('PDF：走字节通道 + 主进程抽取，chip 上印页数', async () => {

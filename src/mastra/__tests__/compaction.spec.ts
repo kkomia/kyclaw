@@ -355,6 +355,64 @@ describe('压缩服务（假 memory + 假模型）', () => {
     expect(deleteMessages).not.toHaveBeenCalled()
   })
 
+  /**
+   * round 62（P0）：`compact()` 是"读快照 → 调模型 → 落记录 → 按快照删消息"一长串，中途没有互斥。
+   * 两次并发（双击手动入口 / 自动预压与手动撞上）会各自按同一份旧快照跑：两次 save 覆盖同一行、
+   * 两次 deleteMessages 删同一批 id —— 白跑一轮，前一次的摘要还可能被挤掉。这里钉住 single-flight：
+   * 同会话并发合并到同一个 Promise。
+   */
+  it('同会话并发压缩：single-flight 合并成一轮 —— recall / 摘要 / 删除各只跑一次，两次拿到同一结果', async () => {
+    const { memory, recall, deleteMessages } = fakeMemory([
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '旧问题二'),
+      storedMessage('m4', 'assistant', '旧回答二'),
+      storedMessage('m5', 'user', '新问题'),
+      storedMessage('m6', 'assistant', '新回答')
+    ])
+    const store = memoryStore()
+    const generate = vi.fn(async () => ({ text: '合并后的摘要' }))
+    const service = createCompactionService({ memory, store, resolveModel, generate })
+
+    const [first, second] = await Promise.all([
+      service.compact('thread-flight', 2),
+      service.compact('thread-flight', 2)
+    ])
+
+    expect(recall).toHaveBeenCalledTimes(1)
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(deleteMessages).toHaveBeenCalledTimes(1)
+    expect(deleteMessages.mock.calls[0]?.[0]).toEqual(['m1', 'm2', 'm3', 'm4'])
+    // 两次调用拿到的是同一份结果（同一个 Promise）
+    expect(second).toBe(first)
+    expect(await store.get('thread-flight')).toEqual(first.compaction)
+  })
+
+  it('single-flight 跑完就清账（下一次照常重跑）；跨会话互不影响', async () => {
+    const { memory, recall } = fakeMemory([
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '旧问题二'),
+      storedMessage('m4', 'assistant', '旧回答二'),
+      storedMessage('m5', 'user', '新问题')
+    ])
+    const service = createCompactionService({
+      memory,
+      store: memoryStore(),
+      resolveModel,
+      generate: async () => ({ text: '摘要正文' })
+    })
+
+    await service.compact('thread-a', 2)
+    await service.compact('thread-a', 2)
+    // 不是永久缓存：上一轮跑完（finally 清账）后，下一次调用真的重跑
+    expect(recall).toHaveBeenCalledTimes(2)
+
+    await Promise.all([service.compact('thread-x', 2), service.compact('thread-y', 2)])
+    // 跨会话各跑各的（不串行、也不合并）
+    expect(recall).toHaveBeenCalledTimes(4)
+  })
+
   it('摘要调用记 usage（threadId 照记、按价目算钱）——并入 round 18 口径', async () => {
     const { memory } = fakeMemory([
       storedMessage('m1', 'user', '旧问题'),

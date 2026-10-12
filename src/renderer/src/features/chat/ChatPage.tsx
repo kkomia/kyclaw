@@ -46,6 +46,10 @@ import { WelcomeHero } from './WelcomeHero'
  * round 59：内容区（ActiveChat）改成三格弹性布局（消息区 / 初始页标题 / 页脚 + 底部弹性占位）——
  * 空会话时消息区与占位等分剩余高度，输入框落到竖直中位、标题在它上方居中偏上；首条消息到达后
  * 占位收到 0，输入框平滑落回常规底部（不重挂、不硬切）。口径见 ActiveChat 的 `hero`。
+ *
+ * round 62（本轮 P0）：**排队队列挂在会话 store 上**（`sessions-store` 的 `queues`，按 threadId 存），
+ * 不再放 ActiveChat 的组件内 ref —— 切会话就是卸载（`key={activeId}`），队列与计数会跟着蒸发；
+ * 现在切走再切回队列原样还在，轮末（或切回来那一刻）照常补发。
  */
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
@@ -300,12 +304,15 @@ function ActiveChat({
   onClearTurnNotice
 }: ActiveChatProps): React.JSX.Element {
   /**
-   * 流式中发的消息排队（最简队列：先进先出，一轮结束自动发下一条）。
-   * 队列本体放 ref（状态回调里要读最新值）；state 只存条数给界面看。
-   * 队列装的是**完整载荷**（正文 + 要真发的图片），不是纯文本——模块 2 起图片是 file part。
+   * round 62：排队队列**在会话 store 里**（按 threadId 存，见 sessions-store 的 `queues`）。
+   *
+   * 为什么不再用组件内的 ref：对话页按 `key={activeId}` 挂 ChatSession，切会话 = 卸载 ——
+   * 队列与计数会静默消失（而 Composer 的承诺是"流式中按下发送不丢内容，交给上层排队"）。
+   * 队列本体在 store 上之后，这里只**读自己那一格**的条数给界面看；回调里要最新值时走
+   * `useSessionsStore.getState()`（闭包里的值可能是旧的）。队列装的是**完整载荷**
+   * （正文 + 要真发的图片），不是纯文本——模块 2 起图片是 file part。
    */
-  const pending = useRef<OutgoingMessage[]>([])
-  const [queuedCount, setQueuedCount] = useState(0)
+  const queuedCount = useSessionsStore((state) => (state.queues[threadId] ?? []).length)
   /** 服务端截断失败时的重试素材（不静默丢） */
   const [pendingSync, setPendingSync] = useState<PendingSync | null>(null)
   /** round 19：压缩记录（对话流里那条「上下文已压缩」分界线的数据面） */
@@ -360,6 +367,21 @@ function ActiveChat({
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
+  /**
+   * round 62：动作闸门只算一次。三档"状态忙"：流式中 / 挂起等审批 / 压缩中 —— 原来这一串在
+   * 六处各写了一遍，加一条规则就得满文件找。**动作行的显隐看它**（渲染期的 state 就是它的全部）。
+   */
+  const locked = busy || waitingApproval || compacting
+  /**
+   * round 62：**执行时**的最后一道闸 = `locked` + `sending.current`。
+   *
+   * 为什么 ref 也要算：`dispatch` 置 `sending.current = true` 之后，要 await 物化、await 取用量、
+   * 可能还整轮压缩，才真正 `sendMessage` —— 这段窗口里 `busy` 还是 false（消息动作行照旧画着、
+   * `/压缩上下文` 照旧可点）。此时若放行撤回/编辑/压缩，就会与在途的 `sendMessage` 并发写服务端
+   * 历史。render 期读 ref 不触发更新，所以**显隐仍旧由 `locked` 决定**（观感不变），ref 只在事件
+   * 回调里现读 —— 拦的是"已经点下去的那一下"。
+   */
+  const isLocked = useCallback((): boolean => locked || sending.current, [locked])
   /**
    * 输入框上方审批条的数据（round 29）：当前挂起的审批，刨掉"本会话允许"命中的那些 ——
    * 命中的会由下面的 effect 立刻回灌放行，先把它们画出来只会闪一下。
@@ -496,12 +518,32 @@ function ActiveChat({
   )
 
   /**
+   * round 62：审批回灌的**唯一出口** —— 手动决策与"会话记忆自动放行"共用一条，形状不可能再分叉。
+   *
+   * `options` 是给"决策触发的自动续跑请求"用的（AI SDK 的类型注释点名了这个用途）：
+   * 续跑请求与普通发送走同一条路，线程上下文（memory.thread/resource）得同样带上，否则续跑那一轮
+   * 服务端拿不到会话（round 51 修的是手动这条路，自动那条漏了同一处）。
+   */
+  const respondToApproval = useCallback(
+    (request: ApprovalRequest, response: { approved: boolean; reason?: string }): void => {
+      void addToolApprovalResponse({
+        id: request.approvalId,
+        approved: response.approved,
+        ...(response.reason === undefined ? {} : { reason: response.reason }),
+        options: threadRequestOptions(threadId)
+      })
+    },
+    [addToolApprovalResponse, threadId]
+  )
+
+  /**
    * 审批决策（T13）：
    *   - 本会话允许 → 记进模块级内存（同对话 + 同工具 + 同工作区），这个对话里之后不再打扰；
    *   - 永久允许 → **先登记本会话记忆**（同轮内紧随的第二次写不再弹卡），再落一条规则进
    *     settings.permissions.rules（服务端下一轮就不再问）；落盘失败要露出来（见 permissionError）；
-   *   - 决策本身经 addToolApprovalResponse 回灌；`sendAutomaticallyWhen`（thread-chats 里挂的
-   *     `canResumeAfterApproval`，approval.ts）会在所有审批都有回应后自动把消息发回服务端执行。
+   *   - 决策本身经 addToolApprovalResponse 回灌（走 respondToApproval）；`sendAutomaticallyWhen`
+   *     （thread-chats 里挂的 `canResumeAfterApproval`，approval.ts）会在所有审批都有回应后自动把
+   *     消息发回服务端执行。
    * 两个记忆入口都要求工作区明确、且不是危险档（delete/move 服务端永远问、不吃记忆；审批卡
    * 不显示这两个入口，这里再守一道 —— 防任何调用方绕出"点了却不生效"的规则）。
    */
@@ -525,28 +567,26 @@ function ActiveChat({
             )
         }
       }
-      void addToolApprovalResponse({
-        id: request.approvalId,
-        approved: decision !== 'deny',
-        ...(decision === 'deny' ? { reason: '用户拒绝了这次操作' } : {}),
-        // `options` 是给"决策触发的自动续跑请求"用的（AI SDK 的类型注释点名了这个用途）：
-        // 续跑请求与普通发送走同一条路，线程上下文（memory.thread/resource）得同样带上，
-        // 否则续跑那一轮服务端拿不到会话。
-        options: threadRequestOptions(threadId)
-      })
+      respondToApproval(
+        request,
+        decision === 'deny' ? { approved: false, reason: '用户拒绝了这次操作' } : { approved: true }
+      )
     },
-    [addToolApprovalResponse, workspaces, threadId]
+    [respondToApproval, workspaces, threadId]
   )
 
-  /** 会话记忆命中的待批调用直接放行（"本会话允许"之后不再弹卡） */
+  /**
+   * 会话记忆命中的待批调用直接放行（"本会话允许"之后不再弹卡）。
+   * round 62：与手动决策共用 respondToApproval —— 自动续跑那次请求同样带线程上下文。
+   */
   useEffect(() => {
     for (const request of pendingApprovals(messages[messages.length - 1])) {
       const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
       if (workspace !== null && isAllowedForSession(threadId, request.toolName, workspace)) {
-        void addToolApprovalResponse({ id: request.approvalId, approved: true })
+        respondToApproval(request, { approved: true })
       }
     }
-  }, [messages, addToolApprovalResponse, workspaces, threadId])
+  }, [messages, respondToApproval, workspaces, threadId])
 
   /**
    * round 33：新一轮开跑就清掉上一轮的"被截停/被截断"提示 —— 发送、审批续跑、重试、编辑重发
@@ -557,13 +597,12 @@ function ActiveChat({
   }, [status, onClearTurnNotice])
 
   const flushNext = useCallback(() => {
-    const [next, ...rest] = pending.current
-    if (next === undefined) return
-    pending.current = rest
-    setQueuedCount(rest.length)
+    // round 62：队列在 store 里（切会话不丢）；取走即出队，不会重复补发同一条
+    const next = useSessionsStore.getState().takeQueuedMessage(threadId)
+    if (next === null) return
     // 走统一发送入口：补发同样过"超阈值先压缩"的预检（用户排队时可能已越过阈值）
     dispatch(next)
-  }, [dispatch])
+  }, [dispatch, threadId])
 
   /**
    * 一轮结束（从 busy 回到 ready）→ 补发排队的下一条。
@@ -572,13 +611,28 @@ function ActiveChat({
    * 出错收尾状态是 'error'（不是 ready），不自动补发——等用户决定重试还是改主意。
    * 还停在等审批（挂起轮）也不补发：用户还没做决策，替他往前跑只会把审批流搅乱。
    * round 57：同一处顺手把用量取数信号 +1（新一轮用量已落库 → 环与「压缩上下文」胶囊刷新）。
+   * round 62：**首次挂载**（previousStatus 还是 null）也看一次队列 —— 组件是按会话 id 重挂的，
+   * "切走再切回"时看不到"忙 → 空闲"那一下（那一轮的流是在别处收的尾），而队列还躺在 store 里：
+   * 有排队就补发，不让它一直排着（这一档不动用量信号：没发生新的轮末）。
+   *
+   * round 62 的另一条口径（`set-state-in-effect` 的豁免，下一行显式写下来）：`flushNext()` 会一路
+   * 走到 `sendMessage`，同步那一段里有几处 setState（清压缩提示 / 置压缩中位）——于是 react-hooks
+   * 的 set-state-in-effect 判它"effect 里同步 setState"。这里是**有意为之**：触发点是"一轮结束 /
+   * 切回会话时队列还排着"这类**外部事件**（一次轮末最多跑一次），不是渲染派生的状态，也不会每次
+   * 渲染级联。修前那条队列在组件内的 ref 里，规则按"ref 驱动的更新"放过；队列搬进 store 之后
+   * 这层豁免不再成立，所以把理由写在这里。更彻底的走法是把补发挪进 thread-chats 的 onTurnEnd
+   * 回调（外部系统的事件回调，规则认可的形状）——但那会绕开这里的发送预检与发送锁，本轮不动。
    */
-  const previousStatus = useRef(status)
+  const previousStatus = useRef<string | null>(null)
   useEffect(() => {
-    const wasBusy = previousStatus.current === 'submitted' || previousStatus.current === 'streaming'
+    // 挂载时 previousStatus.current 还是 null：等价于"刚才很忙"（重挂时看不到轮末那一下）
+    const firstRun = previousStatus.current === null
+    const wasBusy =
+      firstRun || previousStatus.current === 'submitted' || previousStatus.current === 'streaming'
     previousStatus.current = status
     if (!wasBusy || status !== 'ready') return
-    setUsageVersion((version) => version + 1)
+    if (!firstRun) setUsageVersion((version) => version + 1)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 理由见上面这条注释
     if (!waitingApproval) flushNext()
   }, [status, flushNext, waitingApproval])
 
@@ -587,26 +641,28 @@ function ActiveChat({
    * 为什么不是直发：审批挂起时直发会让 `sendAutomaticallyWhen` 的判定失效（它只看最后一条
    * 助手消息），决策回灌后再也不会自动续跑，卡片永远停在"审批已回应"；排队则等这一轮
    * （决策 → resume → 收尾）真正结束再发，语义与"流式中发送"完全一致。
+   * round 62：排队内容落在会话 store 上（切会话不丢）；闸门用 `isLocked()`（现读 ref，
+   * 预检在途的那段窗口也算忙）。
    */
   const submit = useCallback(
     (message: OutgoingMessage) => {
-      if (busy || waitingApproval || compacting || sending.current) {
-        pending.current = [...pending.current, message]
-        setQueuedCount(pending.current.length)
+      if (isLocked()) {
+        useSessionsStore.getState().enqueueMessage(threadId, message)
         return
       }
       dispatch(message)
     },
-    [busy, waitingApproval, compacting, dispatch]
+    [isLocked, dispatch, threadId]
   )
 
   /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致）。
    *  T13 N1：与编辑入口同一道闸门——流式中/等审批期间不动作（截断会把挂起消息删掉，而服务端
    *  run 快照还在，决策会对着空气回灌；流式中则是对当前这条流并发。闸门只在旧重试卡这条
-   *  窄路径上会被擦边：编辑入口本身在挂起期间是关的）。 */
+   *  窄路径上会被擦边：编辑入口本身在挂起期间是关的）。
+   *  round 62：闸门 = `isLocked()`（多一道"发送预检在途"——那段窗口 busy 还是 false）。 */
   const editResend = useCallback(
     (messageId: string, text: string) => {
-      if (busy || waitingApproval || compacting) return
+      if (isLocked()) return
       setPendingSync(null)
       truncateThread(threadId, messageId).then(
         () => {
@@ -617,7 +673,7 @@ function ActiveChat({
         }
       )
     },
-    [busy, waitingApproval, compacting, sendMessage, threadId]
+    [isLocked, sendMessage, threadId]
   )
 
   /** 重试 = 整轮重生成：先删掉上一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
@@ -627,7 +683,8 @@ function ActiveChat({
    *  错误卡那条路（出错时最后一条就是那条失败的助手回复）的既有行为不变。 */
   const regenerateReply = useCallback(
     (messageId: string | null) => {
-      if (busy || waitingApproval || compacting) return
+      // round 62：闸门统一成 isLocked()（含"发送预检在途"）
+      if (isLocked()) return
       const target =
         messageId === null
           ? messages[messages.length - 1]
@@ -646,7 +703,7 @@ function ActiveChat({
         }
       )
     },
-    [busy, waitingApproval, compacting, messages, regenerate, threadId]
+    [isLocked, messages, regenerate, threadId]
   )
 
   const retry = useCallback(() => regenerateReply(null), [regenerateReply])
@@ -664,7 +721,8 @@ function ActiveChat({
    */
   const undoMessage = useCallback(
     (messageId: string, text: string) => {
-      if (busy || waitingApproval || compacting) return
+      // round 62：闸门统一成 isLocked()（含"发送预检在途"）
+      if (isLocked()) return
       setPendingSync(null)
       truncateThread(threadId, messageId).then(
         () => {
@@ -680,7 +738,7 @@ function ActiveChat({
         }
       )
     },
-    [busy, waitingApproval, compacting, setMessages, threadId]
+    [isLocked, setMessages, threadId]
   )
 
   /** 截断失败的重试：把刚才没做完的动作原样再做一遍 */
@@ -703,7 +761,8 @@ function ActiveChat({
    * 操作失败的反馈（失败 / 没有可压缩的旧消息）。
    */
   const compactManually = useCallback(() => {
-    if (busy || waitingApproval || compacting) return
+    // round 62：闸门统一成 isLocked()（含"发送预检在途"——那段窗口动历史会与在途 send 并发）
+    if (isLocked()) return
     setCompactNotice(null)
     void runCompact().then((outcome) => {
       if (!outcome.ok) {
@@ -712,7 +771,7 @@ function ActiveChat({
         setCompactNotice({ tone: 'warning', text: '当前没有可压缩的旧消息' })
       }
     })
-  }, [busy, waitingApproval, compacting, runCompact])
+  }, [isLocked, runCompact])
 
   const syncError = pendingSync === null ? null : syncErrorOf(pendingSync)
 
@@ -720,8 +779,10 @@ function ActiveChat({
    * round 61：消息动作（编辑 / 撤回 / 重新生成）的**同一道闸** —— 三者都要在服务端动历史，
    * 与"正在跑的那一轮"（流式、挂起等审批）和"正在压上下文"互斥。关着就不给回调，
    * 消息上连动作行都不出现（口径见 Message 的头注）。
+   * round 62：就是上面算好的 `locked` —— 显隐看 state（"发送预检在途"那一下仍画着动作行，
+   * 真正点下去由回调里的 `isLocked()` 拦）。
    */
-  const actionsLocked = busy || waitingApproval || compacting
+  const actionsLocked = locked
 
   /**
    * round 59：初始页（空会话）—— 消息为空、没有错误、没有待审批时，输入框居中 + 品牌标题。
@@ -822,7 +883,7 @@ function ActiveChat({
             }}
             onCompact={compactManually}
             compactBusy={compacting}
-            compactDisabled={busy || waitingApproval}
+            compactDisabled={locked}
             externalNotice={compactNotice}
             usageVersion={usageVersion}
           />

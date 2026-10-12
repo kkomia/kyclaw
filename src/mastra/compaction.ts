@@ -467,115 +467,145 @@ export function createCompactionService(
 ): CompactionService {
   const now = options.now ?? ((): Date => new Date())
   const generate = options.generate ?? defaultGenerate
+  /**
+   * round 62：**同会话压缩的 single-flight**（`threadId → 在跑的那一个 Promise`）。
+   *
+   * 为什么非有不可：`compact()` 是"读快照（recall / store.get）→ 调模型 → 落记录 → 按快照删消息"
+   * 一长串，中途没有任何互斥。两次并发（用户双击手动入口、自动预压与手动入口撞上、或两个窗口
+   * 同时触发）会各自按同一份旧快照跑：两次 save 覆盖同一行、两次 deleteMessages 删同一批 id
+   * （后一次的摘要把前一次挤掉，等于白跑一轮、还可能丢掉前一次摘要里的信息）。
+   *
+   * 口径：同会话的并发调用**合并到同一个 Promise**（第二次拿到的是第一次的结果，连 keep 都不看
+   * ——它要的是"压缩这件事完成"）；跑完/失败都在 finally 里清账，下一次调用重新开始；
+   * 跨会话各跑各的（互不串行）。取舍参照同仓 `tools/guard.ts` 的 runExclusive，但那边是**串行排队**
+   * （每个调用都要跑），这里要的是**去重合并**（同一件事不做第二遍）。
+   */
+  const inFlight = new Map<string, Promise<CompactOutcome>>()
 
   return {
     current: (threadId) => options.store.get(threadId),
     clear: (threadId) => options.store.clear(threadId),
-    async compact(threadId, keep) {
-      // requested：调用方想要保留的条数（夹到 2–40，缺省 10）
-      const requested = Math.min(
-        KEEP_MAX,
-        Math.max(KEEP_MIN, Math.trunc(keep ?? DEFAULT_KEEP_MESSAGES))
-      )
-      // 已有摘要（重压要带上，见下）+ 一次读出来：无操作分支也要回它
-      const previous = await options.store.get(threadId)
-      // round 59：压缩前的 token 读数与 previous **一起在开头读**——摘要用量也是往 usage_runs
-      // 写一行（threadId 照记），落库之后再读就把摘要那一轮当成了"最近一轮"，tokensBefore 会
-      // 记成压缩后的数（分界线说反话）。这里读到的才是"压缩前最近一轮的实测输入"。
-      const readout = await readTokenReadout(options.usageOf, threadId)
-      const { messages } = await options.memory.recall({ threadId, perPage: false })
-      // round 58 自适应：条数够就按 requested 保留；条数比 requested 还少（"条数少、体量大"
-      // 的会话：几轮输入几十万 token）就收窄到 max(2, 条数 - 2)，也就是至少压掉 2 条、
-      // 留最后 2 条兜底——只剩 ≤2 条时才真的没得压。
-      const effective =
-        messages.length > requested ? requested : Math.max(KEEP_MIN, messages.length - 2)
-      if (messages.length <= effective) {
-        return { compacted: false, compaction: previous }
-      }
-
-      const older = messages.slice(0, messages.length - effective)
-      // 保留段 = older 之外的后半段（tokensAfter 里按字符折算计入）
-      const keptMessages = messages.slice(older.length)
-      // 摘要只数本轮真实消息（summarized/kept 同口径）；空素材判定也只看新素材
-      const material = buildTranscript(older)
-      if (material === '') {
-        throw new Error('压缩失败：这段历史没有可摘要的文本内容')
-      }
-      // 重压携带旧摘要：被删消息的原文早已不在库，不带上它二次压缩就会丢第一次摘要的信息
-      const prompt =
-        previous === null
-          ? material
-          : `${COMPACT_PREVIOUS_SUMMARY_TAG}\n${previous.summary}\n\n${material}`
-
-      const model = await options.resolveModel()
-      const result = await generate(model, {
-        system: COMPACT_INSTRUCTIONS,
-        prompt,
-        maxOutputTokens: COMPACT_MAX_OUTPUT_TOKENS,
-        abortSignal: AbortSignal.timeout(options.timeoutMs ?? COMPACTION_TIMEOUT_MS),
-        maxRetries: 0
+    /**
+     * round 62：入口先过 single-flight —— 同会话已有压缩在跑就直接把它那一个 Promise 交回去
+     * （第二次调用拿到的是同一份结果，连 keep 都不再看：它要的是"这件事完成"）；
+     * 跑完（成败都算）在 finally 里清账，下一次调用重新开始（不是永久缓存）。跨会话各跑各的。
+     */
+    compact(threadId, keep) {
+      const running = inFlight.get(threadId)
+      if (running !== undefined) return running
+      const started = compactOnce(threadId, keep).finally(() => {
+        inFlight.delete(threadId)
       })
-      const summary = result.text.trim()
-      if (summary === '') {
-        throw new Error('压缩失败：模型没有返回摘要内容')
-      }
-
-      const record: ThreadCompaction = {
-        threadId,
-        summary,
-        summarized: older.length,
-        kept: messages.length - older.length,
-        createdAt: now().toISOString(),
-        // round 59：读数读不到（没注入 / 查库失败）两个字段都 null；只有 lastInput 缺时 after 照算
-        tokensBefore: readout?.lastInput ?? null,
-        tokensAfter:
-          readout === null
-            ? null
-            : (readout.baselineInput ?? 0) +
-              estimateTokens(summary.length + transcriptChars(keptMessages))
-      }
-      // 先落记录、后删消息：中途失败宁可"摘要 + 旧消息都在"，也不丢历史
-      await options.store.save(record)
-      await options.memory.deleteMessages(older.map((message) => message.id))
-
-      // 记账是旁路：写库失败只记日志，不影响压缩结果（与 usage.ts 的纪律一致）
-      if (options.usage !== undefined && result.usage !== undefined) {
-        try {
-          const input = result.usage.inputTokens ?? 0
-          const output = result.usage.outputTokens ?? 0
-          if (input + output > 0) {
-            const modelId = typeof model.modelId === 'string' ? model.modelId : 'unknown'
-            const provider = typeof model.provider === 'string' ? model.provider : null
-            const pricing = pricingFor(modelId)
-            await options.usage.insert({
-              id: randomUUID(),
-              runId: null,
-              threadId,
-              model: modelId,
-              provider,
-              tokens: {
-                input,
-                output,
-                total: result.usage.totalTokens ?? input + output
-              },
-              cachedInput: result.usage.cachedInputTokens ?? null,
-              cost:
-                pricing === null
-                  ? null
-                  : computeCost(pricing, {
-                      input,
-                      output,
-                      cachedInput: result.usage.cachedInputTokens
-                    }),
-              createdAt: now().toISOString()
-            })
-          }
-        } catch (error) {
-          console.warn('[kyclaw] 压缩的用量记账失败（压缩结果不受影响）', error)
-        }
-      }
-
-      return { compacted: true, compaction: record }
+      inFlight.set(threadId, started)
+      return started
     }
+  }
+
+  /** 真正干活的这一轮（single-flight 的实体：同一会话同时最多跑一个） */
+  async function compactOnce(threadId: string, keep?: number): Promise<CompactOutcome> {
+    // requested：调用方想要保留的条数（夹到 2–40，缺省 10）
+    const requested = Math.min(
+      KEEP_MAX,
+      Math.max(KEEP_MIN, Math.trunc(keep ?? DEFAULT_KEEP_MESSAGES))
+    )
+    // 已有摘要（重压要带上，见下）+ 一次读出来：无操作分支也要回它
+    const previous = await options.store.get(threadId)
+    // round 59：压缩前的 token 读数与 previous **一起在开头读**——摘要用量也是往 usage_runs
+    // 写一行（threadId 照记），落库之后再读就把摘要那一轮当成了"最近一轮"，tokensBefore 会
+    // 记成压缩后的数（分界线说反话）。这里读到的才是"压缩前最近一轮的实测输入"。
+    const readout = await readTokenReadout(options.usageOf, threadId)
+    const { messages } = await options.memory.recall({ threadId, perPage: false })
+    // round 58 自适应：条数够就按 requested 保留；条数比 requested 还少（"条数少、体量大"
+    // 的会话：几轮输入几十万 token）就收窄到 max(2, 条数 - 2)，也就是至少压掉 2 条、
+    // 留最后 2 条兜底——只剩 ≤2 条时才真的没得压。
+    const effective =
+      messages.length > requested ? requested : Math.max(KEEP_MIN, messages.length - 2)
+    if (messages.length <= effective) {
+      return { compacted: false, compaction: previous }
+    }
+
+    const older = messages.slice(0, messages.length - effective)
+    // 保留段 = older 之外的后半段（tokensAfter 里按字符折算计入）
+    const keptMessages = messages.slice(older.length)
+    // 摘要只数本轮真实消息（summarized/kept 同口径）；空素材判定也只看新素材
+    const material = buildTranscript(older)
+    if (material === '') {
+      throw new Error('压缩失败：这段历史没有可摘要的文本内容')
+    }
+    // 重压携带旧摘要：被删消息的原文早已不在库，不带上它二次压缩就会丢第一次摘要的信息
+    const prompt =
+      previous === null
+        ? material
+        : `${COMPACT_PREVIOUS_SUMMARY_TAG}\n${previous.summary}\n\n${material}`
+
+    const model = await options.resolveModel()
+    const result = await generate(model, {
+      system: COMPACT_INSTRUCTIONS,
+      prompt,
+      maxOutputTokens: COMPACT_MAX_OUTPUT_TOKENS,
+      abortSignal: AbortSignal.timeout(options.timeoutMs ?? COMPACTION_TIMEOUT_MS),
+      maxRetries: 0
+    })
+    const summary = result.text.trim()
+    if (summary === '') {
+      throw new Error('压缩失败：模型没有返回摘要内容')
+    }
+
+    const record: ThreadCompaction = {
+      threadId,
+      summary,
+      summarized: older.length,
+      kept: messages.length - older.length,
+      createdAt: now().toISOString(),
+      // round 59：读数读不到（没注入 / 查库失败）两个字段都 null；只有 lastInput 缺时 after 照算
+      tokensBefore: readout?.lastInput ?? null,
+      tokensAfter:
+        readout === null
+          ? null
+          : (readout.baselineInput ?? 0) +
+            estimateTokens(summary.length + transcriptChars(keptMessages))
+    }
+    // 先落记录、后删消息：中途失败宁可"摘要 + 旧消息都在"，也不丢历史
+    await options.store.save(record)
+    await options.memory.deleteMessages(older.map((message) => message.id))
+
+    // 记账是旁路：写库失败只记日志，不影响压缩结果（与 usage.ts 的纪律一致）
+    if (options.usage !== undefined && result.usage !== undefined) {
+      try {
+        const input = result.usage.inputTokens ?? 0
+        const output = result.usage.outputTokens ?? 0
+        if (input + output > 0) {
+          const modelId = typeof model.modelId === 'string' ? model.modelId : 'unknown'
+          const provider = typeof model.provider === 'string' ? model.provider : null
+          const pricing = pricingFor(modelId)
+          await options.usage.insert({
+            id: randomUUID(),
+            runId: null,
+            threadId,
+            model: modelId,
+            provider,
+            tokens: {
+              input,
+              output,
+              total: result.usage.totalTokens ?? input + output
+            },
+            cachedInput: result.usage.cachedInputTokens ?? null,
+            cost:
+              pricing === null
+                ? null
+                : computeCost(pricing, {
+                    input,
+                    output,
+                    cachedInput: result.usage.cachedInputTokens
+                  }),
+            createdAt: now().toISOString()
+          })
+        }
+      } catch (error) {
+        console.warn('[kyclaw] 压缩的用量记账失败（压缩结果不受影响）', error)
+      }
+    }
+
+    return { compacted: true, compaction: record }
   }
 }
