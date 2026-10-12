@@ -378,6 +378,48 @@
   }
 }
 
+/* 滚动条 · 静置隐藏（round 50，用户实拍：左栏常驻一条灰条）：
+   只挂**左栏**的滚动区（会话导航 sidebar-nav-scroll / 设置左列 settings-nav）——这两块平时没有
+   "要提示滚动位置"的需求，静置时就该干净；指针进到滚动区（滚轮滚动必然在 hover 态）或区内有焦点
+   （Tab / 键盘滚动 → :focus-within）才恢复全站皮肤那一档。槽宽仍是 --scrollbar-size（只改颜色、
+   不动几何）→ 显隐不推挤内容，也没有"一出现就换行"的抖动。
+
+   为什么颜色要绕**元素上一条注册过的自定义属性**，而不是直接写 `&:hover::-webkit-scrollbar-thumb`：
+   Chromium 对"元素状态作用域下的滚动条伪元素规则"**不重绘** —— round 50 探针实测（取样记录见
+   .superpowers/sdd/2026-10-10-kyclaw-mvp/_r50-scrollbar-summary.md）：hover 前后滑块像素都是背景色，
+   连基础态不写规则也一样；而"元素上换一条**继承下去**的自定义属性"会重绘伪元素，
+   注册成可插值颜色（@property）再挂过渡就是真淡入（探针取样 transparent → rgb 逐帧变化）。
+   滑块自身的 hover 档（--scrollbar-thumb-hover）是**滚动条部件**的伪类，能重绘，所以照旧直接写颜色。
+   时长取 --motion-fast（0.15s，快档）：不硬切（雷点 5）；prefers-reduced-motion 下走全局那条
+   transition-duration: .01ms !important，直接到位。 */
+@property --scrollbar-thumb-auto {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
+@utility scrollbar-auto-hide {
+  --scrollbar-thumb-auto: transparent;
+  transition: --scrollbar-thumb-auto var(--motion-fast) var(--motion-ease-inout);
+
+  &::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-auto);
+  }
+
+  &:hover,
+  &:focus-within {
+    --scrollbar-thumb-auto: var(--scrollbar-thumb);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+}
+
 /* ===== 过程块：思考 / 工具链的折叠容器（round 6）=====
    对照《对话UI-工具链与显示口径 v0.1》§4.1/§1.7：
    高度走容器级 grid-template-rows 0fr ↔ 1fr **双向过渡**（禁条件渲染硬切，雷点 3/5），

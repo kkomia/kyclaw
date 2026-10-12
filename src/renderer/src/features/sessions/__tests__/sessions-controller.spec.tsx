@@ -172,6 +172,8 @@ describe('SessionsController：首屏与列表', () => {
     )
     // round 20：选中填充挂在**行容器**上（标题 + ⋯ 同一个圆角内），按钮自己只留 aria-current
     expect(screen.getByTestId('session-row-t-a')).toHaveClass('bg-selected')
+    // round 50：导航滚动容器挂静置隐藏的滚动条（机制与实测见 styles/__tests__/scrollbar-contract.spec.ts）
+    expect(screen.getByTestId('sidebar-nav-scroll')).toHaveClass('scrollbar-auto-hide')
   })
 
   it('点会话：选中它并回到对话页', async () => {

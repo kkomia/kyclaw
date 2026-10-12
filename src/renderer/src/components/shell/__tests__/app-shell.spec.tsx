@@ -179,6 +179,8 @@ describe('AppShell 三栏骨架', () => {
     renderShell('/settings')
 
     expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+    // round 50：设置左列与侧栏滚动区同款——静置不显示滚动条（见 scrollbar-contract.spec.ts）
+    expect(screen.getByTestId('settings-nav')).toHaveClass('scrollbar-auto-hide')
     expect(screen.getByTestId('settings-back')).toBeInTheDocument()
     expect(screen.queryByTestId('session-list')).not.toBeInTheDocument()
     expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()

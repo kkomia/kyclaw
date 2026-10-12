@@ -101,8 +101,12 @@ export function SessionsController(): React.JSX.Element {
           {actionError}
         </p>
       )}
-      {/* 整块导航共用一个滚动容器：项目区与平铺列表一起滚（列表自己的滚动关掉） */}
-      <div data-testid="sidebar-nav-scroll" className="min-h-0 flex-1 overflow-y-auto">
+      {/* 整块导航共用一个滚动容器：项目区与平铺列表一起滚（列表自己的滚动关掉）；
+          滚动条静置隐藏（round 50）：指针进栏/区内有焦点才淡入，见 tailwind.css 的 scrollbar-auto-hide */}
+      <div
+        data-testid="sidebar-nav-scroll"
+        className="scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto"
+      >
         <ProjectsSection />
         <SessionList
           sessions={sessions}

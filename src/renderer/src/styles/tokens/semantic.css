@@ -169,6 +169,10 @@
   --scrollbar-size: 6px;
   --scrollbar-thumb: var(--Fills-F2);
   --scrollbar-thumb-hover: var(--Fills-F3);
+  /* 静置档（round 50）：左栏那两个滚动区（tailwind.css 的 scrollbar-auto-hide）没被交互时的滑块色。
+     换档机制（元素上换一条 @property 注册过的颜色 → 伪元素才重绘、才能淡入）写在 tailwind.css 那段；
+     这里给 :root 一条静置值，类没挂上时也只是"不隐藏"，不会错色。 */
+  --scrollbar-thumb-auto: transparent;
 }
 
 :root[data-theme='dark'] {

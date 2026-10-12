@@ -136,4 +136,19 @@ describe('Tailwind 编译护栏', () => {
     expect(css).toContain('-webkit-app-region: drag')
     expect(css).toContain('-webkit-app-region: no-drag')
   })
+
+  it('左栏滚动条静置隐藏（round 50）：伪元素选择器与注册过的颜色变量真进产物', async () => {
+    // 用原始产物（不 flatten）：这里要看的就是嵌套写法本身有没有被保留
+    const css = await compileCandidates(['scrollbar-auto-hide'])
+
+    expect(css).toContain('@property --scrollbar-thumb-auto {')
+    expect(css).toContain("syntax: '<color>';")
+    expect(css).toContain('.scrollbar-auto-hide {')
+    expect(css).toContain('&::-webkit-scrollbar-thumb {')
+    expect(css).toContain('background-color: var(--scrollbar-thumb-auto);')
+    // 恢复档：元素级 hover / focus-within，以及滑块自身的 hover
+    expect(css).toContain('&:focus-within {')
+    expect(css).toContain('&::-webkit-scrollbar-thumb:hover {')
+    expect(css).toContain('background-color: var(--scrollbar-thumb-hover);')
+  })
 })

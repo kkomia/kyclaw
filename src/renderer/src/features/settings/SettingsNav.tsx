@@ -15,7 +15,7 @@ export function SettingsNav(): React.JSX.Element {
   return (
     <div
       data-testid="settings-nav"
-      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2"
+      className="scrollbar-auto-hide flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2"
     >
       <button
         type="button"
