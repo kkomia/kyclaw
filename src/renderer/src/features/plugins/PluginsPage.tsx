@@ -18,6 +18,7 @@ import {
 } from '@renderer/lib/plugins-api'
 import { fetchMcpServers, saveMcpServers } from '@renderer/lib/mcp-api'
 import type { PluginsOverview } from '@shared/plugins'
+import { BUILTIN_PLUGINS } from './builtin-plugins'
 import {
   mcpServerProblems,
   mcpServersProblems,
@@ -213,7 +214,10 @@ export function PluginsPage(): React.JSX.Element {
     }
   }, [importText])
 
-  const pluginCount = overview?.marketplaces.reduce((total, m) => total + m.plugins.length, 0) ?? 0
+  // 插件计数 = 这一栏列出的插件行数（round 48：内置插件常驻，也算在里面）
+  const pluginCount =
+    BUILTIN_PLUGINS.length +
+    (overview?.marketplaces.reduce((total, m) => total + m.plugins.length, 0) ?? 0)
   // 技能计数 = 已安装数（round 13：内置技能不再在界面里列，计数同步）
   const skillCount = overview?.installedSkills.length ?? 0
   const counts: Record<PluginsTab, number> = {

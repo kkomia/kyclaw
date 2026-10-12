@@ -5,9 +5,11 @@ import {
   installKyclawBridge,
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
+import { useSettingsStore } from '@renderer/lib/settings-store'
 import { mcpServersProblems, URL_PROBLEM, type McpTestResult } from '@shared/mcp'
 import type { PluginsOverview, MarketplacePluginView, MarketplaceView } from '@shared/plugins'
-import type { InstalledPlugin, McpServerConfig } from '@shared/settings'
+import { WEB_SEARCH_PRESET } from '@shared/search'
+import { defaultSettings, type InstalledPlugin, type McpServerConfig } from '@shared/settings'
 import { PluginsPage } from '../PluginsPage'
 
 /**
@@ -182,8 +184,8 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('plugins-tab-plugins')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'false')
     expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'false')
-    // 计数：插件 0 / MCP 0 / 技能 0（round 13：技能计数 = 已安装数，内置技能下线）
-    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('0')
+    // 计数：插件 1（round 48 起内置插件常驻，也算一行）/ MCP 0 / 技能 0（round 13：技能计数 = 已安装数，内置技能下线）
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('1')
     expect(screen.getByTestId('plugins-tab-mcp-count')).toHaveTextContent('0')
     expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('0')
 
@@ -661,7 +663,8 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(row).toHaveTextContent('demo-market')
     expect(row).toHaveTextContent('owner/repo')
     expect(row).toHaveTextContent('2 个插件')
-    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('2')
+    // 计数 = 内置 1 + 市场上的 2（round 48）
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('3')
 
     const p1 = screen.getByTestId('plugin-demo-p1')
     expect(p1).toHaveTextContent('一个本地插件')
@@ -851,6 +854,129 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('2')
     expect(screen.queryByTestId('skills-installed-empty')).not.toBeInTheDocument()
     expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
+  })
+})
+
+describe('round 48 · 内置插件（联网搜索）', () => {
+  beforeEach(() => {
+    // 内置插件的设置面读渲染端的设置副本：每个用例都从默认值起，免得跟着别处的改动漂
+    useSettingsStore.setState({ settings: defaultSettings() })
+  })
+
+  it('常驻：0 市场 0 插件也在「内置插件」一组里；没有安装 / 卸载，市场的两个空态照旧', async () => {
+    installPluginsBridge(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    const row = await screen.findByTestId('builtin-plugin-web-search')
+    expect(screen.getByTestId('builtin-plugins')).toHaveTextContent('内置插件')
+    expect(row).toHaveTextContent('联网搜索')
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    // 不是市场来的插件：没有安装 / 卸载 / 已安装态
+    for (const testId of [
+      'builtin-plugin-web-search-install',
+      'builtin-plugin-web-search-uninstall',
+      'builtin-plugin-web-search-state'
+    ]) {
+      expect(screen.queryByTestId(testId), testId).not.toBeInTheDocument()
+    }
+    // 市场的空态照旧；标签计数把常驻的内置插件算成一行
+    expect(screen.getByTestId('marketplace-empty')).toBeInTheDocument()
+    expect(screen.getByTestId('plugin-empty')).toBeInTheDocument()
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('1')
+  })
+
+  it('点行展开它的设置面；没点过不上 DOM，也不提前读密钥状态', async () => {
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    const row = await screen.findByTestId('builtin-plugin-web-search')
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('web-search-settings')).not.toBeInTheDocument()
+    expect(bridge.search.keyStates).not.toHaveBeenCalled()
+
+    fireEvent.click(row)
+
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'true')
+    expect(screen.getByTestId('builtin-plugin-web-search-settings')).toBeInTheDocument()
+    expect(await screen.findByTestId('web-search-mode-free')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByTestId('web-search-reader-endpoint')).toBeInTheDocument()
+    await waitFor(() => expect(bridge.search.keyStates).toHaveBeenCalled())
+  })
+
+  it('再点收起：不硬切（内容留在 DOM 里参与折叠过渡）', async () => {
+    installPluginsBridge(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    const row = await screen.findByTestId('builtin-plugin-web-search')
+    fireEvent.click(row)
+    fireEvent.click(row)
+
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
+    // 收起 ≠ 卸载：设置面还在 DOM 里（雷点 5）
+    expect(screen.getByTestId('web-search-settings')).toBeInTheDocument()
+  })
+
+  it('展开后的配置真能用：切自定义档当场落盘；地址与 Key 保存走各自的通道', async () => {
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    fireEvent.click(await screen.findByTestId('builtin-plugin-web-search'))
+
+    fireEvent.click(screen.getByTestId('web-search-mode-custom'))
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith(
+        expect.objectContaining({ webSearch: expect.objectContaining({ mode: 'custom' }) })
+      )
+    )
+    expect(screen.getByTestId('web-search-exa-key')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByTestId('web-search-reader-endpoint'), {
+      target: { value: 'https://reader.example.com' }
+    })
+    fireEvent.change(screen.getByTestId('web-search-exa-key'), { target: { value: 'exa-1' } })
+    fireEvent.click(screen.getByTestId('web-search-save'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        webSearch: {
+          mode: 'custom',
+          provider: 'exa',
+          exaEndpoint: WEB_SEARCH_PRESET.exaEndpoint,
+          readerEndpoint: 'https://reader.example.com'
+        }
+      })
+    )
+    await waitFor(() => expect(bridge.search.setKey).toHaveBeenCalledWith('exa', 'exa-1'))
+  })
+
+  it('与市场的安装态互不干扰：装了市场插件内置条目照旧，卸载也不动它', async () => {
+    const bridge = installPluginsBridge({
+      marketplaces: [marketplaceView()],
+      installed: [installedRecord()],
+      installedSkills: []
+    })
+    render(<PluginsPage />)
+
+    expect(await screen.findByTestId('plugin-demo-p1-uninstall')).toBeInTheDocument()
+    expect(screen.queryByTestId('builtin-plugin-web-search-uninstall')).not.toBeInTheDocument()
+
+    bridge.plugins.uninstall.mockResolvedValue({
+      marketplaces: [marketplaceView()],
+      installed: [],
+      installedSkills: []
+    })
+    fireEvent.click(screen.getByTestId('plugin-demo-p1-uninstall'))
+    fireEvent.click(screen.getByTestId('plugin-uninstall-confirm'))
+
+    await waitFor(() => expect(bridge.plugins.uninstall).toHaveBeenCalledWith('demo-p1'))
+    expect(screen.getByTestId('builtin-plugin-web-search')).toBeInTheDocument()
+    // 计数 = 内置 1 + 市场上的 1
+    expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('2')
   })
 })
 

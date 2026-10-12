@@ -69,6 +69,22 @@ describe('设置页骨架（栏目页）', () => {
     )
   })
 
+  it('round 48：联网搜索不再占设置页的一格——配置只在内置插件里（去重口径）', () => {
+    const model = render(
+      <MemoryRouter initialEntries={['/settings/model']}>
+        <SettingsPage />
+      </MemoryRouter>
+    )
+    expect(screen.queryByTestId('settings-group-web-search')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('web-search-settings')).not.toBeInTheDocument()
+    expect(screen.queryByText('联网搜索')).not.toBeInTheDocument()
+    model.unmount()
+
+    renderPage()
+    expect(screen.queryByTestId('settings-group-web-search')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('web-search-settings')).not.toBeInTheDocument()
+  })
+
   it('「记忆」/「用量」栏（round 5）：真实管理面（复用独立页的面板），不再是占位', async () => {
     const memoryView = render(
       <MemoryRouter initialEntries={['/settings/memory']}>

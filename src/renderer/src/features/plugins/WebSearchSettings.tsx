@@ -17,7 +17,9 @@ import {
 import type { SearchKeyStates } from '@shared/ipc'
 
 /**
- * 设置页「模型」栏的「联网搜索」组（round 45）：后端模式 + 服务商 + 两个服务地址 + 三个可选 Key。
+ * 内置插件「联网搜索」的设置面（round 45 在设置页「模型」栏，round 48 随插件页的
+ * 内置插件条目搬到 features/plugins/；**testid 与 IPC 调用一律不动**）：
+ * 后端模式 + 服务商 + 两个服务地址 + 三个可选 Key。
  *
  * 分工（与「思考翻译」/「记忆」同一套）：模式、服务商、两个地址是普通设置，经 settings:update
  * 落 settings.json；三个可选 Key（Exa / Tavily / Jina）只经 search:set-key 写方向过一次

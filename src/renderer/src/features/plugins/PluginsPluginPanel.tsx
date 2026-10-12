@@ -4,10 +4,12 @@ import { Dialog } from '@renderer/components/ui/dialog'
 import { fetchPluginIcon } from '@renderer/lib/plugins-api'
 import type { MarketplaceView } from '@shared/plugins'
 import type { InstalledPlugin } from '@shared/settings'
+import { PluginsBuiltinPanel } from './PluginsBuiltinPanel'
 import { PluginAvatar } from './PluginAvatar'
 
 /**
- * 插件页「插件」面板（round 10）：两块——**插件市场**（添加/刷新/移除）与**插件**（跨市场汇总，安装/卸载）。
+ * 插件页「插件」面板（round 10）：三块——**内置插件**（round 48，常驻、点开就是它的设置）、
+ * **插件市场**（添加/刷新/移除）与**插件**（跨市场汇总，安装/卸载）。
  * 市场 = git 仓库或本机目录（主进程判来源、克隆、校验清单）；插件行来自各市场的 marketplace.json，
  * 组件摘要（技能 n · MCP n）只有本地已存在的目录扫得出来（远端来源安装时才知道）。
  * 动作都经 props 抛给页面（页面拿总览、落错误）；确认框（移除市场 / 卸载）在这里。
@@ -85,6 +87,9 @@ export function PluginsPluginPanel({
 
   return (
     <div data-testid="plugins-plugin-panel" className="flex flex-col gap-5">
+      {/* round 48：内置插件常驻在最前（不来自市场、装不了也卸不掉），点行展开它自己的设置面 */}
+      <PluginsBuiltinPanel />
+
       <section className="flex flex-col gap-1">
         <h2 className="px-3 text-b2 font-medium text-ink">插件市场</h2>
         {marketplaces.length === 0 ? (

@@ -7,7 +7,8 @@ import { WEB_SEARCH_PRESET } from '@shared/search'
 import { WebSearchSettings } from '../WebSearchSettings'
 
 /**
- * 设置页「模型」栏的「联网搜索」组（round 45）：后端模式 + 服务商 + 两个地址 + 三个可选 Key。
+ * 内置插件「联网搜索」的设置面（round 45 起；round 48 随内置插件条目搬到插件页）：
+ * 后端模式 + 服务商 + 两个地址 + 三个可选 Key。
  * 模式/服务商当场落盘（settings:update）；两个地址改完点「保存」；三个 Key 走 search 通道
  * （写方向见一次明文，读方向只有"有没有 / 要不要重录"）。
  * 预置口径同思考翻译：落盘为空时表单按预置填，保存写下去的就是表单里看到的。
@@ -29,7 +30,7 @@ function withSettings(patch: Partial<ReturnType<typeof defaultSettings>['webSear
   })
 }
 
-describe('「联网搜索」组', () => {
+describe('内置插件「联网搜索」的设置面', () => {
   it('默认免费档：只有两个地址；服务商与 Key 输入都不出现', () => {
     installKyclawBridge()
     render(<WebSearchSettings />)
