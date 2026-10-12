@@ -123,9 +123,17 @@ describe('McpLifecycle：连接、命名与 gate', () => {
 
     const tool = tools['mcp__echo__echo']
     expect(tool.requireApproval).toBe(true)
-    // 判定走同一个 gate（参数是归一后的全名与模型给的入参）
+    // 判定走同一个 gate（参数是归一后的全名、模型给的入参，外加审批回调里取到的 session ——
+    // round 51 起回调没带上下文时就是 undefined，见 mcp.ts 的 needsApprovalFn 接线）
     expect(tool.needsApprovalFn?.({ message: 'hi' })).toBe(true)
-    expect(gate).toHaveBeenCalledWith('mcp__echo__echo', { message: 'hi' })
+    expect(gate).toHaveBeenCalledWith('mcp__echo__echo', { message: 'hi' }, undefined)
+
+    // round 51：回调带 requestContext（core 摊平后的 MastraMemory）时，线程 id 透传给 gate ——
+    // MCP 工具靠它按会话根判"无显式目标"的 full 免审（guard.approvalSessionOf）
+    gate.mockClear()
+    const approval = { requestContext: { MastraMemory: { thread: { id: 'thread-9' } } } }
+    expect(tool.needsApprovalFn?.({ message: 'hi2' }, approval as never)).toBe(true)
+    expect(gate).toHaveBeenCalledWith('mcp__echo__echo', { message: 'hi2' }, 'thread-9')
 
     // 设置没变：不重复发现，工具表还是那份
     const again = await lifecycle.tools(gateTrue)
