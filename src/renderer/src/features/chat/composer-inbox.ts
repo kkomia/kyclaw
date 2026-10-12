@@ -1,5 +1,7 @@
 /**
  * 「添加到上下文」的注入通道（round 42）：文件树右键 / 预览选中 → 输入卡的附件条。
+ * round 61 起同一个文件里还有第二条通道：「原文放回输入框」（消息动作行的「撤回」→ 草稿），
+ * 问题形状与解法完全相同，见下面 `ComposerDraft` 那一段。
  *
  * 为什么是一条通道而不是 props：生产方（工作台的文件树与预览）与消费方（输入卡）在组件树上
  * 毫无交情（一个在右侧边栏、一个在对话页），而草稿与附件是 Composer 的内部 state（对外没有
@@ -45,6 +47,38 @@ export function subscribeContextItems(listener: ContextItemListener): () => void
   listeners.add(listener)
   return () => {
     listeners.delete(listener)
+  }
+}
+
+/**
+ * 「原文放回输入框」的通道（round 61）：消息动作行的「撤回」确认后，对话页把被撤回那条
+ * 用户消息的原文交给输入卡。
+ *
+ * 为什么还是 pub/sub：与上面那条同一个问题 —— 生产方（对话页的消息动作）与消费方（输入卡）
+ * 之间没有 props 通路可走（草稿是 Composer 的内部 state，对话页拿不到写入口）。口径也照旧：
+ * **不落 store、不持久化**，带 threadId 做归属过滤，没人在听（非对话路由）就丢掉。
+ */
+export interface ComposerDraft {
+  threadId: string
+  /** 要放回输入框的原文（= 被撤回那条用户消息的文本 parts） */
+  text: string
+}
+
+type ComposerDraftListener = (draft: ComposerDraft) => void
+
+/** 当前挂着的订阅者（同时最多一个 Composer；与上面同理，Set 更省心） */
+const draftListeners = new Set<ComposerDraftListener>()
+
+/** 发布一次「把这段原文放回输入框」（同步派发；没人在听就等于没发生） */
+export function publishDraft(draft: ComposerDraft): void {
+  for (const listener of [...draftListeners]) listener(draft)
+}
+
+/** 订阅草稿回填（返回退订函数；Composer 挂载时订阅、换会话/卸载时退订） */
+export function subscribeDrafts(listener: ComposerDraftListener): () => void {
+  draftListeners.add(listener)
+  return () => {
+    draftListeners.delete(listener)
   }
 }
 

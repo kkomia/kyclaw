@@ -23,6 +23,7 @@ import type { ApprovalDecision } from './ApprovalCard'
 import type { ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
 import type { ThreadChatRuntime, TurnOutcome } from './thread-chats'
+import { publishDraft } from './composer-inbox'
 import { ApprovalDock } from './ApprovalDock'
 import { ChatHeader } from './ChatHeader'
 import { Composer } from './Composer'
@@ -62,6 +63,18 @@ function turnNoticeOf(outcome: TurnOutcome): string | null {
   if (outcome.finishReason === 'tool-calls') return '已达单轮步数上限，回复「继续」可接着做'
   if (outcome.finishReason === 'length') return '输出达到长度上限，内容被截断'
   return null
+}
+
+/**
+ * 截断没做成时给用户看的那句话（round 61 起按动作分档）：撤回与发送/重生成是两件事，
+ * 别说成同一句话；两者都**不静默**（走 pendingSync → 错误卡 +「重试」重做这一步）。
+ */
+function syncErrorOf(pendingSync: PendingSync): Error {
+  return new Error(
+    pendingSync.kind === 'undo'
+      ? '会话历史没能在服务端同步，已取消撤回（重试会重做这一步）'
+      : '会话历史没能在服务端同步，已取消发送（重试会重做这一步）'
+  )
 }
 
 /** 对话页的外框（round 21 拆两层；round 27 顶栏外提）：
@@ -273,9 +286,9 @@ interface ActiveChatProps {
   onClearTurnNotice: () => void
 }
 
-/** 编辑/重试先要在服务端截断的那一步失败了：带着原动作重试 */
+/** 编辑/重试/撤回先要在服务端截断的那一步失败了：带着原动作重试 */
 interface PendingSync {
-  kind: 'edit' | 'retry'
+  kind: 'edit' | 'retry' | 'undo'
   messageId: string
   text?: string
 }
@@ -331,10 +344,18 @@ function ActiveChat({
   /** 发送预检进行中（取用量 → 也许压缩）的防抖锁：status 更新前的小窗口里防连按双发 */
   const sending = useRef(false)
 
-  const { messages, sendMessage, regenerate, stop, status, error, addToolApprovalResponse } =
-    useChat({
-      chat
-    })
+  const {
+    messages,
+    setMessages,
+    sendMessage,
+    regenerate,
+    stop,
+    status,
+    error,
+    addToolApprovalResponse
+  } = useChat({
+    chat
+  })
   const busy = status === 'submitted' || status === 'streaming'
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
@@ -599,34 +620,82 @@ function ActiveChat({
     [busy, waitingApproval, compacting, sendMessage, threadId]
   )
 
-  /** 重试 = 整轮重生成：先删掉最后一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
-   *  T13 N1：同 editResend——等审批/流式中不重试（错误卡的旧重试按钮不能绕开闸门）。 */
-  const retry = useCallback(() => {
-    if (busy || waitingApproval || compacting) return
-    const last = messages[messages.length - 1]
-    if (last === undefined) return
-    setPendingSync(null)
-    const truncateFirst =
-      last.role === 'assistant' ? truncateThread(threadId, last.id) : Promise.resolve(0)
-    truncateFirst.then(
-      () => {
-        void regenerate(threadRequestOptions(threadId))
-      },
-      () => {
-        setPendingSync({ kind: 'retry', messageId: last.id })
-      }
-    )
-  }, [busy, waitingApproval, compacting, messages, regenerate, threadId])
+  /** 重试 = 整轮重生成：先删掉上一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
+   *  T13 N1：同 editResend——等审批/流式中不重试（错误卡的旧重试按钮不能绕开闸门）。
+   *  round 61：`messageId` 给定时就是「重新生成**这一条**」（消息动作行；客户端历史会被
+   *  regenerate 截到它之前，与服务端 truncate 同一刀）；缺省（null）= 列表最后一条 ——
+   *  错误卡那条路（出错时最后一条就是那条失败的助手回复）的既有行为不变。 */
+  const regenerateReply = useCallback(
+    (messageId: string | null) => {
+      if (busy || waitingApproval || compacting) return
+      const target =
+        messageId === null
+          ? messages[messages.length - 1]
+          : messages.find((message) => message.id === messageId)
+      if (target === undefined) return
+      setPendingSync(null)
+      const explicit = messageId === null ? {} : { messageId: target.id }
+      const truncateFirst =
+        target.role === 'assistant' ? truncateThread(threadId, target.id) : Promise.resolve(0)
+      truncateFirst.then(
+        () => {
+          void regenerate({ ...threadRequestOptions(threadId), ...explicit })
+        },
+        () => {
+          setPendingSync({ kind: 'retry', messageId: target.id })
+        }
+      )
+    },
+    [busy, waitingApproval, compacting, messages, regenerate, threadId]
+  )
+
+  const retry = useCallback(() => regenerateReply(null), [regenerateReply])
+
+  /**
+   * 撤回一条用户消息（round 61，消息动作行的「撤回」，Kimi 口径的 kyclaw 版）：
+   * 这条消息**及之后的对话**从上下文与列表里移除，这条消息的原文放回输入框；
+   * 工作区里已改动的文件不在这里、也不受影响（那是工具干的事）。
+   *
+   * 顺序与 editResend 同一条：**先服务端 truncate**（存储是权威），删成功了才动客户端 ——
+   * 反过来的话服务端记忆里还留着这条，下一轮又会把它带回来。
+   * 客户端移除走 useChat 的 setMessages（外部管理的 Chat 实例上直接改消息数组），**不重挂**：
+   * 重挂（dropThreadChat + reloadToken）要把整段历史重新拉一遍，而撤回只是砍掉尾巴。
+   * 截断失败不静默：走既有的 pendingSync（错误卡 + 「重试」把这一步重做一遍，原文也还在手里）。
+   */
+  const undoMessage = useCallback(
+    (messageId: string, text: string) => {
+      if (busy || waitingApproval || compacting) return
+      setPendingSync(null)
+      truncateThread(threadId, messageId).then(
+        () => {
+          setMessages((current) => {
+            const index = current.findIndex((message) => message.id === messageId)
+            return index === -1 ? current : current.slice(0, index)
+          })
+          // 原文放回输入框（草稿是 Composer 的内部 state，跨组件只这条通道，见 composer-inbox）
+          publishDraft({ threadId, text })
+        },
+        () => {
+          setPendingSync({ kind: 'undo', messageId, text })
+        }
+      )
+    },
+    [busy, waitingApproval, compacting, setMessages, threadId]
+  )
 
   /** 截断失败的重试：把刚才没做完的动作原样再做一遍 */
   const retryPendingSync = useCallback(() => {
     if (!pendingSync) return
     if (pendingSync.kind === 'edit') {
       editResend(pendingSync.messageId, pendingSync.text ?? '')
-    } else {
-      retry()
+      return
     }
-  }, [editResend, pendingSync, retry])
+    if (pendingSync.kind === 'undo') {
+      undoMessage(pendingSync.messageId, pendingSync.text ?? '')
+      return
+    }
+    regenerateReply(pendingSync.messageId)
+  }, [editResend, pendingSync, regenerateReply, undoMessage])
 
   /**
    * 「/」→「压缩上下文」（round 19）：立即压缩；流式/等审批/压缩中命令行为禁用态。
@@ -645,9 +714,14 @@ function ActiveChat({
     })
   }, [busy, waitingApproval, compacting, runCompact])
 
-  const syncError = pendingSync
-    ? new Error('会话历史没能在服务端同步，已取消发送（重试会重做这一步）')
-    : null
+  const syncError = pendingSync === null ? null : syncErrorOf(pendingSync)
+
+  /**
+   * round 61：消息动作（编辑 / 撤回 / 重新生成）的**同一道闸** —— 三者都要在服务端动历史，
+   * 与"正在跑的那一轮"（流式、挂起等审批）和"正在压上下文"互斥。关着就不给回调，
+   * 消息上连动作行都不出现（口径见 Message 的头注）。
+   */
+  const actionsLocked = busy || waitingApproval || compacting
 
   /**
    * round 59：初始页（空会话）—— 消息为空、没有错误、没有待审批时，输入框居中 + 品牌标题。
@@ -687,7 +761,10 @@ function ActiveChat({
           // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
           // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
           // round 19：压缩进行中也不给（两边都动同一批消息）
-          onEdit={busy || waitingApproval || compacting ? undefined : editResend}
+          onEdit={actionsLocked ? undefined : editResend}
+          // round 61：撤回 / 重新生成与编辑同一道闸（都能在服务端动历史，与流式/挂起轮/压缩互斥）
+          onUndo={actionsLocked ? undefined : undoMessage}
+          onRegenerate={actionsLocked ? undefined : regenerateReply}
           compaction={hero ? null : compaction}
           compacting={compacting}
           compactionIndex={compactionIndex}

@@ -11,7 +11,7 @@ import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from '
 import type { ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
-import { resolveContextItem, subscribeContextItems } from './composer-inbox'
+import { resolveContextItem, subscribeContextItems, subscribeDrafts } from './composer-inbox'
 import { ComposerSuggest } from './ComposerSuggest'
 import { ReferenceChipInner } from './reference-chip'
 import {
@@ -55,6 +55,7 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  *
  * 另一条入口（round 42）：工作台文件树的「添加到上下文」与预览区选中的「添加到上下文（摘选）」
  * 走 composer-inbox 的事件通道进来，落进**同一个附件条**、同一套上限（解析在订阅方做）。
+ * round 61：同一个通道里多了「原文放回输入框」（消息动作行的「撤回」→ 草稿），草稿只有这一条外部写入口。
  *
  * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
  * 与 round 15 的建议浮窗同一条路 ——
@@ -430,6 +431,20 @@ export function Composer({
       unsubscribe()
     }
   }, [threadId, vision, extractPdf])
+
+  /**
+   * round 61：「撤回」确认后把原文放回输入框（对话页 → 输入卡，见 composer-inbox 的草稿通道）。
+   * 只收本会话的事件；落草稿的同时把光标交回输入框末尾 —— 复用 pendingCaret 那套「渲染后落位」，
+   * 顺带把焦点从刚关掉的确认弹窗手里拿回来（那一下的落位在弹窗卸载之后，见下面的落位 effect）。
+   */
+  useEffect(() => {
+    if (threadId === null) return
+    return subscribeDrafts((draft) => {
+      if (draft.threadId !== threadId) return
+      setDraft(draft.text)
+      pendingCaret.current = draft.text.length
+    })
+  }, [threadId])
 
   return (
     <div

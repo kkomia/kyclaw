@@ -21,11 +21,22 @@ import { MessageRail } from './MessageRail'
  * 的定位规则插到"压缩时刻之后的第一条消息"之前；压缩进行中则画在"现在"（列表末尾）。
  * `compactionIndex` 是上层冻结的锚点（手动压缩时在手的本轮新发消息要算在压缩之前，光靠时间戳
  * 判不出来，见 ChatPage 的 compactionAnchor）：给了就用它，不给就自己按时间戳规则算。
+ *
+ * round 61：消息动作行（复制 / 重新生成 / 撤回）的回调从这里往下透传 ——
+ * **哪一条拿到什么是这一层判的**（「重新生成」只挂最后一条助手消息），
+ * 闸门（流式 / 等审批 / 压缩中）仍由上层算好（关着就整个不给回调）。
  */
 export interface MessageListProps {
   messages: UIMessage[]
   status: ChatStatus
   onEdit?: (messageId: string, text: string) => void
+  /** 撤回一条用户消息（确认流在 Message 里，见 ChatPage 的 undoMessage） */
+  onUndo?: (messageId: string, text: string) => void
+  /**
+   * 重新生成一条助手回复（round 61）：**只有最后一条助手消息拿得到**（其他助手消息不出现这枚钮），
+   * 闸门（流式 / 等审批 / 压缩中）由上层算好——关着就整个不给。
+   */
+  onRegenerate?: (messageId: string) => void
   /** round 19：压缩记录（null = 不渲染分界线） */
   compaction?: ThreadCompaction | null
   /** 压缩进行中（同一位置显示「正在压缩上下文…」） */
@@ -61,6 +72,8 @@ export function MessageList({
   messages,
   status,
   onEdit,
+  onUndo,
+  onRegenerate,
   compaction = null,
   compacting = false,
   compactionIndex
@@ -114,6 +127,14 @@ export function MessageList({
                 message={message}
                 streaming={status === 'streaming' && message.id === lastAssistantId}
                 onEdit={onEdit}
+                onUndo={onUndo}
+                /* 「重新生成」只挂最后一条助手消息上（`lastAssistantId` 与本条同一判据：
+                   最后一条消息就是助手消息时它才是"最后一条助手回复"） */
+                onRegenerate={
+                  onRegenerate === undefined || message.id !== lastAssistantId
+                    ? undefined
+                    : () => onRegenerate(message.id)
+                }
               />
             </Fragment>
           ))}
