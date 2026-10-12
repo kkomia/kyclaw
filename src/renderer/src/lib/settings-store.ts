@@ -5,7 +5,6 @@ import {
   type AppSettingsPatch,
   type ArchivedProject,
   type ArchivedThread,
-  type ModelCapability,
   type ModelPrefs,
   type ReasoningTranslateSettings,
   type SemanticRecallSettings,
@@ -71,11 +70,6 @@ export interface SettingsState {
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
   /** round 18：保存模型级偏好（思考挡位 / 对话长度百分比；以落盘结果为准，失败抛） */
   saveModelPrefs: (modelPrefs: Record<string, ModelPrefs>) => Promise<void>
-  /**
-   * 模块 2：写某个模型的能力覆盖（目前只有视觉；键 = 模型名原文）。以落盘结果为准，失败抛。
-   * 生效口径是"用户覆盖 > 注册表 > false"，所以这里写的就是用户显式的那一层。
-   */
-  setModelCapability: (model: string, patch: ModelCapability) => Promise<void>
   /** round 20：保存置顶会话 id 列表（侧栏排序用；以落盘结果为准，失败抛） */
   setPinnedThreads: (threadIds: string[]) => Promise<void>
   /** round 20：归档一个会话（写快照进 archivedThreads，并从置顶里摘掉；数据不删） */
@@ -106,7 +100,7 @@ export interface SettingsState {
    */
   saveReasoningTranslate: (patch: Partial<ReasoningTranslateSettings>) => Promise<void>
   /**
-   * round 45：保存联网搜索设置（模型栏「联网搜索」组；给谁就改谁）。
+   * round 45：保存联网搜索设置（设置面在内置插件「联网搜索」里；给谁就改谁）。
    * 三个可选 Key（Exa / Tavily / Jina）不在设置里，走 search 通道（与 provider 密钥同一套）。
    */
   saveWebSearch: (patch: Partial<WebSearchSettings>) => Promise<void>
@@ -177,13 +171,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   /** round 18：模型级偏好（思考挡位 / 对话长度百分比）——与 provider 同族：失败抛给调用方 */
   saveModelPrefs: async (modelPrefs) => {
     set({ settings: await settingsApi().update({ modelPrefs }) })
-  },
-
-  /** 模块 2：模型能力覆盖（键 = 模型名）——与 provider 同族：失败抛给调用方 */
-  setModelCapability: async (model, patch) => {
-    const current = get().settings.modelCapabilities
-    const next = { ...current, [model]: { ...current[model], ...patch } }
-    set({ settings: await settingsApi().update({ modelCapabilities: next }) })
   },
 
   /** round 20：置顶列表（整表替换，顺序无关）；与 provider 同族：失败抛给调用方 */

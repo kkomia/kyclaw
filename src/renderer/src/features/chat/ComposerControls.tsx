@@ -616,7 +616,6 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const probedModels = useSettingsStore((state) => state.settings.probedModels)
-  const modelCapabilities = useSettingsStore((state) => state.settings.modelCapabilities)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
   const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
@@ -667,8 +666,8 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
       id: provider.id,
       label: provider.model === '' ? provider.id : provider.model,
       selected: provider.isDefault,
-      // 模块 2：视觉模型给一个小标记（不解释后端；判据 = 用户覆盖 > 注册表 > false）
-      trailing: visionOf(provider.model, modelCapabilities[provider.model])
+      // 模块 2：视觉模型给一个小标记（不解释后端；判据 = 探测结论 > 注册表 > false，见 visionOf）
+      trailing: visionOf(provider.model, probedModels[probedKeyOf(provider.id, provider.model)])
         ? VISION_MARK
         : undefined,
       testId: `composer-model-${provider.id}`,

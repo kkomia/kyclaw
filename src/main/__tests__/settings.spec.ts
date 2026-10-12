@@ -30,7 +30,6 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
-      modelCapabilities: {},
       probedModels: {},
       pinnedThreads: [],
       pinnedProjects: [],
@@ -129,7 +128,6 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pluginMarketplaces: [],
       installedPlugins: [],
       modelPrefs: {},
-      modelCapabilities: {},
       probedModels: {},
       pinnedThreads: [],
       pinnedProjects: [],
@@ -157,6 +155,29 @@ describe('设置存储（userData 下的 settings.json）', () => {
         readerEndpoint: 'https://r.jina.ai'
       }
     })
+  })
+
+  it('round 46：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {
+    const file = settingsPath(dir)
+    // appSettingsSchema 是 strictObject：不剥掉旧键的话，整份设置会被当成坏文件丢回默认值
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'dark',
+        fontTier: 'large',
+        providers: [],
+        workspaces: [],
+        modelCapabilities: { 'deepseek-flash': { vision: true } }
+      }),
+      'utf8'
+    )
+
+    const settings = readSettings(file)
+    expect(settings.theme).toBe('dark')
+    expect(settings.fontTier).toBe('large')
+    expect(Object.keys(settings)).not.toContain('modelCapabilities')
+    // 落盘回写时也不会再带上那个键
+    expect(JSON.stringify(settings)).not.toContain('modelCapabilities')
   })
 
   it('思考翻译（round 32）：老文件没有这个字段时补成缺省（关着 + 预置服务）；落过盘的取值原样保留', () => {

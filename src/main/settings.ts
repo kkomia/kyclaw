@@ -27,9 +27,14 @@ export function settingsPath(userDataDir: string): string {
  * round 10 的 pluginMarketplaces / installedPlugins、round 18 的 modelPrefs、
  * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels、
  * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）、round 32 的 reasoningTranslate、
- * round 45 的 webSearch、模块 2 的 modelCapabilities。
+ * round 45 的 webSearch。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
+ *
+ * 反向还有一件事（round 46）：**删掉的老字段要在这里剥掉**。模块 2 的 `modelCapabilities`
+ * （"支持看图"手动开关年代留下的键）已经不在 schema 里了，而 appSettingsSchema 用的是
+ * strictObject —— 多一个未知键就整份校验失败（设置全丢回默认）。所以带旧键的文件必须先在这里
+ * 清理干净才进解析：这一条不是"补空值"，是"迁移时丢掉废除字段"。
  */
 function migrateStoredSettings(raw: unknown): unknown {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
@@ -43,7 +48,8 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.pluginMarketplaces === undefined) next.pluginMarketplaces = []
   if (next.installedPlugins === undefined) next.installedPlugins = []
   if (next.modelPrefs === undefined) next.modelPrefs = {}
-  if (next.modelCapabilities === undefined) next.modelCapabilities = {}
+  // round 46：手动"支持看图"开关删除——旧的覆盖记录不再读，直接剥掉（留着的键会让 strict 校验失败）
+  delete next.modelCapabilities
   if (next.probedModels === undefined) next.probedModels = {}
   if (next.pinnedThreads === undefined) next.pinnedThreads = []
   if (next.pinnedProjects === undefined) next.pinnedProjects = []

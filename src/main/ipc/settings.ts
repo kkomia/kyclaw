@@ -45,7 +45,7 @@ export function registerSettingsIpc(userDataDir: string): void {
     const [patch] = parseIpcArgs(settingsUpdateArgsSchema, args, IPC_CHANNELS.settings.update)
     // 落盘失败会把错误抛回渲染端（updateSettings 不吞写失败）
     const next = updateSettings(file, patch)
-    // round 22：provider 保存后**后台**探一轮元数据（不 await、不挡保存；失败静默）
+    // round 22：provider 保存后**后台**探一轮（元数据 + round 46 的视觉能力；不 await、不挡保存；失败静默）
     if (patch.providers !== undefined) {
       for (const provider of next.providers) {
         void probeProviderModelsQuietly({ file, readKey, providerId: provider.id })
@@ -89,8 +89,9 @@ export function registerSettingsIpc(userDataDir: string): void {
     return testConnection(provider, apiKey)
   })
 
-  // round 22：探测模型元数据（GET /models）。连接测试成功 / 模型菜单打开且过期时由渲染端触发；
-  // 静默失败（回当前设置）——探测是"尽力拿真实值"，不该挡用户在看的东西
+  // round 22 / 46：探这个 provider 的模型能力（GET /models 的元数据 + 一条真带图的 chat 定视觉）。
+  // 连接测试成功 / 模型菜单打开且过期 / 写完密钥时由渲染端触发；静默失败（回当前设置）
+  // ——探测是"尽力拿真实值"，不该挡用户在看的东西
   ipcMain.handle(IPC_CHANNELS.settings.probeModels, (_event, ...args) => {
     const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.probeModels)
     return probeProviderModelsQuietly({ file, readKey, providerId: id })

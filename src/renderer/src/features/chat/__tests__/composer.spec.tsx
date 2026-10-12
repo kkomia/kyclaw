@@ -1167,12 +1167,15 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
 })
 
 describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
-  /** 装一个"有默认 provider"的环境：模型名 + 用户覆盖决定视觉能力 */
+  /** 装一个"有默认 provider"的环境：模型名 + **探测结论**（round 46，没有手动开关）决定视觉能力 */
   function mount(
     model: string,
-    capabilities: AppSettings['modelCapabilities'] = {}
+    vision = false
   ): { onSend: ReturnType<typeof vi.fn>; bridge: KyclawBridgeStubs } {
-    const initial: AppSettings = { ...settingsWithProvider(model), modelCapabilities: capabilities }
+    const initial: AppSettings = {
+      ...settingsWithProvider(model),
+      probedModels: vision ? { [`p1:${model}`]: { vision: true } } : {}
+    }
     const bridge = installKyclawBridge(initial)
     useSettingsStore.setState({ settings: initial, loaded: true })
     const { onSend } = setup()
@@ -1195,14 +1198,14 @@ describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '当前模型不支持看图：可在设置 → 模型里标记视觉模型，或把图片内容用文字描述'
+        '已自动检测：当前模型不支持看图'
       )
     )
     expect(screen.queryByTestId('composer-attachment-shot.png')).not.toBeInTheDocument()
   })
 
-  it('vision=true（用户覆盖）→ 收下并给缩略图；发送时图片随消息真发（file part）', async () => {
-    const { onSend } = mount('deepseek-chat', { 'deepseek-chat': { vision: true } })
+  it('vision=true（探测结论）→ 收下并给缩略图；发送时图片随消息真发（file part）', async () => {
+    const { onSend } = mount('deepseek-chat', true)
 
     pick([new File(['png-bytes'], 'shot.png', { type: 'image/png' })])
 
@@ -1286,7 +1289,7 @@ describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
   })
 
   it('模型菜单：视觉模型带「看图」小标记；没有视觉的不带', async () => {
-    mount('deepseek-chat', { 'deepseek-chat': { vision: true } })
+    mount('deepseek-chat', true)
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     await waitFor(() => expect(screen.getByTestId('composer-model-p1')).toHaveTextContent('看图'))
 
@@ -1300,11 +1303,11 @@ describe('模块 2 · 图片与 PDF（视觉模型区分）', () => {
 describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件条）', () => {
   let bridge: KyclawBridgeStubs
 
-  /** 当前环境：一个能看图的模型（图片的收/拒要看它） */
+  /** 当前环境：一个能看图的模型（探测结论说了算；图片的收/拒要看它） */
   function mount(vision = true): ReturnType<typeof vi.fn> {
     const initial: AppSettings = {
       ...settingsWithProvider('deepseek-chat'),
-      modelCapabilities: vision ? { 'deepseek-chat': { vision: true } } : {}
+      probedModels: vision ? { 'p1:deepseek-chat': { vision: true } } : {}
     }
     bridge = installKyclawBridge(initial)
     useSettingsStore.setState({ settings: initial, loaded: true })
@@ -1481,7 +1484,7 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
 
     await waitFor(() =>
       expect(screen.getByTestId('composer-notice')).toHaveTextContent(
-        '未附加：图片.png（当前模型不支持看图'
+        '未附加：图片.png（已自动检测：当前模型不支持看图'
       )
     )
     // 视觉不看，连字节都不去拉

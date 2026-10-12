@@ -147,9 +147,11 @@ export function isPdfFile(file: File): boolean {
   return file.type.toLowerCase() === 'application/pdf' || extensionOf(file.name) === 'pdf'
 }
 
-/** 图片被拒时的固定说法（设置页那一行开关的位置就写在这句里） */
-export const NO_VISION_MESSAGE =
-  '当前模型不支持看图：可在设置 → 模型里标记视觉模型，或把图片内容用文字描述'
+/**
+ * 图片被拒时的固定说法（round 46）：能力是**自动探出来的**（注册模型后主进程真发一条带图请求），
+ * 用户没有开关可开、也不该去翻设置——所以这里只如实说结论，不解释后端、不给无效指引。
+ */
+export const NO_VISION_MESSAGE = '已自动检测：当前模型不支持看图'
 
 /**
  * 能不能收（不能收给出简短原因，调用方原样展示）。

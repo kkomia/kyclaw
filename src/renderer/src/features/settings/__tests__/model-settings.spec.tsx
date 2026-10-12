@@ -346,46 +346,39 @@ describe('模型组 · 测试连接', () => {
   })
 })
 
-describe('模块 2 · 当前模型的「支持看图」开关（用户覆盖 > 注册表 > false）', () => {
-  it('注册表说没有视觉（deepseek）→ 开关是关的；打开就写一条覆盖', async () => {
-    const bridge = await mount(withProviders(DEEPSEEK))
-
-    const toggle = screen.getByTestId('model-vision-switch')
-    expect(screen.getByTestId('model-vision')).toHaveTextContent('deepseek-flash')
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-
-    fireEvent.click(toggle)
-
-    await waitFor(() =>
-      expect(bridge.update).toHaveBeenLastCalledWith({
-        modelCapabilities: { 'deepseek-flash': { vision: true } }
-      })
-    )
-    expect(toggle).toHaveAttribute('aria-checked', 'true')
-  })
-
-  it('已有覆盖时按覆盖显示（键 = 模型名原文，不归一）', async () => {
-    await mount({
-      ...withProviders({ ...OPENAI, isDefault: true }, { ...DEEPSEEK, isDefault: false }),
-      modelCapabilities: { 'gpt-4o-mini': { vision: true } }
-    })
-
-    expect(screen.getByTestId('model-vision')).toHaveTextContent('gpt-4o-mini')
-    expect(screen.getByTestId('model-vision-switch')).toHaveAttribute('aria-checked', 'true')
-  })
-
-  it('写覆盖失败：错误露在页上，不静默', async () => {
-    const bridge = await mount(withProviders(DEEPSEEK))
-    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
-
-    fireEvent.click(screen.getByTestId('model-vision-switch'))
-
-    expect(await screen.findByTestId('model-page-error')).toHaveTextContent('磁盘满了')
-  })
-
-  it('没有 provider 时不画这一格（没有"当前模型"可标）', async () => {
-    await mount(defaultSettings())
+describe('模块 2 / round 46 · 能力探测（手动「支持看图」开关已删）', () => {
+  it('页面上不再有开关：能力只由探测标注（composer 的收/拒、菜单标记同源）', async () => {
+    await mount(withProviders(DEEPSEEK))
 
     expect(screen.queryByTestId('model-vision')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-vision-switch')).not.toBeInTheDocument()
+  })
+
+  it('写完密钥补一发探测：注册模型（填 key → 保存）就自动标注能力', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+
+    fireEvent.change(screen.getByTestId('provider-deepseek-key'), { target: { value: KEY } })
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+
+    await waitFor(() => expect(bridge.setProviderKey).toHaveBeenCalledWith('deepseek', KEY))
+    // settings:update 那一趟当时还没有 key（渲染端先存配置再写 key），所以这里必须再补一发
+    await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
+  })
+
+  it('没填新密钥时就那一趟（settings:update 自己会探），不重复发', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+
+    fireEvent.change(screen.getByTestId('provider-deepseek-model'), {
+      target: { value: 'deepseek-v4-pro' }
+    })
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        providers: [{ ...DEEPSEEK, model: 'deepseek-v4-pro' }]
+      })
+    )
+    expect(bridge.setProviderKey).not.toHaveBeenCalled()
+    expect(bridge.probeModels).not.toHaveBeenCalled()
   })
 })

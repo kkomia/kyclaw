@@ -6,7 +6,7 @@ import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
-import { visionOf } from '@shared/models'
+import { probedKeyOf, visionOf } from '@shared/models'
 import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
@@ -121,14 +121,17 @@ export function Composer({
     .filter((server) => server.enabled)
     .map((server) => ({ id: server.id, name: server.name }))
   /**
-   * 当前模型能不能看图（模块 2）：用户覆盖 > 注册表 > false（口径见 shared/models 的 visionOf）。
+   * 当前模型能不能看图（模块 2）：**探测结论 > 注册表 > false**（口径见 shared/models 的 visionOf；
+   * 结论来自注册/保存后主进程那条真带图的探测，没有手动开关）。
    * 图片的收/拒在这一层定，UI 上不给解释性小字——拒的时候由 pickFiles 给一句人话。
    */
   const currentProvider =
     settings.providers.find((provider) => provider.isDefault) ?? settings.providers[0]
   const vision = visionOf(
     currentProvider?.model,
-    currentProvider === undefined ? undefined : settings.modelCapabilities[currentProvider.model]
+    currentProvider === undefined
+      ? undefined
+      : settings.probedModels[probedKeyOf(currentProvider.id, currentProvider.model)]
   )
 
   /** 「引用技能」菜单的数据（round 13：插件装进来的技能；挂载 + 每次打开菜单时拉一遍） */

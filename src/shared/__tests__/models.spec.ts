@@ -197,7 +197,7 @@ describe('round 22 · probed 实测优先（GET /models 的真实元数据盖过
   })
 })
 
-describe('视觉能力（模块 2：用户覆盖 > 注册表 > false）', () => {
+describe('视觉能力（模块 2；round 46：探测结论 > 注册表 > false）', () => {
   it('注册表：deepseek 全系没有视觉（如实标 false）；未知模型保守 false', () => {
     for (const model of [
       'deepseek-v4-pro',
@@ -215,16 +215,23 @@ describe('视觉能力（模块 2：用户覆盖 > 注册表 > false）', () => 
     expect(visionOf('DeepSeek-V4-Pro')).toBe(false)
   })
 
-  it('用户覆盖压过注册表：true 覆盖 false，false 覆盖"注册表没写"的保守值', () => {
+  it('探测结论压过注册表：true / false 都算数（真发过带图请求的那条才是准的）', () => {
+    // 端点实测收了图（自配的多模态端点）→ 注册表说没有也认探测
     expect(visionOf('deepseek-chat', { vision: true })).toBe(true)
     expect(visionOf('gpt-4o', { vision: true })).toBe(true)
+    // 端点明确拒图
     expect(visionOf('gpt-4o', { vision: false })).toBe(false)
-    // 覆盖对象在但没写 vision = 没覆盖（回落注册表）
-    expect(visionOf('gpt-4o', {})).toBe(false)
-    expect(visionOf('gpt-4o', undefined)).toBe(false)
+    expect(visionOf('deepseek-flash', { vision: false })).toBe(false)
   })
 
-  it('modelSpecOf 带上 vision（probed 覆盖上下文/挡位时也不丢）', () => {
+  it('没有探测结论 → 回落注册表（"不知道"不等于"不能"）', () => {
+    expect(visionOf('gpt-4o', {})).toBe(false)
+    expect(visionOf('gpt-4o', undefined)).toBe(false)
+    // 只探出了上下文、还没探视觉：视觉那一项照旧走注册表 / 保守值
+    expect(visionOf('deepseek-chat', { contextWindow: 1_000_000 })).toBe(false)
+  })
+
+  it('modelSpecOf 带上 vision：探测结论优先；probed 只给上下文时回落注册表', () => {
     expect(modelSpecOf('deepseek-flash').vision).toBe(false)
     expect(
       modelSpecOf('deepseek-flash', {
@@ -233,5 +240,10 @@ describe('视觉能力（模块 2：用户覆盖 > 注册表 > false）', () => 
         fetchedAt: '2026-10-11T00:00:00.000Z'
       }).vision
     ).toBe(false)
+    expect(modelSpecOf('deepseek-flash', { vision: true }).vision).toBe(true)
+  })
+
+  it('只有视觉结论的记录不算"元数据新鲜"：菜单打开时元数据仍会被重抓', () => {
+    expect(isProbedFresh({ vision: true }, Date.now())).toBe(false)
   })
 })

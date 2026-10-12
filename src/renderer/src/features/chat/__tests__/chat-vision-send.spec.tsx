@@ -28,7 +28,8 @@ function settingsWithVision(): AppSettings {
         baseUrl: 'http://x/v1'
       }
     ],
-    modelCapabilities: { 'my-vision-model': { vision: true } }
+    // round 46：视觉能力由探测结论说了算（`<providerId>:<model>`），没有手动开关
+    probedModels: { 'p1:my-vision-model': { vision: true } }
   }
 }
 

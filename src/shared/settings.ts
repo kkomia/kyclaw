@@ -152,37 +152,29 @@ export const modelPrefsSchema = z.strictObject({
 export type ModelPrefs = z.infer<typeof modelPrefsSchema>
 
 /**
- * 模型能力的**用户覆盖**（模块 2）：按键 = 模型名（`provider.model` 原文，不归一——
- * 用户改模型名时旧覆盖自然失配，回落注册表，不会把整份设置读不出来）。
- *
- * 为什么需要覆盖：`GET /models` **给不出视觉能力**（探测回包里没有这一项，猜就是编），
- * 注册表只覆盖我们实测/明确知道的档位（deepseek 全系没有视觉，如实标 false）；
- * 用户自配的端点（本地多模态模型、第三方兼容服务）只能由用户说了算。
- * 生效口径：**用户覆盖 > 注册表 > false（保守）**，见 shared/models.ts 的 visionOf。
- */
-export const modelCapabilitySchema = z.strictObject({
-  /** 这个模型能不能看图（真发图片给模型；false = 图片会被 composer 人话拒收） */
-  vision: z.boolean().optional()
-})
-
-export type ModelCapability = z.infer<typeof modelCapabilitySchema>
-
-/**
- * 探测到的模型元数据（round 22）：`GET {baseUrl}/models` 的实测值，键 = `<providerId>:<modelId>`
- * （provider 的模型名原文，不归一——探测和消费两边同一个键函数 `probedKeyOf`）。
- * 取值优先级 = probed → 注册表 → 默认（见 shared/models.ts）；`fetchedAt` 用于 >24h 过期重抓。
+ * 探测到的模型元数据（round 22；视觉探测 round 46 起合住同一条记录）：
+ * 键 = `<providerId>:<modelId>`（provider 的模型名原文，不归一——探测和消费两边同一个键函数
+ * `probedKeyOf`）。两个来源各写各的字段：
+ *   - `GET {baseUrl}/models`（main/model-probe.ts 的 probeProviderModels）→ contextWindow / 挡位；
+ *   - **一条真发图片的最小 chat 请求**（同文件的 probeProviderVision）→ `vision`：
+ *     2xx = 端点收下了图（能看图）、明确拒图 = 不能，其余（认证/限流/超时/5xx）**不写**。
+ *     所以 `vision` 缺省 = **还不知道**（不是"不能"），消费侧回落注册表，见 shared/models.ts 的 visionOf。
+ * 取值优先级 = probed → 注册表 → 默认；`fetchedAt` 是 `GET /models` 那一趟的抓取时刻（>24h 过期重抓），
+ * 视觉判定不盖它（"这条记录新鲜"说的始终是元数据那一趟）。
  */
 export const probedModelSchema = z.strictObject({
-  /** 实测上下文长度（正整数） */
-  contextWindow: z.number().int().positive(),
+  /** 实测上下文长度（正整数；只有 `GET /models` 给得出——只探出视觉时这一项没有） */
+  contextWindow: z.number().int().positive().optional(),
   /** 实测最大输出（存档；暂未参与 UI） */
   maxOutputTokens: z.number().int().positive().optional(),
   /** 实测思考挡位（原样值；空/没有 = 回落注册表） */
   efforts: z.array(z.string().min(1)).optional(),
   /** 实测默认挡位（如 'high'；无效/没有 = `default`） */
   defaultEffort: z.string().min(1).optional(),
-  /** ISO 时间串（抓取时刻） */
-  fetchedAt: z.string()
+  /** 视觉能力实测（round 46：真发图片探出来的结论；没有 = 还没探出来，按注册表回落） */
+  vision: z.boolean().optional(),
+  /** ISO 时间串（`GET /models` 的抓取时刻；没有 = 只有视觉判定，不当作元数据新鲜） */
+  fetchedAt: z.string().optional()
 })
 
 export type ProbedModel = z.infer<typeof probedModelSchema>
@@ -329,9 +321,11 @@ export const appSettingsSchema = z.strictObject({
   installedPlugins: z.array(installedPluginSchema),
   /** round 18 的模型级偏好（`${providerId}/${model}` → 思考挡位 / 对话长度百分比；走 settings:update 补丁） */
   modelPrefs: z.record(z.string(), modelPrefsSchema),
-  /** 模块 2 的模型能力用户覆盖（模型名 → 视觉等；走 settings:update 补丁。旧落盘文件由 main/settings.ts 补空表） */
-  modelCapabilities: z.record(z.string(), modelCapabilitySchema),
-  /** round 22 的模型元数据实测缓存（`${providerId}:${model}` → 上下文/挡位；主进程探测，见 main/model-probe.ts） */
+  /**
+   * round 22 的模型实测缓存（`${providerId}:${model}` → 上下文/挡位/视觉；主进程探测，见 main/model-probe.ts）。
+   * round 46 起视觉能力也在这里（真发图片探出来的）——模块 2 的"用户覆盖"（旧的 modelCapabilities）
+   * 已经删掉：能力只由探测说话（读盘时由 main/settings.ts 的迁移剥掉旧键）。
+   */
   probedModels: z.record(z.string(), probedModelSchema),
   /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
   pinnedThreads: z.array(z.string().min(1)),
@@ -472,8 +466,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   langfuse: { endpoint: '' },
   semanticRecall: DEFAULT_SEMANTIC_RECALL,
   reasoningTranslate: DEFAULT_REASONING_TRANSLATE,
-  webSearch: DEFAULT_WEB_SEARCH,
-  modelCapabilities: {}
+  webSearch: DEFAULT_WEB_SEARCH
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -488,7 +481,6 @@ export function defaultSettings(): AppSettings {
     pluginMarketplaces: [],
     installedPlugins: [],
     modelPrefs: {},
-    modelCapabilities: {},
     probedModels: {},
     pinnedThreads: [],
     pinnedProjects: [],
