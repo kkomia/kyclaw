@@ -10,8 +10,14 @@
  *   3. `createCompactionProcessor`：agent 输入处理器，把摘要加成系统消息。
  *
  * 口径与边界（写报告时要照抄的部分）：
- *   - 保留窗口：缺省最近 10 条**存储消息**（≈5 轮对话；一张工具调用+结果算两条），
- *     调用方可传 keep（2–40）覆盖；消息总数 ≤ keep 时无可压缩，compacted=false；
+ *   - 保留窗口（round 58 起自适应）：先按调用方 keep 夹到 2–40（缺省 10 条**存储消息**，
+ *     ≈5 轮对话；一张工具调用+结果算两条）；消息总数 > 该值就按它保留，否则退到
+ *     max(KEEP_MIN, 条数 - 2)——所以"条数少、体量大"的会话（几轮输入几十万 token）
+ *     单独一按也能压：4 条 → 保留 2、压 2；3 条 → 保留 2、压 1；只剩 ≤2 条才是
+ *     "没有可压缩的旧消息"（compacted=false）；12 条以上与旧口径完全一致（长会话策略不变）；
+ *   - 重压携带旧摘要：被删消息的原文已不在库，所以压缩时先把现有摘要作为一段
+ *     「【此前摘要】」素材拼在摘要素材最前面，让新摘要把它折叠进去（否则二次压缩会丢
+ *     第一次摘要里的信息）；summarized / kept 只数本轮真实消息，不把旧摘要算进去；
  *   - "旧消息被裁" = `memory.deleteMessages` 物理删除（摘要已接管它们的信息）——
  *     压缩后 UI 回灌只出保留段 + 顶部「上下文已压缩」标记；
  *   - 先落记录、后删消息（中途失败宁可"摘要+旧消息都在"，也不丢历史）；摘要为空按失败抛；
@@ -41,7 +47,13 @@ export const COMPACTION_PROCESSOR_ID = 'kyclaw-compaction'
 /** 注入前缀的固定开头（测试与 UI 标记的口径从这里来） */
 export const COMPACTION_PREFIX_TAG = '【上下文已压缩】'
 
-/** 缺省保留的最近消息条数（≈5 轮对话） */
+/** 摘要素材里"此前摘要"小节的开头（round 58：重压携带旧摘要） */
+export const COMPACT_PREVIOUS_SUMMARY_TAG = '【此前摘要】'
+
+/**
+ * 缺省的保留窗口（≈5 轮对话）：消息总数超过它时保留最近这么多条。
+ * round 58 起窗口自适应：条数不足这个数时收窄到 max(KEEP_MIN, 条数 - 2)，见 compact()
+ */
 export const DEFAULT_KEEP_MESSAGES = 10
 
 /** keep 的可调范围（路由 schema 与这里同一口径） */
@@ -65,6 +77,7 @@ export const TRANSCRIPT_MAX_CHARS = 48_000
 
 /** 给模型的摘要素材指令：结构化四段（与 UI 标记展开里的摘要同构） */
 export const COMPACT_INSTRUCTIONS = `你是会话压缩器。下面是 AI 助手与用户对话中「较早的部分」（这段原文将在压缩后删除，只有你的摘要会被保留）。
+素材开头若有一段以「【此前摘要】」开头的内容，那是上一次压缩留下的摘要：请把它与后面的新素材合并成一份完整摘要，不要丢掉其中的要点。
 请把其中有长期价值的信息整理成结构化摘要，只输出摘要正文，包含四个小节：
 ## 要点
 ## 决定
@@ -87,7 +100,7 @@ export function compactionSqlClient(storage: LibSQLStore): SqliteClient {
 /** 摘要记录之外我们要的最小记录面（真实现落 libsql） */
 export interface CompactionStore {
   ensureTable(): Promise<void>
-  /** upsert：同一会话只留最新一条（每次压缩覆盖旧摘要） */
+  /** upsert：同一会话只留最新一条（旧摘要已被折进新摘要，见 compact() 的"携带"口径） */
   save(record: ThreadCompaction): Promise<void>
   get(threadId: string): Promise<ThreadCompaction | null>
   /** 删线程时顺手清掉它的压缩记录（幂等） */
@@ -232,14 +245,14 @@ async function defaultGenerate(
   }
 }
 
-/** 压缩结果：compacted=false 表示没到可压的规模（compaction 为现有记录或 null） */
+/** 压缩结果：compacted=false 表示没到可压的规模（只剩 ≤2 条消息；compaction 为现有记录或 null） */
 export interface CompactOutcome {
   compacted: boolean
   compaction: ThreadCompaction | null
 }
 
 export interface CompactionService {
-  /** 压缩一条会话（keep 缺省 = DEFAULT_KEEP_MESSAGES） */
+  /** 压缩一条会话（keep 缺省 = DEFAULT_KEEP_MESSAGES；保留窗口自适应，见头注） */
   compact(threadId: string, keep?: number): Promise<CompactOutcome>
   /** 现有压缩记录（顶部标记/GET 用） */
   current(threadId: string): Promise<ThreadCompaction | null>
@@ -361,25 +374,39 @@ export function createCompactionService(
     current: (threadId) => options.store.get(threadId),
     clear: (threadId) => options.store.clear(threadId),
     async compact(threadId, keep) {
-      const keepCount = Math.min(
+      // requested：调用方想要保留的条数（夹到 2–40，缺省 10）
+      const requested = Math.min(
         KEEP_MAX,
         Math.max(KEEP_MIN, Math.trunc(keep ?? DEFAULT_KEEP_MESSAGES))
       )
+      // 已有摘要（重压要带上，见下）+ 一次读出来：无操作分支也要回它
+      const previous = await options.store.get(threadId)
       const { messages } = await options.memory.recall({ threadId, perPage: false })
-      if (messages.length <= keepCount) {
-        return { compacted: false, compaction: await options.store.get(threadId) }
+      // round 58 自适应：条数够就按 requested 保留；条数比 requested 还少（"条数少、体量大"
+      // 的会话：几轮输入几十万 token）就收窄到 max(2, 条数 - 2)，也就是至少压掉 2 条、
+      // 留最后 2 条兜底——只剩 ≤2 条时才真的没得压。
+      const effective =
+        messages.length > requested ? requested : Math.max(KEEP_MIN, messages.length - 2)
+      if (messages.length <= effective) {
+        return { compacted: false, compaction: previous }
       }
 
-      const older = messages.slice(0, messages.length - keepCount)
-      const transcript = buildTranscript(older)
-      if (transcript === '') {
+      const older = messages.slice(0, messages.length - effective)
+      // 摘要只数本轮真实消息（summarized/kept 同口径）；空素材判定也只看新素材
+      const material = buildTranscript(older)
+      if (material === '') {
         throw new Error('压缩失败：这段历史没有可摘要的文本内容')
       }
+      // 重压携带旧摘要：被删消息的原文早已不在库，不带上它二次压缩就会丢第一次摘要的信息
+      const prompt =
+        previous === null
+          ? material
+          : `${COMPACT_PREVIOUS_SUMMARY_TAG}\n${previous.summary}\n\n${material}`
 
       const model = await options.resolveModel()
       const result = await generate(model, {
         system: COMPACT_INSTRUCTIONS,
-        prompt: transcript,
+        prompt,
         maxOutputTokens: COMPACT_MAX_OUTPUT_TOKENS,
         abortSignal: AbortSignal.timeout(options.timeoutMs ?? COMPACTION_TIMEOUT_MS),
         maxRetries: 0

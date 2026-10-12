@@ -4,12 +4,13 @@
  *
  *   1. 压缩服务（假 memory + 假模型）：保留最近 N 条 / 旧消息被裁 / 素材只含旧段 /
  *      记录落库 / 摘要为空与模型失败不炸（也不删消息）/ keep 夹取 / 摘要调用记 usage；
+ *      round 58：保留窗口自适应（4 条也能压、只剩 ≤2 条才无操作）+ 重压携带旧摘要；
  *   2. 注入处理器：有记录 → 加一条系统前缀（含摘要）；无记录 / 无会话 → 什么都不加；
  *   3. 真服务集成（startAgentServer：chat 路由 v7 + libsql + Memory + mock 模型）：
  *      多轮对话 → POST /compact → 旧消息从存储消失、记录可读、**下一轮请求的 prompt 带摘要**
  *      （mock 捕获 prompt 断言，不是只看回包）、压缩后继续对话 / 截断（编辑重发半边）正常。
  *
- * 口径细节见 src/mastra/compaction.ts 头注（保留窗口、先落记录后删消息、注入时序）。
+ * 口径细节见 src/mastra/compaction.ts 头注（保留窗口、重压携带、先落记录后删消息、注入时序）。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -31,6 +32,7 @@ import {
   COMPACTION_PREFIX_TAG,
   COMPACTION_TABLE,
   COMPACTION_PROCESSOR_ID,
+  COMPACT_PREVIOUS_SUMMARY_TAG,
   compactionPrefix,
   compactionSqlClient,
   createCompactionProcessor,
@@ -170,6 +172,7 @@ describe('压缩服务（假 memory + 假模型）', () => {
       generate: async () => ({ text: '摘要' })
     })
 
+    // round 58：长会话（条数 > requested）窗口与旧口径完全一致——策略没变
     const byDefault = await service.compact('thread-b')
     expect(byDefault.compaction).toMatchObject({ summarized: 2, kept: DEFAULT_KEEP_MESSAGES })
 
@@ -178,7 +181,7 @@ describe('压缩服务（假 memory + 假模型）', () => {
     expect(deleteMessages).toHaveBeenCalledTimes(2)
   })
 
-  it('消息数 ≤ keep：无可压缩，不调模型、不删消息，回现有记录', async () => {
+  it('只剩 ≤2 条：无可压缩，不调模型、不删消息，回现有记录（round 58 的自适应下界）', async () => {
     const existing: ThreadCompaction = {
       threadId: 'thread-c',
       summary: '上一次的摘要',
@@ -198,10 +201,93 @@ describe('压缩服务（假 memory + 假模型）', () => {
       generate
     })
 
+    // 保留窗口收窄到 max(2, 2-2)=2 = 条数，所以没得压（4 条起就压得动，见下一条）
     const outcome = await service.compact('thread-c', 4)
     expect(outcome).toEqual({ compacted: false, compaction: existing })
     expect(generate).not.toHaveBeenCalled()
     expect(deleteMessages).not.toHaveBeenCalled()
+  })
+
+  it('round 58 自适应：4 条（2 轮、条数少但体量大）也能压——保留 2、压 2、旧消息被删', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ]
+    const { memory, deleteMessages } = fakeMemory(messages)
+    const store = memoryStore()
+    // 摘要里带上模型 id：顺带确认模型真到了生成函数（与上面第一条用例同风格）
+    const generate = vi.fn(async (model: unknown, options: { prompt: string }) => ({
+      text: `摘要正文（${String((model as { modelId?: unknown }).modelId)}，素材 ${options.prompt.length} 字）`
+    }))
+    // keep 都不传：用户"单独命令一按"就是这条路（缺省 10 > 4，窗口自适应到 2）
+    const service = createCompactionService({ memory, store, resolveModel, generate })
+
+    const outcome = await service.compact('thread-adaptive4')
+
+    expect(outcome.compacted).toBe(true)
+    expect(outcome.compaction).toMatchObject({ summarized: 2, kept: 2 })
+    // 素材 = 最旧两条；保留段（m3/m4）不在里面
+    const prompt = generate.mock.calls[0]?.[1]?.prompt ?? ''
+    expect(prompt).toContain('旧问题')
+    expect(prompt).not.toContain('新问题')
+    expect(deleteMessages).toHaveBeenCalledTimes(1)
+    expect(deleteMessages.mock.calls[0]?.[0]).toEqual(['m1', 'm2'])
+    expect(await store.get('thread-adaptive4')).toEqual(outcome.compaction)
+  })
+
+  it('round 58 自适应：3 条 → 压 1、留最后 2 条兜底', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题')
+    ]
+    const { memory, deleteMessages } = fakeMemory(messages)
+    const service = createCompactionService({
+      memory,
+      store: memoryStore(),
+      resolveModel,
+      generate: async () => ({ text: '摘要正文' })
+    })
+
+    const outcome = await service.compact('thread-adaptive3')
+
+    expect(outcome.compacted).toBe(true)
+    expect(outcome.compaction).toMatchObject({ summarized: 1, kept: 2 })
+    expect(deleteMessages).toHaveBeenCalledWith(['m1'])
+  })
+
+  it('round 58 重压携带旧摘要：旧摘要拼在素材最前面（折叠进新摘要）；计数只数本轮消息', async () => {
+    const previous: ThreadCompaction = {
+      threadId: 'thread-carry',
+      summary: '## 要点\n- 上一轮定下用 libsql 存摘要',
+      summarized: 4,
+      kept: 2,
+      createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString()
+    }
+    const { memory, deleteMessages } = fakeMemory([
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ])
+    const store = memoryStore([previous])
+    const generate = vi.fn(async (model: unknown, options: { prompt: string }) => ({
+      text: `合并后的摘要（${String((model as { modelId?: unknown }).modelId)}，素材 ${options.prompt.length} 字）`
+    }))
+    const service = createCompactionService({ memory, store, resolveModel, generate })
+
+    const outcome = await service.compact('thread-carry')
+
+    expect(outcome.compacted).toBe(true)
+    // 计数只数本轮真实消息（旧摘要不算一条消息）
+    expect(outcome.compaction).toMatchObject({ summarized: 2, kept: 2 })
+    const prompt = generate.mock.calls[0]?.[1]?.prompt ?? ''
+    expect(prompt.startsWith(COMPACT_PREVIOUS_SUMMARY_TAG)).toBe(true)
+    expect(prompt).toContain('上一轮定下用 libsql 存摘要')
+    expect(prompt).toContain('旧问题')
+    expect(deleteMessages.mock.calls[0]?.[0]).toEqual(['m1', 'm2'])
   })
 
   it('模型失败：错误照抛、不删消息、记录不变（先落记录后删消息的反向保护）', async () => {
@@ -422,7 +508,7 @@ describe('压缩存储（真 libsql）', () => {
   })
 })
 
-describe('压缩路由（Hono + 假压缩服务）', () => {
+describe('压缩路由（Hono + 压缩服务：多数假件，一条真接线）', () => {
   const THREAD_ID = 'thread-route'
   const threadRow = {
     id: THREAD_ID,
@@ -560,6 +646,53 @@ describe('压缩路由（Hono + 假压缩服务）', () => {
     const emptyResponse = await empty.request(`/api/threads/${THREAD_ID}/compaction`)
     expect(emptyResponse.status).toBe(200)
     expect(threadCompactionResponseSchema.parse(await emptyResponse.json()).compaction).toBeNull()
+  })
+
+  // round 58：路由不另设门槛——4 条会话（条数少、体量大）就该压得动。这条用真压缩服务接线
+  // （上面的用例是假服务，只验回包形状）。
+  it('POST /:id/compact：4 条会话也回 compacted=true（真服务接线，空 body 用缺省 keep）', async () => {
+    const messages = [
+      storedMessage('m1', 'user', '旧问题'),
+      storedMessage('m2', 'assistant', '旧回答'),
+      storedMessage('m3', 'user', '新问题'),
+      storedMessage('m4', 'assistant', '新回答')
+    ]
+    const deleteMessages = vi.fn(async () => undefined)
+    const memory = {
+      getThreadById: vi.fn(async () => threadRow),
+      recall: vi.fn(async () => ({ messages })),
+      deleteMessages
+    }
+    const store = memoryStore()
+    const service = createCompactionService({
+      memory: memory as unknown as CompactionMemory,
+      store,
+      resolveModel: (async () => ({})) as never,
+      generate: async () => ({ text: '## 要点\n- 前两轮聊过的事' })
+    })
+    const app = new Hono().route(
+      '/api/threads',
+      createThreadsRouter({
+        memory: memory as never,
+        resolveModel: (async () => ({})) as never,
+        compaction: {
+          compact: (threadId, keep) => service.compact(threadId, keep),
+          of: (threadId) => store.get(threadId)
+        }
+      })
+    )
+
+    const response = await app.request(`/api/threads/${THREAD_ID}/compact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    })
+    expect(response.status).toBe(200)
+    const body = compactThreadResponseSchema.parse(await response.json())
+    expect(body.compacted).toBe(true)
+    expect(body.compaction).toMatchObject({ threadId: THREAD_ID, summarized: 2, kept: 2 })
+    expect(deleteMessages).toHaveBeenCalledWith(['m1', 'm2'])
+    expect(await store.get(THREAD_ID)).toEqual(body.compaction)
   })
 })
 
