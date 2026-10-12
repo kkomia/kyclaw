@@ -31,6 +31,16 @@ vi.mock('electron', () => ({
   }
 }))
 
+/**
+ * 后台探测（provider 保存后 fire-and-forget，round 22 / 48）换空实现：这份用例只测通道本身的行为，
+ * 探测请求（GET /models + 一条带图 chat）会跟"连接测试"抢同一个假服务器、把请求计数搅浑
+ * （保存 provider 时还没有 key，但探测的第二趟在微任务里跑，key 可能已经落进去了）。
+ * 探测自己的行为在 src/main/__tests__/model-probe.spec.ts 里测。
+ */
+vi.mock('../../model-probe', () => ({
+  probeProviderModelsQuietly: async () => undefined
+}))
+
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
