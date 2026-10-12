@@ -2,7 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 import { subscribeContextItems, type ContextItem } from '@renderer/features/chat/composer-inbox'
+import { useShellStore } from '@renderer/lib/shell-store'
 import type { WorkbenchRoot } from '../use-workbench-root'
+import { useWorkbenchStore } from '../workbench-store'
 import { FilesTool } from '../FilesTool'
 import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
 
@@ -166,6 +168,58 @@ describe('FilesTool：单击预览', () => {
     expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
       '这个文件不在磁盘上了'
     )
+  })
+})
+
+describe('round 50 · 在新标签页中查看（双击 / 右键）', () => {
+  it('双击文件：开预览标签并开面板；单击那一档原样不动（内联预览照旧）', async () => {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [{ name: 'notes.txt', kind: 'file', size: 12 }],
+      truncated: false
+    })
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '正文\n',
+      size: 12,
+      truncated: false
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('notes.txt')).toBeInTheDocument())
+
+    // 用户实报路径：真机双击 = 两次 click 之后再来一次 dblclick；单击本身照旧只走内联预览
+    const row = screen.getByText('notes.txt')
+    fireEvent.click(row)
+    expect(await screen.findByTestId('file-preview-text')).toHaveTextContent('正文')
+
+    // 面板先收着：双击要把它打开（否则新标签在收起的面板里看不见）
+    useShellStore.setState({ workPanelOpen: false })
+    fireEvent.doubleClick(row)
+
+    const tabs = useWorkbenchStore.getState().tabs
+    expect(tabs.map((tab) => tab.kind)).toEqual(['preview'])
+    expect(tabs[0]?.path).toBe('notes.txt')
+    expect(tabs[0]?.title).toBe('notes.txt')
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+    expect(useShellStore.getState().workPanelOpen).toBe(true)
+    // 单击那条链没被顶掉：内联预览还开着
+    expect(screen.getByTestId('file-preview')).toBeInTheDocument()
+  })
+
+  it('右键文件的菜单里有「在新标签页中查看」，点了就开；目录的那份没有这一项', async () => {
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('README.md'))
+    const item = screen.getByTestId('workbench-context-menu-preview')
+    expect(item).toHaveTextContent('在新标签页中查看')
+    fireEvent.click(item)
+
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['preview'])
+    expect(useWorkbenchStore.getState().tabs[0]?.path).toBe('README.md')
+
+    // 目录：菜单里没有这一项（标签看的是文件内容）
+    fireEvent.contextMenu(screen.getByText('src'))
+    expect(screen.queryByTestId('workbench-context-menu-preview')).not.toBeInTheDocument()
   })
 })
 
@@ -647,12 +701,15 @@ describe('round 42 · 右键「添加到上下文」', () => {
     expect(items[0]).toHaveTextContent('添加到上下文')
     expect(items.map((item) => item.textContent)).toEqual([
       '添加到上下文',
+      // round 50：文件的菜单里多一项「在新标签页中查看」（目录没有，见下）
+      '在新标签页中查看',
       '在文件资源管理器中定位',
       '复制路径'
     ])
 
     const dirMenu = menuOf('src')
     expect(within(dirMenu).queryByText('添加到上下文')).not.toBeInTheDocument()
+    expect(within(dirMenu).queryByText('在新标签页中查看')).not.toBeInTheDocument()
     expect(within(dirMenu).getAllByRole('menuitem')).toHaveLength(2)
   })
 

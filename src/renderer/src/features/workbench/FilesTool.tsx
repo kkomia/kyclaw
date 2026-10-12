@@ -16,11 +16,16 @@
  * round 44：工具条上的搜索钮把工具条与树之间展开一行搜索行（文件名 / 内容两种口径）。
  * 递归遍历、上限判定、大小写口径全在主进程（`workbench:search`），这里只管防抖、渲染与打开：
  * 查询（trim 后）不足 `SEARCH_QUERY_MIN` 个字符就回树；结果点击复用 `chooseFile` 那条预览链。
+ *
+ * round 50：**双击文件**（或右键「在新标签页中查看」）把这份文件开成一个**预览标签**
+ * （FilesTool 的单击内联预览原样不动）。开标签由 workbench-store 的 `openPreviewTab` 去重，
+ * 开面板由这里顺带做（store 不碰 shell-store）。
  */
 import {
   ChevronRight,
   Copy,
   File as FileIcon,
+  FileText,
   Folder,
   FolderOpen,
   FolderSearch,
@@ -33,8 +38,6 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   SEARCH_QUERY_MIN,
   type DirEntry,
-  type FileBytesResult,
-  type FilePreview,
   type WorkbenchSearchHit,
   type WorkbenchSearchMode,
   type WorkbenchSearchResult
@@ -45,23 +48,15 @@ import { Input } from '@renderer/components/ui/input'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { linesOfSelection, publishContextItem } from '@renderer/features/chat/composer-inbox'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
+import { useShellStore } from '@renderer/lib/shell-store'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
 import { ContextMenu, type ContextMenuState, type ContextMenuItem } from './ContextMenu'
-import { CodePreview } from './preview/CodePreview'
-import { ImagePreview } from './preview/ImagePreview'
-import { MarkdownPreview } from './preview/MarkdownPreview'
-import { PdfPreview } from './preview/PdfPreview'
-import { PptxPreview } from './preview/PptxPreview'
-import { TablePreview } from './preview/TablePreview'
-import {
-  LEGACY_OFFICE_NOTICE,
-  codeLanguageOf,
-  extensionOf,
-  previewModeOf,
-  type PreviewMode
-} from './preview/modes'
+import { PreviewBody } from './preview/PreviewBody'
+import { baseNameOf, readPreviewState, type PreviewState } from './preview/fetch'
+import { previewModeOf } from './preview/modes'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
 import { formatBytes } from './format'
+import { useWorkbenchStore } from './workbench-store'
 
 interface DirState {
   status: 'ready' | 'error'
@@ -73,21 +68,6 @@ interface DirState {
 /** 列目录失败时的状态（`entries` 留空，界面只看 error） */
 function failedDir(error: string): DirState {
   return { status: 'error', entries: [], truncated: false, error }
-}
-
-/** 预览拿到的值：文本通道（`FilePreview`）与字节通道（`FileBytesResult`）各一路 */
-type PreviewValue =
-  { channel: 'text'; preview: FilePreview } | { channel: 'bytes'; bytes: FileBytesResult }
-
-interface PreviewState {
-  /** 属于哪个线程（晚到的响应据此丢弃） */
-  threadId: string
-  relative: string
-  /** 按后缀定下来的渲染方式（决定走哪条通道、哪个组件） */
-  mode: PreviewMode
-  status: 'loading' | 'ready' | 'error'
-  value?: PreviewValue
-  error?: string
 }
 
 /** 输入停多久才真发搜索（防抖；打字期间一个请求都不发） */
@@ -159,24 +139,21 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
         return
       }
       setPreview({ threadId, relative, mode, status: 'loading' })
-      // 图片 / PDF 拉原始字节，办公三件与表格拉"抽好的结构"（都在字节通道上）；
-      // 文本 / markdown / 代码走文本通道（64KB 有界，承载不了上面的真渲染）
-      const remote = mode !== 'text' && mode !== 'markdown' && mode !== 'code'
-      const request = remote
-        ? workbench
-            .readBytes(threadId, relative)
-            .then((bytes): PreviewValue => ({ channel: 'bytes', bytes }))
-        : workbench
-            .readFile(threadId, relative)
-            .then((preview): PreviewValue => ({ channel: 'text', preview }))
-      void request.then(
-        (value) => setPreview({ threadId, relative, mode, status: 'ready', value }),
-        (error: unknown) =>
-          setPreview({ threadId, relative, mode, status: 'error', error: unwrapIpcError(error) })
-      )
+      // 取内容的那一段与预览标签共用（分流口径见 preview/fetch.ts）。响应带上"这是哪个会话的
+      // 哪份文件"的记账：预览标签那边要靠它判晚到，这边则让 `sourceTextOf`（摘选取行号）拿得到源文。
+      void readPreviewState(workbench, threadId, relative).then(setPreview)
     },
     [threadId, workbench]
   )
+
+  /**
+   * round 50：**双击文件**在新标签页里打开（单击的内联预览原样不动）。
+   * 开面板是调用方的事（store 只管标签）——这里顺带把右栏打开，否则新标签在收起的面板里看不见。
+   */
+  const openInTab = useCallback((relative: string): void => {
+    useWorkbenchStore.getState().openPreviewTab(relative)
+    useShellStore.getState().setWorkPanelOpen(true)
+  }, [])
 
   const toggleDir = useCallback(
     (relative: string): void => {
@@ -281,7 +258,7 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
   const addFileToContext = useCallback(
     (relative: string): void => {
       if (threadId === null) return
-      publishContextItem({ source: 'file', threadId, relative, name: baseName(relative) })
+      publishContextItem({ source: 'file', threadId, relative, name: baseNameOf(relative) })
     },
     [threadId]
   )
@@ -300,7 +277,7 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
         source: 'selection',
         threadId,
         relative: state.relative,
-        name: `${baseName(state.relative)} 摘选`,
+        name: `${baseNameOf(state.relative)} 摘选`,
         text,
         ...(lines === null ? {} : { lines })
       })
@@ -437,6 +414,7 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
             expanded={expanded}
             onToggle={toggleDir}
             onChoose={chooseFile}
+            onDoubleChoose={openInTab}
             onContext={(event, relative, isDir) => {
               event.preventDefault()
               setMenu({
@@ -452,6 +430,13 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
                           label: '添加到上下文',
                           icon: <MessageSquarePlus />,
                           onSelect: () => addFileToContext(relative)
+                        },
+                        // round 50：在新标签页里查看（目录不进——标签看的是文件内容）
+                        {
+                          id: 'preview',
+                          label: '在新标签页中查看',
+                          icon: <FileText />,
+                          onSelect: () => openInTab(relative)
                         }
                       ]),
                   {
@@ -479,11 +464,11 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
         <div className="contents" onContextMenu={(event) => onPreviewContextMenu(event, preview)}>
           <BottomSheet
             testId="file-preview"
-            title={baseName(preview.relative)}
+            title={baseNameOf(preview.relative)}
             onClose={() => setPreview(null)}
           >
             <div ref={previewBodyRef} data-testid="file-preview-body">
-              <PreviewBody state={preview} />
+              <PreviewBody relative={preview.relative} state={preview} mode={preview.mode} />
             </div>
           </BottomSheet>
         </div>
@@ -492,11 +477,6 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
       {menu === null ? null : <ContextMenu state={menu} onClose={() => setMenu(null)} />}
     </div>
   )
-}
-
-function baseName(relative: string): string {
-  const index = relative.lastIndexOf('/')
-  return index === -1 ? relative : relative.slice(index + 1)
 }
 
 /**
@@ -516,6 +496,8 @@ interface LevelProps {
   expanded: readonly string[]
   onToggle: (relative: string) => void
   onChoose: (relative: string) => void
+  /** 双击文件 = 在新标签页里看（目录没有这一档；见 Round 50） */
+  onDoubleChoose: (relative: string) => void
   onContext: (event: React.MouseEvent, relative: string, isDir: boolean) => void
 }
 
@@ -547,6 +529,7 @@ function Level(props: LevelProps): React.JSX.Element {
             depth={props.depth}
             entry={entry}
             onChoose={props.onChoose}
+            onDoubleChoose={props.onDoubleChoose}
             onContext={props.onContext}
           />
         )
@@ -563,6 +546,7 @@ function DirRow({
   expanded,
   onToggle,
   onChoose,
+  onDoubleChoose,
   onContext
 }: LevelProps & { entry: DirEntry }): React.JSX.Element {
   const open = expanded.includes(relative)
@@ -603,6 +587,7 @@ function DirRow({
               expanded={expanded}
               onToggle={onToggle}
               onChoose={onChoose}
+              onDoubleChoose={onDoubleChoose}
               onContext={onContext}
             />
           ) : null}
@@ -617,12 +602,14 @@ function Row({
   depth,
   entry,
   onChoose,
+  onDoubleChoose,
   onContext
 }: {
   relative: string
   depth: number
   entry: DirEntry
   onChoose: (relative: string) => void
+  onDoubleChoose: (relative: string) => void
   onContext: (event: React.MouseEvent, relative: string, isDir: boolean) => void
 }): React.JSX.Element {
   return (
@@ -632,6 +619,8 @@ function Row({
       data-kind="file"
       data-relative={relative}
       onClick={() => onChoose(relative)}
+      // 双击在新标签页里看（单击的内联预览不受影响：两次 click 之后才到的 dblclick）
+      onDoubleClick={() => onDoubleChoose(relative)}
       onContextMenu={(event) => onContext(event, relative, false)}
       style={{ paddingInlineStart: 8 + depth * 12 + 18 }}
       className="flex h-8 w-full cursor-default items-center gap-1.5 pr-2 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
@@ -755,159 +744,5 @@ function SearchHitRow({
         </span>
       )}
     </button>
-  )
-}
-
-/**
- * 预览体：按格式分派 ——
- *   - `.md` / `.markdown`：走 markdown 渲染器（内容仍来自文本通道）；
- *   - 代码扩展名（`previewModeOf` 认得出的那些）：同一份文本过代码高亮；
- *   - 图片 / `.pdf` / 办公三件 / csv：走字节通道（原始字节或主进程抽好的结构）；
- *   - `.doc` / `.xls` / `.ppt`：不读文件，直接给"另存为新格式"的人话；
- *   - 其余：文本档原样（monospace、换行保留）；二进制/过大给人话。
- */
-function PreviewBody({ state }: { state: PreviewState }): React.JSX.Element {
-  if (state.status === 'loading') {
-    return (
-      <div className="flex justify-center py-4">
-        <Spinner label="加载中" className="text-ink-tertiary" />
-      </div>
-    )
-  }
-  if (state.status === 'error') {
-    return <ToolError testId="file-preview-error" message={state.error ?? '读不了这个文件'} />
-  }
-
-  // 旧版 Office：没有 value（压根没读文件），人话在这儿收口
-  if (state.mode === 'office-legacy') {
-    return (
-      <p data-testid="file-preview-legacy" className="px-3 py-2 text-b2 text-ink-secondary">
-        {LEGACY_OFFICE_NOTICE[extensionOf(state.relative)] ?? '这个旧版 Office 文件暂不支持预览'}
-      </p>
-    )
-  }
-
-  const value = state.value
-  if (value === undefined) return <div />
-  if (value.channel === 'bytes') {
-    // key 绑文件名：换文件即重挂，免得上一个文件的状态（坏图标记 / 已画页数 / 当前工作表）跟过来
-    return <BytesBody key={state.relative} result={value.bytes} />
-  }
-  return <TextBody mode={state.mode} relative={state.relative} preview={value.preview} />
-}
-
-/** 文本通道的那三种结果（markdown / 代码只是把它们里的 `text` 过一遍对应的渲染器） */
-function TextBody({
-  mode,
-  relative,
-  preview
-}: {
-  mode: PreviewMode
-  relative: string
-  preview: FilePreview
-}): React.JSX.Element {
-  if (preview.kind === 'binary') {
-    return (
-      <p data-testid="file-preview-binary" className="px-3 py-2 text-b2 text-ink-secondary">
-        这是二进制文件（{formatBytes(preview.size)}）
-      </p>
-    )
-  }
-  if (preview.kind === 'too-large') {
-    return (
-      <p data-testid="file-preview-large" className="px-3 py-2 text-b2 text-ink-secondary">
-        文件太大（{formatBytes(preview.size)}），不适合在这里预览
-      </p>
-    )
-  }
-
-  const language = mode === 'code' ? codeLanguageOf(relative) : null
-
-  return (
-    <div className="py-2">
-      {mode === 'markdown' ? (
-        <MarkdownPreview text={preview.text} />
-      ) : language === null ? (
-        <div data-testid="file-preview-text" className="px-3">
-          <pre className="font-mono text-b2 whitespace-pre-wrap break-all text-ink">
-            {preview.text}
-          </pre>
-        </div>
-      ) : (
-        <CodePreview text={preview.text} language={language} />
-      )}
-      {preview.truncated ? (
-        <p className="px-3 pt-2 text-b2 text-ink-tertiary">
-          只显示前面一部分（共 {formatBytes(preview.size)}）
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
-/** 字节通道：认得出的格式交给对应的渲染器；其余三种给人话（与文本档同口径） */
-function BytesBody({ result }: { result: FileBytesResult }): React.JSX.Element {
-  if (result.kind === 'missing') {
-    return (
-      <p data-testid="file-preview-missing" className="px-3 py-2 text-b2 text-ink-secondary">
-        这个文件不在磁盘上了（可能刚被删除或改名）
-      </p>
-    )
-  }
-  if (result.kind === 'too-large') {
-    return (
-      <p data-testid="file-preview-large" className="px-3 py-2 text-b2 text-ink-secondary">
-        文件太大（{formatBytes(result.size)}），不适合在这里预览
-      </p>
-    )
-  }
-  if (result.kind === 'unsupported') {
-    // 后缀认得、内容对不上暗号（或后缀不认得）：按二进制占位，不猜、不硬画
-    return (
-      <p data-testid="file-preview-binary" className="px-3 py-2 text-b2 text-ink-secondary">
-        这是二进制文件（{formatBytes(result.size)}）
-      </p>
-    )
-  }
-
-  if (result.kind === 'docx') {
-    // Word 在主进程已转成 markdown：这里就是 markdown 渲染器（同一个组件，零新渲染器）
-    return (
-      <div className="py-2">
-        <MarkdownPreview text={result.markdown} />
-        {result.truncated ? (
-          <p
-            data-testid="file-preview-docx-truncated"
-            className="px-3 pt-2 text-b2 text-ink-tertiary"
-          >
-            文档太长，只显示了前面一部分
-          </p>
-        ) : null}
-      </div>
-    )
-  }
-  if (result.kind === 'xlsx') {
-    return (
-      <div className="py-2">
-        <TablePreview sheets={result.sheets} />
-        {result.truncated ? (
-          <p
-            data-testid="file-preview-table-sheets-truncated"
-            className="px-3 pt-2 text-b2 text-ink-tertiary"
-          >
-            工作表太多，只显示了前 {result.sheets.length} 张
-          </p>
-        ) : null}
-      </div>
-    )
-  }
-  if (result.kind === 'pptx') {
-    return <PptxPreview slides={result.slides} truncated={result.truncated} />
-  }
-
-  return result.format === 'pdf' ? (
-    <PdfPreview bytes={result.bytes} />
-  ) : (
-    <ImagePreview format={result.format} bytes={result.bytes} />
   )
 }

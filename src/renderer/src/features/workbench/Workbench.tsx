@@ -7,7 +7,7 @@
  * （`transition-[opacity,visibility]`）：visibility 在过渡结束时才翻，所以淡出是完整的、不硬切（雷点 5）。
  *
  * 标签标题：浏览器 = 页面标题（webview 的 page-title-updated）→ 网址主机名兜底；文件 = 根目录名；
- * Git = 「改动」；终端 = 「终端」。过长的 CSS 截断（ellipsis + title 属性）。
+ * Git = 「改动」；终端 = 「终端」；预览 = 文件名（见 tabLabel）。过长的 CSS 截断（ellipsis + title 属性）。
  *
  * 面板底铺 `bg-surface`（与内容区同色，看不出差别）：万一 `<webview>` 这种原生客人不吃祖先的
  * visibility，后画的工具面板仍能把它盖住（浏览器是第一个标签，DOM 顺序在最后）。
@@ -21,8 +21,13 @@
  * 那段窗口（`settling`）里三件按根开工的工具先不挂，只给一圈 spinner（见 renderTool）。
  * 同轮（用户补充口径）：启动不再兜底一个「文件」标签（空态 = EmptyActions）；变根时标签不是清空，
  * 而是**按根存取**（switchRoot：旧根存起来、新根取上次的样子）——"切走再切回来还要有"。
+ *
+ * round 50：第五种标签 `preview`（文件预览，双击文件 / 右键「在新标签页中查看」来开，见 FilesTool）
+ * 也走上面那套 —— 按 `${kind}:${rootPath}:${threadId}` 重挂（换会话/换根即重读该文件，不留旧根的内容），
+ * 且同样受 settling 门约束（那段窗口里主进程还按兜底根解析，读回来的是别的文件夹里的同名文件）。
  */
 import {
+  FileText,
   FolderTree,
   GitBranch,
   Globe,
@@ -41,12 +46,11 @@ import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { EmptyActions } from './EmptyActions'
-import { matchWorkbenchShortcut } from './workbench-actions'
+import { matchWorkbenchShortcut, WORKBENCH_ACTIONS } from './workbench-actions'
 import { useWorkbenchRoot, type WorkbenchRoot } from './use-workbench-root'
 import {
   browserTabTitle,
   useWorkbenchStore,
-  WORKBENCH_KINDS,
   type WorkbenchTab,
   type WorkbenchTabKind
 } from './workbench-store'
@@ -54,6 +58,7 @@ import type { WebviewNavigateEvent, WebviewTitleEvent } from './webview-element'
 import { BrowserTool } from './BrowserTool'
 import { FilesTool } from './FilesTool'
 import { GitTool } from './GitTool'
+import { PreviewTool } from './PreviewTool'
 import { TerminalTool } from './TerminalTool'
 
 /** 工具的正式名（新建菜单与面板 aria-label 用；标签标题见 tabLabel） */
@@ -61,14 +66,16 @@ const TOOL_LABEL: Record<WorkbenchTabKind, string> = {
   browser: '浏览器',
   files: '文件',
   git: 'Git',
-  terminal: '终端'
+  terminal: '终端',
+  preview: '预览'
 }
 
 const TAB_ICON: Record<WorkbenchTabKind, LucideIcon> = {
   browser: Globe,
   files: FolderTree,
   git: GitBranch,
-  terminal: SquareTerminal
+  terminal: SquareTerminal,
+  preview: FileText
 }
 
 export function Workbench(): React.JSX.Element {
@@ -235,7 +242,7 @@ export function Workbench(): React.JSX.Element {
                 )}
               >
                 {tab.kind === 'browser' ? <BrowserTabTitle tabId={tab.id} /> : null}
-                {renderTool(tab.kind, root, active)}
+                {renderTool(tab.kind, root, active, tab)}
               </section>
             )
           })}
@@ -256,31 +263,37 @@ function tabLabel(tab: WorkbenchTab, root: WorkbenchRoot): string {
       return '改动'
     case 'terminal':
       return TOOL_LABEL.terminal
+    case 'preview':
+      // round 50：预览标签看的是**一份文件**，名字就是文件名（开标签时记进 title）
+      return tab.title ?? TOOL_LABEL.preview
   }
 }
 
+/**
+ * ＋ 菜单里的"新建"项：**空态那四行工具**（workbench-actions 那张表），不含预览 ——
+ * 预览不是"新建一个空标签"能开的东西，它得先有一份文件（双击文件 / 右键来开）。
+ */
 function newTabItems(openTab: (kind: WorkbenchTabKind) => void): MenuEntry[] {
-  return WORKBENCH_KINDS.map((kind) => {
-    const Icon = TAB_ICON[kind]
-    return {
-      id: kind,
-      label: TOOL_LABEL[kind],
-      icon: <Icon aria-hidden="true" />,
-      testId: `workbench-new-${kind}`,
-      onSelect: () => openTab(kind)
-    }
-  })
+  return WORKBENCH_ACTIONS.map(({ kind, label, icon: Icon }) => ({
+    id: kind,
+    label,
+    icon: <Icon aria-hidden="true" />,
+    testId: `workbench-new-${kind}`,
+    onSelect: () => openTab(kind)
+  }))
 }
 
 function renderTool(
   kind: WorkbenchTabKind,
   root: WorkbenchRoot,
-  active: boolean
+  active: boolean,
+  tab: WorkbenchTab
 ): React.JSX.Element {
   // 会话根由主进程按服务端映射解析，而渲染端的映射是乐观的：归属还在写（settling）时主进程
-  // 还按兜底根解析 —— 三件按根开工的工具**先别挂**（文件树会列到别的文件夹、终端会把 cwd
-  // 起在兜底根上、Git 读的不是这个会话的仓库），而且它们都不会自己重来一次。
-  // 浏览器与根无关，照常挂。回执落地后 settling 翻假，这里换成真工具（一次干净的挂载）。
+  // 还按兜底根解析 —— 按根开工的几件**先别挂**（文件树会列到别的文件夹、终端会把 cwd
+  // 起在兜底根上、Git 读的不是这个会话的仓库、预览读回来的会是另一个文件夹里的同名文件），
+  // 而且它们都不会自己重来一次。浏览器与根无关，照常挂。回执落地后 settling 翻假，
+  // 这里换成真工具（一次干净的挂载）。
   if (root.settling && kind !== 'browser') return <ToolSettling />
   switch (kind) {
     case 'browser':
@@ -291,6 +304,8 @@ function renderTool(
       return <GitTool root={root} />
     case 'terminal':
       return <TerminalTool root={root} active={active} />
+    case 'preview':
+      return <PreviewTool root={root} relative={tab.path ?? ''} />
   }
 }
 

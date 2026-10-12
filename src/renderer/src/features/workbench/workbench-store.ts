@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { baseNameOf } from './preview/fetch'
 
 /**
  * 工作台右栏的界面状态（只放"右栏自己"的开合，不放业务数据）。
@@ -8,8 +9,8 @@ import { create } from 'zustand'
  *     （浏览器/终端每次新建都是新窗口；文件/Git 是世界状态，重复点就激活已有的那个）；
  *   - `activeTabId`：当前标签。**在 tabs 里的标签都挂载着**（切走只隐藏、不卸载 —— 终端 PTY
  *     与浏览器页面因此保活）；**关掉才卸载**（终端的 dispose 由 TerminalTool 的收尾做）；
- *   - `title`：浏览器标签的显示标题（页面标题 → 网址主机名），其余三种的标题渲染时算
- *     （文件 = 根目录名、Git = 改动、终端 = 终端）。
+ *   - `title`：浏览器标签的显示标题（页面标题 → 网址主机名）、预览标签的**文件名**，
+ *     其余三种的标题渲染时算（文件 = 根目录名、Git = 改动、终端 = 终端）。
  *
  * round 49（用户补充口径）：
  *   - **启动是空态**：不再默认开一个「文件」标签（原话"保持什么都没有得状态就可以了"；
@@ -18,9 +19,14 @@ import { create } from 'zustand'
  *     装上新根上次离开时的样子（没有存根 = 空态）——"打开了一个网页一个终端，切走再切回来还要有"。
  *     存根只在内存里：**重启不恢复**（启动一律空态，与上一条同一个口径）。
  *
+ * round 50：第四种"内容型"标签 —— `preview`（文件预览）。它与上面四种工具不同：**开哪个标签
+ * 由内容（相对路径）决定**，所以只有 `openPreviewTab(relPath)` 这一个入口（**按 path 去重**：
+ * 同一份文件只开一个标签，重复打开就激活已有的那个）。文件名存在 `title` 里（标签显示名用它），
+ * 路径存在 `path` 里（去重键）。开面板不在这里做（那是 shell-store 的事，调用方自己开）。
+ *
  * 为什么不放 shell-store：那是"三栏骨架"的开关，这里是右栏内容自己的状态，改由谁都不用动骨架。
  */
-export const WORKBENCH_KINDS = ['browser', 'files', 'git', 'terminal'] as const
+export const WORKBENCH_KINDS = ['browser', 'files', 'git', 'terminal', 'preview'] as const
 
 export type WorkbenchTabKind = (typeof WORKBENCH_KINDS)[number]
 
@@ -28,8 +34,10 @@ export interface WorkbenchTab {
   /** 标签 id（同 kind 可开多个，所以 id 不复用 kind） */
   id: string
   kind: WorkbenchTabKind
-  /** 浏览器标签的显示标题（其它 kind 不用；见上） */
+  /** 浏览器标签的显示标题（其它 kind 不用；见上）；预览标签存**文件名** */
   title?: string
+  /** 预览标签看的**工作区相对路径**（同时是去重键；其它 kind 没有） */
+  path?: string
 }
 
 /** 一个根"上次离开时"的标签样子（内存态；见头注的 round 49 口径） */
@@ -47,6 +55,12 @@ export interface WorkbenchState {
   stash: Record<string, WorkbenchSnapshot>
   /** 新建标签：文件/Git 已开就激活它，浏览器/终端每次都新开一个窗口 */
   openTab: (kind: WorkbenchTabKind) => void
+  /**
+   * round 50：开一个文件预览标签（`relPath` = 工作区相对路径）。**按 path 去重** ——
+   * 同一份文件已经开着就只激活它（不重复开），否则新开一个（`title` = 文件名）。
+   * **不开面板**：那是 shell-store 的开关，由调用方自己开（store 不越界）。
+   */
+  openPreviewTab: (relPath: string) => void
   closeTab: (id: string) => void
   selectTab: (id: string) => void
   setTabTitle: (id: string, title: string) => void
@@ -81,6 +95,18 @@ export const useWorkbenchStore = create<WorkbenchState>()((set) => ({
         if (existing !== undefined) return { activeTabId: existing.id }
       }
       const tab: WorkbenchTab = { id: nextTabId(kind), kind }
+      return { tabs: [...state.tabs, tab], activeTabId: tab.id }
+    }),
+  openPreviewTab: (relPath) =>
+    set((state) => {
+      const existing = state.tabs.find((tab) => tab.kind === 'preview' && tab.path === relPath)
+      if (existing !== undefined) return { activeTabId: existing.id }
+      const tab: WorkbenchTab = {
+        id: nextTabId('preview'),
+        kind: 'preview',
+        path: relPath,
+        title: previewTitleOf(relPath)
+      }
       return { tabs: [...state.tabs, tab], activeTabId: tab.id }
     }),
   closeTab: (id) =>
@@ -123,6 +149,11 @@ export function browserTabTitle(title: string, url: string): string {
     host = ''
   }
   return host === '' ? '浏览器' : host
+}
+
+/** 相对路径的**文件名**（正反斜杠都认；没有就是整串）——与 preview/fetch 的 baseNameOf 同一口径 */
+export function previewTitleOf(relPath: string): string {
+  return baseNameOf(relPath)
 }
 
 /** 测试用：回到初始状态（模块级 store 与 id 计数器都不随 render 重置） */

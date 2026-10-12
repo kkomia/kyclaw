@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultSettings } from '@shared/settings'
 import { useSettingsStore } from '@renderer/lib/settings-store'
@@ -271,6 +271,73 @@ describe('Workbench 标签页', () => {
     expect(screen.getByRole('tab', { name: '工作区' })).toBeInTheDocument()
   })
 
+  it('round 50 · 预览标签：文件名当标题、面板里读到那份文件；换根后按存根语义换成新根的样子', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '预览标签里的正文\n',
+      size: 24,
+      truncated: false
+    })
+    render(<Workbench />)
+
+    act(() => useWorkbenchStore.getState().openPreviewTab('src/notes.txt'))
+    await tick()
+
+    expect(screen.getByRole('tab', { name: 'notes.txt' })).toBeInTheDocument()
+    const panel = panelOf('preview')
+    expect(panel).toHaveAttribute('data-active', 'true')
+    // 数据走既有文本通道（会话 + 工作区相对路径），正文进面板
+    expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'src/notes.txt')
+    expect(await within(panel).findByTestId('file-preview-text')).toHaveTextContent(
+      '预览标签里的正文'
+    )
+    // 文件名那一行也在（点它复制绝对路径）
+    expect(within(panel).getByTestId('preview-name')).toHaveAttribute(
+      'title',
+      'D:\\工作区\\src\\notes.txt'
+    )
+
+    // 换根：旧根存起来、新根还没存根 = 空态（预览标签跟着旧根一起被存走）
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        workspaces: [{ path: 'D:\\另一个工作区', mode: 'ask' as const }]
+      },
+      loaded: true
+    })
+    await waitFor(() => expect(kinds()).toEqual([]))
+    expect(screen.getByTestId('workbench-empty')).toBeInTheDocument()
+
+    // 切回旧根：这份预览标签原样回来，并且**重新读**（按根重挂）
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        workspaces: [{ path: 'D:\\工作区', mode: 'ask' as const }]
+      },
+      loaded: true
+    })
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'notes.txt' })).toBeInTheDocument())
+    expect(bed.bridge.workbench.readFile).toHaveBeenLastCalledWith('thread-1', 'src/notes.txt')
+  })
+
+  it('round 50 · 归属还在写（settling）：预览标签也先不读盘，落定后才读（与文件/Git/终端同一道门）', async () => {
+    useProjectsStore.setState({ pending: { 'thread-1': true } })
+    render(<Workbench />)
+
+    act(() => useWorkbenchStore.getState().openPreviewTab('src/index.ts'))
+    await tick()
+
+    expect(screen.getByTestId('workbench-settling')).toBeInTheDocument()
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+
+    act(() => useProjectsStore.setState({ pending: {} }))
+    await waitFor(() =>
+      expect(bed.bridge.workbench.readFile).toHaveBeenCalledWith('thread-1', 'src/index.ts')
+    )
+    expect(screen.queryByTestId('workbench-settling')).not.toBeInTheDocument()
+  })
+
   it('头部图标簇：＋ 新建（四种都在）/ ⤢ 切全屏 / ▯ 收起面板（全屏一并复位）', async () => {
     render(<Workbench />)
 
@@ -278,6 +345,8 @@ describe('Workbench 标签页', () => {
     for (const kind of ['browser', 'files', 'git', 'terminal']) {
       expect(screen.getByTestId(`workbench-new-${kind}`)).toBeInTheDocument()
     }
+    // round 50：预览**不在**新建菜单里（它得先有一份文件：双击 / 右键来开）
+    expect(screen.queryByTestId('workbench-new-preview')).not.toBeInTheDocument()
     fireEvent.keyDown(screen.getByTestId('workbench-new-browser'), { key: 'Escape' })
     await tick()
 

@@ -111,6 +111,48 @@ describe('workbench-store：标签页模型', () => {
     expect(browserTabTitle('', 'about:blank')).toBe('浏览器')
     expect(browserTabTitle('', '不是网址')).toBe('浏览器')
   })
+
+  it('round 50 · openPreviewTab：按 path 去重（重复调用只激活）、title 记文件名、不同文件各一个', () => {
+    const { openPreviewTab } = useWorkbenchStore.getState()
+
+    openPreviewTab('src/index.ts')
+    openPreviewTab('README.md')
+    const tabs = useWorkbenchStore.getState().tabs
+    expect(tabs.map((tab) => tab.kind)).toEqual(['preview', 'preview'])
+    expect(tabs.map((tab) => tab.path)).toEqual(['src/index.ts', 'README.md'])
+    // title 记文件名（标签显示名用它）；id 走 preview-N 那套
+    expect(tabs.map((tab) => tab.title)).toEqual(['index.ts', 'README.md'])
+    expect(tabs.map((tab) => tab.id)).toEqual(['preview-1', 'preview-2'])
+    // 后开的是当前标签
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[1]?.id)
+
+    // 同一份文件再开：**不重复开**，只把它激活（引用都不换）
+    openPreviewTab('src/index.ts')
+    expect(useWorkbenchStore.getState().tabs).toBe(tabs)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(tabs[0]?.id)
+
+    // 相对路径里的子目录不影响文件名（正反斜杠都认）
+    openPreviewTab('docs\\说明.txt')
+    const added = useWorkbenchStore.getState().tabs[2]
+    expect(added?.title).toBe('说明.txt')
+    expect(added?.path).toBe('docs\\说明.txt')
+  })
+
+  it('round 50 · 预览标签进得了按根记忆：换根存起来、切回来还在（去重键跟着标签一起回来）', () => {
+    useWorkbenchStore.getState().switchRoot('D:\\项目A')
+    useWorkbenchStore.getState().openPreviewTab('src/index.ts')
+    const preview = useWorkbenchStore.getState().tabs[0]
+
+    useWorkbenchStore.getState().switchRoot('D:\\项目B')
+    expect(useWorkbenchStore.getState().tabs).toEqual([])
+
+    useWorkbenchStore.getState().switchRoot('D:\\项目A')
+    expect(useWorkbenchStore.getState().tabs[0]).toEqual(preview)
+    // 存根回来的标签仍参与去重（不是又一个同 path 的新标签）
+    useWorkbenchStore.getState().openPreviewTab('src/index.ts')
+    expect(useWorkbenchStore.getState().tabs).toHaveLength(1)
+    expect(useWorkbenchStore.getState().activeTabId).toBe(preview?.id)
+  })
 })
 
 describe('显示口径（纯函数）', () => {
