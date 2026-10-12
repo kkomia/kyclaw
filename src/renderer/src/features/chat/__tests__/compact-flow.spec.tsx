@@ -468,7 +468,8 @@ describe('压缩后的既有链条不回退', () => {
     const runtime = makeRuntime(control, [{ id: 'h1', role: 'user', text: '旧问题' }])
 
     await renderSession(control, runtime)
-    expect(screen.getByTestId('compaction-marker')).toBeInTheDocument()
+    // 满载下挂载读取（fetchThreadCompaction → setCompaction）可能还没刷进 React：等它出现，不做同步断言
+    await screen.findByTestId('compaction-marker')
 
     fireEvent.click(screen.getByTestId('message-edit'))
     fireEvent.change(screen.getByTestId('message-edit-input'), {
