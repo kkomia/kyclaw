@@ -3,7 +3,8 @@
  *
  * 为什么是 data URL 而不是 `file://` 或 `blob:`：CSP 只放行 `img-src 'self' data:`，
  * 而仓库里"渲染端显示本地图片"本来就是 data URL 口径（composer 附件 / 消息 part / 插件图标同路数）。
- * 代价是 base64 膨胀约 33%（8MB 的图上限 = 约 10.7MB 字符串），换来的是不改 CSP、不留对象 URL 生命周期。
+ * 代价是 base64 膨胀约 33%（预览上限 30MB = 约 40MB 字符串，`PREVIEW_IMAGE_MAX_BYTES`；composer 附件
+ * 真发送那张仍是 8MB），换来的是不改 CSP、不留对象 URL 生命周期。
  *
  * 口径（对照 Kimi 的图片查看器）：
  *   - **百分比 = 相对原始像素的倍率**（100% = 一图一 CSS px），显示在工具条正中。初始态是"适应窗口"
