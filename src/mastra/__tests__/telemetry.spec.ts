@@ -203,7 +203,9 @@ describe('Langfuse 真链路（假 OTLP 端点）', () => {
     } finally {
       await collector.close()
     }
-  })
+    // 真链路（真起 agent 服务 + 真跑一轮 + shutdown flush）：满载全跑下 5s 默认超时会顶穿
+    // （单跑约 2s；round 59 全量门禁首跑实测），补 30s——与 workbench 办公档同型的加固
+  }, 30_000)
 
   it('默认关（没配）：不建 observability、一个请求都不发', async () => {
     const collector = await startCollector()
@@ -226,5 +228,6 @@ describe('Langfuse 真链路（假 OTLP 端点）', () => {
     } finally {
       await collector.close()
     }
-  })
+    // 同上一例：真起服务 + 真跑一轮，满载下 5s 会顶穿
+  }, 30_000)
 })
