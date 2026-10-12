@@ -122,6 +122,44 @@ export function serverDefinition(
  *  拿不到会话，按老口径（整份授权列表）判——与内置工具同一条规则。 */
 export type McpToolGate = (tool: string, input: unknown, session?: string) => boolean
 
+/** MCP 结果的尺寸护栏上限（字符；round 62 效率复盘，见 capMcpText 的成因注释） */
+export const MCP_RESULT_MAX_CHARS = 120_000
+/** 截断时保留的尾部字符数（结尾常带结论/错误码） */
+const MCP_RESULT_TAIL_CHARS = 15_000
+
+/**
+ * 单条 MCP 结果的尺寸护栏（round 62 效率复盘）：实测爬网页/知识库类工具单条可回 6 万字符级文本，
+ * 多步回合里这些结果层层累积，出现 40–70 万 token 的巨轮（langfuse 数据）。超过上限时保留
+ * **首尾**、中段截去并留一句给模型看的说明——与 bash 的首尾截断同一套取舍。
+ *
+ * 保守边界：只动可识别的文本形态（string / `{ content: [{ type:'text', text }] }`），
+ * 其它形状（图片块、结构化对象）原样放行——护栏不重写语义。
+ */
+export function capMcpText(text: string): string {
+  if (text.length <= MCP_RESULT_MAX_CHARS) return text
+  const head = text.slice(0, MCP_RESULT_MAX_CHARS - MCP_RESULT_TAIL_CHARS)
+  const tail = text.slice(-MCP_RESULT_TAIL_CHARS)
+  return `${head}\n\n…（结果过长：中间 ${text.length - head.length - tail.length} 字符已截去；需要完整内容请分段获取）\n\n${tail}`
+}
+
+export function capMcpResult(result: unknown): unknown {
+  if (typeof result === 'string') return capMcpText(result)
+  if (typeof result !== 'object' || result === null) return result
+  const content = (result as { content?: unknown }).content
+  if (!Array.isArray(content)) return result
+  let changed = false
+  const next = content.map((item) => {
+    if (typeof item !== 'object' || item === null) return item
+    const entry = item as { type?: unknown; text?: unknown }
+    if (entry.type !== 'text' || typeof entry.text !== 'string') return item
+    const capped = capMcpText(entry.text)
+    if (capped === entry.text) return item
+    changed = true
+    return { ...entry, text: capped }
+  })
+  return changed ? { ...(result as object), content: next } : result
+}
+
 /**
  * listToolsets 的结果 → agent 的工具表：只取**启用中**的 server；命名 `mcp__<server>__<tool>`；
  * 每个工具挂上同一个权限 gate（requireApproval，走 guard.needsApproval —— 和内置工具一条路）。
@@ -150,6 +188,12 @@ export function collectMcpTools(options: {
       // 透传给 gate，让"没有显式目标"的 MCP 工具也能按会话根判 full（老口径：拿不到就整份列表）
       tool.needsApprovalFn = (args: unknown, approval?: NeedsApprovalContext) =>
         options.gate(name, args, approvalSessionOf(approval))
+      // round 62：结果尺寸护栏——原 execute 的结果过一遍 capMcpResult（只在超限时动文本形态）
+      const originalExecute = tool.execute
+      if (typeof originalExecute === 'function') {
+        tool.execute = (async (...args: Parameters<typeof originalExecute>) =>
+          capMcpResult(await originalExecute(...args))) as typeof tool.execute
+      }
       collected[name] = tool
     }
   }

@@ -45,6 +45,13 @@ asarUnpack:
   - '**/*.node'
   - '**/@libsql/**'
   - '**/node-pty/prebuilds/**'
+# 更新通道（round 62）：内测走局域网 MinIO 的 generic 源——打包时自动生成 latest.yml，并把
+# app-update.yml 写进 resources/（测试机开箱即"检查更新/自助下载"）；上传由 R62 的上传脚本
+# 单独做，electron-builder 本身仍然 --publish never（scripts/package.mjs 写死）。
+# KYCLAW_UPDATE_URL 仍可覆盖（本机模拟 / 临时切通道，见 src/main/updater.ts）。
+publish:
+  provider: generic
+  url: http://192.168.31.18:9000/kyclaw/releases/
 win:
   executableName: kyclaw
   icon: resources/icon.ico

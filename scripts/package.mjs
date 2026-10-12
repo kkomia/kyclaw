@@ -3,8 +3,8 @@
  * 出包入口（T15）：`pnpm package` = electron-vite build + electron-builder（Windows NSIS 用户级安装）。
  *
  * 为什么单起一个脚本而不是一行 npm script：
- *   1. `--publish never` 要写死——本次不接更新通道（T17），而 electron-builder 在 CI 环境里
- *      默认会试着发布；
+ *   1. `--publish never` 要写死——上传是单独一步（round 62 起内测更新走局域网 MinIO，
+ *      但 electron-builder 本身不发布；它在 CI 环境里默认会试着发布，这里永远关死）；
  *   2. 打包前**预清上一次的打包输出**（只清 electron-builder 自己写的那些条目，dist/ 里别的
  *      内容一律不碰），打包后自检两个"构建成功但装完会发现"的坑：**本版本**（绑 package.json
  *      的 name/version）的安装包在不在、asarUnpack 有没有真的把 libsql 的原生绑定
@@ -172,6 +172,13 @@ function main() {
     )
     if (engineBytes < 30 * 1024 * 1024) {
       fail(`resources/llama 只有 ${(engineBytes / 1024 / 1024).toFixed(1)} MB——裁剪结果不完整？`)
+    }
+    // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新
+    if (!existsSync(join(DIST_DIR, 'latest.yml'))) {
+      fail('dist/ 下没有 latest.yml（electron-builder.yml 的 publish 配置被改坏了？）')
+    }
+    if (!existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'app-update.yml'))) {
+      fail('resources/app-update.yml 没有进包（publish 配置被改坏了？测试机不会检查更新）')
     }
 
     console.log('[package] 产物：')
