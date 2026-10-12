@@ -71,6 +71,44 @@ describe('useWorkbenchRoot：换项目换根（响应式）', () => {
   })
 })
 
+/**
+ * round 55：无项目会话的根不再等于默认工作区本身 —— 每个会话在它下面占一个子目录
+ * （`shared/session-dir.ts`）。rootPath 给真根（复制路径 / 附件相对路径按它算），
+ * rootName 仍显示默认工作区的目录名（短 id 那串不适合当标题）。
+ */
+describe('useWorkbenchRoot：无项目会话落在默认工作区下的会话子目录（round 55）', () => {
+  beforeEach(() => {
+    const settings = {
+      ...defaultSettings(),
+      workspaces: [
+        { path: 'D:\\甲区', mode: 'ask' as const },
+        { path: 'D:\\乙区', mode: 'ask' as const }
+      ],
+      defaultWorkspace: 'D:\\甲区',
+      projects: [PROJECT]
+    }
+    installKyclawBridge(settings)
+    useSettingsStore.setState({ settings, loaded: true })
+  })
+
+  it('无项目：rootPath = 默认工作区下的会话子目录，rootName 是默认工作区的目录名', () => {
+    const { result } = renderHook(() => useWorkbenchRoot())
+
+    expect(result.current.rootPath).toBe('D:\\甲区\\tasks\\thread-1')
+    expect(result.current.rootName).toBe('甲区')
+    expect(result.current.ready).toBe(true)
+    expect(result.current.notice).toBeNull()
+  })
+
+  it('有项目的会话不受影响：rootPath 还是项目目录、标题是项目目录名', () => {
+    useProjectsStore.setState({ mappings: { 'thread-1': 'p1' } })
+    const { result } = renderHook(() => useWorkbenchRoot())
+
+    expect(result.current.rootPath).toBe('D:\\乙区')
+    expect(result.current.rootName).toBe('乙区')
+  })
+})
+
 describe('useWorkbenchRoot：归属还在写（settling，round 49）', () => {
   it('本会话的映射还没回执 → settling 为真；回执落地翻假（根路径不动）', () => {
     useProjectsStore.setState({ mappings: { 'thread-1': 'p1' }, pending: { 'thread-1': true } })

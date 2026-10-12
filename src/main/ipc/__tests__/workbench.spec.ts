@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 /**
  * workbench / terminal 两组通道的 handler：
  *   1. 通道都注册了、入参先过闸门（非法调用不碰磁盘、不起进程）；
- *   2. 会话根在主进程解析（项目 → 默认工作区 → 唯一授权目录），判不出给人话；
+ *   2. 会话根在主进程解析（项目 → 默认工作区下的会话子目录（round 55）→ 唯一授权目录），判不出给人话；
  *   3. 文件/Git 把结果原样回吐；终端把 id 与发起它的 webContents 对上并推输出/退出。
  */
 const mocks = vi.hoisted(() => {
@@ -30,6 +30,7 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC_CHANNELS, IpcInputError, WORKBENCH_LOG_LIMIT } from '../../../shared/ipc'
+import { sessionDirOf } from '../../../shared/session-dir'
 import { defaultSettings } from '../../../shared/settings'
 import { readSettings, settingsPath, writeSettings } from '../../settings'
 import { createTerminalSink, registerWorkbenchIpc, type WorkbenchDeps } from '../workbench'
@@ -325,6 +326,7 @@ describe('文件族', () => {
 })
 
 describe('会话根解析（与 workspace 通道同口径）', () => {
+  // round 55：无项目会话的根是默认工作区下的会话子目录；下面两条钉住"没工作区/多根给人话"不变
   it('没有工作区 / 多条并列：人话拒绝（工作台四工具共用一句）', async () => {
     writeSettings(settingsPath(dir), { ...defaultSettings() })
     expect(() => handlerOf(IPC_CHANNELS.workbench.listDir)(EVENT, 't', '')).toThrow(/还没有工作区/)
@@ -339,7 +341,7 @@ describe('会话根解析（与 workspace 通道同口径）', () => {
     expect(() => handlerOf(IPC_CHANNELS.workbench.listDir)(EVENT, 't', '')).toThrow(/不唯一/)
   })
 
-  it('指认默认工作区后唯一的那个就是根（项目映射优先，同 workspace 通道的取值器）', async () => {
+  it('指认默认工作区后，根是它下面的会话子目录（round 55，解析时顺手建出来）', async () => {
     writeSettings(settingsPath(dir), {
       ...defaultSettings(),
       workspaces: [
@@ -348,10 +350,22 @@ describe('会话根解析（与 workspace 通道同口径）', () => {
       ],
       defaultWorkspace: project
     })
-    const result = (await handlerOf(IPC_CHANNELS.workbench.listDir)(EVENT, 't', '')) as {
-      entries: { name: string }[]
+    const sessionDir = sessionDirOf(project, 't')
+    const list = async (): Promise<string[]> => {
+      const result = (await handlerOf(IPC_CHANNELS.workbench.listDir)(EVENT, 't', '')) as {
+        entries: { name: string }[]
+      }
+      return result.entries.map((entry) => entry.name)
     }
-    expect(result.entries.map((entry) => entry.name)).toContain('README.md')
+
+    // 目录由主进程在解析会话根时建出来（引擎要求根真实存在），刚建好时是空的
+    expect(existsSync(sessionDir)).toBe(false)
+    expect(await list()).toEqual([])
+    expect(existsSync(sessionDir)).toBe(true)
+
+    // 会话根确实是它：放进去的文件能列出来，而默认工作区根里的 README.md 不在清单里
+    writeFileSync(join(sessionDir, '笔记.md'), 'x')
+    expect(await list()).toEqual(['笔记.md'])
   })
 
   it('读的是当前落盘的设置（改完下一轮就换根）', () => {

@@ -79,7 +79,8 @@ export const IPC_CHANNELS = {
     remove: 'workspace:remove',
     /**
      * T18：打开原生选择器指认**默认工作区**（无入参，取消=不改动；返回合并后的 AppSettings）。
-     * 选中目录会以 ask 并进授权列表，再写 settings.defaultWorkspace —— 未指定项目的会话用它当根。
+     * 选中目录会以 ask 并进授权列表，再写 settings.defaultWorkspace —— 未指定项目的会话落在它
+     * 下面的会话子目录里（round 55：`<默认工作区>/tasks/<threadId 前 8 位>`）。
      */
     pickDefault: 'workspace:pick-default',
     /**
@@ -693,7 +694,7 @@ export interface KyclawWorkspaceApi {
   setMode(path: string, mode: WorkspaceMode): Promise<AppSettings>
   /** 移除一个工作区（不在列表里是空操作） */
   remove(path: string): Promise<AppSettings>
-  /** 指认默认工作区（原生选择器；取消 = 不改动）——未指定项目的会话用它当根 */
+  /** 指认默认工作区（原生选择器；取消 = 不改动）——未指定项目的会话在它下面的会话子目录里干活 */
   pickDefault(): Promise<AppSettings>
   /**
    * round 15：列这个会话根下的文件（相对路径、正斜杠；有界 1500 条 / 深度 8 / 常见构建目录跳过）。

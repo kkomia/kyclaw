@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * workspace 通道 handler：pick 走原生选择器（mock 掉 electron 的 dialog），
  * add / remove 读写这个 userData 目录下的 settings.json。
  * 重点看两件事：① 只有**校验过的目录**能进授权列表；② 入参先过闸门。
- * round 15：list-files（@ 引用文件）——会话根解析（sessionRoots 口径）+ 有界清单。
+ * round 15：list-files（@ 引用文件）——会话根解析（sessionRoots 口径：项目 → 默认工作区下的
+ * 会话子目录（round 55）→ 唯一授权目录）+ 有界清单。
  */
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -33,6 +34,7 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
+import { sessionDirOf } from '../../../shared/session-dir'
 import { DEFAULT_SETTINGS, defaultSettings, type Workspace } from '../../../shared/settings'
 import { readSettings, settingsPath, writeSettings } from '../../settings'
 import { registerWorkspaceIpc, openInExplorerForThread, type ProjectIdOf } from '../workspace'
@@ -356,6 +358,25 @@ describe('workspace:list-files（round 15：@ 引用工作区文件）', () => {
     expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't-other')).toThrow(/不唯一/)
   })
 
+  it('指认了默认工作区：@ 清单列的是它下面的会话子目录（round 55，各会话一个）', () => {
+    plantTree()
+    writeSettings(settingsPath(dir), {
+      ...defaultSettings(),
+      workspaces: [{ path: project, mode: 'ask' }],
+      defaultWorkspace: project
+    })
+
+    // 解析时把子目录建出来，刚建好时是空的 —— 默认工作区根里的 a.txt / 子目录 不在清单里
+    expect(handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 'thread-1')).toEqual({ files: [] })
+
+    writeFileSync(join(sessionDirOf(project, 'thread-1'), '笔记.md'), 'x')
+    expect(handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 'thread-1')).toEqual({
+      files: ['笔记.md']
+    })
+    // 另一个会话有它自己的子目录，互不串味
+    expect(handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 'thread-2')).toEqual({ files: [] })
+  })
+
   it('还没有工作区 / 根目录不存在：都是人话错误（不静默空表）', () => {
     expect(() => handlerOf(IPC_CHANNELS.workspace.listFiles)(EVENT, 't')).toThrow(/还没有工作区/)
 
@@ -420,6 +441,22 @@ describe('workspace:open-in-explorer（round 20：在文件资源管理器里打
       't-project'
     )) as { path: string }
     expect(inProject.path).toBe(project)
+  })
+
+  it('指认了默认工作区：打开的是它下面的会话子目录（round 55，不存在就先建出来）', async () => {
+    writeSettings(settingsPath(dir), {
+      ...defaultSettings(),
+      workspaces: [{ path: project, mode: 'ask' }],
+      defaultWorkspace: project
+    })
+    const sessionDir = sessionDirOf(project, 'thread-1')
+
+    const result = (await handlerOf(IPC_CHANNELS.workspace.openInExplorer)(EVENT, 'thread-1')) as {
+      path: string
+    }
+    expect(result.path).toBe(sessionDir)
+    expect(mocks.openPath).toHaveBeenCalledWith(sessionDir)
+    expect(existsSync(sessionDir)).toBe(true)
   })
 
   it('没有工作区 / 根不唯一：人话错误，且不碰 shell', async () => {

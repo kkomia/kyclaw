@@ -632,6 +632,27 @@ describe('round 53 · 非图片非 PDF 的附件走路径引用（路径优先�
     expect(sentText(onSend)).toBe('看这个文件\n\n【附件】src/note.txt')
   })
 
+  /* round 55：无项目会话的真根 = 默认工作区下的会话子目录（不是默认工作区本身） */
+  it('无项目会话落在默认工作区下的子目录：子目录里的文件算**根内**（载荷发相对路径）', async () => {
+    const initial: AppSettings = {
+      ...defaultSettings(),
+      workspaces: [{ path: 'D:\\ws', mode: 'ask' }],
+      defaultWorkspace: 'D:\\ws'
+    }
+    const bridge = installKyclawBridge(initial)
+    // 真根 = D:\ws\tasks\<threadId 前 8 位>（这里 threadId = t1）；拿 D:\ws 当基准会误判成"根外"
+    bridge.files.pathForFile.mockImplementation(() => 'D:\\ws\\tasks\\t1\\note.txt')
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    const { onSend } = setup({ threadId: 't1' })
+
+    pick(new File(['hello'], 'note.txt', { type: 'text/plain' }))
+
+    const chip = await screen.findByTestId('composer-attachment-note.txt')
+    expect(chip).toHaveAttribute('title', 'D:\\ws\\tasks\\t1\\note.txt')
+    fireEvent.click(screen.getByTestId('composer-send'))
+    expect(sentText(onSend)).toBe('【附件】note.txt')
+  })
+
   it('根外（比如 Downloads）：原样绝对路径；exe 照收，没有"文件太大"', async () => {
     const onSend = mountWithPaths({
       'mediacreationtool.exe': 'C:\\Users\\me\\Downloads\\mediacreationtool.exe'

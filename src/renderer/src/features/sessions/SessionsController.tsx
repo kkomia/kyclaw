@@ -78,7 +78,9 @@ export function SessionsController(): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <NewSessionButton onNew={() => startNew(projectOf(activeId))} />
+      {/* 全局「新建会话」= **无项目草稿**（round 55）：不继承"最后浏览的那个项目"，
+          根走默认工作区 + 本会话的子目录；要落进项目只有项目行 ⊕ 那一条路（ProjectsSection） */}
+      <NewSessionButton onNew={() => startNew()} />
       <PluginsNavItem />
       {error !== null ? (
         <p data-testid="session-load-error" className="px-4 pb-1 text-c1 text-danger">

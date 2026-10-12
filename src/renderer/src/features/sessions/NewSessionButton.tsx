@@ -9,6 +9,8 @@ import { Button } from '../../components/ui/button'
  * 底与文字按实测取 --field-bg + 墨色（深 #1f1f1f 底 / #dbdbdb 字 = Bg-Secondary + Labels-Primary）。
  * T9：点击 = 开一个新草稿（onNew，由 SessionsController 接 store）并回到对话页；
  * 草稿在第一轮发消息时才在服务端落成真线程。
+ * round 55：全局新建 = **无项目草稿**（不继承"最后浏览的项目"，根走默认工作区下的会话子目录）；
+ * 要归属项目只有项目行的 ⊕ 那一条路 —— 这个按钮不带项目参数。
  */
 export interface NewSessionButtonProps {
   onNew?: () => void

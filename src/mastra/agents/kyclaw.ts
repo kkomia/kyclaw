@@ -11,8 +11,9 @@
  * 工作区列表与"永久允许"规则（T13）都用**取值函数**传（现读设置）：用户中途加工作区、
  * 批准一条永久规则，下一轮工具就能用，不必重启服务。
  *
- * 工具的根（T18）：**按会话**取 —— 会话属于某项目就用那个项目的路径，没项目用默认工作区，
- * 都没有才用整份授权列表（口径与判据见 main/projects.ts 的 sessionRoots；会话→项目 的映射
+ * 工具的根（T18）：**按会话**取 —— 会话属于某项目就用那个项目的路径；没项目用默认工作区下
+ * **属于这个会话的子目录**（round 55，规则见 shared/session-dir.ts）；都没有才用整份授权列表
+ * （口径与判据见 main/projects.ts 的 sessionRoots；会话→项目 的映射
  * 由 libsql 的 session_projects 表给，经 projectOf 同步读内存镜像）。工具执行时把
  * `sessionKey(context)`（agent 线程 id）传给 guard；**审批那一层（round 46 起）也按会话判**：
  * requireApproval 回调的第二参里带着摊平的 requestContext，线程 id 从 `MastraMemory.thread.id`
@@ -50,6 +51,7 @@ import {
 } from '../../shared/search'
 import { sessionRoots } from '../../main/projects'
 import { currentShell, type ResolvedShell } from '../../main/git-bash'
+import { ensureSessionDir } from '../../main/workspace'
 import { createToolContext, needsApproval } from '../tools/guard'
 import { createBashTool, shellGuidance } from '../tools/bash'
 import { createDeleteTool } from '../tools/delete'
@@ -82,7 +84,7 @@ export type ModelResolver = () => Promise<KyclawModel>
 export interface KyclawAgentTools {
   /** 授权工作区（缺省 = 没有工作区：文件工具会明确报"先去设置里添加"） */
   workspaces?: () => readonly Workspace[]
-  /** T18：默认工作区（缺省 = 没指认：没项目的会话用整份授权列表） */
+  /** T18：默认工作区（缺省 = 没指认：没项目的会话用整份授权列表；指认了就用它下面的会话子目录） */
   defaultWorkspace?: () => string | null
   /** T18：项目清单（缺省 = 没有项目） */
   projects?: () => readonly Project[]
@@ -163,17 +165,24 @@ export async function createKyclawAgent(
   }
 
   /**
-   * 会话根（T18）：session 有值 = 工具执行口径（项目 → 默认工作区 → 授权列表）；
+   * 会话根（T18）：session 有值 = 工具执行口径（项目 → 默认工作区下的会话子目录 → 授权列表）；
    * `session === undefined` = 审批口径（整份授权列表，见 guard.WorkspaceRoots 头注）。
+   * round 55：带上 threadId 与 `ensureSessionDir` —— 无项目会话的根是默认工作区下属于它的子目录，
+   * guard 在每次工具执行时同步调这里，顺手把目录建出来（引擎要求根真实存在）；
+   * 建目录是同步的，这条路径必须保持同步可跑。
    */
   const roots = (session: string | undefined): readonly Workspace[] => {
     if (session === undefined) return workspacesFor()
-    return sessionRoots({
-      workspaces: workspacesFor(),
-      defaultWorkspace: defaultWorkspaceFor(),
-      projects: projectsFor(),
-      projectId: projectOf(session)
-    })
+    return sessionRoots(
+      {
+        workspaces: workspacesFor(),
+        defaultWorkspace: defaultWorkspaceFor(),
+        projects: projectsFor(),
+        projectId: projectOf(session),
+        threadId: session
+      },
+      { ensureDir: ensureSessionDir }
+    )
   }
 
   const ctx = createToolContext({

@@ -9,6 +9,10 @@
  * 文件名点一下复制**绝对路径**；右侧「在文件资源管理器中定位」（既有 `workbench:reveal` 通道）与
  * 「重新读取」（内容变了不用关标签重开）。
  *
+ * round 55：**根目录文件不画那行相对路径**。此时 relative === 文件名（`baseNameOf` 就是它自己），
+ * 两行逐字同名，加上标签页标题就是三处重复（用户实拍）。深层文件照旧显示整条相对路径（那才有
+ * "在根的哪儿"这层信息）。
+ *
  * 标签从哪来：`openPreviewTab(relPath)`（store 按 path 去重；见 workbench-store）。要看的相对路径
  * 由 Workbench 从标签上取下来传进来（**传进来的 `relative` 就是这份预览的根**：换个路径就是另一份
  * 预览状态，所以读回来的结果直接替换、不需要代次计数）。
@@ -96,6 +100,8 @@ export function PreviewTool({
   }
 
   const name = baseNameOf(relative)
+  // 根目录文件（相对路径里没有分隔符）：路径与文件名逐字相同，不重复画（见头注 round 55）
+  const inSubdirectory = /[\\/]/.test(relative)
   const icon = createElement(fileIconOf(relative), {
     'aria-hidden': true,
     className: 'size-(--icon-size-md)'
@@ -115,8 +121,8 @@ export function PreviewTool({
         sourceText={sourceTextOf(state)}
         bodyRef={bodyRef}
       >
-        {/* 文件类型图标块 + 文件名（醒目档）+ 相对路径（次要色、截断）：
-            一块圆角底色托图标，两层文字靠字号与颜色分层 —— 不叠框线（雷点 7） */}
+        {/* 文件类型图标块 + 文件名（醒目档）+ 相对路径（次要色、截断；根目录文件没有这一行 ——
+            它与文件名逐字相同）：一块圆角底色托图标，两层文字靠字号与颜色分层 —— 不叠框线（雷点 7） */}
         <div className="flex shrink-0 items-center gap-2.5 px-3 py-2">
           <span
             data-testid="preview-icon"
@@ -135,13 +141,15 @@ export function PreviewTool({
             >
               {name === '' ? '预览' : name}
             </button>
-            <p
-              data-testid="preview-path"
-              title={relative}
-              className="truncate text-b2 text-ink-tertiary"
-            >
-              {relative}
-            </p>
+            {inSubdirectory ? (
+              <p
+                data-testid="preview-path"
+                title={relative}
+                className="truncate text-b2 text-ink-tertiary"
+              >
+                {relative}
+              </p>
+            ) : null}
           </div>
           <IconButton
             data-testid="preview-reveal"

@@ -80,7 +80,7 @@ export function WorkspaceSettings(): React.JSX.Element {
         <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
           <span className="text-b2 text-ink">默认工作区</span>
           <span className="text-c1 text-ink-secondary">
-            未指定项目的会话（新建会话）在这里读写文件。
+            未指定项目的会话（新建会话）在这里读写文件，每个会话一个子目录。
           </span>
         </div>
         {defaultWorkspace === null ? (

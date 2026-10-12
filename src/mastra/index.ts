@@ -16,7 +16,7 @@
  * - 用量记账（T14）：chat 路由的 `defaultOptions.onFinish` 从 run 收尾事件里取 usage，
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
  * - 会话↔项目映射（T18）：同一份 libsql 里的 `session_projects` 表（见 session-projects.ts），
- *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区 → 授权列表）。
+ *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区下的会话子目录 → 授权列表）。
  * - 追踪（T17）：Langfuse exporter **默认关**；地址 + 公私钥配齐（选项 `langfuse` 现读）才挂上
  *   observability 入口，判定与装配在 telemetry.ts。
  * - 产出物（模块 4）：五个格式工具在 agent 侧注册（tools/report|excel|ppt|docx.ts）；PDF 那件走
@@ -182,7 +182,7 @@ export async function createKyclawMastra(options: {
   resolveModel: ModelResolver
   /** 授权工作区（工具权限边界）；缺省 = 没有工作区 */
   workspaces?: () => readonly Workspace[]
-  /** 默认工作区（T18：没项目的会话用它当根）；缺省 = 没指认 */
+  /** 默认工作区（T18：没项目的会话在它下面的会话子目录里干活）；缺省 = 没指认 */
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）；缺省 = 没有项目 */
   projects?: () => readonly Project[]

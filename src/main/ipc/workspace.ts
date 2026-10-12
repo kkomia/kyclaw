@@ -30,7 +30,13 @@ import {
 import type { AppSettings, WorkspaceMode } from '../../shared/settings'
 import { defaultWorkspaceAfterRemoval, defaultWorkspacePatch, sessionRoots } from '../projects'
 import { readSettings, settingsPath, updateSettings } from '../settings'
-import { addWorkspace, checkWorkspacePath, removeWorkspace, setWorkspaceMode } from '../workspace'
+import {
+  addWorkspace,
+  checkWorkspacePath,
+  ensureSessionDir,
+  removeWorkspace,
+  setWorkspaceMode
+} from '../workspace'
 import { listWorkspaceFiles } from '../workspace-files'
 
 /** round 15：threadId → 项目 id（agent 服务的 session_projects 内存镜像；缺省 = 没有映射） */
@@ -104,23 +110,32 @@ export function registerWorkspaceIpc(userDataDir: string, projectIdOf?: ProjectI
   })
 }
 
-/** 会话根解析的公共半边：按 sessionRoots 口径（项目 → 默认工作区 → 唯一授权目录）取根列表 */
+/**
+ * 会话根解析的公共半边：按 sessionRoots 口径（项目 → 默认工作区下的会话子目录 → 唯一授权目录）
+ * 取根列表。**带上 threadId**：无项目会话的根是默认工作区下属于它自己的那个子目录，且要顺手
+ * 建出来（`ensureSessionDir`）——工作台四工具、@ 清单、资源管理器都经这里拿根，根不存在就全报错。
+ */
 function rootsForThread(
   file: string,
   threadId: string,
   projectIdOf?: ProjectIdOf
 ): readonly { path: string }[] {
   const current = readSettings(file)
-  return sessionRoots({
-    workspaces: current.workspaces,
-    defaultWorkspace: current.defaultWorkspace,
-    projects: current.projects,
-    projectId: projectIdOf?.(threadId) ?? null
-  })
+  return sessionRoots(
+    {
+      workspaces: current.workspaces,
+      defaultWorkspace: current.defaultWorkspace,
+      projects: current.projects,
+      projectId: projectIdOf?.(threadId) ?? null,
+      threadId
+    },
+    { ensureDir: ensureSessionDir }
+  )
 }
 
 /**
- * 会话根 → **唯一**的那个根目录（绝对路径）。
+ * 会话根 → **唯一**的那个根目录（绝对路径）。无项目的会话拿到的就是默认工作区下属于它的
+ * 那个子目录（round 55；解析时已由 `rootsForThread` 顺带建出来，所以调用方拿到的一定存在）。
  * 判不出（没有工作区 / 多条并列）时抛人话 —— 文案由调用方给，各入口的说法不同
  * （@ 清单说"再用 @"，工作台说"再用工作台"）。工作台各工具、@ 清单、资源管理器打开共用这一份。
  */
@@ -137,8 +152,8 @@ export function sessionRootForThread(
 }
 
 /**
- * 会话根 → 文件清单（round 15）：解析口径与文件工具一致（`sessionRoots`：项目 → 默认工作区 →
- * 唯一的授权目录）。**会话根不唯一**（多条授权且没指认默认）时抛人话——@ 的相对路径得有唯一基准；
+ * 会话根 → 文件清单（round 15）：解析口径与文件工具一致（`sessionRoots`：项目 → 默认工作区下的
+ * 会话子目录 → 唯一的授权目录）。**会话根不唯一**（多条授权且没指认默认）时抛人话——@ 的相对路径得有唯一基准；
  * 渲染端只给 threadId，路径解析全在主进程。读不了/不存在由 `listWorkspaceFiles` 的人话兜底。
  */
 export function listFilesForThread(

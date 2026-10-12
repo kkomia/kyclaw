@@ -336,7 +336,8 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
  *   - **显式目标**：解析用**审批口径**（整份授权列表，= `resolveTarget(ctx, target)` 不传 session）；
  *   - **无显式目标**（能力类缺省分支 / 外部工具档）：执行层的根 = 会话根，审批按**会话根**判 full
  *     （round 46；拿不到会话时退回整份列表）。
- * 执行层（工具 execute）用**会话根**（某个项目或默认工作区，见 main/projects.ts 的 sessionRoots）；
+ * 执行层（工具 execute）用**会话根**（某个项目；没项目的会话是默认工作区下的会话子目录，
+ * round 55，见 main/projects.ts 的 sessionRoots）；
  * 会话根是整份列表的子集，所以方向判据不变：任何能落盘的写都落在审批看过的那条工作区条目上
  * （同一条目决定 mode 与规则），审批不会比执行松；反过来，用户批准一次不在会话范围内的写
  * 会以工具错误收场（fail closed，不落盘），不会静默越界。

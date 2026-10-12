@@ -2,8 +2,10 @@
  * 工作台四工具共用的"操作对象"：**当前会话的会话根**。
  *
  * 两件事分开：
- *   1. 这里是**纯展示口径的镜像**（`sessionWorkspaceOf`，与 sessionRoots 同序：项目 → 默认工作区
- *      → 唯一授权目录）—— 只用来判"这个会话有没有唯一的工作区"，以及显示目录名；
+ *   1. 这里是**纯展示口径的镜像**（`sessionRootPathOf`，与 sessionRoots 同序同值）—— 它决定
+ *      "复制路径"的显示文本与目录名。**无项目会话的根是默认工作区下的会话子目录**（round 55，
+ *      每个会话一个，见 `shared/session-dir.ts`）：所以 rootPath 不是默认工作区本身，而是子目录；
+ *      标题仍显示默认工作区的目录名（短 id 目录名不适合当标题）；
  *   2. 真正的路径解析与 containment 在主进程（workbench:* 通道收 threadId + 相对路径）。
  *      渲染端算出来的绝对路径只用来拼"复制路径"的显示文本，不参与任何访问判定。
  *
@@ -20,7 +22,12 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { KyclawWorkbenchApi, KyclawTerminalApi } from '@shared/ipc'
-import { folderNameOf, sessionWorkspaceOf } from '@renderer/features/chat/session-workspace'
+import { sessionDirOf } from '@shared/session-dir'
+import {
+  defaultWorkspaceEntryOf,
+  folderNameOf,
+  sessionRootPathOf
+} from '@renderer/features/chat/session-workspace'
 
 export interface WorkbenchRoot {
   /** 当前会话 id（草稿也算；null = 还没载入出会话） */
@@ -35,8 +42,9 @@ export interface WorkbenchRoot {
    * 这个会话的项目归属还在写（本地已经画出来了、服务端还没回执）。
    *
    * `rootPath` 是渲染端的乐观口径；真正碰盘子的根由主进程按服务端映射解析 —— 回执落地之前
-   * 主进程还会给出**兜底根**（默认工作区 / 唯一授权目录）。按根开工的工具要在 `settling` 为真时
-   * 先不动手（列出来的目录 / 起来的 shell cwd 都是那个兜底根，而且不会再重来一次）。
+   * 主进程还会给出**兜底根**（无项目会话 = 默认工作区下的会话子目录；没默认 = 唯一授权目录）。
+   * 按根开工的工具要在 `settling` 为真时先不动手（列出来的目录 / 起来的 shell cwd 都是那个
+   * 兜底根，而且不会再重来一次）。
    */
   settling: boolean
   /** 不能开工的原因（人话；能开工时 null） */
@@ -59,11 +67,15 @@ export function useWorkbenchRoot(): WorkbenchRoot {
     [mappings]
   )
 
-  const workspace = sessionWorkspaceOf({ threadId, settings, projectOf })
+  const rootPath = sessionRootPathOf({ threadId, settings, projectOf })
   const workbench = window.kyclaw?.workbench ?? null
   const terminal = window.kyclaw?.terminal ?? null
 
-  const rootPath = workspace?.path ?? null
+  // 无项目会话的根是默认工作区下的**会话子目录**（round 55）：路径照真根给，标题不好用那串
+  // 短 id —— 正好是它时显示默认工作区的目录名
+  const sessionHome = defaultWorkspaceEntryOf(settings)
+  const sessionDir =
+    sessionHome === null || threadId === null ? null : sessionDirOf(sessionHome.path, threadId)
   const settling = threadId !== null && pending[threadId] === true
   const notice =
     workbench === null
@@ -77,7 +89,12 @@ export function useWorkbenchRoot(): WorkbenchRoot {
   return {
     threadId,
     rootPath,
-    rootName: rootPath === null ? null : folderNameOf(rootPath),
+    rootName:
+      rootPath === null
+        ? null
+        : rootPath === sessionDir && sessionHome !== null
+          ? folderNameOf(sessionHome.path)
+          : folderNameOf(rootPath),
     ready: notice === null && threadId !== null && rootPath !== null,
     settling,
     notice,

@@ -8,8 +8,11 @@
  * 本 spec 先钉**运行时事实**：真跑一轮（真 mastra agent + 真 chatRoute + stub 模型），让一个
  * 探针工具的 `requireApproval` 把第二参原样记下来 —— 到底有没有一个能反推线程 id 的键。
  * 再钉**判定口径**：完全访问（会话根 full）下 bash 不给 cwd 不弹卡；ask 档照弹。
+ * round 55 起无项目会话的根是默认工作区下的会话子目录（见 shared/session-dir.ts）——
+ * 它是同一套判定的回归网：合成条目**继承默认工作区那一条的 mode**，丢了这层继承
+ * 就会退化成"完全访问仍弹审批"（本次用例的免审断言即为此把关）。
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -17,6 +20,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { startAgentServer, type AgentServerHandle } from '../../main/agent/service'
 import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
 import { approvalSessionOf } from '../tools/guard'
+import { sessionDirOf } from '../../shared/session-dir'
 import { threadMemoryBody } from '../../shared/threads'
 import { z } from '../../shared/zod'
 import type { Workspace } from '../../shared/settings'
@@ -285,6 +289,8 @@ describe('判定口径：无显式目标的 bash 按会话根判 full', () => {
     // 免审的硬证据：命令真跑了、第二轮也真跑了（挂起的话两个脚本都不会被走完）
     expect(parts.some((part) => part.type === 'tool-output-available')).toBe(true)
     expect(kyclawScripts.length).toBe(0)
+    // round 55：根是默认工作区下的会话子目录（mode 继承那条 full），解析时建出来、bash 真在里面跑
+    expect(existsSync(sessionDirOf(workspaceA, 'thread-full-root'))).toBe(true)
     await kyclawServer?.stop()
     kyclawServer = undefined
   }, 60_000)

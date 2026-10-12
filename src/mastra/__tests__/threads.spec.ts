@@ -525,9 +525,12 @@ describe('DELETE：流式中的会话也要删得掉', () => {
     }
 
     // 渲染端的顺序：先停（断开这一轮）→ 再删。DELETE 里先掐运行、等落库、再删线程；
-    // 少了这一步，"取消 → 半截回复落库"会把线程行写回来（T9 实测到的复活）
+    // 少了这一步，"取消 → 半截回复落库"会把线程行写回来（T9 实测到的复活）。
+    // round 55：删除前的停顿给足 ≥ 一个流式节拍（上面 chunkDelayMs=400）——取消要先被那一轮
+    // 感知、把落库登记进后台活，`memory.settled()` 才等得到它；满载全跑下 150ms 会在登记前
+    // 就放行 settled() → 迟到落库把线程写回来（两次全跑复现的既有抖动，单独跑恒绿）。
     controller.abort()
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    await new Promise((resolve) => setTimeout(resolve, 800))
     const deleted = await fetch(
       `${server.baseUrl}/api/threads/thread-del`,
       authed(server, { method: 'DELETE' })

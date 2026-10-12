@@ -3,11 +3,13 @@
  * T18 Step 1：项目清单的纯函数 + 会话根解析。
  *
  * 审查点：① 名称校验（空/保留字符）；② 路径去重与大小写/分隔符等价；③ 会话根的三层口径
- * （项目 → 默认工作区 → 整份授权列表）与"项目/默认工作区必须仍在授权列表里"这条收紧。
+ * （项目 → 默认工作区下的会话子目录 → 整份授权列表，round 55）与"项目/默认工作区必须仍在
+ * 授权列表里"这条收紧；④ 生成子目录时 mode 原样继承、`ensureDir` 只在那条分支上被调用。
  */
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Project } from '../../shared/projects'
+import { sessionDirOf } from '../../shared/session-dir'
 import type { Workspace } from '../../shared/settings'
 import {
   addProject,
@@ -93,13 +95,49 @@ describe('sessionRoots：会话能碰的根', () => {
     ).toEqual([ws(root)])
   })
 
-  it('没有项目 → 默认工作区；没指认默认工作区 → 整份授权列表（T10 既有口径）', () => {
+  it('没有项目 → 默认工作区下的会话子目录（mode 继承该条目）；没指认默认工作区 → 整份授权列表', () => {
+    // round 55：默认工作区只是"产房"，会话自己的根是它下面 tasks/<threadId 前 8 位>
+    expect(
+      sessionRoots({
+        workspaces,
+        defaultWorkspace: fallback,
+        projects,
+        projectId: null,
+        threadId: 'B55EB49D-ab63-44d5'
+      })
+    ).toEqual([{ path: sessionDirOf(fallback, 'B55EB49D-ab63-44d5'), mode: 'full' }])
+    // 拿不到 threadId（纯函数调用 / 没有会话的通道）→ 退回默认工作区条目本身，行为不变
     expect(
       sessionRoots({ workspaces, defaultWorkspace: fallback, projects, projectId: null })
     ).toEqual([ws(fallback, 'full')])
     expect(
+      sessionRoots({
+        workspaces,
+        defaultWorkspace: fallback,
+        projects,
+        projectId: null,
+        threadId: ''
+      })
+    ).toEqual([ws(fallback, 'full')])
+    expect(
       sessionRoots({ workspaces, defaultWorkspace: null, projects, projectId: undefined })
     ).toEqual(workspaces)
+  })
+
+  it('ensureDir 只在"生成会话子目录"这条分支上被调用（不传 = 纯函数，无副作用）', () => {
+    const ensureDir = vi.fn()
+    const input = { workspaces, defaultWorkspace: fallback, projects, projectId: null }
+
+    const roots = sessionRoots({ ...input, threadId: 'thread-1' }, { ensureDir })
+    expect(ensureDir).toHaveBeenCalledTimes(1)
+    expect(ensureDir).toHaveBeenCalledWith(roots[0].path)
+
+    // 项目会话 / 没给 threadId / 没指认默认工作区：都不该去建目录
+    ensureDir.mockClear()
+    sessionRoots({ ...input, projectId: 'p1', threadId: 'thread-1' }, { ensureDir })
+    sessionRoots({ ...input }, { ensureDir })
+    sessionRoots({ ...input, defaultWorkspace: null, threadId: 'thread-1' }, { ensureDir })
+    expect(ensureDir).not.toHaveBeenCalled()
   })
 
   it('项目 id 找不到（项目已删 / 映射过期）→ 退回默认工作区', () => {

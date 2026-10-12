@@ -87,7 +87,8 @@ export interface AgentServerOptions {
    */
   workspaces?: () => readonly Workspace[]
   /**
-   * 默认工作区（T18）：**现读**；缺省 = 从 dataDir/settings.json 读。未指定项目的会话用它当根。
+   * 默认工作区（T18）：**现读**；缺省 = 从 dataDir/settings.json 读。
+   * 未指定项目的会话落在它**下面的会话子目录**里（round 55，规则见 shared/session-dir.ts）。
    */
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */

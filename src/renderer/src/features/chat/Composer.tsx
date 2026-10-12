@@ -29,7 +29,7 @@ import {
   replaceRangeWithMarker,
   type ReferenceKind
 } from './reference-markers'
-import { folderNameOf, sessionWorkspaceOf } from './session-workspace'
+import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-workspace'
 
 /**
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
@@ -143,7 +143,11 @@ export function Composer({
     (id: string | null): string | null => (id === null ? null : (mappings[id] ?? null)),
     [mappings]
   )
+  // 两条口径各管各的（round 55，见 session-workspace.ts 头注）：rootWorkspace 是**授权列表里的
+  // 那条条目**（权限 chip 切的是它的 mode）；rootPath 是**真根**（无项目会话 = 默认工作区下的会话
+  // 子目录），决定附件的"根内 → 相对路径"。
   const rootWorkspace = sessionWorkspaceOf({ threadId, settings, projectOf })
+  const rootPath = sessionRootPathOf({ threadId, settings, projectOf })
   const contextLabel = rootWorkspace === null ? null : folderNameOf(rootWorkspace.path)
   const enabledPlugins = settings.mcpServers
     .filter((server) => server.enabled)
@@ -359,6 +363,8 @@ export function Composer({
    *
    * round 53：非图片非 PDF 的文件走**路径引用**——路径从 preload 的
    * `files.pathForFile`（webUtils）取；会话根内转相对路径、根外留绝对路径。
+   * 这里的"会话根"是**真根**（`sessionRootPathOf`；无项目会话 = 默认工作区下的会话子目录）——
+   * 用权限 chip 那条授权条目当基准的话，子目录里的文件会被误判成"根外"、发成绝对路径。
    * 桥缺失 / 拿不到路径时 prepareAttachment 自己兜底旧行为（≤16KB 文本内联，否则旧拒收文案）。
    */
   const pickFiles = async (files: File[]): Promise<void> => {
@@ -371,7 +377,7 @@ export function Composer({
         vision,
         extractPdf,
         id: uid(),
-        rootPath: rootWorkspace?.path ?? null,
+        rootPath,
         pathForFile
       })
       if ('problem' in result) rejected.push(`${file.name}（${result.problem}）`)

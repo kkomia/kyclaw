@@ -628,6 +628,33 @@ describe('SessionsController·round 25：置顶项目 / ⊕ 新建会话 / 重�
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
   })
 
+  /* round 55：全局「新建会话」不再继承"最后浏览的项目"——不挂映射、不 PUT、不落进项目分组 */
+  it('全局「新建会话」：当前会话属于 p2 时新草稿仍无项目（无映射、无 PUT、不在 p2 组下）', async () => {
+    const { server } = await mountProjects({ mappings: [{ threadId: 't-a', projectId: 'p2' }] })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p2')).toContainElement(
+        screen.getByTestId('session-item-t-a')
+      )
+    })
+    // 首屏选中的就是 p2 里那条（"最后浏览的项目"最容易被继承的情形）
+    expect(useSessionsStore.getState().activeId).toBe('t-a')
+
+    fireEvent.click(screen.getByTestId('new-session'))
+
+    await waitFor(() => {
+      const draftId = useSessionsStore.getState().activeId
+      expect(draftId).not.toBe('t-a')
+      // 服务端那边的映射没有任何变化：新草稿不在里面，也没有 PUT 发出去
+      expect(server.mappings).toEqual([{ threadId: 't-a', projectId: 'p2' }])
+      expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
+      // 新草稿不在 p2 组下（项目分组里没有它），它在平铺区正常渲染
+      const draftRow = screen.getByTestId(`session-item-${draftId}`)
+      expect(draftRow.closest('[data-testid="project-sessions-p2"]')).toBeNull()
+      expect(screen.getByTestId(`session-row-${draftId}`)).toHaveClass('bg-selected')
+    })
+    expect(screen.getByTestId('location')).toHaveTextContent('/chat')
+  })
+
   it('重命名项目：projects:rename(id, name)，行名换成落盘回吐', async () => {
     const { bridge } = await mountProjects()
 

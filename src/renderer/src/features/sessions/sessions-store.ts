@@ -55,8 +55,10 @@ export interface SessionsState {
   select: (threadId: string) => void
   /**
    * 新建：开一个草稿（不发请求；第一轮对话时才落成真线程）。
-   * T18：`projectId` 非空时把这个新会话记进项目映射（服务端据此给它项目工作区的根）；
-   * 归属由调用方决定（点项目行 = 那个项目；「新建会话」= 当前会话的项目，见 ProjectsSection）。
+   * T18：`projectId` 非空时把这个新会话记进项目映射（服务端据此给它项目工作区的根）。
+   * round 55 的归属口径：**全局「新建会话」= 不传 projectId（无项目草稿）**——不继承"最后浏览的
+   * 那个项目"，根走默认工作区下的会话子目录；**只有项目行的 ⊕**（与"项目刚建好"那条路）才传
+   * projectId（见 ProjectsSection 的 openSessionIn）。
    * 返回新草稿的 id（调用方要拿它做后续动作）。
    */
   startNew: (projectId?: string | null) => string

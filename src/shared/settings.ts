@@ -303,7 +303,9 @@ export const appSettingsSchema = z.strictObject({
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
   workspaces: z.array(workspaceSchema),
   /**
-   * T18 的默认工作区：**未指定项目的会话**用它当文件工具的根（见 main/projects.ts 的 sessionRoots）。
+   * T18 的默认工作区：**未指定项目的会话**的文件工具根落在它**下面的会话子目录**里
+   * （round 55：`<默认工作区>/tasks/<threadId 前 8 位>`，规则见 shared/session-dir.ts；
+   * 解析见 main/projects.ts 的 sessionRoots）。
    * 存的是 `checkWorkspacePath` 归一后的路径，且一定同时是 workspaces 里的一条（指认时就并进去，
    * 模式 ask —— full 仍然只能由用户在设置页显式切换）；null = 没指认，那种情况下会话的根回退到
    * 整份授权列表（T10 既有口径）。写入只有 workspace:pick-default 一条路（原生选择器）。

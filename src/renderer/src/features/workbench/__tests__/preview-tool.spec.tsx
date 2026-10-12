@@ -136,6 +136,14 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     expect(screen.getByTestId('preview-path')).toHaveTextContent('docs/说明.md')
   })
 
+  /* round 55：根目录文件不画那行路径（relative === 文件名，画出来是逐字重复） */
+  it('根目录文件：只有文件名，没有那一行相对路径', async () => {
+    render(<PreviewTool root={rootOf()} relative="notes.txt" />)
+
+    expect(screen.getByTestId('preview-name')).toHaveTextContent('notes.txt')
+    expect(screen.queryByTestId('preview-path')).not.toBeInTheDocument()
+  })
+
   it('头部图标随后缀换：pdf / 图片 / 表格各是各的', async () => {
     const cases: Array<[string, string]> = [
       ['报告.pdf', 'lucide-file-text'],

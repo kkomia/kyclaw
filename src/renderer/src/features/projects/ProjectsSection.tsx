@@ -14,7 +14,9 @@ import { useProjectsStore } from './projects-store'
  * 侧栏「项目」区的接线（T18；round 25 补行尾动作与归档）：把 settings（项目清单）/ projects-store
  * （会话归属）/ sessions-store（会话本体）三份数据拼成 ProjectList 要的形状，并管住：
  *   1. 首屏拉一次映射（与会话列表并行；失败只在区里落一行错误，不炸侧栏）；
- *   2. **点项目行 = 展开/折叠名下会话**（round 16 口径）；**⊕ = 在这个项目下开新会话**（round 25）；
+ *   2. **点项目行 = 展开/折叠名下会话**（round 16 口径）；**⊕ = 在这个项目下开新会话**（round 25）
+ *      —— round 55 的归属口径：**只有这条 ⊕ 让新会话归属项目**（侧栏顶部那个全局「新建会话」
+ *      一律无项目，根走默认工作区下的会话子目录）；
  *   3. 建项目 / 删项目（连带摘会话归属）与 round 25 的行尾动作：置顶项目（settings.pinnedProjects，
  *      置顶排前）、在文件资源管理器中打开（projects:open-in-explorer）、重命名项目（projects:rename）、
  *      归档项目（settings.archivedProjects——侧栏隐藏该项目**及其会话**，取消归档一并回来）；

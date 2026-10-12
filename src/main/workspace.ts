@@ -12,7 +12,7 @@
  * 加与切模式分开（T13）：`addWorkspace` 只以 ask 新增；`setWorkspaceMode` 只认已授权路径。
  * 这样"完全访问"必须是对已有目录的一次显式切换（设置页里带确认），不能随添加静默生效。
  */
-import { realpathSync, statSync } from 'node:fs'
+import { mkdirSync, realpathSync, statSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import type { Workspace, WorkspaceMode } from '../shared/settings'
 import { isUncPath } from './permission/realpath'
@@ -77,4 +77,25 @@ export function removeWorkspace(workspaces: readonly Workspace[], path: string):
 /** 同一个路径的两种写法（Windows：大小写不敏感、分隔符等价）—— path.relative 归一后为空的即同一条 */
 export function samePath(a: string, b: string): boolean {
   return relative(resolve(a), resolve(b)) === ''
+}
+
+/** 已经建过的会话子目录（进程内 memo：命中即回，省掉每次工具调用一次 mkdir syscall） */
+const ensuredSessionDirs = new Set<string>()
+
+/**
+ * 建出**无项目会话**的根目录（round 55）：那种会话的根是默认工作区下的子目录
+ * （路径规则见 shared/session-dir.ts），而权限引擎（permission/realpath.ts 的 realRoot）
+ * 要求根本身存在且是目录 —— 不先建出来，所有文件工具都会以"工作区不存在或不是目录"失败。
+ *
+ * 同步、幂等、可重入（guard 在每次工具执行时同步调它）。建不出来（权限等）只吞掉并警告一次，
+ * 不在这里另起一套错误通道：真正的失败由 realpath 那一层给人话。
+ */
+export function ensureSessionDir(path: string): void {
+  if (ensuredSessionDirs.has(path)) return
+  ensuredSessionDirs.add(path)
+  try {
+    mkdirSync(path, { recursive: true })
+  } catch (error) {
+    console.warn('[kyclaw] 会话目录建不出来（这个会话的文件工具会报错）：', path, error)
+  }
 }

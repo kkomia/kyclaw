@@ -7,7 +7,9 @@
  *
  * 钉住的口径（细节见 main/projects.ts 的 sessionRoots 与 tools/guard.ts 的 needsApproval 头注）：
  *   ① 会话属于某项目 → 文件工具的根就是项目路径（项目里写 = 按项目那条工作区的模式走审批）；
- *   ② 会话没有项目 → 默认工作区；默认工作区也没指认 → 整份授权列表（T10 口径不变）；
+ *   ② 会话没有项目 → 默认工作区**下属于这个会话的子目录**（round 55；mode 继承默认工作区那条
+ *      授权 —— 完全访问不会因为多了 tasks/ 这一层就重新弹卡），目录在执行前被建出来；
+ *      默认工作区也没指认 → 整份授权列表（T10 口径不变）；
  *   ③ **执行层比审批层严**：目标在工作区外/会话范围外时执行 fail closed（工具错误、不落盘）——
  *      审批拿不到会话，所以按授权列表（超集）问，执行按会话根（子集）判；
  *   ④ 映射落在 libsql：换一个服务实例（= 重启）还读得回来（service 启动时 load 进镜像）；
@@ -30,6 +32,7 @@ import { startAgentServer, type AgentServerHandle } from '../../main/agent/servi
 import { readSettings, settingsPath, updateSettings } from '../../main/settings'
 import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
 import type { KyclawModel } from '../model'
+import { sessionDirOf } from '../../shared/session-dir'
 import { LOCAL_USER_RESOURCE_ID, threadMemoryBody } from '../../shared/threads'
 
 const USAGE = {
@@ -210,7 +213,7 @@ describe('会话↔项目映射的路由（T18）', () => {
   })
 })
 
-describe('会话根：项目 → 默认工作区 → 授权列表（T18）', () => {
+describe('会话根：项目 → 默认工作区下的会话子目录 → 授权列表（T18 + round 55）', () => {
   it('① 会话属于项目：项目里的写按项目那条工作区的模式走审批（ask → 弹卡、不落盘）', async () => {
     await mapSession('thread-project', PROJECT.id)
 
@@ -224,7 +227,7 @@ describe('会话根：项目 → 默认工作区 → 授权列表（T18）', () 
     expect(existsSync(join(projectDir, 'inside.txt'))).toBe(false)
   })
 
-  it('② 会话没有项目：默认工作区（full → 不弹卡、直接写成功）', async () => {
+  it('② 会话没有项目：默认工作区下的会话子目录（继承 full → 不弹卡、直接写成功）', async () => {
     updateSettings(settingsPath(dir), {
       workspaces: [
         { path: projectDir, mode: 'ask' },
@@ -232,28 +235,34 @@ describe('会话根：项目 → 默认工作区 → 授权列表（T18）', () 
       ]
     })
 
+    // round 55：根是 <默认工作区>/tasks/<threadId 前 8 位>，不是默认工作区本身
+    const sessionDir = sessionDirOf(defaultDir, 'thread-default')
     const done = await runWrite(
       'thread-default',
       'd-inside',
-      join(defaultDir, 'inside.txt'),
+      join(sessionDir, 'inside.txt'),
       '默认里'
     )
     expect(done.some((part) => part.type === 'tool-approval-request')).toBe(false)
-    expect(readFileSync(join(defaultDir, 'inside.txt'), 'utf8')).toBe('默认里')
+    expect(readFileSync(join(sessionDir, 'inside.txt'), 'utf8')).toBe('默认里')
+    // 默认工作区根里不再直接落文件
+    expect(existsSync(join(defaultDir, 'inside.txt'))).toBe(false)
   })
 
-  it('③ 执行层比审批层严：项目会话写到默认工作区（full，不弹卡）→ 工具错误、fail closed', async () => {
-    // 默认工作区此时是 full：审批那层（授权列表超集）不问；执行那层（会话根 = 项目）解析不到 → 拒
+  it('③ 执行层比审批层严：项目会话写到默认工作区（含它的会话子目录，full，不弹卡）→ 工具错误、fail closed', async () => {
+    // 默认工作区此时是 full：审批那层（授权列表超集）不问；执行那层（会话根 = 项目）解析不到 → 拒。
+    // 连"这个项目会话若没有项目本该拿到的那个子目录"也一样拒 —— 会话根由它属于谁决定，不由路径长相决定
+    const defaultSessionDir = sessionDirOf(defaultDir, 'thread-project')
     const refused = await runWrite(
       'thread-project',
       'p-outside',
-      join(defaultDir, 'outside.txt'),
+      join(defaultSessionDir, 'outside.txt'),
       '越界'
     )
 
     expect(refused.some((part) => part.type === 'tool-approval-request')).toBe(false)
     expect(toolError(refused)).toContain('不在任何授权工作区内')
-    expect(existsSync(join(defaultDir, 'outside.txt'))).toBe(false)
+    expect(existsSync(join(defaultSessionDir, 'outside.txt'))).toBe(false)
     // 项目里的文件不受影响；映射也还在
     expect(existsSync(join(projectDir, 'inside.txt'))).toBe(false)
   })
@@ -273,13 +282,24 @@ describe('会话根：项目 → 默认工作区 → 授权列表（T18）', () 
     expect(asked.some((part) => part.type === 'tool-approval-request')).toBe(true)
     expect(existsSync(join(projectDir, 'free.txt'))).toBe(false)
 
-    // 恢复默认工作区：同一个会话现在收窄到默认工作区（full）→ 写默认目录不问、写项目目录 fail closed
+    // 恢复默认工作区：同一个会话现在收窄到它的会话子目录（继承 full）→ 写在那里不问、
+    // 写默认工作区根（子目录之外）反而越界 fail closed
     updateSettings(settingsPath(dir), { defaultWorkspace: defaultDir })
-    const done = await runWrite('thread-free', 'f-default', join(defaultDir, 'free.txt'), '收窄了')
+    const sessionDir = sessionDirOf(defaultDir, 'thread-free')
+    const done = await runWrite('thread-free', 'f-default', join(sessionDir, 'free.txt'), '收窄了')
     expect(done.some((part) => part.type === 'tool-approval-request')).toBe(false)
-    expect(readFileSync(join(defaultDir, 'free.txt'), 'utf8')).toBe('收窄了')
+    expect(readFileSync(join(sessionDir, 'free.txt'), 'utf8')).toBe('收窄了')
 
-    // 项目目录也切 full：审批（超集）不问、执行（会话根 = 默认工作区）解析不到 → 工具错误
+    const outsideSession = await runWrite(
+      'thread-free',
+      'f-default-root',
+      join(defaultDir, 'free-root.txt'),
+      '子目录之外'
+    )
+    expect(toolError(outsideSession)).toContain('不在任何授权工作区内')
+    expect(existsSync(join(defaultDir, 'free-root.txt'))).toBe(false)
+
+    // 项目目录也切 full：审批（超集）不问、执行（会话根 = 默认工作区下的会话子目录）解析不到 → 工具错误
     updateSettings(settingsPath(dir), {
       workspaces: [
         { path: projectDir, mode: 'full' },
