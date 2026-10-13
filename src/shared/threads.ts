@@ -92,17 +92,61 @@ export const threadTitleResponseSchema = z.strictObject({
 })
 
 /**
+ * 压缩档位：**这次是怎么省的**——记录里区分出来，供分界线 / 轨迹页说人话。
+ * 数组顺序 = 力度递增的顺序（从轻到重），也是机器档"同一档不重复停"的次序：
+ *
+ *   - `snip`（裁剪，round 75）：只把**较早的大工具结果**换成占位说明（工具名 + 参数 + 开头
+ *     若干行 + "去哪找"），用户原话与助手文字一字不动、消息一条不删；
+ *   - `dedupe`（去重，round 75）：在裁剪之上，再把与更早结果重复的工具结果指向首次出现处
+ *     （零信息损失）；
+ *   - `fold`（折叠，round 76）：在前两档之上，再把**较早那几段已经结束的对话**里助手的正文
+ *     折成一行"这里折了 N 条消息、讲的是…"（用户原话永不折叠，工具结果仍由前两档管）；
+ *   - `summary`（摘要，round 19）：前面三档都不够时才走的老路——调模型把旧段摘成结构化
+ *     摘要、原文删除。
+ *
+ * 前三档（`snip` / `dedupe` / `fold`）都是**零 API 成本**的（不调模型、不记账、不删消息，
+ * 改写只发生在"这一轮发给模型的那份"上）；只有它们都不够才走 `summary`（那一档要付一次
+ * 模型调用、且会删掉旧消息）。
+ * 老库（round 71 及更早）的记录没有这一列，读出来按 `summary` 归一（那时只有摘要这一条路）。
+ */
+export const compactionLevels = ['snip', 'dedupe', 'fold', 'summary'] as const
+
+export const compactionLevelSchema = z.enum(compactionLevels)
+
+export type CompactionLevel = z.infer<typeof compactionLevelSchema>
+
+/**
  * 会话级压缩记录（round 19）：更早的历史被摘要后，原始消息从存储删除，摘要存这里。
  * 后续请求由 agent 的输入处理器把摘要注入成系统前缀（不落 UI 消息流）；顶部标记读它。
+ *
+ * round 75 起这条记录也承载**机械档**（snip / dedupe，round 76 又加了 fold）：那时没有摘要、
+ * 也没有消息被删——`summary` 字段装的是"这次精简/折叠了什么"的人话说明（分界线展开里给
+ * 用户看的那段）。
  */
 export const threadCompactionSchema = z.strictObject({
   threadId: z.string().min(1),
-  /** 结构化摘要原文（要点/决定/未完成事项/关键文件与结论） */
+  /**
+   * 摘要原文（`summary` 档）或"这次是怎么省的"的人话说明（`snip` / `dedupe` / `fold` 档）；
+   * 两种都非空——分界线展开后显示的就是它。
+   */
   summary: z.string().min(1),
-  /** 被摘要并删除的消息条数 */
+  /**
+   * 被处理的消息条数：`summary` 档 = 被摘要并删除的条数；`snip` / `dedupe` 档 = 被改写的
+   * 条数（工具结果换成占位 / 指向首次出现处，消息本身没删）；`fold` 档 = 被折叠的消息条数
+   * （助手正文换成折叠说明，消息本身没删）。
+   */
   summarized: z.number().int().min(1),
   /** 保留的最近消息条数（压缩时刻） */
   kept: z.number().int().min(0),
+  /**
+   * round 75：本次走的档位（见 compactionLevels）。
+   *
+   * **服务端每条记录都会写**（老库的行读出来归一成 `summary`，见 compaction.ts 的
+   * `compactionLevelOf`），所以回包上总有值；这里写成可选是**读侧宽容**：既有的记录字面量
+   * （测试夹件、渲染端夹具）不必为一个新字段集体补值，读侧按 `level ?? 'summary'` 解释——
+   * 缺省语义正好等于 round 75 之前的唯一档位。
+   */
+  level: compactionLevelSchema.optional(),
   /** ISO 时间串（压缩完成时刻） */
   createdAt: z.string(),
   /**

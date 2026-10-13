@@ -105,9 +105,26 @@ export interface UsageRun {
   /** 运行时的模型 id 原文（未知也照记） */
   model: string
   provider: string | null
+  /**
+   * 这一轮**所有 LLM 调用**的合计（AI SDK 的 totalUsage：一轮里每调一次模型算一次 step）。
+   * 这是**花费**口径 —— 计费按它算（见 computeCost）。
+   */
   tokens: UsageTokens
   /** provider 报的缓存命中输入；没报就是 null（别当成 0 去算价） */
   cachedInput: number | null
+  /**
+   * round 67：这一轮**最后一次** LLM 调用的输入 tokens —— 也就是这一轮结束时**真实的上下文大小**
+   * （系统提示词 + 工具定义 + 全部历史消息 + 本轮工具结果）。
+   *
+   * 为什么非记不可：`tokens.input` 是整轮合计，**不是**"每轮固定开销"。把它当上下文大小会
+   * 得出"系统提示词/工具定义 = 221K"这种结论（实测：一轮 9 次调用的合计 221K，而真实上下文
+   * 只有 ~30K）。老记录 / 事件里没有 steps 的时刻 → null（回读时退回 tokens.input，不编造）。
+   */
+  contextInput: number | null
+  /** round 67：`contextInput` 那一份的缓存命中数（与它同一次调用，配对比值才有意义） */
+  contextCachedInput: number | null
+  /** round 67：这一轮一共调了几次模型（AI SDK 的 steps 数）；拿不到 → null */
+  stepCount: number | null
   /** 世界货币计价的花费；价目表不认识这个模型 → null */
   cost: number | null
   /** ISO 时间串（写入时刻） */
@@ -168,15 +185,25 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           "output_tokens" INTEGER NOT NULL DEFAULT 0,
           "total_tokens" INTEGER NOT NULL DEFAULT 0,
           "cached_input_tokens" INTEGER,
+          "context_input_tokens" INTEGER,
+          "context_cached_input_tokens" INTEGER,
+          "step_count" INTEGER,
           "cost" REAL,
           "created_at" TEXT NOT NULL
         )`
       )
-      // 已有库补列（round 18）：SQLite 的 ALTER 重复执行会报错，忽略即可（列已存在 = 已完成迁移）
-      try {
-        await client.execute(`ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "thread_id" TEXT`)
-      } catch {
-        // 列已存在
+      // 已有库补列（round 18 / round 67）：SQLite 的 ALTER 重复执行会报错，忽略即可（列已存在 = 已完成迁移）
+      for (const column of [
+        'thread_id TEXT',
+        'context_input_tokens INTEGER',
+        'context_cached_input_tokens INTEGER',
+        'step_count INTEGER'
+      ]) {
+        try {
+          await client.execute(`ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "${column}"`)
+        } catch {
+          // 列已存在
+        }
       }
       await client.execute(
         `CREATE INDEX IF NOT EXISTS "${USAGE_TABLE}_created_at" ON "${USAGE_TABLE}" ("created_at")`
@@ -197,8 +224,8 @@ export function createUsageStore(client: SqliteClient): UsageStore {
       await ensureTable()
       await client.execute({
         sql: `INSERT OR REPLACE INTO "${USAGE_TABLE}"
-          ("id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at")
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ("id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "cost", "created_at")
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           run.id,
           run.runId,
@@ -209,6 +236,9 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           run.tokens.output,
           run.tokens.total,
           run.cachedInput,
+          run.contextInput,
+          run.contextCachedInput,
+          run.stepCount,
           run.cost,
           run.createdAt
         ]
@@ -217,7 +247,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
     async listSince(since) {
       await ensureTable()
       const result = await client.execute({
-        sql: `SELECT "id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at"
+        sql: `SELECT ${USAGE_COLUMNS}
           FROM "${USAGE_TABLE}" WHERE "created_at" >= ? ORDER BY "created_at" DESC`,
         args: [since.toISOString()]
       })
@@ -226,7 +256,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
     async listByThread(threadId) {
       await ensureTable()
       const result = await client.execute({
-        sql: `SELECT "id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at"
+        sql: `SELECT ${USAGE_COLUMNS}
           FROM "${USAGE_TABLE}" WHERE "thread_id" = ? ORDER BY "created_at" ASC`,
         args: [threadId]
       })
@@ -234,6 +264,9 @@ export function createUsageStore(client: SqliteClient): UsageStore {
     }
   }
 }
+
+/** usage_runs 的列清单（读回用；round 67 加了三列上下文口径） */
+const USAGE_COLUMNS = `"id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "cost", "created_at"`
 
 /** libsql 行 → UsageRun（列名映射只写这一处） */
 function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
@@ -251,6 +284,10 @@ function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
       total: toNumber(row.total_tokens)
     },
     cachedInput: toNullableNumber(row.cached_input_tokens),
+    // round 67：老记录这两列是 NULL → null（回读时退回整轮口径，不假装是老口径的 0）
+    contextInput: toNullableNumber(row.context_input_tokens),
+    contextCachedInput: toNullableNumber(row.context_cached_input_tokens),
+    stepCount: toNullableNumber(row.step_count),
     cost: toNullableNumber(row.cost),
     createdAt: String(row.created_at)
   }
@@ -260,15 +297,26 @@ function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
  * round 59：一条会话的 token 读数（**唯一口径**：/api/usage/context 与压缩记录的 tokensBefore
  * 都从这里来，别在两处各算一套）。
  *
- * 口径同 listByThread 的排序：按 created_at 升序，**末行** = 最近一轮、**首行** = 首轮基线
- * （首行 ≈ 系统提示 + 工具定义的基线，见 shared/usage 的 usageThreadContextSchema 注释）。
- * 空会话三个字段都是 null（不假装 0）。`lastCachedInput` 一起回：路由的 hover 明细要它，
- * 与其再查一次同一张表，不如一次读完（压缩侧只用前两个字段）。
+ * round 67 改口径（原来把**整轮合计**当成了"上下文大小"，于是面板把 221K 的整轮合计显示成
+ * "系统提示词 / 工具定义"）：
+ *   - `lastInput` = 最近一轮的**真实上下文大小** —— 那一轮最后一次 LLM 调用的输入 tokens
+ *     （`contextInput`）。老记录没有这一列（NULL）才退回整轮合计，宁可粗一点也不要空；
+ *   - `baselineInput` = **首轮**的同一口径 —— ≈ 系统提示词 + 工具定义 + 首条提问；
+ *   - `lastCachedInput` = 与 `lastInput` **同一次调用**的缓存命中数（两者必须同源，否则
+ *     算出来的命中率是拿"整轮命中和"除"最后一次的输入"，没有意义）。
+ *
+ * 排序口径不变：按 created_at 升序，末行 = 最近一轮、首行 = 首轮基线。
+ * 空会话三个字段都是 null（不假装 0）。
  */
 export interface ThreadTokenReadout {
   lastInput: number | null
   lastCachedInput: number | null
   baselineInput: number | null
+}
+
+/** 取"上下文口径"的数字：新记录用 contextInput，老记录（NULL）退回整轮合计 */
+function contextOrTurn(contextValue: number | null, turnValue: number): number {
+  return contextValue ?? turnValue
 }
 
 export async function threadTokenReadout(
@@ -278,10 +326,14 @@ export async function threadTokenReadout(
   const rows = await store.listByThread(threadId)
   const first = rows[0]
   const last = rows[rows.length - 1]
+  if (last === undefined) {
+    return { lastInput: null, lastCachedInput: null, baselineInput: null }
+  }
   return {
-    lastInput: last?.tokens.input ?? null,
-    lastCachedInput: last?.cachedInput ?? null,
-    baselineInput: first?.tokens.input ?? null
+    lastInput: contextOrTurn(last.contextInput, last.tokens.input),
+    lastCachedInput: last.contextCachedInput ?? last.cachedInput,
+    baselineInput:
+      first === undefined ? null : contextOrTurn(first.contextInput, first.tokens.input)
   }
 }
 
@@ -352,6 +404,12 @@ export function summarizeUsage(rows: readonly UsageRun[], range: UsageRange): Us
 export interface UsageFinishEvent {
   usage?: unknown
   totalUsage?: unknown
+  /** 这一步是第几次 LLM 调用（0 基）。有它就能算出这一轮调了几次模型（round 67） */
+  stepNumber?: number
+  /** 这一轮的全部 step（每个 step 带自己那一次的 usage）——取末一个 = 真实上下文大小（round 67） */
+  steps?: unknown
+  /** 末一个 step 的捷径（有的框架版本只给这个，不给 steps） */
+  finalStep?: unknown
   model?: { modelId?: string; provider?: string } | null
   response?: { modelId?: string; dbMessages?: ReadonlyArray<{ threadId?: unknown }> } | null
   runId?: string | null
@@ -384,6 +442,37 @@ function firstText(...values: Array<string | undefined | null>): string | undefi
   return undefined
 }
 
+/** 「这一次调用」的 usage 对象（末一个 step 的 usage；形状不对 → null） */
+function lastStepUsage(event: UsageFinishEvent): Record<string, unknown> | null {
+  const steps = Array.isArray(event.steps) ? event.steps : []
+  const last = steps.length > 0 ? steps[steps.length - 1] : event.finalStep
+  if (typeof last !== 'object' || last === null) return null
+  const usage = (last as { usage?: unknown }).usage
+  return typeof usage === 'object' && usage !== null ? (usage as Record<string, unknown>) : null
+}
+
+/** 这一轮调了几次模型：stepNumber（0 基）+1 优先，其次 steps.length；都没有 → null */
+function stepCountOf(event: UsageFinishEvent): number | null {
+  if (typeof event.stepNumber === 'number' && Number.isFinite(event.stepNumber)) {
+    return Math.max(1, Math.trunc(event.stepNumber) + 1)
+  }
+  if (Array.isArray(event.steps) && event.steps.length > 0) return event.steps.length
+  return null
+}
+
+/** 缓存命中数：兼容 `cachedInputTokens`（别名）与 `inputTokenDetails.cacheReadTokens`（新形状） */
+function cachedOf(usage: Record<string, unknown> | null): number | null {
+  if (usage === null) return null
+  const alias = tokenNumber(usage.cachedInputTokens)
+  if (alias !== undefined) return alias
+  const details = usage.inputTokenDetails
+  if (typeof details === 'object' && details !== null) {
+    const read = tokenNumber((details as { cacheReadTokens?: unknown }).cacheReadTokens)
+    if (read !== undefined) return read
+  }
+  return null
+}
+
 /**
  * 记账钩子（chatRoute 的 defaultOptions.onFinish）：
  * 每轮 run 收尾把 usage 落一行；token 为 0 的轮不记（空轮不留噪音）。
@@ -403,10 +492,14 @@ export function createUsageRecorder(options: {
       const output = tokenNumber(usage?.outputTokens) ?? 0
       if (input + output <= 0) return
       const reportedTotal = tokenNumber(usage?.totalTokens) ?? 0
-      const cachedInput = tokenNumber(usage?.cachedInputTokens)
+      const cachedInput = cachedOf(usage ?? null)
       const model = firstText(event.model?.modelId, event.response?.modelId) ?? 'unknown'
       const provider = firstText(event.model?.provider) ?? null
       const pricing = pricingFor(model)
+      // round 67：末一个 step 的 usage = 这一轮结束时的真实上下文（见 UsageRun.contextInput）
+      const finalUsage = lastStepUsage(event)
+      const contextInput = tokenNumber(finalUsage?.inputTokens) ?? null
+      const contextCachedInput = cachedOf(finalUsage)
 
       await options.store.insert({
         id: randomUUID(),
@@ -416,7 +509,10 @@ export function createUsageRecorder(options: {
         provider,
         tokens: { input, output, total: reportedTotal > 0 ? reportedTotal : input + output },
         cachedInput: cachedInput ?? null,
-        cost: pricing === null ? null : computeCost(pricing, { input, output, cachedInput }),
+        contextInput,
+        contextCachedInput,
+        stepCount: stepCountOf(event),
+        cost: pricing === null ? null : computeCost(pricing, { input, output, cachedInput: cachedInput ?? undefined }),
         createdAt: now().toISOString()
       })
     } catch (error) {

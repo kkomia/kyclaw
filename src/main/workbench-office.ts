@@ -186,6 +186,9 @@ function readSheet(sheet: import('exceljs').Worksheet): PreviewSheet {
  *
  * 版式不还原（调研结论：浏览器侧没有可信的高保真渲染），只把 `ppt/slides/slideN.xml` 里的
  * `<a:t>` 文本按段落抽出来：一页一张卡，读得到内容、读不到排版 —— 在界面上如实说明。
+ * 抽的是**形状（`<p:sp>`）与表格（`<a:tbl>`）两类**：表格里的字同样在 `<a:t>` 里，不抽就会
+ * 出现"这一页明明有表，预览只剩标题"（实测：一份带行情表的 deck，第 4 页只剩「市场速览」，
+ * 表里的缺值 `—` 一个字都看不到）。
  */
 export function extractPptx(bytes: Uint8Array): PptxExtract {
   let entries: Map<string, Buffer>
@@ -216,28 +219,43 @@ function slideNumberOf(name: string): number {
   return matched === null ? 0 : Number(matched[1])
 }
 
-/** 一个形状块（`<p:sp>`）：文本段落 + 是不是标题占位符 */
+/** 一个内容块（形状或表格）抽出来的文字：段落 + 是不是标题占位符（表格永远不是标题） */
 interface ShapeText {
   title: boolean
   paragraphs: string[]
 }
 
 /**
- * 抽一页的文字。逐形状走：标题占位符（`<p:ph type="title|ctrTitle">`）的第一个段落当标题，
+ * slide 里的内容块，**按文档顺序**：形状 `<p:sp>` 与表格 `<a:tbl>` 都是 shape tree 里的同级元素，
+ * 抽出来要跟眼睛看到的顺序一致（表格在形状下面时，行也不该跑到形状前面）。
+ * 直接盯 `<a:tbl>` 而不是外面的 `<p:graphicFrame>`：chart / 图片也是 graphicFrame，它们不带表格；
+ * 而表格偶尔会裹在 `<mc:AlternateContent>` 里，盯 `<a:tbl>` 两种写法都收得到。
+ */
+const SLIDE_BLOCK = /<p:sp>[\s\S]*?<\/p:sp>|<a:tbl(?:\s[^>]*)?>[\s\S]*?<\/a:tbl>|<a:tbl\/>/g
+
+/** 表格里的一行 / 一个单元格（`<a:tc hMerge="1">` 这类带属性的、`<a:tc/>` 这类空的都要收） */
+const TABLE_ROW = /<a:tr(?:\s[^>]*)?>[\s\S]*?<\/a:tr>/g
+const TABLE_CELL = /<a:tc(?:\s[^>]*)?(?:\/>|>[\s\S]*?<\/a:tc>)/g
+
+/**
+ * 抽一页的文字。逐块走：标题占位符（`<p:ph type="title|ctrTitle">`）的第一个段落当标题，
  * 其余段落都进正文行 —— **认不出占位符就不给 title**（宁可不给，也不猜哪一行"看起来像标题"）。
  * 段落里的 `<a:br/>` 是真换行，拆成两行；`<a:t>` 的 XML 转义在这里还原。
  */
 function readSlide(xml: string, index: number): PreviewSlide {
   const shapes: ShapeText[] = []
-  for (const block of xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) ?? []) {
+  for (const block of xml.match(SLIDE_BLOCK) ?? []) {
+    if (block.startsWith('<a:tbl')) {
+      const rows = tableLines(block)
+      if (rows.length > 0) shapes.push({ title: false, paragraphs: rows })
+      continue
+    }
+
     const title = /<p:ph[^>]*\btype="(?:title|ctrTitle)"/.test(block)
     const paragraphs: string[] = []
     for (const paragraph of block.match(/<a:p>[\s\S]*?<\/a:p>/g) ?? []) {
       for (const piece of paragraph.split(/<a:br\s*\/?>/)) {
-        const text = (piece.match(/<a:t>([\s\S]*?)<\/a:t>/g) ?? [])
-          .map((run) => unescapeXml(run.replace(/<\/?a:t>/g, '')))
-          .join('')
-          .trim()
+        const text = runsText(piece)
         if (text !== '') paragraphs.push(text)
       }
     }
@@ -253,6 +271,50 @@ function readSlide(xml: string, index: number): PreviewSlide {
   }
 
   return title === undefined ? { index, lines } : { index, title, lines }
+}
+
+/**
+ * 一件 `<a:tbl>` → 每行一句（单元格按列序用 ` | ` 连起来）。
+ *
+ * 为什么拍平成行文本、不给 `PreviewSlide` 加结构化字段：`lines` 是预览（PptxPreview）与
+ * `render_ppt` 的"逐页文字自检"共用的既有形状，改形状要同时动 IPC schema 与渲染端；
+ * 而这里要解决的问题只是"表格里的字看不见"（`—` 这类缺值抽不到）。`甲 | — | 丙` 既让预览看得见，
+ * 也让退化自检的模型读得出**列对列**的空值。
+ *
+ * 空单元格**保留空位**（不去掉），列才不会错位（合并单元格那些空 `<a:tc>` 同样占一列）；
+ * 整行都没字的行不留（那是画表格时的空行）。
+ */
+function tableLines(table: string): string[] {
+  const lines: string[] = []
+  for (const row of table.match(TABLE_ROW) ?? []) {
+    const cells = (row.match(TABLE_CELL) ?? []).map(cellText)
+    if (cells.every((cell) => cell === '')) continue
+    lines.push(cells.join(' | '))
+  }
+  return lines
+}
+
+/** 一个单元格的文字：段内换行（`<a:br/>`）与多段落都并成一句（一格就是一句，别把表格撑成多行） */
+function cellText(cell: string): string {
+  const text = (cell.match(/<a:p>[\s\S]*?<\/a:p>/g) ?? [])
+    .map((paragraph) =>
+      paragraph
+        .split(/<a:br\s*\/?>/)
+        .map(runsText)
+        .filter((piece) => piece !== '')
+        .join(' ')
+    )
+    .filter((paragraph) => paragraph !== '')
+    .join(' ')
+  return text.trim()
+}
+
+/** 一段（`<a:br/>` 之间的片段）里的 `<a:t>`：拼接 + 还原 XML 转义 + 去首尾空白 */
+function runsText(fragment: string): string {
+  return (fragment.match(/<a:t>[\s\S]*?<\/a:t>/g) ?? [])
+    .map((run) => unescapeXml(run.replace(/<\/?a:t>/g, '')))
+    .join('')
+    .trim()
 }
 
 /** XML 文本转义还原（`<a:t>` 里只有这几个 + 数字实体） */

@@ -55,12 +55,17 @@ export type UsageResponse = z.infer<typeof usageResponseSchema>
 /**
  * GET /api/usage/context?threadId= 的回包（round 18：上下文环与 hover 明细的数据面）。
  *
- * 口径（都是**近似**，报告里如实标注）：
- *   - `lastInput` = 该会话最近一轮的输入 tokens（环的分子）；
- *   - `baselineInput` = 该会话**首轮**的输入 tokens ≈ 系统提示词 + 工具定义的基线；
+ * 口径（**round 67 起是实测值，不是估算**）：
+ *   - `lastInput` = 该会话最近一轮结束时的**真实上下文大小** —— 那一轮最后一次 LLM 调用的输入
+ *     tokens（系统提示词 + 工具定义 + 全部历史消息 + 本轮工具结果）。环的分子就是它；
+ *   - `baselineInput` = 该会话**首轮**的同一口径 ≈ 系统提示词 + 工具定义 + 首条提问；
  *     分解里"对话消息" = lastInput − baselineInput（不足 0 归 0）；
- *   - 缓存字段来自 provider 上报（DeepSeek 系有 prompt_cache_hit_tokens → AI SDK 的 cachedInputTokens）；
- *     端点不报就是 null / 0，不拿它猜命中率；`today*` 是本地日历当天**全部会话**的合计（窗口合计口径）。
+ *   - `lastCachedInput` = 与 `lastInput` **同一次调用**的缓存命中数（同源才有比值意义）；
+ *   - 三者只统计**能拿到实测值**的那部分口径：老记录（round 67 之前落的行）没有"末次调用"
+ *     这一列，回读时退回该轮**整轮合计**（`tokens.input`）—— 那是**花费**口径、比上下文大得多，
+ *     所以老会话的环会偏高；新会话一律是实测；
+ *   - `today*` 是本地日历当天**全部会话**的合计（窗口合计口径，用整轮合计累加 —— 页面说的是
+ *     "今天花了多少 token"，不是"当前上下文多大"）；`todayCachedInput` 同理。
  */
 export const usageThreadContextSchema = z.strictObject({
   threadId: z.string().min(1),
