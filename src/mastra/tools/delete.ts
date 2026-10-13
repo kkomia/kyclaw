@@ -20,11 +20,11 @@ import {
 } from './guard'
 
 export const deleteInputSchema = z.object({
-  path: z.string().min(1).describe('要删除的文件或目录（工作区内）'),
+  path: z.string().min(1).describe('File or directory to delete (inside the workspace)'),
   recursive: z
     .boolean()
     .optional()
-    .describe('目录非空时是否整树删除（缺省 false：只删文件与空目录）')
+    .describe('Delete a non-empty directory tree; default false removes files and empty directories only')
 })
 
 export type DeleteInput = z.infer<typeof deleteInputSchema>
@@ -35,8 +35,8 @@ export async function createDeleteTool(ctx: ToolContext): Promise<Tool<DeleteInp
   return createTool({
     id: 'delete',
     description:
-      '删除工作区内的文件或目录（recursive=true 才允许删非空目录；缺省只删文件与空目录）。' +
-      '这是危险操作：每次都会请求用户批准（没有"以后都别问"的豁免）。',
+      'Delete a workspace file or directory; recursive=true is required for a non-empty directory. ' +
+      'Dangerous: approved every call, with no remember-this-choice option.',
     inputSchema: deleteInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

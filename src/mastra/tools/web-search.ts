@@ -35,13 +35,16 @@ import { approvalSessionOf, needsApproval, type ToolContext } from './guard'
 export const SEARCH_RAW_LIMIT_BYTES = 32 * 1024
 
 export const webSearchInputSchema = z.object({
-  query: z.string().min(1).describe('搜索词：自然语言即可；查最新信息时把时间范围或版本号说清楚'),
+  query: z
+    .string()
+    .min(1)
+    .describe('Search query; natural language is fine. State the date range or version when looking for current information'),
   numResults: z
     .number()
     .int()
     .min(1)
     .optional()
-    .describe(`返回条数（缺省 ${WEB_SEARCH_DEFAULT_RESULTS}，最多 ${WEB_SEARCH_MAX_RESULTS}）`)
+    .describe(`Number of results; defaults to ${WEB_SEARCH_DEFAULT_RESULTS}, maximum ${WEB_SEARCH_MAX_RESULTS}`)
 })
 
 export type WebSearchInput = z.infer<typeof webSearchInputSchema>
@@ -99,9 +102,9 @@ export async function createWebSearchTool(
   return createTool({
     id: 'web_search',
     description:
-      '联网搜索：查最新的信息、多来源查证一件事（返回标题、链接与摘要）。默认走免费搜索档，无需配置。' +
-      '要看某个**已知网页**的正文，用 fetch 的阅读模式（mode: "reader"），不要用本工具。' +
-      '执行前会请求用户批准。',
+      'Search the web for current information or to cross-check a claim; returns titles, links and snippets. ' +
+      'Free search tier by default, no configuration needed. ' +
+      'To read the body of a known page, use fetch with mode: "reader", not this tool.',
     inputSchema: webSearchInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

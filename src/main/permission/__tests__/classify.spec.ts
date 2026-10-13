@@ -45,13 +45,15 @@ describe('classifyToolCall：内置文件工具', () => {
     expect(classifyToolCall('Delete')).toBe('dangerous')
   })
 
-  it('模块 4 产出物五件 → write（默认问；不是"未知名字碰巧落在 write"）', () => {
+  it('模块 4 产出物五件 + round 76 的 edit_ppt → write（默认问；不是"未知名字碰巧落在 write"）', () => {
     for (const name of [
       'create_report',
       'create_pdf',
       'create_excel',
       'create_ppt',
-      'create_docx'
+      'create_docx',
+      // round 76：edit_ppt 是"就地改已有的一份 .pptx"，与 create_ppt 同档
+      'edit_ppt'
     ]) {
       expect(classifyToolCall(name), name).toBe('write')
     }
@@ -62,6 +64,17 @@ describe('classifyToolCall：内置文件工具', () => {
     expect(classifyToolCall('web_search')).toBe(classifyToolCall('fetch'))
     // 大小写与空白同样不敏感（与既有表项同口径）
     expect(classifyToolCall(' Web_Search ')).toBe('write')
+  })
+
+  /**
+   * round 68 修订：render_ppt 是**派生只读产物**（把已有 deck 逐页导成页图给模型看），
+   * 写入只落在 `<deck 名>_页图/`，所以按只读档免审 —— 非 full 工作区里每次自检都弹卡，
+   * 拦下的收益远小于代价。免审的前提由 render-ppt 的越界拒绝撑着（见那个工具的用例）。
+   */
+  it('render_ppt（派生只读产物）→ read；不再属于"按写类判审批"的那张表', () => {
+    expect(classifyToolCall('render_ppt')).toBe('read')
+    expect(classifyToolCall(' Render_Ppt ')).toBe('read')
+    expect(isWorkspaceFileTool('render_ppt')).toBe(false)
   })
 })
 
@@ -85,7 +98,7 @@ describe('classifyToolCall：MCP / 外部工具', () => {
 })
 
 describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判定）', () => {
-  it('五件套 + 产出物五件是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
+  it('五件套 + 产出物五件 + edit_ppt 是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
     for (const name of [
       'read',
       'glob',
@@ -98,7 +111,9 @@ describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判
       'create_pdf',
       'create_excel',
       'create_ppt',
-      'create_docx'
+      'create_docx',
+      // round 76：edit_ppt 与 create_ppt 同一个引擎（artifactTarget 先解析再改），同类
+      'edit_ppt'
     ]) {
       expect(isWorkspaceFileTool(name), name).toBe(true)
     }
@@ -112,6 +127,8 @@ describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判
       'fetch',
       'web_search',
       'git_add',
+      // round 68 修订：render_ppt 按只读档免审，不再靠这张表判审批（见上面那组用例）
+      'render_ppt',
       ''
     ]) {
       expect(isWorkspaceFileTool(name), name).toBe(false)

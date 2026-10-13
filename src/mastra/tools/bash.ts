@@ -28,9 +28,10 @@
  *       能覆盖（Git Bash 那套 MSYS 组杀不适用）。
  *
  * 契约：`$ command`（PowerShell 下落 `PS> command`）+ `[cwd: ...]` + 合并输出 + `[退出码 N]`；
- * 超时换成 `[已超时：...]`；输出超 64KB 首尾保留（见 exec.MAX_OUTPUT_BYTES）；默认超时 120s、
- * 上限 600s。cd 到工作区之外、以及跑任意命令本身都允许 —— 这正是「工作区之外」的主通道，
- * 审批兜底。
+ * 超时换成 `[已超时：...]`；用户中止（round 72，停止键）换成 `[已被用户中止：...]`；输出超
+ * 32KB 首尾保留（见 `BASH_MAX_OUTPUT_BYTES`，round 71 从 64KB 收到 32KB：上下文是真实成本），
+ * 截断说明后面附一句"怎么拿到剩余部分"；默认超时 120s、上限 600s。cd 到工作区之外、以及跑任意
+ * 命令本身都允许 —— 这正是「工作区之外」的主通道，审批兜底。
  */
 import { realpathSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -40,7 +41,7 @@ import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import { resolveInsideWorkspace } from '../../main/permission/realpath'
 import { currentShell, SHELL_MISSING, type ResolvedShell } from '../../main/git-bash'
-import { formatSeconds, MAX_OUTPUT_BYTES, runProcess, type RunResult } from './exec'
+import { formatSeconds, runProcess, type RunResult } from './exec'
 import {
   approvalSessionOf,
   needsApproval,
@@ -75,19 +76,47 @@ export const BASH_DEFAULT_TIMEOUT_MS = 120_000
 /** 超时上限（毫秒）：600 秒 */
 export const BASH_MAX_TIMEOUT_MS = 600_000
 
+/**
+ * bash 单条输出的保留上限（字节）：**32KB**（round 71，从 64KB 收下来）。
+ *
+ * 为什么单给 bash 一档（exec.MAX_OUTPUT_BYTES 仍是 64KB，git / fetch / render-ppt 走那一档）：
+ * bash 是最容易吐出巨量文本的一件（RSS / XML / 目录递归 / 构建日志），而一条结果就是一条
+ * 上下文成本——实测一轮里两条 64KB 级结果（各 ≈16K token）吃掉了整轮 57% 的上下文。
+ * 32KB ≈ 8K token 量级，常规命令的输出仍读得全，巨量输出则退化成"头尾 + 怎么取"。
+ * read / grep / glob 是另一套上限（256KB / 100 / 200），不在这一档。
+ */
+export const BASH_MAX_OUTPUT_BYTES = 32 * 1024
+
+/**
+ * 截断说明后面那句"下一步"（round 71）：告诉模型**怎么拿到被省掉的部分**。
+ * 只说"已截断"没用——模型会重跑同一条命令再撞一次上限；给出取样手法它才会换手段。
+ * 命令名按当前 shell 给（bash 的 head/tail/grep、PowerShell 的 Select-Object/Select-String），
+ * 免得在回落 PowerShell 的机器上劝它敲 bash 命令。
+ */
+export function bashTruncationHint(shell: ResolvedShell): string {
+  const sample =
+    shell.kind === 'powershell'
+      ? '用 Select-Object -First / -Last 取头尾、Select-String 过滤'
+      : '用 head / tail / grep 精确取样'
+  return (
+    '要拿到其余部分：把命令的输出面收窄（更精确的路径或筛选条件、只取需要的字段），' +
+    `${sample}，或者把完整输出写进文件再用 read 分段读。`
+  )
+}
+
 export const bashInputSchema = z.object({
   command: z
     .string()
     .min(1)
-    .describe(
-      '要执行的 shell 命令（Git Bash 环境写 bash 语法；回落 PowerShell 时写 PowerShell 语法）'
-    ),
+    // round 70 瘦身：写哪种语法由本工具的**顶层描述**（按当前解析出的 shell 现算）与系统指令的
+    // 运行时快照一起说清，字段这一层再抄一遍只是重复
+    .describe('Shell command to run'),
   cwd: z
     .string()
     .min(1)
     .optional()
     .describe(
-      '工作目录；相对路径以会话工作区为基准，绝对路径可指向工作区之外（缺省 = 会话工作区）'
+      'Working directory; defaults to the session workspace, and an absolute path may point outside it'
     ),
   timeout_ms: z
     .number()
@@ -95,7 +124,9 @@ export const bashInputSchema = z.object({
     .min(1)
     .max(BASH_MAX_TIMEOUT_MS)
     .optional()
-    .describe('超时毫秒（缺省 120000，上限 600000）；超时会终止整个进程树')
+    .describe(
+      'Timeout in milliseconds; defaults to 120000, maximum 600000. On timeout the whole process tree is terminated'
+    )
 })
 
 export type BashInput = z.infer<typeof bashInputSchema>
@@ -113,46 +144,53 @@ export function shellPromptMarker(shell: ResolvedShell): string {
 /**
  * 工具描述（round 33）：按当前解析出来的 shell 给正确口径 —— 不能让模型拿 bash 语法往
  * PowerShell 里灌。`shell === null` = 一个 shell 都没有（极罕见），如实说，省得白试一次。
- * 其余内容（cwd / 超时 / 输出截断 / 审批）两套口径一致。
+ * 其余内容（cwd / 超时 / 输出截断 / 审批）两套口径一致；上限按 `BASH_MAX_OUTPUT_BYTES` 现算
+ * （不写死数字，改上限只改那一处）。
  */
 export function bashToolDescription(shell: ResolvedShell | null): string {
   if (shell === null) {
-    return '执行 shell 命令；但这台机器上既没有 Git Bash 也没有 PowerShell，命令无法执行。'
+    return 'Run a shell command. This machine has neither Git Bash nor PowerShell, so commands cannot run.'
   }
   const tail =
-    '返回合并后的输出与退出码。默认工作目录 = 会话工作区，可用 cwd 指定（绝对路径可到工作区' +
-    '之外）。默认超时 120 秒（timeout_ms 可调，上限 600 秒），超时会终止整个进程树；输出超过' +
-    ' 64KB 时保留首尾。执行前会请求用户批准。'
+    `Returns merged output and exit code; the working directory defaults to the session workspace. Output over ${BASH_MAX_OUTPUT_BYTES / 1024}KB keeps the head and the tail and drops the middle, and the result says how many bytes were dropped. ` +
+    'Send independent commands as separate bash calls in the same turn instead of chaining them; join dependent steps with `&&` (`;` only when an earlier failure does not matter), never with a newline. ' +
+    'Confirm the parent directory before writing into it, do not `sleep`-poll a service you started in the background, and never run an interactive command, which hangs until the timeout.'
   if (shell.kind === 'powershell') {
     return (
-      '在 Windows PowerShell 里执行 shell 命令（**这台机器没有 Git Bash，已回落 PowerShell**：' +
-      '命令请写 PowerShell 语法，不是 bash）。' +
+      'Run a shell command in Windows PowerShell, since this machine has no Git Bash and falls back to it, so write PowerShell syntax rather than bash. ' +
       tail +
-      '长驻服务（dev server 等）请用 Start-Process 放到后台，不要前台常驻。'
+      ' Run a long-lived service in the background with Start-Process.'
     )
   }
   return (
-    '在 Git Bash 里执行 shell 命令（bash 语法，不是 PowerShell）。' +
+    'Run a shell command in Git Bash, using bash syntax rather than PowerShell. ' +
     tail +
-    '长驻服务（dev server 等）请重定向输出到文件并在末尾加 &，不要前台常驻。'
+    ' Start a long-lived service by redirecting output to a file and appending &.'
   )
 }
 
-/** 系统指令里那行"当前 shell 是什么、该怎么写"（round 33；按解析结果现算） */
+/**
+ * 系统指令快照里的"当前 shell 是什么、该怎么写"（round 33；按解析结果现算）。
+ *
+ * 两处平台陷阱逐条编码（round 69，DSH 的做法）：
+ *   - PowerShell 回落时，**含空格的路径**必须用 `&` 调用运算符或逐个加引号（`& "C:\Program Files\x.exe"`）——
+ *     这是 PowerShell 与 bash / cmd 最容易踩混的一处，光说"写 PowerShell 语法"指不到具体位置；
+ *   - Git Bash 侧给**路径写法**（正斜杠；含空格或中文时整体加引号），同样只写这条环境真会遇到的。
+ */
 export function shellGuidance(shell: ResolvedShell | null): string {
   if (shell === null) {
-    return '- bash 工具当前不可用：这台机器上既没有 Git Bash 也没有 PowerShell，命令跑不起来；需要命令行的任务如实告诉用户。'
+    return '- bash is unavailable: this machine has neither Git Bash nor PowerShell, so commands cannot run; say so when a task needs a command line.'
   }
   if (shell.kind === 'powershell') {
     return (
-      '- bash 工具当前运行的是 Windows PowerShell（这台机器没有 Git Bash，已回落）：命令请写' +
-      ' PowerShell 语法（不是 bash），例如 `Get-ChildItem`、`Write-Output`、`Select-String`；' +
-      '长驻服务用 Start-Process 起后台。'
+      '- bash runs Windows PowerShell, since this machine has no Git Bash and falls back to it: write PowerShell syntax, ' +
+      'not bash (`Get-ChildItem`, `Select-String`). Quote a path that contains spaces, or invoke it with the `&` operator: ' +
+      '`& "C:\\Program Files\\x.exe" -Arg`. Start a long-lived service with Start-Process.'
     )
   }
   return (
-    '- bash 工具当前运行的是 Git Bash：命令请写 bash 语法（不是 PowerShell），长驻服务用 `&` ' +
-    '放到后台并重定向输出到文件。'
+    '- bash runs Git Bash: write bash syntax, not PowerShell; background a long-lived service with `&` and redirect its output ' +
+    'to a file; use forward slashes in paths, and quote any path containing spaces or non-ASCII characters.'
   )
 }
 
@@ -171,8 +209,9 @@ export async function createBashTool(
     description,
     inputSchema: bashInputSchema,
     outputSchema: z.string(),
-    // 审批按会话判（round 46）：回调第二参带得到线程 id → 没给 cwd 时按会话根判 full，
-    // 见 guard.approvalSessionOf / noTargetFullExempt
+    // 审批按会话判（round 46）：回调第二参带得到线程 id → 没给 cwd 时按会话根判区，
+    // 见 guard.approvalSessionOf 与 guard.ts 头注（round 75 起按"目标落在哪个区"分档，
+    // 旧的"无目标一律全免"那一档已经没有了）
     requireApproval: (input, approval) =>
       needsApproval(ctx, 'bash', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
@@ -182,11 +221,16 @@ export async function createBashTool(
       const session = sessionKey(context)
       const cwd = resolveBashCwd(ctx, session, input.cwd)
       const timeoutMs = input.timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS
+      // 截断说明里那句"下一步"按当前 shell 给（两套 shell 的取样命令名不一样）
+      const hint = bashTruncationHint(shell)
+      // 用户点停止（round 72）：mastra 把请求的 abortSignal 交给工具 execute，一路传给
+      // runProcess —— 收到就杀掉整棵命令树，不再只停 UI
+      const signal = context.abortSignal
 
       const result =
         shell.kind === 'git-bash'
-          ? await runInGitBash(shell.path, input.command, cwd, timeoutMs)
-          : await runInPowerShell(shell.path, input.command, cwd, timeoutMs)
+          ? await runInGitBash(shell.path, input.command, cwd, timeoutMs, hint, signal)
+          : await runInPowerShell(shell.path, input.command, cwd, timeoutMs, hint, signal)
 
       if (result.spawnError !== null) {
         throw new Error(`bash 启动失败：${result.spawnError.message}`)
@@ -201,7 +245,10 @@ export async function createBashTool(
         body === '' ? '（无输出）' : body,
         ''
       ]
-      if (result.timedOut) {
+      if (result.aborted) {
+        // 用户中止：与"裸退出码=被终止"同一口径，但明说原因 —— 模型不该把它读成命令自己失败
+        lines.push(`[已被用户中止：命令已终止（退出码 ${result.exitCode ?? '未知'}）]`)
+      } else if (result.timedOut) {
         lines.push(`[已超时：超过 ${formatSeconds(timeoutMs)} 秒，已终止进程]`)
       } else if (result.streamHeldOpen) {
         lines.push('[命令已结束；输出管道仍被后台进程占用，后续输出不会带回]')
@@ -233,7 +280,9 @@ async function runInGitBash(
   bash: string,
   command: string,
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  truncationHint: string,
+  signal?: AbortSignal
 ): Promise<ShellRunResult> {
   const token = randomBytes(6).toString('hex')
   const marker = `kyclaw-pid-${token}:`
@@ -253,7 +302,9 @@ async function runInGitBash(
     cwd,
     env: bashEnv(),
     timeoutMs,
-    maxOutputBytes: MAX_OUTPUT_BYTES,
+    maxOutputBytes: BASH_MAX_OUTPUT_BYTES,
+    truncationHint,
+    signal,
     onData: (chunk) => {
       // 握手行只在开头：解析出结果、或第一行明显超长（bash 没跑到 printf）就停手
       if (parseDone || handshake !== null) return
@@ -289,7 +340,9 @@ async function runInPowerShell(
   ps: string,
   command: string,
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  truncationHint: string,
+  signal?: AbortSignal
 ): Promise<ShellRunResult> {
   const result = await runProcess({
     command: ps,
@@ -297,7 +350,9 @@ async function runInPowerShell(
     cwd,
     env: { ...process.env },
     timeoutMs,
-    maxOutputBytes: MAX_OUTPUT_BYTES
+    maxOutputBytes: BASH_MAX_OUTPUT_BYTES,
+    truncationHint,
+    signal
   })
   return { ...result, body: result.text }
 }

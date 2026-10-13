@@ -39,8 +39,8 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   bash: 'write',
   fetch: 'write',
   // round 45：web_search 与 fetch **同档**（写类，默认问）。网络出站与 fetch 同性质 ——
-  // guard 的 capabilityOf 把它认成 'network'，判定与 fetch 不带 save_to 时逐字一致
-  // （单工作区 full / 全部 full → 免审；单工作区上落了 (工具×工作区) 规则也放行）。
+  // guard 按"这次调用有没有可判定的目标"判区：fetch 的显式目标是 save_to、web_search 没有目标字段，
+  // 两者在"无目标"那一支汇合（单会话根 full → 免审；区外那一档默认问）。
   web_search: 'write',
   // git 只读三件套是真只读（git 自己不写索引）；add / commit 动仓库，按写类
   git_status: 'read',
@@ -54,11 +54,32 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   create_pdf: 'write',
   create_excel: 'write',
   create_ppt: 'write',
+  // round 76：edit_ppt 是"改上一版那份 .pptx"（同一个 path 就地覆盖，见 mastra/tools/ppt-edit.ts），
+  // 与 create_ppt **同档同表**：默认问、目标工作区 full 或命中"永久允许"规则才免审，
+  // 执行同样必过引擎（目标解析不出去即拒，见下面的 WORKSPACE_FILE_TOOLS）。
+  edit_ppt: 'write',
   create_docx: 'write',
+  // round 68 修订：render_ppt 是**派生只读产物** —— 它把已有 deck 逐页导成页图给模型看，
+  // 写入**只落在派生目录** `<deck 名>_页图/`（目标越界一律拒绝、一个文件都不写，见
+  // mastra/tools/render-ppt.ts），不碰用户的文件。所以按**只读档免审**：非 full 工作区里
+  // 每次自检都弹一张卡，拦下的收益远小于代价（自检恰恰是我们要求模型每次都做的那一步）。
+  // 取舍：模型因此能不经询问在工作区里**新建/覆盖**这个派生目录（同名目录里的东西会被整段清掉）。
+  render_ppt: 'read',
   // round 50：deliver_file 是"把工作区里已有的文件交付给用户看"，只 stat 元数据
   // （不读内容、不写盘）——**真只读**，与 read/glob/grep 同档免审。
   // 目标仍过 guard 的引擎（越界 fail closed），只是不需要用户为"看一眼文件"点卡。
-  deliver_file: 'read'
+  deliver_file: 'read',
+  // round 64：use_skill 读的是随包/插件带进来的 SKILL.md（技能目录，不是用户工作区），
+  // 不写盘、不改状态——**真只读**，与 read 同档免审（技能手册是"参考资料"，不是数据）。
+  use_skill: 'read',
+  // round 65：让模型自己落地技能 / MCP 的四个工具。写"托管数据面"（用户技能目录、settings.mcpServers），
+  // 都按**写类**（默认问）：它们的效果超出工作区（写的是应用自己的数据目录、会让 stdio 服务在本机起进程）。
+  // 走 guard.needsApproval 的"无显式目标"档 —— 与 bash/fetch/MCP 外部工具同一套 full 判定
+  // （工作区「完全访问」时免审，见 round 36 用户口径）；delete_skill 是**危险档**，永远问。
+  create_skill: 'write',
+  delete_skill: 'dangerous',
+  add_mcp_server: 'write',
+  remove_mcp_server: 'write'
 }
 
 /** 没在表里的工具（含 MCP 里未标只读的那些）按写类处理：默认问一次，不静默放行 */
@@ -72,6 +93,7 @@ const DEFAULT_CLASS: ToolClass = 'write'
  * 模块 4 的产出物五件同属这一档：它们只写"guard 解析出来的那个绝对路径"，
  * 目标不可解析时执行同样 fail closed（工具层先 toolTarget 再渲染/落盘），所以按同一口径判审批
  * —— 否则 `mode='full'` 的工作区里写文件免审、生成报告却要弹卡，同一件事两套规则说不通。
+ * round 76 的 edit_ppt 是它们的"就地改"同伴（同一份 .pptx、同一个引擎），一样在这里。
  */
 const WORKSPACE_FILE_TOOLS = new Set([
   'read',
@@ -83,7 +105,11 @@ const WORKSPACE_FILE_TOOLS = new Set([
   'create_pdf',
   'create_excel',
   'create_ppt',
+  // round 76：edit_ppt 与 create_ppt 是同一件事的两步（新做 / 就地改），执行都过同一个引擎
+  'edit_ppt',
   'create_docx'
+  // round 68 修订：render_ppt 不在这张表里 —— 它已按**只读档免审**（见上面的 TOOL_CLASSES），
+  // needsApproval 在"只读放行"那一步就返回了，走不到这张表的判定。
 ])
 
 export function classifyToolCall(tool: string, input?: unknown): ToolClass {

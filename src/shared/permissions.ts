@@ -66,3 +66,18 @@ export function withAllowedRule(
   if (rules.some((rule) => ruleMatches(rule, tool, workspace))) return [...rules]
   return [...rules, { tool: normalizeToolName(tool), workspace, mode: 'allow' }]
 }
+
+/**
+ * 撤销一条允许规则（round 71）：按同一把尺（工具名归一 + 工作区路径归一）摘掉所有命中的条目。
+ *
+ * 为什么要有它：在这之前规则只增不减 —— 审批卡上的"永久允许"写进去就再没有入口能看见或收回，
+ * 用户只能去手改 settings.json（设置页「工作区」栏现在把表列出来 + 逐条撤销）。
+ * 摘除按**归一后相等**判，所以 `D:\项目\demo` 与 `d:/项目/demo` 视同一条。
+ */
+export function withoutAllowedRule(
+  rules: readonly PermissionRule[],
+  tool: string,
+  workspace: string
+): PermissionRule[] {
+  return rules.filter((rule) => !ruleMatches(rule, tool, workspace))
+}

@@ -23,12 +23,12 @@ import {
 } from './guard'
 
 export const moveInputSchema = z.object({
-  path: z.string().min(1).describe('要移动 / 重命名的源路径（工作区内）'),
-  to: z.string().min(1).describe('目标路径（工作区内；相对路径以工作区为基准）'),
+  path: z.string().min(1).describe('Source path to move or rename (inside the workspace)'),
+  to: z.string().min(1).describe('Destination path (inside the workspace; relative to the workspace root)'),
   overwrite: z
     .boolean()
     .optional()
-    .describe('目标已存在时是否覆盖（缺省 false；目标为目录时一律拒绝）')
+    .describe('Overwrite an existing destination; default false. A destination that is a directory is always rejected')
 })
 
 export type MoveInput = z.infer<typeof moveInputSchema>
@@ -39,8 +39,8 @@ export async function createMoveTool(ctx: ToolContext): Promise<Tool<MoveInput, 
   return createTool({
     id: 'move',
     description:
-      '在工作区内移动或重命名文件 / 目录；目标父目录会自动创建。默认不覆盖已存在的目标' +
-      '（要覆盖传 overwrite: true；目标为目录时一律拒绝）。这是危险操作：每次都会请求用户批准。',
+      'Move or rename a workspace file or directory; the destination parent directory is created. ' +
+      'An existing destination is not overwritten unless overwrite: true. Dangerous: approved every call.',
     inputSchema: moveInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

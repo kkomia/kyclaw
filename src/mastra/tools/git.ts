@@ -10,6 +10,8 @@
  *   - 非零退出（不在仓库里、nothing to commit、无提交历史…）**不抛错**：git 自己的输出就是
  *     最好的解释，原样带回并附退出码；只有 spawn 失败才抛，超时/挂后台只加标注。
  *   - 输出超过 64KB 首尾保留（exec.MAX_OUTPUT_BYTES）；单条命令超时 60s 后杀进程树。
+ *   - **用户中止（round 73）**：`context.abortSignal` 一路传给 `runProcess` —— 用户点停止时
+ *     命令树被收掉、回执换成 `[已被用户中止：…]`（与 bash 同一口径，不伪装成 git 自己失败）。
  *   - `core.quotepath=false`：中文文件名在 status/log 里不转义成 \344\270\255。
  *   - **v1 明确不做 push**（远程写）：远程交互面（凭据、冲突策略）不在本轮契约里。
  */
@@ -50,13 +52,20 @@ const repoSchema = z
   .string()
   .min(1)
   .optional()
-  .describe('仓库所在目录（工作区内）；缺省 = 会话工作区（有多个工作区时必须给）')
+  // round 70 瘦身：这一串在五件 git 工具里各出现一次（wire 上是五份），措辞压到最短
+  .describe(
+    'Repository directory inside the workspace; defaults to the session workspace and is required with several workspaces'
+  )
 
 export const gitStatusInputSchema = z.object({ path: repoSchema })
 export const gitDiffInputSchema = z.object({
   path: repoSchema,
-  staged: z.boolean().optional().describe('true = 看已暂存的改动（git diff --staged）'),
-  file: z.string().min(1).optional().describe('只看这个路径的改动（相对仓库）')
+  staged: z.boolean().optional().describe('true = show staged changes only (git diff --staged)'),
+  file: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Limit the diff to this path, relative to the repository')
 })
 export const gitLogInputSchema = z.object({
   path: repoSchema,
@@ -66,17 +75,17 @@ export const gitLogInputSchema = z.object({
     .min(1)
     .max(GIT_LOG_MAX)
     .optional()
-    .describe(`最多显示多少条提交（缺省 20，上限 ${GIT_LOG_MAX}）`)
+    .describe(`Maximum number of commits to show; defaults to 20, maximum ${GIT_LOG_MAX}`)
 })
 export const gitAddInputSchema = z.object({
   paths: z
     .array(z.string().min(1))
     .min(1)
-    .describe('要加入暂存区的路径（相对仓库；用 "." 表示全部）'),
+    .describe('Paths to stage, relative to the repository; name them, never "."'),
   path: repoSchema
 })
 export const gitCommitInputSchema = z.object({
-  message: z.string().min(1).describe('提交信息'),
+  message: z.string().min(1).describe('Commit message'),
   path: repoSchema
 })
 
@@ -113,26 +122,28 @@ export async function createGitTools(
   const gitStatus = createTool({
     id: 'git_status',
     description:
-      '查看工作区 git 仓库的短格式状态（当前分支 + 变更清单，只读）。仓库目录缺省 = 会话工作区。',
+      'Short status of the workspace git repository: current branch and changed files, read-only.',
     inputSchema: gitStatusInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
       needsApproval(ctx, 'git_status', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
-      return await runGitCommand(resolveGit, timeoutMs, repo.abs, [
-        '-c',
-        'core.quotepath=false',
-        'status',
-        '--short',
-        '--branch'
-      ])
+      return await runGitCommand(
+        resolveGit,
+        timeoutMs,
+        repo.abs,
+        ['-c', 'core.quotepath=false', 'status', '--short', '--branch'],
+        undefined,
+        context.abortSignal
+      )
     }
   })
 
   const gitDiff = createTool({
     id: 'git_diff',
-    description: '查看工作区 git 仓库的改动 diff（缺省未暂存；staged=true 看已暂存；只读）。',
+    description:
+      'Diff the workspace git repository: unstaged by default, staged with staged=true, read-only.',
     inputSchema: gitDiffInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
@@ -148,35 +159,43 @@ export async function createGitTools(
       if (input.file !== undefined && input.file.trim() !== '') {
         args.push('--', resolveSpec(repo, input.file))
       }
-      return await runGitCommand(resolveGit, timeoutMs, repo.abs, args)
+      return await runGitCommand(
+        resolveGit,
+        timeoutMs,
+        repo.abs,
+        args,
+        undefined,
+        context.abortSignal
+      )
     }
   })
 
   const gitLog = createTool({
     id: 'git_log',
-    description: '查看工作区 git 仓库的提交历史（--oneline，缺省 20 条，只读）。',
+    description:
+      'Commit history of the workspace git repository (--oneline, 20 by default, read-only).',
     inputSchema: gitLogInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
       needsApproval(ctx, 'git_log', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
-      return await runGitCommand(resolveGit, timeoutMs, repo.abs, [
-        '-c',
-        'core.quotepath=false',
-        'log',
-        '--oneline',
-        '-n',
-        String(input.limit ?? 20)
-      ])
+      return await runGitCommand(
+        resolveGit,
+        timeoutMs,
+        repo.abs,
+        ['-c', 'core.quotepath=false', 'log', '--oneline', '-n', String(input.limit ?? 20)],
+        undefined,
+        context.abortSignal
+      )
     }
   })
 
   const gitAdd = createTool({
     id: 'git_add',
     description:
-      '把工作区 git 仓库里的文件加入暂存区（paths 必填，如 ["."] 或 ["src/index.ts"]；' +
-      '执行前会请求用户批准）。',
+      'Stage files in the workspace git repository; paths is required, for example ["src/index.ts"]. ' +
+      'Stage the paths you changed by name, never ".".',
     inputSchema: gitAddInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
@@ -189,7 +208,8 @@ export async function createGitTools(
         timeoutMs,
         repo.abs,
         ['add', '--', ...specs],
-        () => `已暂存：${input.paths.join('、')}`
+        () => `已暂存：${input.paths.join('、')}`,
+        context.abortSignal
       )
     }
   })
@@ -197,15 +217,22 @@ export async function createGitTools(
   const gitCommit = createTool({
     id: 'git_commit',
     description:
-      '提交已暂存的改动（message 必填；执行前会请求用户批准）。先 git_add 再 commit；' +
-      '本工具不 push（需要推到远端请让用户自己做）。',
+      'Commit the staged changes; message is required. Run git_add first. Commit only when the user asked for ' +
+      'one; this tool never pushes, so pushing stays with the user.',
     inputSchema: gitCommitInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
       needsApproval(ctx, 'git_commit', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
       const repo = await gitRepo(ctx, sessionKey(context), input.path)
-      return await runGitCommand(resolveGit, timeoutMs, repo.abs, ['commit', '-m', input.message])
+      return await runGitCommand(
+        resolveGit,
+        timeoutMs,
+        repo.abs,
+        ['commit', '-m', input.message],
+        undefined,
+        context.abortSignal
+      )
     }
   })
 
@@ -239,12 +266,17 @@ function resolveSpec(repo: ResolvedTarget, spec: string): string {
   return resolved.abs
 }
 
+/**
+ * 跑一条 git 命令。`signal` = `context.abortSignal`（round 73）：用户点停止时命令树会被收掉，
+ * 结果带 `aborted: true`，回执明说"已被用户中止"（见 renderGitResult）——不再只停 UI。
+ */
 async function runGitCommand(
   resolveGit: () => string | null,
   timeoutMs: number,
   repoAbs: string,
   args: string[],
-  receipt?: () => string
+  receipt?: () => string,
+  signal?: AbortSignal
 ): Promise<string> {
   const git = resolveGit()
   if (git === null) throw new Error(GIT_MISSING)
@@ -254,20 +286,26 @@ async function runGitCommand(
     args: ['-C', repoAbs, ...args],
     cwd: repoAbs,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    timeoutMs
+    timeoutMs,
+    signal
   })
   if (result.spawnError !== null) throw new Error(`git 启动失败：${result.spawnError.message}`)
   return renderGitResult(result, timeoutMs, receipt?.())
 }
 
-/** 结果渲染：输出 + 退出码（非零不抛错 —— git 的输出就是解释）；超时/挂后台换成说明 */
+/**
+ * 结果渲染：输出 + 退出码（非零不抛错 —— git 的输出就是解释）；超时 / 用户中止 / 挂后台换成说明。
+ * 中止单独一条：与超时分开说，模型才不会把它读成"git 自己失败了"（与 bash 同一口径）。
+ */
 export function renderGitResult(result: RunResult, timeoutMs: number, receipt?: string): string {
   const body = result.text.replace(/[\r\n]+$/, '')
   const head = receipt !== undefined && result.exitCode === 0 ? receipt : ''
   const content = [head, body].filter((part) => part !== '').join('\n\n')
 
   const lines = [content === '' ? '（无输出）' : content, '']
-  if (result.timedOut) {
+  if (result.aborted) {
+    lines.push(`[已被用户中止：命令已终止（退出码 ${result.exitCode ?? '未知'}）]`)
+  } else if (result.timedOut) {
     lines.push(`[已超时：超过 ${formatSeconds(timeoutMs)} 秒，已终止进程]`)
   } else if (result.streamHeldOpen) {
     lines.push('[命令已结束；输出管道仍被后台进程占用]')

@@ -13,6 +13,13 @@
  *      后台进程占着时，等一小段宽限就不再等（报告 streamHeldOpen），避免 `cmd &` 把调用
  *      拖到超时。stderr 与 stdout 的**真实交错顺序**依赖调用方在子进程侧先做 fd 合并
  *      （bash 的包装器里有 `exec 2>&1`）；不做合并的调用方（git）两条管道分别按到达顺序收录。
+ *   4. **用户中止**（round 72）：`options.signal` 是 mastra 交给工具 execute 的
+ *      `context.abortSignal`（用户点停止 = 请求被 abort）。信号一响就按**同一套杀法**收掉
+ *      命令树（killExtra → taskkill /T /F → 宽限关读端），结果带上 `aborted: true` ——
+ *      与超时分开报，调用方才能回一条"被用户中止"的回执，而不是把它伪装成命令失败。
+ *      已经中止的信号不再拉起进程（中止发生在命令启动前时不留副作用）。
+ *   5. **在途账本**：每个活着的子进程都在 `running` 里登记，`killAllRunning()` 供应用退出
+ *      时统一清账（只清这个账本里的，不碰用户自己的进程）。
  */
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
@@ -38,6 +45,8 @@ export interface RunResult {
   /** 子进程退出码；被信号杀 / spawn 失败时为 null */
   exitCode: number | null
   timedOut: boolean
+  /** 已被用户中止（`options.signal` 触发）；与 timedOut 互斥 */
+  aborted: boolean
   /** 命令已结束、但输出管道仍被后台进程占用（如 `cmd &` 起的常驻进程） */
   streamHeldOpen: boolean
   /** 启动失败（命令不存在等）；此时 text 为空、exitCode 为 null */
@@ -52,15 +61,33 @@ export interface RunOptions {
   timeoutMs: number
   /** 输出上限（字节），缺省 MAX_OUTPUT_BYTES */
   maxOutputBytes?: number
+  /**
+   * 截断说明后面追加的一句"下一步"（round 71；缺省不带）。给的是**拿到剩余部分的办法**，
+   * 而不是复述"已截断"——模型只有知道怎么取样才会去取样，否则只会重跑同一条命令。
+   */
+  truncationHint?: string
   /** 每收到一段原始输出就回调（bash 用它当场解析握手行） */
   onData?: (chunk: Buffer) => void
   /** 超时后、通用杀法之前的额外杀法（bash：MSYS 进程组），同步实现 */
   killExtra?: (pid: number | undefined) => void
+  /**
+   * 用户中止信号（round 72）：mastra 把它作为 `context.abortSignal` 交给工具 execute，
+   * 请求被 abort（用户点停止）时触发。一响就按与超时相同的杀法收掉整棵命令树。
+   */
+  signal?: AbortSignal
 }
 
-/** 按码点边界拼接的截断说明（bash / fetch 共用同一句话） */
-export function truncationNote(totalBytes: number, headBytes: number, tailBytes: number): string {
-  return `[输出已截断：共 ${totalBytes} 字节，仅保留前 ${headBytes} 字节与后 ${tailBytes} 字节]`
+/** 按码点边界拼接的截断说明（bash / fetch 共用同一句话）。
+ *  `hint` 是调用方追加的"下一步"（round 71：bash 用它说清怎么拿到被省掉的那部分）——
+ *  缺省不带，别的调用方（git / fetch / render-ppt）的说明一字不变。 */
+export function truncationNote(
+  totalBytes: number,
+  headBytes: number,
+  tailBytes: number,
+  hint = ''
+): string {
+  const note = `[输出已截断：共 ${totalBytes} 字节，仅保留前 ${headBytes} 字节与后 ${tailBytes} 字节]`
+  return hint === '' ? note : `${note}\n${hint}`
 }
 
 /** 超时秒数的显示口径（整数秒不给小数点；120000 → 120、1500 → 1.5） */
@@ -94,6 +121,21 @@ export async function runProcess(options: RunOptions): Promise<RunResult> {
   const tailTarget = maxBytes - headTarget
   const capture = new Capture(headTarget, tailTarget, CAPTURE_LIMIT_BYTES)
 
+  // 信号已经响了（用户在命令起来之前就点了停止）：不拉起进程，直接回一条"被中止" —— 否则
+  // 这条命令的副作用（写文件 / 删东西 / 发请求）照样落地，那是"停止"最不该有的结果
+  if (options.signal?.aborted === true) {
+    return {
+      text: '',
+      totalBytes: 0,
+      truncated: false,
+      exitCode: null,
+      timedOut: false,
+      aborted: true,
+      streamHeldOpen: false,
+      spawnError: null
+    }
+  }
+
   return await new Promise<RunResult>((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
@@ -110,8 +152,12 @@ export async function runProcess(options: RunOptions): Promise<RunResult> {
       return
     }
 
+    const entry: RunningProcess = { pid: child.pid, killExtra: options.killExtra }
+    running.add(entry)
+
     let settled = false
     let timedOut = false
+    let aborted = false
     let streamHeldOpen = false
     let spawnError: Error | null = null
     let graceTimer: NodeJS.Timeout | undefined
@@ -120,25 +166,26 @@ export async function runProcess(options: RunOptions): Promise<RunResult> {
     const settle = (exitCode: number | null): void => {
       if (settled) return
       settled = true
+      running.delete(entry)
+      options.signal?.removeEventListener('abort', onAbort)
       clearTimeout(timeoutTimer)
       if (graceTimer !== undefined) clearTimeout(graceTimer)
       if (detachTimer !== undefined) clearTimeout(detachTimer)
-      const { text, truncated } = capture.result(maxBytes)
+      const { text, truncated } = capture.result(maxBytes, options.truncationHint ?? '')
       resolve({
         text,
         totalBytes: capture.totalBytes,
         truncated,
         exitCode,
         timedOut,
+        aborted,
         streamHeldOpen,
         spawnError
       })
     }
 
-    // 超时计时器：回调用到的 settle / graceTimer 都在闭包里延迟执行，放到后面定义不影响
-    const timeoutTimer = setTimeout(() => {
-      if (settled) return
-      timedOut = true
+    /** 杀命令树 + 宽限收尾：超时与用户中止共用同一套（只有标记不同） */
+    const killTree = (): void => {
       try {
         options.killExtra?.(child.pid)
       } catch {
@@ -152,7 +199,27 @@ export async function runProcess(options: RunOptions): Promise<RunResult> {
         child.stderr?.destroy()
         settle(null)
       }, KILL_GRACE_MS)
+    }
+
+    const onAbort = (): void => {
+      // 已经超时（正在杀的宽限里）就不再改判成"用户中止"：两者互斥，先到的那个说了算
+      if (settled || aborted || timedOut) return
+      aborted = true
+      killTree()
+    }
+
+    // 超时计时器：回调用到的 settle / graceTimer 都在闭包里延迟执行，放到后面定义不影响
+    const timeoutTimer = setTimeout(() => {
+      if (settled || timedOut || aborted) return
+      timedOut = true
+      killTree()
     }, options.timeoutMs)
+
+    if (options.signal !== undefined) {
+      options.signal.addEventListener('abort', onAbort, { once: true })
+      // 登记监听与 spawn 之间信号可能已经响过：补一次，别漏掉这一跳
+      if (options.signal.aborted) onAbort()
+    }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       capture.push(chunk)
@@ -169,7 +236,7 @@ export async function runProcess(options: RunOptions): Promise<RunResult> {
     })
 
     child.on('exit', (code) => {
-      if (timedOut || settled) return
+      if (timedOut || aborted || settled) return
       // 直接子进程退出了，但 close 还没来：可能只是管道里还有尾巴，也可能是 `&` 起的
       // 后台进程占着写端。给一小段宽限，超了就当"命令已结束"收尾，不再挂到超时。
       detachTimer = setTimeout(() => {
@@ -192,9 +259,50 @@ function spawnFailed(error: unknown): RunResult {
     truncated: false,
     exitCode: null,
     timedOut: false,
+    aborted: false,
     streamHeldOpen: false,
     spawnError: error instanceof Error ? error : new Error(String(error))
   }
+}
+
+/**
+ * 在途子进程账本（round 72）：`runProcess` 每拉起一个进程就登记，settle 时注销。
+ *
+ * 收的是 `{ pid, killExtra }` 而不是光 pid：退出清账要收的是**整棵命令树**，而 Git Bash 的
+ * fork 子孙不在 Windows 父链上（taskkill /T 打不到），必须连同调用方给的 MSYS 组杀一起做。
+ */
+interface RunningProcess {
+  pid: number | undefined
+  killExtra?: (pid: number | undefined) => void
+}
+
+const running = new Set<RunningProcess>()
+
+/** 当前在途子进程数（遥测 / 测试用；不含已 settle 的） */
+export function runningProcessCount(): number {
+  return running.size
+}
+
+/**
+ * 应用退出时统一清账：把账本里**自己起的**每一个在途命令树收掉（MSYS 组杀 + taskkill /T /F），
+ * 返回收掉的条数。只认这个账本 —— 用户自己在终端里跑的进程不在此列，不会被误伤。
+ *
+ * 杀法是同步发起的（与超时路径同一套）：taskkill 子进程已 `unref`，主进程退出后它会自己跑完
+ * （Windows 上子进程不随父进程退出而终止）。Git Bash 的组杀是 spawnSync，最坏每条等一小节，
+ * 属"退出时把该收的收干净"的代价。
+ */
+export function killAllRunning(): number {
+  const entries = [...running]
+  running.clear()
+  for (const entry of entries) {
+    try {
+      entry.killExtra?.(entry.pid)
+    } catch {
+      // 额外杀法失败不挡通用杀法
+    }
+    killProcessTree(entry.pid)
+  }
+  return entries.length
 }
 
 /** 通用杀法：Windows taskkill /T /F；非 Windows 对 detached 进程组发 SIGKILL */
@@ -268,14 +376,14 @@ class Capture {
   }
 
   /** 全部数据（未超上限）或「头 + 截断说明 + 尾」；头尾解码都收在 UTF-8 字符边界上 */
-  result(maxBytes: number): { text: string; truncated: boolean } {
+  result(maxBytes: number, hint = ''): { text: string; truncated: boolean } {
     const truncated = this.totalBytes > maxBytes
     if (!truncated) {
       return { text: Buffer.concat([...this.head, ...this.tail]).toString('utf8'), truncated }
     }
     const headText = new StringDecoder('utf8').write(Buffer.concat(this.head))
     const tailText = decodeFromBoundary(Buffer.concat(this.tail))
-    const note = truncationNote(this.totalBytes, this.headBytes, this.tailBytes)
+    const note = truncationNote(this.totalBytes, this.headBytes, this.tailBytes, hint)
     return { text: `${headText}\n${note}\n${tailText}`, truncated }
   }
 }
