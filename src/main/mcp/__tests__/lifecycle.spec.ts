@@ -494,3 +494,112 @@ describe('McpLifecycle：发现不拖对话（round 54，等待预算 + 后台�
     expect(client.listCalls).toBe(3)
   })
 })
+
+describe('McpLifecycle：未启用的 server 不连接也不注入（round 71）', () => {
+  it('createClient 只拿到启用的那条：停用的 server 连连接配置都不进，工具表里也没有它', async () => {
+    const servers = [config(), config({ id: 'off', name: '停用的', enabled: false })]
+    const seen: string[][] = []
+    const client = new FakeClient([{ echo: 'ok' }])
+    const lifecycle = new McpLifecycle({
+      servers: () => servers,
+      createClient: async (configs) => {
+        seen.push(configs.map((candidate) => candidate.id))
+        return client as unknown as McpClient
+      },
+      log: () => {}
+    })
+
+    const tools = await lifecycle.tools(gateTrue)
+
+    // ① 连接：只把启用的交给 MCPClient（停用的那条不会起子进程 / 不会发请求）
+    expect(seen).toEqual([['echo']])
+    // ② 注入：工具表里一处 `mcp__off__` 都没有（工具定义不进模型请求 = 省 token）
+    expect(Object.keys(tools)).toEqual(['mcp__echo__echo'])
+    expect(lifecycle.enabled().map((server) => server.id)).toEqual(['echo'])
+  })
+
+  it('开关切一下就换连接，且下一轮 tools() 就生效（不必重启）', async () => {
+    const servers = [config(), config({ id: 'off', name: '停用的', enabled: false })]
+    const seen: string[][] = []
+    const client = new FakeClient([{ echo: 'ok', off: 'ok' }])
+    const lifecycle = new McpLifecycle({
+      servers: () => servers,
+      createClient: async (configs) => {
+        seen.push(configs.map((candidate) => candidate.id))
+        return client as unknown as McpClient
+      },
+      log: () => {}
+    })
+
+    expect(Object.keys(await lifecycle.tools(gateTrue))).toEqual(['mcp__echo__echo'])
+
+    // 用户把两个开关同时翻过来：启用 off、停用 echo
+    servers[0] = config({ enabled: false })
+    servers[1] = config({ id: 'off', name: '停用的' })
+
+    // 下一轮就按新设置重连（旧连接断开 = 停用那条的子进程下线）
+    expect(lifecycle.enabled().map((server) => server.id)).toEqual(['off'])
+    expect(Object.keys(await lifecycle.tools(gateTrue))).toEqual(['mcp__off__echo'])
+    expect(seen).toEqual([['echo'], ['off']])
+    expect(client.disconnects).toBe(1)
+  })
+
+  it('statusOf：未启用 / 连接中 / 就绪 / 暂停 四态互不混同（边界①）', async () => {
+    const servers = [config(), config({ id: 'off', name: '停用的', enabled: false })]
+    const { lifecycle } = bench([{ echo: 'ok' }], servers)
+    await lifecycle.tools(gateTrue)
+
+    expect(lifecycle.statusOf('echo')).toBe('ready')
+    // 未启用 = 用户自己关的（连都没连）；与"连接失败"不是一件事
+    expect(lifecycle.statusOf('off')).toBe('disabled')
+    expect(lifecycle.statusOf('不存在的 id')).toBe('disabled')
+
+    // 启用但连续起不来 = paused（另一种"没有工具"：日志里写着原因，状态与 disabled 分开）
+    const broken = bench([{ echo: { code: 'CONNECTION_CLOSED', message: '一直起不来' } }])
+    expect(await broken.lifecycle.tools(gateTrue)).toEqual({})
+    expect(broken.lifecycle.statusOf('echo')).toBe('paused')
+    expect(broken.logs.some((line) => line.includes('暂停使用'))).toBe(true)
+  })
+
+  it('刚启用还没发现完：留一条"正在连接中"的日志 + statusOf=connecting（不是静默失败，边界②）', async () => {
+    type ToolsetsResult = Awaited<ReturnType<McpClient['listToolsetsWithErrors']>>
+    /** 闸门 client：发现挂起，由测试放行（模拟冷启动/慢服务超过本轮预算） */
+    class GatedClient {
+      readonly gates: Array<(value: ToolsetsResult) => void> = []
+      async listToolsetsWithErrors(): Promise<ToolsetsResult> {
+        return await new Promise<ToolsetsResult>((resolve) => this.gates.push(resolve))
+      }
+      async reconnectServer(): Promise<void> {
+        /* 闸门用例：重连是空操作 */
+      }
+      async disconnect(): Promise<void> {
+        /* 闸门用例：断开是空操作 */
+      }
+    }
+
+    const client = new GatedClient()
+    const logs: string[] = []
+    const lifecycle = new McpLifecycle({
+      servers: () => [config()],
+      createClient: async () => client as unknown as McpClient,
+      log: (line) => logs.push(line),
+      discoveryBudgetMs: 20
+    })
+
+    // 这一轮：工具表空着，但状态与日志都能说清"为什么"——不是静默地什么都没有
+    expect(await lifecycle.tools(gateTrue)).toEqual({})
+    expect(lifecycle.statusOf('echo')).toBe('connecting')
+    expect(logs.some((line) => line.includes('正在连接中'))).toBe(true)
+
+    // 同一轮里 Mastra 会再问一次工具：不重复刷日志
+    await lifecycle.tools(gateTrue)
+    expect(logs.filter((line) => line.includes('正在连接中'))).toHaveLength(1)
+
+    // 后台发现回来：工具按约出现（下一轮），状态转 ready
+    client.gates[0]({ toolsets: { echo: { echo: makeTool() } }, errors: {}, errorDetails: {} })
+    await vi.waitFor(async () => {
+      expect(Object.keys(await lifecycle.tools(gateTrue))).toEqual(['mcp__echo__echo'])
+    })
+    expect(lifecycle.statusOf('echo')).toBe('ready')
+  })
+})

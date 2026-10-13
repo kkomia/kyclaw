@@ -45,6 +45,73 @@ export function parseMcpToolName(name: string): { serverId: string; tool: string
 }
 
 /**
+ * 元工具的第三段（round 75「渐进披露」）：`mcp__<serverId>__meta`。
+ *
+ * 一个 server 的工具不再逐件进每轮请求前缀（实测 kybase 11 件 ≈5.2k 字符 ≈2k token/轮），
+ * 而是换成这一个入口：`{action:"list"}` 拿清单（名字 + 一行 + 参数名与类型 + 审批档）、
+ * `{action:"call", tool, args}` 真调用。构建方在 `mastra/mcp.ts` 的 `buildMcpToolTable`。
+ *
+ * 为什么取 `meta` 当第三段：它必须落在 `mcp__<serverId>__<tool>` 的既有形状里，渲染端与轨迹页
+ * 才能沿用同一套解析（否则又要多一套命名规则）。服务端真有个叫 `meta` 的工具时不夺名 ——
+ * 那个 server 退回逐件注入（见 buildMcpToolTable 的碰撞分支）。
+ */
+export const MCP_META_TOOL_SEGMENT = 'meta'
+
+/** 元工具名：`mcp__<serverId>__meta` */
+export function mcpMetaToolName(serverId: string): string {
+  return mcpToolName(serverId, MCP_META_TOOL_SEGMENT)
+}
+
+/** `mcp__<serverId>__meta` → serverId；不是元工具名回 null（渲染端 / 轨迹页判断要不要解包） */
+export function parseMcpMetaToolName(name: string): { serverId: string } | null {
+  const parsed = parseMcpToolName(name)
+  if (parsed === null || parsed.tool !== MCP_META_TOOL_SEGMENT) return null
+  return { serverId: parsed.serverId }
+}
+
+/** 元工具 `call` 的入参形状（只有这两件事有意义；`list` 不带它们） */
+export interface McpMetaCall {
+  /** 被调用的真实工具名（第三段，不含 `mcp__<server>__` 前缀） */
+  tool: string
+  /** 传给该工具的入参对象（原样交给服务端 schema 校验） */
+  args: unknown
+}
+
+/** 元工具入参 → 被调用的工具与入参；不是"这个元工具在 call"就回 null（认不出就不猜） */
+export function mcpMetaCallOf(input: unknown): McpMetaCall | null {
+  if (typeof input !== 'object' || input === null) return null
+  const record = input as { action?: unknown; tool?: unknown; args?: unknown }
+  if (record.action !== 'call') return null
+  if (typeof record.tool !== 'string' || record.tool.trim() === '') return null
+  return { tool: record.tool.trim(), args: record.args ?? {} }
+}
+
+/**
+ * 用户可见面（工具卡 / 审批卡 / 轨迹页）显示的工具名：元工具在 `call` 时换成**被调用的真实工具名**
+ * `mcp__<server>__<tool>`，而不是元工具名。
+ *
+ * 为什么必须换（round 75）：渲染端按工具名判"审批记忆的粒度"（`approval.ts` 的会话记忆 = 对话 ×
+ * 工具 × 工作区），不换的话用户对某个只读工具的"本会话允许"会落到 `mcp__x__meta` 上 ——
+ * 之后**这个服务的任何**调用都被客户端自动放行，粒度从"某个工具"塌成"某个服务"。
+ * 非元工具 / 不是 call / 形状不对 → 原样返回（认不出就不猜）。
+ */
+export function resolveMcpToolCallName(toolName: string, input: unknown): string {
+  const meta = parseMcpMetaToolName(toolName)
+  if (meta === null) return toolName
+  const call = mcpMetaCallOf(input)
+  return call === null ? toolName : mcpToolName(meta.serverId, call.tool)
+}
+
+/** 与 `resolveMcpToolCallName` 配套：元工具调用的**真实入参**（`call.args`）；不是元工具调用原样返回。
+ *  渲染端拿它算目标（path / cwd / save_to）、做 diff、判危险档 —— 元工具那层壳对用户是透明的。 */
+export function resolveMcpToolCallInput(toolName: string, input: unknown): unknown {
+  const meta = parseMcpMetaToolName(toolName)
+  if (meta === null) return input
+  const call = mcpMetaCallOf(input)
+  return call === null ? input : call.args
+}
+
+/**
  * 展示名（round 14 用户实拍）：`mcp__<serverId>__<tool>` → 「<服务名> · <工具名>」——
  * 用户注册 MCP 时取了名字，界面上不该露出内部 id（`mcp__mcp-1__search`）。
  * 不是 MCP 名 / 列表里找不到该 server → 原样返回（认不出就不猜）。
@@ -234,8 +301,12 @@ export function parseMcpServersJson(
   return entries.map(([name, raw]) => convertImportedEntry(name, raw, used))
 }
 
-/** 键 → id：规范化后可用且不重名就用它，否则退 `mcp-N`（唯一） */
-function claimId(name: string, used: Set<string>): string {
+/**
+ * 键 → id：规范化后可用且不重名就用它，否则退 `mcp-N`（唯一）。
+ * round 65 从内部函数改成导出：agent 侧的 add_mcp_server 也按同一口径给"没给 id"的服务命名 ——
+ * 界面导入与模型写入两条路共用一个实现。
+ */
+export function claimMcpId(name: string, used: Set<string>): string {
   const candidate = name
     .trim()
     .toLowerCase()
@@ -305,7 +376,7 @@ function convertImportedEntry(
     fail(`不认识的 type：${type}`)
   }
 
-  const id = claimId(name, used)
+  const id = claimMcpId(name, used)
   if (transport === 'http') {
     const url = typeof raw.url === 'string' ? raw.url.trim() : ''
     const headers = importedValue(raw.headers, label, 'headers')

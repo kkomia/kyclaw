@@ -14,9 +14,22 @@
  *      尝试重连；同一个 server **连续**失败用满次数就"暂停使用"（工具从下一轮消失，不再反复拉起）。
  *      任何一次成功（发现成功 / 调用成功）把计数清零——上限管的是"连续崩溃"，不是服务器的一生。
  *   4. **失败不静默**：连不上只记日志并从工具表里拿掉（该 server 的工具消失），不挡这一轮对话。
+ *      round 71 补齐另一面：**"启用了但还没连上"也留信号**（每个连接时段一条"正在连接中"日志
+ *      + `statusOf` 四态），否则用户刚启用却找不到工具时，日志里一个字都没有。
  *   5. **发现不拖对话**（round 54 首字延迟实测：不可达 HTTP server 的启动重试 ≈86s，全记在
  *      SSE 首字节之前）：`tools()`/`refresh()` 最多等 `discoveryBudgetMs`（缺省 5s），超时先把
  *      当前结果交出去（缺的工具下一轮补上），发现继续在后台跑完——重启/暂停逻辑照常走。
+ *
+ * **未启用（`enabled: false`）的 server 既不连接、也不注入**（round 71 实测结论，不是本次新加）：
+ * 连接用的 server 表与工具注入用的列表**都来自 `enabled()`**，所以停用的 server 连子进程都不会
+ * 起（实测：见证文件不存在）、工具定义也不会进模型请求。用户改开关后，下一轮 `tools()` 现读
+ * 设置、指纹变了就整体换连接（启用的接上、停用的断开），**不必重启**。
+ *
+ * **渐进披露（round 75）**：工具数多于 `inlineToolThreshold`（缺省 3）的 server，逐件定义不进
+ * 工具表，换成一个元工具 `mcp__<serverId>__meta`（`action:"list"` / `action:"call"`）——省的是
+ * **每轮固定开销**（实测 kybase 11 件：前缀 3,999 → 598 token/轮）。审批、结果护栏、崩溃监督
+ * 一律照旧（元工具只是转调用真工具），实现在 mcp.ts 的 `buildMcpToolTable`；
+ * 顺序上的讲究见 `tools()` 的头注。
  *
  * 客户端可注入（测试用假件钉顺序与计数）；真件是 @mastra/mcp 的 MCPClient（ESM-only，动态 import）。
  */
@@ -24,8 +37,10 @@ import type { Tool } from '@mastra/core/tools'
 import type { MCPClient } from '@mastra/mcp'
 import type { McpServerConfig } from '../../shared/settings'
 import {
+  buildMcpToolTable,
   classifyMcpFailure,
   collectMcpTools,
+  MCP_INLINE_TOOL_THRESHOLD,
   MCP_TIMEOUT_MS,
   parseMcpToolName,
   serverDefinition,
@@ -34,6 +49,19 @@ import {
 
 /** agent 工具表里的 MCP 工具（@mastra/mcp 造出来的就是这一族） */
 type McpTool = Tool<unknown, unknown, unknown, unknown>
+
+/**
+ * 一个 server 当下在工具表里的处境（诊断/测试用；四态**刻意不合并**，见 `statusOf`）。
+ *
+ *   - `disabled`：未启用（或服务已 stop）——连都没连，工具不进模型请求；
+ *   - `connecting`：启用中、发现还没回来（慢服务 / 冷启动 / 本轮预算用完），下一轮补上；
+ *   - `ready`：发现了工具，正常出工具；
+ *   - `paused`：启用中但连续失败用满重启上限，暂停使用（既有语义，见 discover）。
+ *
+ * 前两个的差别就是 round 71 的边界①：**"用户自己关的"与"它坏了"不是一回事**——
+ * 混成一句"没有工具"，用户分不清该去看设置开关还是去看服务日志。
+ */
+export type McpServerStatus = 'disabled' | 'connecting' | 'ready' | 'paused'
 
 /** 生命周期只需要 MCPClient 的这三件事（测试可以造结构相同的假件） */
 export type McpClient = Pick<MCPClient, 'listToolsetsWithErrors' | 'reconnectServer' | 'disconnect'>
@@ -61,6 +89,12 @@ export interface McpLifecycleOptions {
   timeoutMs?: number
   /** 一次"等发现"的总预算（缺省 MCP_DISCOVERY_BUDGET_MS；测试用小值） */
   discoveryBudgetMs?: number
+  /**
+   * 渐进披露阈值（round 75）：一个 server 的工具 ≤ 它就直接逐件注入，多于它就换成元工具
+   * `mcp__<serverId>__meta`（缺省 `MCP_INLINE_TOOL_THRESHOLD`；0 = 一律元工具，Infinity = 一律逐件）。
+   * 关掉整套机制 = 传 `Infinity`。
+   */
+  inlineToolThreshold?: number
 }
 
 /** 已挂过监督包装的工具（重挂会套娃，WeakSet 去重） */
@@ -93,6 +127,8 @@ export class McpLifecycle {
   private readonly maxRestarts: number
   private readonly timeoutMs: number
   private readonly discoveryBudgetMs: number
+  /** 渐进披露阈值（round 75）：≤ 它逐件注入，> 它换成元工具 */
+  private readonly inlineToolThreshold: number
 
   private client: McpClient | undefined
   /** 当前连接对应的"连接指纹"（undefined = 还没连过；'' = 一条启用的 server 都没有） */
@@ -100,6 +136,8 @@ export class McpLifecycle {
   private readonly toolsets = new Map<string, Record<string, McpTool>>()
   private readonly restarts = new Map<string, number>()
   private readonly failed = new Set<string>()
+  /** 已经报过"正在连接中"的 server（同一段连接只报一次；发现成功或配置再变时重记） */
+  private readonly announced = new Set<string>()
   private clientCounter = 0
   private stopped = false
   /** 正在跑的一轮后台发现（同时只跑一轮：并发对话不重复建连接）；结算后清空 */
@@ -111,6 +149,7 @@ export class McpLifecycle {
     this.maxRestarts = Math.max(0, options.maxRestarts ?? MCP_MAX_RESTARTS)
     this.timeoutMs = options.timeoutMs ?? MCP_TIMEOUT_MS
     this.discoveryBudgetMs = Math.max(0, options.discoveryBudgetMs ?? MCP_DISCOVERY_BUDGET_MS)
+    this.inlineToolThreshold = Math.max(0, options.inlineToolThreshold ?? MCP_INLINE_TOOL_THRESHOLD)
     this.createClient =
       options.createClient ??
       (async (configs) => {
@@ -126,9 +165,23 @@ export class McpLifecycle {
       })
   }
 
-  /** 现读设置里启用的 server 列表（诊断/测试用） */
+  /** 现读设置里启用的 server 列表（诊断/测试用）。
+   *  **未启用的一条都不在里面** —— 连接（createClient 的 server 表）与工具注入（collectMcpTools）
+   *  用的都是这份列表，所以 `enabled: false` 的 server 既不连接、也不进模型请求（round 71 实测）。 */
   enabled(): readonly McpServerConfig[] {
     return this.serversFor().filter((server) => server.enabled)
+  }
+
+  /**
+   * 某个 server 现在为什么不（该）出工具（诊断/测试用；round 71）。
+   * 四态的含义与"为什么不合并"见 `McpServerStatus` 的头注。
+   */
+  statusOf(serverId: string): McpServerStatus {
+    if (this.stopped) return 'disabled'
+    const server = this.serversFor().find((candidate) => candidate.id === serverId)
+    if (server === undefined || !server.enabled) return 'disabled'
+    if (this.failed.has(serverId)) return 'paused'
+    return this.toolsets.has(serverId) ? 'ready' : 'connecting'
   }
 
   /** 连续重启次数（诊断/测试用；一次成功即清零） */
@@ -137,9 +190,15 @@ export class McpLifecycle {
   }
 
   /**
-   * 当前可用的 MCP 工具（`mcp__<server>__<tool>` → Tool，已挂权限 gate）。
+   * 当前可用的 MCP 工具（`mcp__<server>__<tool>` → Tool，已挂权限 gate；round 75 起大 server
+   * 换成 `mcp__<server>__meta` 元工具，见 buildMcpToolTable）。
    * 发现失败/暂停中的 server 不出现在结果里；设置变了会先换连接。
    * 等发现最多用满本轮预算（round 54）：超时就先把现状交出去，发现转后台继续。
+   *
+   * **顺序**（三处都不能换）：先 `collectMcpTools` 逐件命名 + 挂 gate + 挂结果护栏，再对真工具
+   * 挂崩溃监督，最后才做渐进披露。反过来的话监督会把元工具也当成那个 server 的工具去包一层，
+   * 一次连接类失败要记两次重启。元工具 execute 里是**现取** `tool.execute` 调用的，
+   * 所以它拿到的一定是上面这两层包装后的那一份（护栏与"暂停使用"原样生效）。
    */
   async tools(gate: McpToolGate): Promise<Record<string, McpTool>> {
     if (this.stopped) return {}
@@ -159,13 +218,42 @@ export class McpLifecycle {
       const parsed = parseMcpToolName(name)
       if (parsed !== null) this.supervise(parsed.serverId, tool)
     }
-    return collected
+    this.announceConnecting(enabled)
+    const table = await buildMcpToolTable({
+      collected,
+      servers: enabled,
+      gate,
+      threshold: this.inlineToolThreshold
+    })
+    return table as Record<string, McpTool>
+  }
+
+  /**
+   * "启用了、这轮还没发现完"的 server：写一句可查的日志（round 71）。
+   *
+   * 为什么必须有：懒连接下这是**唯一的静默失败面**——用户刚启用一个 server，发现还没回来
+   * （冷启动 / 慢服务 / 本轮预算用完），这一轮工具表里空空如也、日志里也一个字没有，模型只能说
+   * "我没有这个工具"，用户无从判断是没启用、还是没连上、还是坏了（实测复核：慢连接那轮
+   * 工具表 `[]`、日志 `[]`）。每个"连接中"的时段只说一次：一轮里 Mastra 会问两次工具
+   * （guidance + prepare-tools），去重免得刷屏；发现成功（discover 里）或配置再变（syncNow 里）
+   * 会把这条记录清掉，所以下一段连接还能再报。
+   */
+  private announceConnecting(enabled: readonly McpServerConfig[]): void {
+    for (const server of enabled) {
+      if (this.toolsets.has(server.id) || this.failed.has(server.id)) continue
+      if (this.announced.has(server.id)) continue
+      this.announced.add(server.id)
+      this.log(
+        `MCP 服务「${server.name}」正在连接中：本轮还没发现完，工具下一轮补上（一直不出现就看设置页的「测试连接」）`
+      )
+    }
   }
 
   /** 应用退出/服务收尾：断开连接（子进程随 transport 关闭下线），之后不再重连 */
   async stop(): Promise<void> {
     this.stopped = true
     this.toolsets.clear()
+    this.announced.clear()
     this.key = undefined
     // 在飞的后台发现随断连自然失败收尾（日志照记），不再复用到下一轮
     this.discovery = undefined
@@ -229,6 +317,7 @@ export class McpLifecycle {
       this.toolsets.clear()
       this.restarts.clear()
       this.failed.clear()
+      this.announced.clear()
       // 先清指纹再建连接：createClient 抛错时不会卡在"新指纹 + 没有 client"的半对齐态，
       // 下一轮（或下一次 refresh）会照常重试
       this.key = undefined
@@ -264,6 +353,8 @@ export class McpLifecycle {
         if (tools !== undefined) {
           this.toolsets.set(server.id, tools)
           this.restarts.set(server.id, 0)
+          // 接上了：把"正在连接中"那条记录清掉——万一以后又断，还能再报一次
+          this.announced.delete(server.id)
           continue
         }
         stillMissing.push(server)
