@@ -472,10 +472,14 @@ export const updateStatusSchema = z.discriminatedUnion('phase', [
 /**
  * 渲染端看到的更新全貌：当前版本 + 有没有配更新源 + 状态。
  * `configured=false` 时"检查更新"只回状态（不发网络请求）——开发态/未配置的路径不报错、不骚扰。
+ *
+ * round 63：多了 `builtinUrl` —— 打包时烘焙进 app-update.yml 的源地址（没有 = null）。
+ * 设置页拿它当更新源输入框的占位提示：用户一眼能看见"留空会用哪个源"。
  */
 export const updateStateSchema = z.strictObject({
   currentVersion: z.string(),
   configured: z.boolean(),
+  builtinUrl: z.string().nullable(),
   status: updateStatusSchema
 })
 

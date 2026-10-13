@@ -388,7 +388,12 @@ describe('preload：window.kyclaw.projects', () => {
 })
 
 describe('preload：window.kyclaw.updates（T17）', () => {
-  const STATE = { currentVersion: '1.0.0', configured: true, status: { phase: 'idle' } }
+  const STATE = {
+    currentVersion: '1.0.0',
+    configured: true,
+    builtinUrl: null,
+    status: { phase: 'idle' }
+  }
 
   it('暴露 updates 一族（读 / 检查 / 安装 / 订阅）', async () => {
     const { kyclawApi } = await loadPreload()
@@ -452,6 +457,7 @@ describe('preload：window.kyclaw.updates（T17）', () => {
     expect(listener).toHaveBeenCalledWith({
       currentVersion: '1.0.0',
       configured: true,
+      builtinUrl: null,
       status: { phase: 'downloading', percent: 40 }
     })
 

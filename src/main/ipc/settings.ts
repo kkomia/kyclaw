@@ -30,7 +30,16 @@ import {
 } from '../secrets'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 
-export function registerSettingsIpc(userDataDir: string): void {
+export interface SettingsIpcHooks {
+  /**
+   * 这次落盘写了 `updateUrl` 之后的通知（round 63）：更新源是"改了就该当场生效"的一项，
+   * 主进程拿它重配更新器（不必重启）。写得进去才调（写失败会抛，通知不会到）；
+   * 值没真变也照调——要不要动由监听方自己比（见 main/updater.ts 的 reconfigure）。
+   */
+  onUpdateUrlSaved?: () => void
+}
+
+export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks = {}): void {
   const file = settingsPath(userDataDir)
   const secrets = secretsPath(userDataDir)
   /** 密钥读取器（主进程内唯一的口子：safeStorage 解出来只进内存，不回渲染端、不进日志） */
@@ -45,6 +54,8 @@ export function registerSettingsIpc(userDataDir: string): void {
     const [patch] = parseIpcArgs(settingsUpdateArgsSchema, args, IPC_CHANNELS.settings.update)
     // 落盘失败会把错误抛回渲染端（updateSettings 不吞写失败）
     const next = updateSettings(file, patch)
+    // round 63：更新源改完当场生效（不用重启）——落盘成功才通知
+    if (patch.updateUrl !== undefined) hooks.onUpdateUrlSaved?.()
     // round 22：provider 保存后**后台**探一轮（元数据 + round 48 的视觉能力；不 await、不挡保存；失败静默）
     if (patch.providers !== undefined) {
       for (const provider of next.providers) {

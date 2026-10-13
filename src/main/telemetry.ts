@@ -1,14 +1,17 @@
 /**
- * Langfuse 的设置与密钥（T17）：
- *   - 服务地址落 settings.json（shared/settings.ts 的 `langfuse.endpoint`）；
+ * Langfuse 的设置与密钥（T17；round 67 加代理）：
+ *   - 服务地址与代理落 settings.json（shared/settings.ts 的 `langfuse.endpoint` / `proxyUrl`）；
  *   - 公私钥与 provider 密钥同待遇 —— safeStorage 密文落 secrets.json（复用 main/secrets.ts 那套
  *     通用读写，用两个固定的 key id 占位）。明文只在写入的那一刻与"建 exporter 的那一刻"存在，
  *     回渲染端的数据永远只有"有没有"。
  *
  * 这里也是"配齐没配齐"的唯一判定入口：agent 服务（建 exporter）与设置页（显示状态）读同一份，
  * 不会两处各判一次、判出两个结果。
+ *
+ * 代理的兜底口径（round 67）：设置项非空就用它；空则看 `LANGFUSE_PROXY_URL` /
+ * `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 环境变量（归一逻辑在 mastra/telemetry.ts）。
  */
-import { langfuseConfigOf, type LangfuseExportConfig } from '../mastra/telemetry'
+import { langfuseConfigOf, resolveProxyUrl, type LangfuseExportConfig } from '../mastra/telemetry'
 import type { LangfuseState } from '../shared/ipc'
 import {
   clearProviderKey,
@@ -34,6 +37,7 @@ export function readLangfuseConfig(
   const { langfuse } = readSettings(settingsPath(dataDir))
   return langfuseConfigOf({
     endpoint: langfuse.endpoint,
+    proxyUrl: resolveProxyUrl(langfuse.proxyUrl, process.env),
     publicKey: getProviderKey(secretsFile, LANGFUSE_PUBLIC_KEY_ID),
     secretKey: getProviderKey(secretsFile, LANGFUSE_SECRET_KEY_ID)
   })

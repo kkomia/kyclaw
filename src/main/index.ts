@@ -34,12 +34,15 @@ import {
   createInertUpdater,
   createKyclawUpdater,
   hasBundledUpdateConfig,
+  readBundledUpdateUrl,
+  resolveUpdateSource,
   UPDATE_URL_ENV
 } from './updater'
 import { createTray } from './tray'
 import { showMainWindow } from './window'
 import { installWebviewGuard } from './webview'
 import { resolveModel } from '../mastra/model'
+import { killAllRunning } from '../mastra/tools/exec'
 import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
 import { SEARCH_KEY_SECRET_ID } from '../shared/search'
 import type { AgentEndpoint } from '../shared/ipc'
@@ -52,6 +55,41 @@ process.env.MASTRA_TELEMETRY_DISABLED = 'true'
 const APP_USER_MODEL_ID = 'com.kkomia.kyclaw'
 
 /**
+ * 冷启动打点（主进程一侧，round 73）。只记内存、只在"渲染端文档加载完"那一刻打两行，不改行为。
+ *
+ * 口径：
+ *   - 时间点相对**本模块开始执行**（`MAIN_T0`，即 Electron 把主进程脚本跑起来的那一刻）；
+ *   - `process.uptime()` 是"进程起来（Electron 自己启动）到本模块开始"的那一段 —— 打点里唯一
+ *     能反映 Electron 自身启动成本的口子（窗口创建之后的可见性由渲染端的线接手）；
+ *   - 两条线与渲染端那条（lib/startup-timing.ts，打的是 epoch ms）**按绝对时间对齐**：
+ *     主进程给 `主进程时间原点`，渲染端给 `performance.timeOrigin`，两者之差就是"进程启动 →
+ *     渲染端开始加载"这一段。
+ *   - 只在 `did-finish-load`（渲染端文档加载完）打一次；报完就清，不常驻（不占内存、不重复刷）。
+ */
+const MAIN_T0 = Date.now()
+const ELECTRON_BOOT_MS = Math.round(process.uptime() * 1000)
+const mainMarks: string[] = []
+/** 汇总行打过了没有 —— 报过之后才到的打点单出"续"行（agent 服务就绪一定晚于渲染端文档加载） */
+let mainStartupReported = false
+
+function mainMark(name: string): void {
+  const at = Date.now() - MAIN_T0
+  mainMarks.push(`${name} ${at}ms`)
+  if (mainStartupReported) {
+    console.info(`[kyclaw] 启动分解（主进程·续）: ${name} 距本模块开始 ${at}ms`)
+  }
+}
+
+function reportMainStartup(): void {
+  console.info(
+    `[kyclaw] 启动分解（主进程）: Electron 自身启动到本模块 ${ELECTRON_BOOT_MS}ms · ${mainMarks.join(' · ')}`
+  )
+  console.info(`[kyclaw] 主进程时间原点（epoch ms，与渲染端那条线对齐用）: ${MAIN_T0}`)
+  mainMarks.length = 0
+  mainStartupReported = true
+}
+
+/**
  * 本机嵌入引擎的可执行文件位置（模块 3B）：
  *   - 打包后：`<resources>/llama/llama-server.exe`（electron-builder 的 extraResources 放的）；
  *   - 开发态：仓库的 `resources/llama/llama-server.exe`（先跑 `pnpm fetch:llama` 获取，见该脚本头注）。
@@ -61,6 +99,18 @@ function llamaBinaryPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'llama', 'llama-server.exe')
     : join(app.getAppPath(), 'resources', 'llama', 'llama-server.exe')
+}
+
+/**
+ * 内置技能根目录（round 64）：
+ *   - 打包后：`<resources>/skills`（electron-builder.yml 的 extraResources 放的 office 四件套）；
+ *   - 开发态：仓库的 `resources/skills`（改完技能文件不用重新打包，下一轮对话就是新的）。
+ * 找不到 = 没有内置技能（只剩插件技能），不影响其它功能。
+ */
+function builtinSkillsDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'skills')
+    : join(app.getAppPath(), 'resources', 'skills')
 }
 
 // 单实例：后起的实例不建窗口，直接把已运行的那个拉到前台（第二个实例自己退出）
@@ -85,6 +135,8 @@ if (!app.requestSingleInstanceLock()) {
   let agentProjectIdOf: ((threadId: string) => string | null) | undefined
 
   app.whenReady().then(() => {
+    // round 73：冷启动打点 —— app ready（Electron 与我们的模块都已就位，从这里开始建窗口）
+    mainMark('app ready')
     // Windows 任务栏归组/通知：AUMID 与 electron-builder.yml 的 appId 一致
     electronApp.setAppUserModelId(APP_USER_MODEL_ID)
 
@@ -97,7 +149,9 @@ if (!app.requestSingleInstanceLock()) {
     const secretsFile = secretsPath(userDataDir)
 
     registerWindowIpc()
-    registerSettingsIpc(userDataDir)
+    // round 63：更新源写进设置后要当场生效，所以设置通道带一个回调（更新器本身是异步装配的，
+    // 这里晚绑定取"当前那个"——回调只在渲染端保存设置时触发，那时下面的 updater 早就装配好了）
+    registerSettingsIpc(userDataDir, { onUpdateUrlSaved: () => updater.reconfigure() })
     // round 22：启动时后台探一轮模型元数据（真实上下文长度/思考挡位；串行、静默、不挡窗口）
     void probeConfiguredProvidersQuietly({
       file: settingsPath(userDataDir),
@@ -124,11 +178,17 @@ if (!app.requestSingleInstanceLock()) {
     app.on('will-quit', () => {
       // 一个终端都不留（node-pty 不随主进程退出自动收：前台 shell 死了，它拉起的子进程还在）
       workbench.terminals.disposeAll()
+      // round 72：在途的 bash 命令同样不留 —— Windows 上子进程不随父进程退出而终止，
+      // 一个正在跑的 `sleep 600` / 构建 / 长下载会变成孤儿。账本只记我们自己拉起的那些
+      // （见 exec.ts 的 running），用户自己在终端里跑的进程不在里面。
+      const killed = killAllRunning()
+      if (killed > 0) console.log(`[kyclaw] 退出清账：已终止 ${killed} 个在途命令`)
     })
     // 内嵌浏览器的护栏（webview 的分区/window.open/右键菜单口径，进程级挂一次）
     installWebviewGuard()
     registerProjectsIpc(userDataDir)
-    registerPluginIpc(userDataDir)
+    // round 64：内置技能目录由这一层算（要 app），插件页总览与 agent 侧共用同一个路径
+    registerPluginIpc(userDataDir, { builtinSkillsDir: builtinSkillsDir() })
     registerAgentIpc(() => agentEndpoint)
     // 模块 2：附件（PDF 文字层抽取在主进程跑，渲染端零新依赖）
     registerAttachmentsIpc()
@@ -169,20 +229,37 @@ if (!app.requestSingleInstanceLock()) {
         console.warn('[kyclaw] 本机嵌入引擎收尾失败（进程会随应用退出一起结束）', error)
       })
     })
-    showMainWindow()
+    // round 73：冷启动打点 —— IPC 通道注册完（窗口在这之前一直没建：这些注册都在关键路径上）
+    mainMark('IPC 通道注册完')
+    const mainWindow = showMainWindow()
+    // round 73：冷启动打点 —— 窗口建好并开始加载渲染端；之后的"可见 / 文档加载完"挂在这个窗口上
+    mainMark('窗口已创建')
+    mainWindow.once('ready-to-show', () => mainMark('窗口可见'))
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainMark('渲染端文档加载完')
+      reportMainStartup()
+    })
     createTray()
 
-    // 更新通道（T17）：通道面立刻可用（渲染端一挂载就拉状态），装配是异步的（electron-updater 是
-    // 动态 import）——装好后顶上并广播一次。没配更新源时就是个"什么都不做"的实例：
-    // 不检查、不报错、不发网络请求（开发态与未配置的默认路径）。
+    // 更新通道（T17 / round 63）：通道面立刻可用（渲染端一挂载就拉状态），装配是异步的
+    // （electron-updater 是动态 import）——装好后顶上并广播一次。源现算（环境变量 > 设置里的更新源 >
+    // 打包内 app-update.yml > 没配），所以设置里改完当场生效、不用重启（见上面 registerSettingsIpc
+    // 的 onUpdateUrlSaved）；没配源的路径就是个"什么都不做"的实例：不检查、不报错、不发网络请求。
     let updater = createInertUpdater(app.getVersion())
     registerUpdatesIpc(() => updater)
+    // 打包内源的地址：只有两个用处——界面占位提示、切回内置源时把 feed 显式设回去（见 main/updater.ts）
+    const builtinUrl = readBundledUpdateUrl(process.resourcesPath)
     void createKyclawUpdater({
       currentVersion: app.getVersion(),
-      envUrl: process.env[UPDATE_URL_ENV],
-      isPackaged: app.isPackaged,
-      // 真发布时 electron-builder 会把 app-update.yml 写进 resources/；没有 = 没配源
-      hasBundledConfig: hasBundledUpdateConfig(process.resourcesPath),
+      resolveSource: () =>
+        resolveUpdateSource({
+          envUrl: process.env[UPDATE_URL_ENV],
+          settingsUrl: readSettings(settingsPath(userDataDir)).updateUrl,
+          isPackaged: app.isPackaged,
+          // 真发布时 electron-builder 会把 app-update.yml 写进 resources/；没有 = 没配源
+          hasBundledConfig: hasBundledUpdateConfig(process.resourcesPath)
+        }),
+      builtinUrl,
       onChange: pushUpdateState
     }).then((ready) => {
       updater = ready
@@ -222,12 +299,17 @@ if (!app.requestSingleInstanceLock()) {
           searchKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID[settings.provider]),
           readerKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID.jina)
         }
-      }
+      },
+      // round 64：内置技能目录（office 四件套）——agent 侧的技能清单与 use_skill 读的就是它
+      builtinSkillsDir: builtinSkillsDir()
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
         agentTelemetry = handle.telemetry
         agentProjectIdOf = handle.projectIdOf
+        // round 73：冷启动打点 —— **渲染端"可输入"就卡在这一刻之后**：端点没就绪，对话页一直停在
+        // 「正在连接…」；就绪之后还要再等两次 HTTP（会话列表 + 历史回灌）。这一笔单出一行。
+        mainMark('agent 服务就绪')
         console.log(`[kyclaw] agent 服务已启动：${handle.baseUrl}`)
         if (is.dev) {
           console.log(`[kyclaw] agent token（仅开发期打印，便于 curl 本地联调）：${handle.token}`)

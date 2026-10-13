@@ -10,6 +10,10 @@
  * 「未指定项目的会话」用的那个默认工作区（地位 = Kimi「其他 → 通用 → 存储位置」）；
  * langfuse（T17）只有服务地址一项——公私钥走 secrets.json（safeStorage）。
  * 追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
+ *
+ * round 66：**会话级的状态不放这里**。PPT 模板选择从 `pptTemplate` 挪到了
+ * libsql 的 `session_ppt_templates`（见 shared/session-ppt-templates.ts）—— 放全局设置会让新会话
+ * 继承别人的选择（用户实报）。同理可见 projects 的会话归属（`session_projects`）。
  */
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
@@ -26,8 +30,14 @@ export const themeModeSchema = z.enum(['system', 'light', 'dark'])
 export const fontTierSchema = z.enum(['small', 'default', 'large'])
 
 /**
- * 授权工作区的访问模式（spec §5.2）：ask = 写类默认询问；full = 这个工作区放行（Full access）。
- * 移动/删除（dangerous）不受 full 影响，永远默认问。
+ * 访问档位（spec §5.2；round 75 起是**两个独立档位**共用的一个枚举）：
+ * ask = 每次询问（默认）；full = 完全访问（**真免审**）。
+ *
+ * 两个档位：
+ *   1. **工作区内**——每个授权工作区自己一条（`workspaceSchema.mode`）。`full` = 这个文件夹里的
+ *      写 / 删 / 移 / bash 命令都不再问（`rm -rf` 也不问：这就是「完全访问」的字面意思）；
+ *   2. **工作区之外**——`appSettingsSchema.outsideWorkspaceMode` 一条，**默认 ask**。目标是区外
+ *      路径（或判不出落在哪）的调用按它判；用户显式设成 full 也是真免审（他设了就照办）。
  */
 export const workspaceModeSchema = z.enum(['ask', 'full'])
 
@@ -56,13 +66,21 @@ export const permissionsSchema = z.strictObject({
 })
 
 /**
- * Langfuse 追踪的**非密钥**部分（T17）：只放服务地址。
+ * Langfuse 追踪的**非密钥**部分（T17；round 67 加代理）：
+ *   - `endpoint`：实例地址（默认 = 用户现用那台，见 LANGFUSE_PRESET，设置页里随手改）；
+ *   - `proxyUrl`：HTTP(S) 代理（空串 = 直连；填了才起作用，也可以改用环境变量兜底）。
  * 公私钥与 provider 密钥同待遇——safeStorage 密文落 secrets.json（main/secrets.ts），
  * 所以这里没有它们。三项齐 = 开启导出（缺一不导出、也不报错，见 mastra/telemetry.ts）。
- * 空串 = 没配（默认关），也就是"内容不出机器"的默认姿态（R18 的遥测禁用不受影响）。
+ * 地址空串 = 没配（默认关），也就是"内容不出机器"的默认姿态（R18 的遥测禁用不受影响）。
  */
 export const langfuseSettingsSchema = z.strictObject({
-  endpoint: z.string()
+  endpoint: z.string(),
+  /**
+   * 代理地址（round 67）：形如 `http://127.0.0.1:7890`；没写协议时补 `http://`
+   * （归一在 mastra/telemetry.ts 的 normalizeProxyUrl）。空串 = 没配 → 回落
+   * `LANGFUSE_PROXY_URL` / `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 环境变量。
+   */
+  proxyUrl: z.string()
 })
 
 /**
@@ -179,6 +197,29 @@ export const probedModelSchema = z.strictObject({
 })
 
 export type ProbedModel = z.infer<typeof probedModelSchema>
+
+/**
+ * 出站边界的白名单（round 73）：fetch 默认**只访问公网** —— 环回 / 私网 / 链路本地地址
+ * （含云元数据 169.254.169.254）与本机名一律拒绝，重定向也逐跳校验（见 mastra/tools/fetch.ts）。
+ * 这里让用户显式开口子：**用户就是要读自己机器上的服务**（本机的 ollama / llama gateway /
+ * 自建服务）是完全正当的用法，白名单是它的出口。
+ *
+ * 形态（与 fetch.ts 的 hostAllowed 同一份口径）：
+ *   - `example.com` —— 该主机名的所有端口；
+ *   - `127.0.0.1:8080` / `[::1]:8080` —— 只放行这个主机 + 端口；
+ *   - `*.local` —— 后缀通配（`nas.local` 命中）。
+ * 缺省空数组 = 一个本机/内网主机都不放行。
+ *
+ * 为什么是 optional 而不是必填：`appSettingsSchema` 是 strictObject，给新字段加默认值会让
+ * **已落盘的旧文件**在解析时多出一个字段（`readSettings` 的"写进去什么就读出来什么"就破了）；
+ * 读盘侧用 `settings.network?.allowLocalHosts ?? []` 兜底，不必改 main/settings.ts 的迁移表。
+ */
+export const networkSettingsSchema = z.strictObject({
+  /** 允许 fetch 访问的本机 / 内网主机（见上；空 = 一律拒绝） */
+  allowLocalHosts: z.array(z.string())
+})
+
+export type NetworkSettings = z.infer<typeof networkSettingsSchema>
 
 /**
  * 归档项目快照（round 25）：归档 = 侧栏隐藏该项目**及其名下会话**（会话映射照旧，
@@ -304,6 +345,18 @@ export const appSettingsSchema = z.strictObject({
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
   workspaces: z.array(workspaceSchema),
   /**
+   * round 75：**工作区之外**那一档（与每条工作区自己的 `mode` 是两个独立档位）。
+   * 默认 `ask` = 区外的一切操作都逐次询问；显式设成 `full` = 区外也免审（用户设了就照办）。
+   * 判定链见 `mastra/tools/guard.ts` 的 `needsApproval`；设置页「工作区」栏把它显式列成一组档位。
+   *
+   * 为什么是**顶层字段**、不塞进 `permissions`：`permissions` 会被整对象替换 —— 渲染端写
+   * "永久允许"规则（settings-store 的 allowToolForever、设置页的「撤销」）发的补丁是
+   * `{ permissions: { rules } }`，档位若住在里面会被那些补丁悄悄打回默认。顶层字段不参与
+   * 那些补丁，各写各的（`settings:update` 的补丁 schema 里开着）。
+   * 旧落盘文件由 main/settings.ts 的读盘迁移补 `ask`（缺了会整份设置当坏文件）。
+   */
+  outsideWorkspaceMode: workspaceModeSchema,
+  /**
    * T18 的默认工作区：**未指定项目的会话**的文件工具根落在它**下面的会话子目录**里
    * （round 55：`<默认工作区>/tasks/<threadId 前 8 位>`，规则见 shared/session-dir.ts；
    * 解析见 main/projects.ts 的 sessionRoots）。
@@ -338,7 +391,7 @@ export const appSettingsSchema = z.strictObject({
   archivedThreads: z.array(archivedThreadSchema),
   /** round 25 的归档项目快照（侧栏隐藏该项目及其会话；取消归档一并恢复） */
   archivedProjects: z.array(archivedProjectSchema),
-  /** T17 的 Langfuse 追踪（默认关；端点在设置页「追踪」栏填，密钥走 secrets.json） */
+  /** T17 的 Langfuse 追踪（默认关；地址与代理在设置页「追踪」栏填，密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema,
   /** round 28 模块 3 的语义召回（round 58 起 thread 作用域，只召回本会话；开关 + 嵌入来源，远程 key 走 secrets.json） */
   semanticRecall: semanticRecallSettingsSchema,
@@ -348,7 +401,18 @@ export const appSettingsSchema = z.strictObject({
    * round 45 的联网搜索（默认免费档，开箱即用）：后端模式 + 服务商 + 两个预置端点。
    * 三个可选 Key（Exa / Tavily / Jina）不在设置里，走 safeStorage 保留槽位（见 shared/search.ts）。
    */
-  webSearch: webSearchSettingsSchema
+  webSearch: webSearchSettingsSchema,
+  /**
+   * round 63 的更新源覆盖（设置 → 关于里填，只认 http(s) URL，不需要任何密钥）：
+   * 空串 = 跟随打包时烘焙的内置源（resources/app-update.yml）；非空 = 检查更新时改用它
+   * （主进程读设置后 setFeedURL；渠道文件按版本号自动挑 beta/latest，见 main/updater.ts）。
+   */
+  updateUrl: z.string(),
+  /**
+   * round 73 的出站边界白名单（fetch 的本机/内网主机；见 networkSettingsSchema）。
+   * optional：旧落盘文件没有这个键也算合法（读侧 `settings.network?.allowLocalHosts ?? []`）。
+   */
+  network: networkSettingsSchema.optional()
 })
 
 /**
@@ -411,6 +475,16 @@ export const DEFAULT_SEMANTIC_RECALL: SemanticRecallSettings = {
 export const LOCAL_ENGINE_IDLE_OPTIONS = [5, 15, 30, 0] as const
 
 /**
+ * Langfuse 的预置地址（round 67）：用户现在用的那台自建实例（不在原来的局域网里了，
+ * 走 Tailscale 那类内网地址访问）。它只当**缺省值/表单预填**用——设置页「追踪」栏里
+ * 随时可以改成别的实例（云版或另一台自建），改了以落盘值为准。
+ * 代理不预置：默认直连，需要时在同一个栏里填（或靠 HTTPS_PROXY 环境变量兜底）。
+ */
+export const LANGFUSE_PRESET = {
+  endpoint: 'http://100.66.1.1:3000'
+} as const
+
+/**
  * 思考翻译的预置（用户局域网部署的 llama.cpp，2026-10-11 实测可达）：
  * baseURL / 模型 / 目标语言三项直接当缺省值，用户打开开关就能用；也可以改成任意
  * OpenAI 兼容端点（如云端翻译接口，那就得再填一把 key）。
@@ -454,6 +528,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontTier: 'default',
   providers: [],
   workspaces: [],
+  /** round 75：工作区之外默认「每次询问」（保守缺省：区外的操作要先过用户） */
+  outsideWorkspaceMode: 'ask',
   defaultWorkspace: null,
   projects: [],
   permissions: { rules: [] },
@@ -466,10 +542,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pinnedProjects: [],
   archivedThreads: [],
   archivedProjects: [],
-  langfuse: { endpoint: '' },
+  langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
   semanticRecall: DEFAULT_SEMANTIC_RECALL,
   reasoningTranslate: DEFAULT_REASONING_TRANSLATE,
-  webSearch: DEFAULT_WEB_SEARCH
+  webSearch: DEFAULT_WEB_SEARCH,
+  updateUrl: '',
+  network: { allowLocalHosts: [] }
 }
 
 /** 默认值的新副本（含新数组/新对象）：调用方拿到的对象随便改，不污染模块级默认 */
@@ -489,9 +567,10 @@ export function defaultSettings(): AppSettings {
     pinnedProjects: [],
     archivedThreads: [],
     archivedProjects: [],
-    langfuse: { endpoint: '' },
+    langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
     semanticRecall: { ...DEFAULT_SEMANTIC_RECALL },
     reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE },
-    webSearch: { ...DEFAULT_WEB_SEARCH }
+    webSearch: { ...DEFAULT_WEB_SEARCH },
+    network: { allowLocalHosts: [] }
   }
 }
