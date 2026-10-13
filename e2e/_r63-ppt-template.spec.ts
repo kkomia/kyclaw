@@ -112,32 +112,58 @@ test('PPT 模板：单独一行在卡片下方、只在初始页出现 —— �
       'data-active',
       'true'
     )
-    // 初始页：卡片上/下各一行（「选择项目」在上、PPT 在下），两行都与卡片同列宽、左缘 = 卡片左缘 + 行的 px-1
+    // 初始页：卡片上/下各一行（「选择项目」在上、PPT 在下）。对齐口径分**两半**说，两个数别混着量：
+    //   ① **与卡片同列宽**：行容器自己的盒子（border box）与卡片盒子同宽、左缘对齐 —— 两行都走
+    //      与 Composer 同一条配方（`mx-auto w-full max-w-(--chat-input-max-width)`，居中的是
+    //      限宽列）；外面那层 CollapsibleRow（满宽 grid + overflow-hidden）不改这一列。
+    //   ② **+4px**：行自带 `px-1`（4px），所以**行里的内容**（左起第一枚 chip）左缘 = 卡片左缘 + 4px
+    //      —— 用户看到的对齐是这一条（「行左缘 +4」不存在：行的盒子与卡片同左缘，4px 在行的内边距上；
+    //      量法：`row.left + 计算出的 padding-left` = 行的内容盒左缘，也就是行里第一枚 chip 的左缘）。
     const chip = page.getByTestId('composer-ppt-template')
     await expect(chip).toHaveText('PPT')
     const heroBox = await page.evaluate(() => {
+      /** 一行量出来的三个位置：行自己的盒子、行的内容盒左缘（行自带 px-1）、行里第一枚 chip 的左缘 */
+      type Row = {
+        left: number
+        width: number
+        top: number
+        bottom: number
+        contentLeft: number
+        chipLeft: number
+      }
+      const rowOf = (testId: string): Row => {
+        const row = document.querySelector(`[data-testid="${testId}"]`)!
+        const rect = row.getBoundingClientRect()
+        return {
+          left: rect.left,
+          width: rect.width,
+          top: rect.top,
+          bottom: rect.bottom,
+          contentLeft: rect.left + Number.parseFloat(getComputedStyle(row).paddingLeft),
+          chipLeft: row.querySelector('button')!.getBoundingClientRect().left
+        }
+      }
       const composer = document.querySelector('[data-testid="composer"]')!.getBoundingClientRect()
-      const projectRow = document
-        .querySelector('[data-testid="composer-project-row"]')!
-        .getBoundingClientRect()
-      const pptRow = document
-        .querySelector('[data-testid="composer-capabilities"]')!
-        .getBoundingClientRect()
       return {
         composerLeft: composer.left,
+        composerWidth: composer.width,
         composerTop: composer.top,
         composerBottom: composer.bottom,
-        projectLeft: projectRow.left,
-        projectBottom: projectRow.bottom,
-        pptLeft: pptRow.left,
-        pptTop: pptRow.top
+        projectRow: rowOf('composer-project-row'),
+        pptRow: rowOf('composer-capabilities')
       }
     })
-    expect(heroBox.projectLeft - heroBox.composerLeft).toBeCloseTo(4, 0)
-    expect(heroBox.pptLeft - heroBox.composerLeft).toBeCloseTo(4, 0)
+    for (const row of [heroBox.projectRow, heroBox.pptRow]) {
+      // ① 与卡片同列宽：同宽、同左缘
+      expect(row.left).toBeCloseTo(heroBox.composerLeft, 0)
+      expect(row.width).toBeCloseTo(heroBox.composerWidth, 0)
+      // ② 行里的内容（第一枚 chip）左缘 = 卡片左缘 + 行的 px-1（4px）
+      expect(row.contentLeft - heroBox.composerLeft).toBeCloseTo(4, 0)
+      expect(row.chipLeft - heroBox.composerLeft).toBeCloseTo(4, 0)
+    }
     // 「选择项目」行在卡片**上方**（且整行收在卡片上沿之上），PPT 行在卡片**下方**
-    expect(heroBox.projectBottom).toBeLessThanOrEqual(heroBox.composerTop)
-    expect(heroBox.pptTop).toBeGreaterThanOrEqual(heroBox.composerBottom)
+    expect(heroBox.projectRow.bottom).toBeLessThanOrEqual(heroBox.composerTop)
+    expect(heroBox.pptRow.top).toBeGreaterThanOrEqual(heroBox.composerBottom)
 
     // round 66：两枚 chip 都**不在卡片里**（用户口径："放到对话框上面，不要嵌入到里面"）
     const insideCard = await page.evaluate(() => {
