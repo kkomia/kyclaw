@@ -26,6 +26,7 @@ import type { KyclawModel } from '../model'
 import { createUsageRouter } from '../routes/usage'
 import {
   computeCost,
+  createUsageRecorder,
   createUsageStore,
   MODEL_PRICING,
   pricingFor,
@@ -66,6 +67,10 @@ function run(overrides: {
   output?: number
   total?: number
   cachedInput?: number | null
+  /** round 67：末次调用的输入（真实上下文大小）；不给 = null（回读退回整轮合计） */
+  contextInput?: number | null
+  contextCachedInput?: number | null
+  stepCount?: number | null
   cost?: number | null
   at?: Date
 }): UsageRun {
@@ -79,6 +84,9 @@ function run(overrides: {
     provider: overrides.provider ?? null,
     tokens: { input, output, total: overrides.total ?? input + output },
     cachedInput: overrides.cachedInput ?? null,
+    contextInput: overrides.contextInput ?? null,
+    contextCachedInput: overrides.contextCachedInput ?? null,
+    stepCount: overrides.stepCount ?? null,
     cost: overrides.cost ?? null,
     createdAt: (overrides.at ?? new Date()).toISOString()
   }
@@ -164,7 +172,70 @@ describe('价目与花费计算', () => {
   })
 })
 
-describe('会话 token 读数（round 59）', () => {
+describe('记账钩子：从 onFinish 事件取"上下文口径"（round 67）', () => {
+  /** 记一行就回，供断言读 */
+  async function record(event: unknown): Promise<UsageRun | null> {
+    const runs: UsageRun[] = []
+    const store = {
+      insert: async (row: UsageRun) => {
+        runs.push(row)
+      }
+    } as unknown as UsageStore
+    await createUsageRecorder({ store })(event as never)
+    return runs[0] ?? null
+  }
+
+  it('末个 step 的 usage 落进 contextInput；stepNumber+1 落进 stepCount；整轮合计仍进 tokens', async () => {
+    const row = await record({
+      // AI SDK 的 totalUsage = 全部 step 之和（花费口径）
+      totalUsage: { inputTokens: 221_356, outputTokens: 3_928, totalTokens: 225_284, cachedInputTokens: 194_944 },
+      stepNumber: 8,
+      steps: [
+        { usage: { inputTokens: 11_000 } },
+        { usage: { inputTokens: 30_000, cachedInputTokens: 29_000 } }
+      ],
+      finalStep: { usage: { inputTokens: 30_000, cachedInputTokens: 29_000 } },
+      model: { modelId: 'deepseek-flash', provider: 'deepseek.chat' }
+    })
+    expect(row).not.toBeNull()
+    expect(row?.tokens.input).toBe(221_356)
+    expect(row?.cachedInput).toBe(194_944)
+    expect(row?.contextInput).toBe(30_000)
+    expect(row?.contextCachedInput).toBe(29_000)
+    expect(row?.stepCount).toBe(9)
+  })
+
+  it('事件里没有 steps / stepNumber 时两个口径都是 null（不编造），整轮合计照记', async () => {
+    const row = await record({
+      usage: { inputTokens: 120, outputTokens: 7, totalTokens: 127 },
+      model: { modelId: 'deepseek-flash' }
+    })
+    expect(row?.tokens.input).toBe(120)
+    expect(row?.contextInput).toBeNull()
+    expect(row?.contextCachedInput).toBeNull()
+    expect(row?.stepCount).toBeNull()
+  })
+
+  it('缓存命中兼容两种形状：cachedInputTokens 别名 与 inputTokenDetails.cacheReadTokens', async () => {
+    const row = await record({
+      totalUsage: {
+        inputTokens: 500,
+        outputTokens: 10,
+        totalTokens: 510,
+        inputTokenDetails: { cacheReadTokens: 480 }
+      },
+      finalStep: {
+        usage: { inputTokens: 300, inputTokenDetails: { cacheReadTokens: 290 } }
+      },
+      model: { modelId: 'deepseek-flash' }
+    })
+    expect(row?.cachedInput).toBe(480)
+    expect(row?.contextInput).toBe(300)
+    expect(row?.contextCachedInput).toBe(290)
+  })
+})
+
+describe('会话 token 读数（round 59 / round 67）', () => {
   it('按 created_at 升序取首末：末行 = 最近一轮、首行 = 基线；空会话三个字段全 null', async () => {
     const rows = [
       run({ model: 'm', threadId: 't', input: 100, output: 5, at: new Date(2026, 9, 15, 9, 0, 0) }),
@@ -190,6 +261,59 @@ describe('会话 token 读数（round 59）', () => {
       lastInput: null,
       lastCachedInput: null,
       baselineInput: null
+    })
+  })
+
+  it('round 67：有"末次调用"这一列时用它（真实上下文），不再拿整轮合计冒充', async () => {
+    // 一轮 9 次调用：整轮合计 221,356，而最后一次调用只有 30,000 —— 面板要的是后者
+    const rows = [
+      run({
+        model: 'm',
+        threadId: 't',
+        input: 21_000,
+        contextInput: 11_000,
+        contextCachedInput: 9_000,
+        stepCount: 1,
+        at: new Date(2026, 9, 15, 9, 0, 0)
+      }),
+      run({
+        model: 'm',
+        threadId: 't',
+        input: 221_356,
+        cachedInput: 194_944,
+        contextInput: 30_000,
+        contextCachedInput: 29_000,
+        stepCount: 9,
+        at: new Date(2026, 9, 15, 10, 0, 0)
+      })
+    ]
+    const store = { listByThread: async () => rows } as unknown as UsageStore
+    expect(await threadTokenReadout(store, 't')).toEqual({
+      lastInput: 30_000,
+      lastCachedInput: 29_000,
+      baselineInput: 11_000
+    })
+  })
+
+  it('round 67：新旧混排（老行没有那一列）时逐行各自退回整轮合计，不整体作废', async () => {
+    const rows = [
+      run({ model: 'm', threadId: 't', input: 100, at: new Date(2026, 9, 15, 9, 0, 0) }),
+      run({
+        model: 'm',
+        threadId: 't',
+        input: 400,
+        cachedInput: 399,
+        contextInput: 250,
+        contextCachedInput: 240,
+        stepCount: 3,
+        at: new Date(2026, 9, 15, 10, 0, 0)
+      })
+    ]
+    const store = { listByThread: async () => rows } as unknown as UsageStore
+    expect(await threadTokenReadout(store, 't')).toEqual({
+      lastInput: 250,
+      lastCachedInput: 240,
+      baselineInput: 100
     })
   })
 })

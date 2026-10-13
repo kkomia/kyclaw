@@ -72,7 +72,12 @@ export async function closeApp(launched: LaunchedApp): Promise<void> {
   rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 
-/** 等界面可用：输入卡出现（transport 端点 + 会话列表都就绪了） */
+/**
+ * 等界面可用：输入卡出现。
+ * round 76：输入卡**第一帧就在**（不再等端点/会话列表/历史回灌），所以这一等基本是"外壳起来了"。
+ * "能不能发"由发送钮的可用态把着 —— `sendMessage` 里 Playwright 点按钮会自动等到它可点，
+ * 这里不必另等（也就不会把"还没就绪"误判成失败）。
+ */
 export async function waitForChat(page: Page): Promise<void> {
   await expect(page.getByTestId('composer-input')).toBeVisible({ timeout: 30_000 })
 }

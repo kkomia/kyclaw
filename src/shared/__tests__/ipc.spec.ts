@@ -377,14 +377,25 @@ describe('IPC 契约：updates 通道（T17）', () => {
     }
   })
 
-  it('整态：当前版本 + 有没有配源 + 状态（三者齐，别的键不收）', () => {
-    const state = { currentVersion: '1.0.0', configured: true, status: { phase: 'up-to-date' } }
+  it('整态：当前版本 + 有没有配源 + 打包内源地址 + 状态（四者齐，别的键不收）', () => {
+    const state = {
+      currentVersion: '1.0.0',
+      configured: true,
+      builtinUrl: 'http://192.168.31.18:9000/kyclaw/releases/',
+      status: { phase: 'up-to-date' }
+    }
     expect(updateStateSchema.safeParse(state).success).toBe(true)
+    // 没配打包内源就是 null（不是空串：没配与"配了个空地址"是两件事）
+    expect(
+      updateStateSchema.safeParse({ ...state, builtinUrl: null }).success,
+      'builtinUrl 可以是 null'
+    ).toBe(true)
 
     for (const bad of [
       { currentVersion: '1.0.0', configured: true },
       { currentVersion: 1, configured: true, status: { phase: 'idle' } },
       { currentVersion: '1.0.0', configured: 'yes', status: { phase: 'idle' } },
+      { ...state, builtinUrl: undefined },
       { ...state, feedUrl: 'http://x' }
     ]) {
       expect(updateStateSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)

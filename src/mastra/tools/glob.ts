@@ -22,12 +22,12 @@ import {
 export const GLOB_MAX_RESULTS = 200
 
 export const globInputSchema = z.object({
-  pattern: z.string().min(1).describe('glob 模式，例如 **/*.ts、src/*.md'),
+  pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts or src/*.md'),
   path: z
     .string()
     .min(1)
     .optional()
-    .describe('起始目录（工作区内）；缺省 = 工作区根（有多个工作区时必须给）')
+    .describe('Directory to search; defaults to the workspace root (required with several workspaces)')
 })
 
 export type GlobInput = z.infer<typeof globInputSchema>
@@ -38,7 +38,7 @@ export async function createGlobTool(ctx: ToolContext): Promise<Tool<GlobInput, 
   return createTool({
     id: 'glob',
     description:
-      '按 glob 模式列出授权工作区内的文件路径（** 递归、* 不跨目录），最多 200 条。找文件内容用 grep。',
+      'List workspace file paths matching a glob (** recurses, * stays in one directory); max 200 results, absolute paths, sorted by path name — not by modification time, so never infer which file changed most recently from this order.',
     inputSchema: globInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

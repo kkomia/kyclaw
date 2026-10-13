@@ -8,8 +8,9 @@
  * 这里钉三件事：
  *   1. `approvalSessionOf` 能从**回调第二参的真实形状**里取出线程 id（键位实证见
  *      src/mastra/__tests__/approval-session-chain.spec.ts：躺平后只有 `MastraMemory`）；
- *   2. 无显式目标的判定按**会话根**判 full（单根 full 免审；多根仍要全 full；拿不到会话 = 老口径）；
- *   3. 显式目标与"永久允许"规则那条路**不动**（仍按整份授权列表）。
+ *   2. 无显式目标的判定按**会话根**判（单根 full 免审、单根 ask 看规则；多根仍要全 full；
+ *      拿不到会话 = 老口径的整份列表）；
+ *   3. 显式目标按整份授权列表判区（round 75 起连 delete/move 也走同一套判区）。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { classifyToolCall } from '../../../main/permission/classify'
@@ -143,28 +144,35 @@ describe('needsApproval：无显式目标按会话根判 full（round 46）', ()
   })
 })
 
-describe('显式目标 / 规则那条路不受会话影响（口径不动）', () => {
-  it('显式目标按整份授权列表判：会话根 full，但 cwd 落在 ask 工作区 → 问', () => {
+describe('显式目标 / 规则那条路（round 75 起跟着"目标落在哪个区"走）', () => {
+  it('显式目标按整份授权列表判区：cwd 落在 ask 工作区 → 问；落在 full 的 → 免审', () => {
     const { ctx, roots } = workspaceBed(['full', 'ask'])
     expect(needsApproval(ctx, 'bash', { command: 'pwd', cwd: roots[1].path }, 't1')).toBe(true)
     // 落在 full 的那个工作区（哪怕不是会话根）→ 免审
     expect(needsApproval(ctx, 'bash', { command: 'pwd', cwd: roots[0].path }, 't1')).toBe(false)
   })
 
-  it('"永久允许"规则仍按整份授权列表：多工作区 + 命中会话根的规则 → 仍问（保守，round 46 没改这条）', () => {
+  it('"永久允许"规则：判得出落在哪个工作区时就认那条规则（含会话根那一支）', () => {
     const multi = workspaceBed(['ask', 'ask'])
     multi.rules.push({ tool: 'bash', workspace: multi.roots[0].path, mode: 'allow' })
-    expect(needsApproval(multi.ctx, 'bash', { command: 'pwd' }, 't1')).toBe(true)
+    // 会话根 = roots[0]（执行层就在它里面跑）→ 命中规则 → 免审
+    expect(needsApproval(multi.ctx, 'bash', { command: 'pwd' }, 't1')).toBe(false)
+    // 拿不到会话 + 多个 ask 工作区：说不清落在哪 → 走「工作区之外」那一档（默认问，规则不生效）
     expect(needsApproval(multi.ctx, 'bash', { command: 'pwd' })).toBe(true)
+    // 另一个会话（根是 roots[1]，没有规则）→ 照旧问
+    expect(needsApproval(multi.ctx, 'bash', { command: 'pwd' }, 't2')).toBe(true)
 
-    // 单工作区（审批口径列表就一个）+ 命中该工作区的规则 → 放行（老行为原样）
+    // 单工作区（审批口径列表就一个）+ 命中该工作区的规则 → 放行
     const single = workspaceBed(['ask'])
     single.rules.push({ tool: 'bash', workspace: single.roots[0].path, mode: 'allow' })
     expect(needsApproval(single.ctx, 'bash', { command: 'pwd' }, 't1')).toBe(false)
   })
 
-  it('危险档永远问：会话根 full 也不放行 delete', () => {
-    const { ctx } = workspaceBed(['full', 'ask'])
-    expect(needsApproval(ctx, 'delete', { path: 'x.txt' }, 't1')).toBe(true)
+  it('delete 跟着档位走（round 75：不再"永远问"）：区内 full 免审、区内 ask 问', () => {
+    const full = workspaceBed(['full', 'ask'])
+    expect(needsApproval(full.ctx, 'delete', { path: 'x.txt' }, 't1')).toBe(false)
+
+    const ask = workspaceBed(['ask', 'full'])
+    expect(needsApproval(ask.ctx, 'delete', { path: 'x.txt' }, 't1')).toBe(true)
   })
 })

@@ -146,7 +146,7 @@ describe('web_search：审批档（与 fetch 同档）', () => {
     const tool = await createWebSearchTool(bed.ctx, { deps: { client: fakeClient().client } })
     expect(tool.id).toBe('web_search')
     expect(typeof tool.requireApproval).toBe('function')
-    expect(tool.description).toContain('阅读模式')
     expect(tool.description).toContain('mode: "reader"')
+    expect(tool.description).toContain('not this tool')
   })
 })

@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * guard：文件工具的公共防线单测（T10 引擎的消费方）。
- * 审查点：路径解析只认引擎给的 abs、审批判定按 spec §5.2（读放行 / 写询问 / full 放行 / 危险永远问）、
- * 会话 read 记录与同文件队列。
+ * 审查点：路径解析只认引擎给的 abs；审批判定按区（区内 full 免审 / 区内 ask 看规则 /
+ * 区外走「工作区之外」那一档，round 75）；会话 read 记录与同文件队列。
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -89,6 +89,15 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'grep', { pattern: 'x' })).toBe(false)
   })
 
+  it('render_ppt（派生只读产物）免审：ask 工作区也不弹卡 —— 免审不等于免封', () => {
+    // round 68 修订：页图只落在派生目录（`<deck 名>_页图/`），分类按只读档，所以不再弹卡；
+    // 约束改在**执行**里：工具先 toolTarget、派生目录再单独过一遍引擎，越界 fail closed
+    // （真链路用例见 render-ppt.spec 的"派生目录解析到工作区外"与"跨越工作区边界"两条）。
+    expect(needsApproval(bed.ctx, 'render_ppt', { path: '日报.pptx' })).toBe(false)
+    // 目标是工作区外时同样不问：批了也不会执行（与内置文件工具"解析不到就不问"同口径）
+    expect(needsApproval(bed.ctx, 'render_ppt', { path: join(bed.outside, 'x.pptx') })).toBe(false)
+  })
+
   it('写类在工作区 mode=ask 时要求审批；切到 full 放行', () => {
     expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
     expect(needsApproval(bed.ctx, 'edit', { path: 'a.txt', oldText: 'x', newText: 'y' })).toBe(true)
@@ -100,8 +109,13 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     )
   })
 
-  it('危险类（delete/move）永远问：full 也不放行', () => {
+  it('危险类（delete/move）跟着档位走：区内 full 免审、区内 ask 问、区外按区外档', () => {
     bed.roots[0].mode = 'full'
+    // round 75 用户口径：设了全免就是全免 —— delete/move 不再"永远问"
+    expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(false)
+    expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(false)
+
+    bed.roots[0].mode = 'ask'
     expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(true)
     expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(true)
   })
@@ -121,6 +135,10 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
         newText: 'b'
       })
     ).toBe(false)
+    // round 76：edit_ppt 的 path 与 create_ppt 同一把尺（执行先 artifactTarget 再改，fail closed）
+    expect(
+      needsApproval(bed.ctx, 'edit_ppt', { path: join(bed.outside, 'x.pptx'), ops: [] })
+    ).toBe(false)
   })
 
   it('外部工具（MCP，ask 档）：没有 full 也没有全名规则时一律问——path 只是它的一个入参，不能证明安全', () => {
@@ -134,16 +152,18 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 
-  it('外部工具（MCP）：round 36 —— 单工作区 full 就该放行（与 bash/fetch 同一套 full 判定）', () => {
+  it('外部工具（MCP）：round 36 / round 75 —— 无目标按会话根判 full；目标是**区外**路径则走区外档', () => {
     bed.roots[0].mode = 'full'
-    // 无目标（MCP 工具没有我们的"显式目标"字段）→ 无显式目标分支
+    // 无目标（MCP 工具没有我们的"显式目标"字段）→ 无目标档：单根 full → 免审
     expect(needsApproval(bed.ctx, 'mcp__a__do', { anything: 1 })).toBe(false)
     // 目标解析得到、落在 full 工作区 → 免审
     expect(needsApproval(bed.ctx, 'mcp__a__write', { path: 'a.txt', content: 'x' })).toBe(false)
-    // 目标解析不到也免审：执行层的根就是那个 full 工作区（旧论证"full 不适用"已按用户口径推翻）
+    // round 75 修订：目标**在区外**时按「工作区之外」那一档（默认问）——
+    // 旧口径（"执行不走过我们的引擎也免审"）会让 `mcp__a__write {path: 区外}` 静默放行，
+    // 而那个 path 只证明得了"它碰了区外的东西"，证不了它只碰那里
     expect(
       needsApproval(bed.ctx, 'mcp__a__write', { path: join(bed.outside, 'x.txt'), content: 'x' })
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('外部工具（MCP）：只有全名命中的"永久允许"规则才放行，且仍要求目标可解析', () => {
@@ -192,18 +212,23 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'write', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 
-  it('危险类（delete/move）不受规则影响：永远问', () => {
+  it('危险类（delete/move）也吃规则：区内 ask 档 + (工具 × 工作区) 规则 → 免审', () => {
     bed.rules.push({ tool: 'delete', workspace: bed.root, mode: 'allow' })
-    bed.rules.push({ tool: 'move', workspace: bed.root, mode: 'allow' })
 
-    expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(false)
+    // 粒度仍是 工具 × 工作区：同一个工作区里 move 没规则 → 照旧问
     expect(needsApproval(bed.ctx, 'move', { path: 'a.txt' })).toBe(true)
   })
 
-  it('MCP 危险名（mcp__server__delete）即使有全名规则也永远问（末段危险档）', () => {
+  it('MCP 危险名（mcp__server__delete）与内置 delete 同一口径：规则按整名生效', () => {
     bed.rules.push({ tool: 'mcp__a__delete', workspace: bed.root, mode: 'allow' })
+    expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(false)
 
+    // 规则不串名（T12）：内置 delete 的规则不吃 MCP 名
+    bed.rules.length = 0
+    bed.rules.push({ tool: 'delete', workspace: bed.root, mode: 'allow' })
     expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(true)
+    expect(needsApproval(bed.ctx, 'delete', { path: 'a.txt' })).toBe(false)
   })
 
   it('规则不串名：mcp__a__write 的规则不影响内置 write / 别的 server / 别的工具（T12）', () => {
@@ -264,11 +289,14 @@ describe('needsApproval：外部工具（MCP / 未知工具）的 full 判定（
     }
   })
 
-  it('危险档不动：mcp__server__delete 在 full 工作区仍永远问', () => {
+  it('危险档跟着档位走：mcp__server__delete 在 full 工作区免审、在 ask 档问', () => {
     bed.roots[0].mode = 'full'
 
+    expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(false)
+    expect(needsApproval(bed.ctx, 'mcp__a__move', { path: 'a.txt' })).toBe(false)
+
+    bed.roots[0].mode = 'ask'
     expect(needsApproval(bed.ctx, 'mcp__a__delete', { path: 'a.txt' })).toBe(true)
-    expect(needsApproval(bed.ctx, 'mcp__a__move', { path: 'a.txt' })).toBe(true)
   })
 
   it('规则路径不动：ask 档下仍是"全名 + 目标可解析"才放行', () => {

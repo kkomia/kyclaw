@@ -87,15 +87,18 @@ describe('delete：边界', () => {
   })
 })
 
-describe('delete：审批 gate（危险档永远问）', () => {
-  it('full 工作区也不放行；"永久允许"规则也不放行', async () => {
+describe('delete：审批 gate（round 75 起跟着档位走）', () => {
+  it('区内 full → 免审；区内 ask → 问，有"永久允许"规则则免审', async () => {
     const tool = await createDeleteTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: { path: string }) => boolean
 
+    // 用户口径：设了全免就是全免（delete 不再"永远问"）
     bed.roots[0].mode = 'full'
-    expect(gate({ path: 'a.txt' })).toBe(true)
+    expect(gate({ path: 'a.txt' })).toBe(false)
+
     bed.roots[0].mode = 'ask'
-    bed.rules.push({ tool: 'delete', workspace: bed.root, mode: 'allow' })
     expect(gate({ path: 'a.txt' })).toBe(true)
+    bed.rules.push({ tool: 'delete', workspace: bed.root, mode: 'allow' })
+    expect(gate({ path: 'a.txt' })).toBe(false)
   })
 })

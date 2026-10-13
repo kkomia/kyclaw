@@ -29,9 +29,12 @@ import {
 export const EDIT_CRLF_NOTE = '按 CRLF 行尾匹配'
 
 export const editInputSchema = z.object({
-  path: z.string().min(1).describe('文件路径；相对路径以授权工作区为基准'),
-  oldText: z.string().min(1).describe('要被替换的原文片段（从 read 的结果里逐字复制，不带行号）'),
-  newText: z.string().describe('替换成的新文本；空串表示删除这段')
+  path: z.string().min(1).describe('File path; relative paths resolve against the workspace root'),
+  oldText: z
+    .string()
+    .min(1)
+    .describe('Exact text to replace, copied verbatim from a read result (without line numbers)'),
+  newText: z.string().describe('Replacement text; an empty string deletes that span')
 })
 
 export type EditInput = z.infer<typeof editInputSchema>
@@ -42,7 +45,7 @@ export async function createEditTool(ctx: ToolContext): Promise<Tool<EditInput, 
   return createTool({
     id: 'edit',
     description:
-      '对工作区内的文本文件做精确替换：oldText 必须与文件内容逐字匹配（含空白/换行）且只出现一处。先 read 再改；改整个文件用 write。',
+      'Replace exact text in a workspace file. oldText must match verbatim, whitespace included, and occur exactly once; zero or several matches leave the file unchanged.',
     inputSchema: editInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

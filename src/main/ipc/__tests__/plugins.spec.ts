@@ -359,6 +359,54 @@ describe('round 25 · 卸载彻底删净（installDir / 技能 / git 克隆）',
   })
 })
 
+describe('round 64 · 内置技能进总览（插件页「技能」面板 / composer 的引用菜单）', () => {
+  /** 另起一份用户数据目录 + 一个内置技能目录，重新注册通道（handlers 表被覆盖，只留一份） */
+  function registerWithBuiltin(builtinDir: string): void {
+    mocks.handlers.clear()
+    registerPluginIpc(dir, { builtinSkillsDir: builtinDir })
+  }
+
+  it('内置技能列出（带 source 标记）；插件技能与内置技能共处一张表且内置在前', async () => {
+    const builtinDir = join(dir, 'builtin-skills')
+    writeFile(join(builtinDir, 'pptx', 'SKILL.md'), '---\nname: pptx\ndescription: 演示\n---\n')
+    writeFile(join(builtinDir, 'xlsx', 'SKILL.md'), '---\nname: xlsx\n---\n')
+    registerWithBuiltin(builtinDir)
+
+    const empty = (await handlerOf(IPC_CHANNELS.plugins.overview)(EVENT)) as PluginsOverview
+    expect(empty.installedSkills).toEqual([
+      { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+      { dir: 'xlsx', name: 'xlsx', pluginId: null, pluginName: null, source: 'builtin' }
+    ])
+
+    // 再装一个插件：插件技能排在内置之后，且形状是老样子（不带 source）
+    const market = makeMarket(dir)
+    await handlerOf(IPC_CHANNELS.plugins.addMarketplace)(EVENT, { source: market })
+    const next = (await handlerOf(IPC_CHANNELS.plugins.install)(EVENT, {
+      marketplaceId: 'market',
+      name: 'p-relative'
+    })) as PluginsOverview
+
+    expect(next.installedSkills).toEqual([
+      { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+      { dir: 'xlsx', name: 'xlsx', pluginId: null, pluginName: null, source: 'builtin' },
+      {
+        dir: 'market-p-relative-demo',
+        name: 'demo',
+        pluginId: 'market-p-relative',
+        pluginName: 'p-relative'
+      }
+    ])
+  })
+
+  it('没有内置目录（老调用方 / 单测形状）：总览与 round 10 一致，只有插件技能', () => {
+    mocks.handlers.clear()
+    registerPluginIpc(dir)
+
+    const overview = handlerOf(IPC_CHANNELS.plugins.overview)(EVENT) as PluginsOverview
+    expect(overview.installedSkills).toEqual([])
+  })
+})
+
 describe('plugins:icon（round 23：插件图标）', () => {
   it('没有图标资源 → { dataUrl: null }；入参先过闸门', async () => {
     const market = makeMarket(dir)

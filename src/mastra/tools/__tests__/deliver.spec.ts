@@ -2,11 +2,13 @@
 /**
  * deliver_file 工具：把工作区里已有的文件交付给用户看。
  *
- * 钉住的四件事：
+ * 钉住的五件事：
  *   1. **结构化输出**（卡片要的字段：相对路径 / 文件名 / 字节数 / MIME / note）；
  *   2. **根约束与 read 同口径**（相对路径按会话根解析；越界 / 目录 / 不存在都给人话错误）；
  *   3. **读档免审批**（分类表 + 工具自己的 requireApproval 两个入口都放行，不入工具自己的白名单）；
- *   4. 只 stat：不读内容、不写盘（执行前后工作区内容一字不变）。
+ *   4. 只 stat：不读内容、不写盘（执行前后工作区内容一字不变）；
+ *   5. round 70：**单次上界一件**（多件给的是人话回执，不是异常；逗号不当分隔符），
+ *      以及**描述层**确实写着那三条交付语义（中间产物不交 / 不复制字节 / 一次一件）。
  */
 import { mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -146,6 +148,62 @@ describe('deliver_file：工作区边界与失败（与 read 同口径）', () =
     bed.roots.length = 0
 
     await expect(callTool(tool, { path: 'a.txt' })).rejects.toThrow(/授权工作区/)
+  })
+})
+
+describe('deliver_file：单次上界（round 70，一件/次）', () => {
+  it('一次给多个路径：回一句人话回执（不抛错、也不交付任何一件）', async () => {
+    const tool = await createDeliverFileTool(bed.ctx)
+    writeText(join(bed.root, 'a.md'), '甲')
+    writeText(join(bed.root, 'b.md'), '乙')
+
+    const out = await callTool(tool, { path: 'a.md\nb.md' })
+
+    // 不是交付卡（没有卡片字段），而是给模型看的字符串回执
+    expect(typeof out).toBe('string')
+    const message = String(out)
+    expect(message).toContain('一次只交付一件')
+    expect(message).toContain('a.md')
+    expect(message).toContain('b.md')
+    // 可执行的下一步：拆成几次调用
+    expect(message).toContain('2 次调用')
+    // 一件都没交付：两张卡都不该出现（这里是"没有结构化结果"这个事实本身）
+    expect(message).toContain('一件都没交付')
+  })
+
+  it('逗号不是分隔符：文件名里带逗号照旧是一件（只按换行判多件）', async () => {
+    const tool = await createDeliverFileTool(bed.ctx)
+    writeText(join(bed.root, '报告,终稿.md'), 'x')
+
+    const out = (await callTool(tool, { path: '报告,终稿.md' })) as DeliveryShape
+
+    expect(out.name).toBe('报告,终稿.md')
+    expect(out.path).toBe('报告,终稿.md')
+  })
+
+  it('路径两端多一个换行不算多件：照常交付（模型常这么写）', async () => {
+    const tool = await createDeliverFileTool(bed.ctx)
+    writeText(join(bed.root, 'a.md'), 'x')
+
+    const out = (await callTool(tool, { path: '\n a.md \n' })) as DeliveryShape
+
+    expect(out.path).toBe('a.md')
+  })
+})
+
+describe('deliver_file：描述层的三条交付语义（round 70）', () => {
+  it('描述里写清了"不复制字节 / 中间产物不交 / 一次一件"', async () => {
+    const tool = await createDeliverFileTool(bed.ctx)
+    const description = String((tool as unknown as { description?: unknown }).description ?? '')
+
+    // ① 交付的是原文件本身（不复制、不移动、不清理源文件）
+    expect(description).toContain('the original file in place')
+    expect(description).toContain('cleans up nothing')
+    // ② 中间产物不进交付（技能层同一口径，这里是防"绕过技能时乱交"的那一道）
+    expect(description).toContain('page-image directories')
+    expect(description).toContain('check records')
+    // ③ 单次上界
+    expect(description).toContain('One file per call')
   })
 })
 

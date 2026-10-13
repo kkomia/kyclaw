@@ -7,13 +7,16 @@
  *   1. mcp.ts：命名、分级（未标只读按写类问）、连接（stdio + Streamable HTTP）、错误分类、测试连接；
  *      round 11 加：Windows 裸命令名解析回归（PATH 前置的 .cmd shim，两种形态真连成功）；
  *   2. 装配：collectMcpTools 只取启用的 server、命名 mcp__<server>__<tool>、挂同一权限 gate；
+ *      round 75 加：**渐进披露**（`buildMcpToolTable` 把大 server 换成 `mcp__<server>__meta`）
+ *      —— 这一层自己的用例在 src/main/mcp/__tests__/_r75-mcp-progressive.spec.ts；
+ *      本文件里的 agent 集成用例从元工具那条路走（真模型脚本 → 元工具 → 真子进程）；
  *   3. lifecycle：真子进程崩溃（fixture 的 crash 工具 + 状态文件）→ 重启 ≤2 次、记日志、暂停；
  *   4. 路由：GET/PUT /api/mcp/servers（校验 + 落盘）、POST /:id/test；
  *   5. agent 集成（mock 模型 + 真服务）：未标只读 → approval-requested → 批准执行回显；
  *      标了只读不弹；外部工具带工作区外 path 也**必须**弹（T12 必查项①）；全名规则才放行（必查项②）；
  *      round 36：工作区「完全访问」时不弹、直接执行（与 bash/fetch 同一套 full 判定）。
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -420,6 +423,54 @@ describe('mcp.ts：真 Streamable HTTP（fixture 的 --http 模式）', () => {
   }, 30_000)
 })
 
+describe('MCP：未启用的 server 不连接也不注入（round 71，真子进程）', () => {
+  it('停用的 stdio server：工具表里没有它、连子进程都没起；开关一翻下一轮就生效', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kyclaw-mcp-lazy-'))
+    const witness = join(dir, 'ghost-spawned.txt')
+    const servers: McpServerConfig[] = [
+      stdioConfig(),
+      stdioConfig({
+        id: 'ghost',
+        name: '停用的假件',
+        // 这条命令一起就会写见证文件：只要它被连过（起了子进程），文件就在
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(witness)},'up')`],
+        enabled: false
+      })
+    ]
+    const logs: string[] = []
+    const lifecycle = new McpLifecycle({
+      servers: () => servers,
+      log: (line) => logs.push(line),
+      timeoutMs: 10_000
+    })
+
+    try {
+      const tools = await lifecycle.tools(NO_APPROVAL)
+
+      // ① 不注入：工具表里只有启用的那台（round 75 起是它的元工具 —— 4 件 > 阈值 3）
+      expect(Object.keys(tools).sort()).toEqual(['mcp__echo__meta'])
+      expect(Object.keys(tools).some((name) => name.startsWith('mcp__ghost__'))).toBe(false)
+      // ② 不连接：子进程没起（真子进程判据），也没有为它写任何日志
+      expect(existsSync(witness)).toBe(false)
+      expect(logs.join('\n')).not.toContain('停用的假件')
+      // ③ 状态分开：未启用 = disabled（不是"连接失败"那种 paused）
+      expect(lifecycle.statusOf('ghost')).toBe('disabled')
+
+      // 开关一翻（停用 echo、启用 ghost，换成真 fixture 的启动方式）：下一轮 tools() 就按新设置来
+      servers[0] = stdioConfig({ enabled: false })
+      servers[1] = stdioConfig({ id: 'ghost', name: '刚启用的' })
+
+      const after = await lifecycle.tools(NO_APPROVAL)
+      expect(Object.keys(after).sort()).toEqual(['mcp__ghost__meta'])
+      expect(lifecycle.statusOf('echo')).toBe('disabled')
+      expect(existsSync(witness)).toBe(false) // 那条见证命令始终没被跑过
+    } finally {
+      await lifecycle.stop()
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    }
+  }, 60_000)
+})
+
 describe('McpLifecycle：真子进程崩溃 → 重启 ≤2 次并暂停', () => {
   it('crash 工具杀掉子进程并留下坏标记：调用中断记一次重启，连不上后暂停（工具消失）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kyclaw-mcp-crash-'))
@@ -434,14 +485,18 @@ describe('McpLifecycle：真子进程崩溃 → 重启 ≤2 次并暂停', () =>
 
     try {
       const tools = await lifecycle.tools(NO_APPROVAL)
-      expect(tools['mcp__echo__crash']).toBeDefined()
+      // round 75：4 件 > 阈值 3 → 工具表里是元工具，逐件真工具从它进去调
+      expect(Object.keys(tools)).toEqual(['mcp__echo__meta'])
+      const meta = tools['mcp__echo__meta']
 
       // 崩掉子进程（并写下"起不来"的状态文件）
-      await callTool(tools['mcp__echo__crash'], {})
+      await callTool(meta, { action: 'call', tool: 'crash', args: {} })
       await new Promise((resolve) => setTimeout(resolve, 400))
 
-      // 下一次调用撞上死连接：记一次重启（不在中途重试）
-      await expect(callTool(tools['mcp__echo__echo'], { message: 'x' })).rejects.toThrow()
+      // 下一次调用撞上死连接：记一次重启（不在中途重试）—— 而且**只记一次**（监督没被套两层）
+      await expect(
+        callTool(meta, { action: 'call', tool: 'echo', args: { message: 'x' } })
+      ).rejects.toThrow()
       expect(lifecycle.restartsOf('echo')).toBe(1)
       expect(logs.some((line) => line.includes('调用中断，重启（第 1/2 次）'))).toBe(true)
 
@@ -697,6 +752,8 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
   let workspaces: Workspace[]
   let server: AgentServerHandle
   const scripts: Array<() => StreamPart[]> = []
+  /** 每次模型调用收到的 prompt（终态载荷）：用来证明"上一轮的工具结果真的回灌到了下一轮" */
+  const seenPrompts: unknown[] = []
   const servers: McpServerConfig[] = []
 
   function writeMcpSettings(): void {
@@ -754,7 +811,9 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
     const model = new MockLanguageModelV4({
       provider: 'kyclaw-mcp-mock',
       modelId: 'kyclaw-mcp-mock',
-      doStream: async () => {
+      doStream: async (callOptions) => {
+        // 每次模型调用收到的是本轮**终态载荷**：抓下来就能证明"上一轮工具结果真的回灌了"
+        seenPrompts.push((callOptions as unknown as { prompt?: unknown }).prompt)
         const script = scripts.shift()
         if (script === undefined) throw new Error('mock 脚本用完了：用例没给够回放')
         return {
@@ -781,7 +840,13 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
 
   it('未标只读：调用 echo → 弹审批；批准后才真执行并回显（真子进程往返）', async () => {
     scripts.length = 0
-    scripts.push(() => toolCallScript('mcp-a', 'mcp__echo__echo', { message: '你好 世界' }))
+    // round 75：工具表里是元工具，模型通过 {action:"call"} 调真工具
+    const call = {
+      action: 'call',
+      tool: 'echo',
+      args: { message: '你好 世界' }
+    }
+    scripts.push(() => toolCallScript('mcp-a', 'mcp__echo__meta', call))
     scripts.push(() => textScript('回显完了。'))
 
     const first = await chat([user('u-mcp-a', '让回显服务说句话')], 'thread-mcp-a')
@@ -794,14 +859,7 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
     const second = await chat(
       [
         user('u-mcp-a', '让回显服务说句话'),
-        approvalReply(
-          messageId,
-          'mcp__echo__echo',
-          'mcp-a',
-          { message: '你好 世界' },
-          approval?.approvalId,
-          true
-        )
+        approvalReply(messageId, 'mcp__echo__meta', 'mcp-a', call, approval?.approvalId, true)
       ],
       'thread-mcp-a'
     )
@@ -815,7 +873,13 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
     writeMcpSettings()
 
     scripts.length = 0
-    scripts.push(() => toolCallScript('mcp-b', 'mcp__echo__echo', { message: '只读放行' }))
+    scripts.push(() =>
+      toolCallScript('mcp-b', 'mcp__echo__meta', {
+        action: 'call',
+        tool: 'echo',
+        args: { message: '只读放行' }
+      })
+    )
     scripts.push(() => textScript('好。'))
 
     const parts = await chat([user('u-mcp-b', '直接回显')], 'thread-mcp-b')
@@ -830,9 +894,10 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
   it('必查项①：外部工具带工作区外的 path 也必须弹审批（旧的"路径解析不到就不问"不再适用）', async () => {
     scripts.length = 0
     scripts.push(() =>
-      toolCallScript('mcp-c', 'mcp__echo__write_remote', {
-        path: join(dir, 'outside', 'evil.txt'),
-        content: 'x'
+      toolCallScript('mcp-c', 'mcp__echo__meta', {
+        action: 'call',
+        tool: 'write_remote',
+        args: { path: join(dir, 'outside', 'evil.txt'), content: 'x' }
       })
     )
     scripts.push(() => textScript('处理完了。'))
@@ -849,15 +914,19 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
       mcpServers: servers,
       permissions: { rules: [{ tool: 'write', workspace, mode: 'allow' }] }
     })
+    const call = {
+      action: 'call',
+      tool: 'write_remote',
+      args: { path: 'note.txt', content: 'x' }
+    }
     scripts.length = 0
-    scripts.push(() =>
-      toolCallScript('mcp-d', 'mcp__echo__write_remote', { path: 'note.txt', content: 'x' })
-    )
+    scripts.push(() => toolCallScript('mcp-d', 'mcp__echo__meta', call))
     scripts.push(() => textScript('处理完了。'))
     const stillAsks = await chat([user('u-mcp-d', '写 note.txt')], 'thread-mcp-d')
     expect(stillAsks.some((part) => part.type === 'tool-approval-request')).toBe(true)
 
     // 换成该 MCP 工具的全名规则：下一轮不再问，直接执行
+    // （round 75：规则判的是**真实工具名**——元工具那层壳不吃规则，也不吞规则）
     writeSettings(settingsPath(dir), {
       ...defaultSettings(),
       mcpServers: servers,
@@ -866,9 +935,7 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
       }
     })
     scripts.length = 0
-    scripts.push(() =>
-      toolCallScript('mcp-e', 'mcp__echo__write_remote', { path: 'note.txt', content: 'x' })
-    )
+    scripts.push(() => toolCallScript('mcp-e', 'mcp__echo__meta', call))
     scripts.push(() => textScript('处理完了。'))
     const allowed = await chat([user('u-mcp-e', '写 note.txt')], 'thread-mcp-e')
     expect(allowed.some((part) => part.type === 'tool-approval-request')).toBe(false)
@@ -878,13 +945,60 @@ describe('agent 集成：MCP 工具走同一权限 gate', () => {
     writeSettings(settingsPath(dir), { ...defaultSettings(), mcpServers: servers })
   }, 60_000)
 
+  it('round 75：模型先 list 再 call —— list 的结果真的回灌到下一轮，call 用的是真名字', async () => {
+    // echo 标只读：这条用例只钉"发现路径"，审批在上下两条里各钉过一次
+    servers[0] = stdioConfig({ readOnlyTools: ['echo'], name: '回显服务' })
+    writeMcpSettings()
+
+    scripts.length = 0
+    seenPrompts.length = 0
+    scripts.push(() => toolCallScript('mcp-list', 'mcp__echo__meta', { action: 'list' }))
+    scripts.push(() =>
+      toolCallScript('mcp-call', 'mcp__echo__meta', {
+        action: 'call',
+        tool: 'echo',
+        args: { message: '两步走' }
+      })
+    )
+    scripts.push(() => textScript('两步走完了。'))
+
+    const parts = await chat([user('u-mcp-list', '看看回显服务有什么再说话')], 'thread-mcp-list')
+    expect(scripts.length).toBe(0) // 三轮都跑完了
+
+    // ① list 的结果是清单（名字 + 参数），并且出现在对话里
+    const listOutput = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'mcp-list'
+    )
+    const listText = JSON.stringify(listOutput?.output ?? '')
+    expect(listText).toContain('echo(message: string)')
+    expect(listText).toContain('write_remote')
+
+    // ② 第二次模型调用（call 那一轮）的载荷里带着 list 的结果 = 真回灌，不是自说自话
+    expect(JSON.stringify(seenPrompts[1] ?? '')).toContain('echo(message: string)')
+
+    // ③ call 走的是**真工具**（真子进程往返），结果原样回来
+    const callOutput = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'mcp-call'
+    )
+    expect(JSON.stringify(callOutput?.output ?? '')).toContain('echo: 两步走')
+
+    servers[0] = stdioConfig({ name: '回显服务' })
+    writeMcpSettings()
+  }, 60_000)
+
   it('round 36：工作区「完全访问」时，未标只读的 MCP 工具直接执行、不挂审批（真子进程往返）', async () => {
     // 对照组是本 describe 第一条（同一工具、同一 server，工作区 ask → tool-approval-request）；
     // 这里只把工作区档切成 full，其余不变
     workspaces[0] = { path: workspace, mode: 'full' }
     try {
       scripts.length = 0
-      scripts.push(() => toolCallScript('mcp-full', 'mcp__echo__echo', { message: '免审直跑' }))
+      scripts.push(() =>
+        toolCallScript('mcp-full', 'mcp__echo__meta', {
+          action: 'call',
+          tool: 'echo',
+          args: { message: '免审直跑' }
+        })
+      )
       scripts.push(() => textScript('免审跑完了。'))
 
       const parts = await chat([user('u-mcp-full', '直接回显')], 'thread-mcp-full')

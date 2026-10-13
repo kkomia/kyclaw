@@ -120,15 +120,17 @@ describe('move：边界与拒绝', () => {
   })
 })
 
-describe('move：审批 gate（危险档永远问）', () => {
-  it('full 与"永久允许"都不放行', async () => {
+describe('move：审批 gate（round 75 起跟着档位走）', () => {
+  it('区内 full → 免审；区内 ask → 问，有"永久允许"规则则免审', async () => {
     const tool = await createMoveTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: { path: string; to: string }) => boolean
 
     bed.roots[0].mode = 'full'
-    expect(gate({ path: 'a.txt', to: 'b.txt' })).toBe(true)
+    expect(gate({ path: 'a.txt', to: 'b.txt' })).toBe(false)
+
     bed.roots[0].mode = 'ask'
-    bed.rules.push({ tool: 'move', workspace: bed.root, mode: 'allow' })
     expect(gate({ path: 'a.txt', to: 'b.txt' })).toBe(true)
+    bed.rules.push({ tool: 'move', workspace: bed.root, mode: 'allow' })
+    expect(gate({ path: 'a.txt', to: 'b.txt' })).toBe(false)
   })
 })

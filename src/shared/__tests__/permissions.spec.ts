@@ -5,7 +5,8 @@ import {
   normalizeWorkspacePath,
   ruleMatches,
   toolBasename,
-  withAllowedRule
+  withAllowedRule,
+  withoutAllowedRule
 } from '../permissions'
 
 /**
@@ -85,5 +86,26 @@ describe('withAllowedRule', () => {
 
     expect(withAllowedRule(rules, 'write', 'D:\\项目\\demo')).toHaveLength(1)
     expect(withAllowedRule(rules, 'edit', 'D:\\项目\\demo')).toHaveLength(2)
+  })
+})
+
+describe('withoutAllowedRule：撤销一条允许规则（round 71）', () => {
+  it('按同一把尺摘掉命中的条目（写法归一后相等就算同一条）；返回新数组，不改入参', () => {
+    const rules = [
+      { tool: 'write', workspace: 'D:\\项目\\demo', mode: 'allow' },
+      { tool: 'edit', workspace: 'D:\\项目\\demo', mode: 'allow' }
+    ] as const
+
+    const after = withoutAllowedRule(rules, 'write', 'd:/项目/demo')
+    expect(after).toEqual([{ tool: 'edit', workspace: 'D:\\项目\\demo', mode: 'allow' }])
+    expect(rules).toHaveLength(2)
+  })
+
+  it('没有命中就是原样一份（不抛、不误删别的工具/工作区）', () => {
+    const rules = [{ tool: 'write', workspace: 'D:\\项目\\demo', mode: 'allow' }] as const
+
+    expect(withoutAllowedRule(rules, 'write', 'D:\\项目\\另一个')).toHaveLength(1)
+    expect(withoutAllowedRule(rules, 'edit', 'D:\\项目\\demo')).toHaveLength(1)
+    expect(withoutAllowedRule([], 'write', 'D:\\项目\\demo')).toEqual([])
   })
 })

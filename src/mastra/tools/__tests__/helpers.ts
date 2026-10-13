@@ -26,7 +26,13 @@ export interface TestBed {
 }
 
 export function createBed(
-  options: { mode?: WorkspaceMode; fs?: ToolFs; rules?: PermissionRule[] } = {}
+  options: {
+    mode?: WorkspaceMode
+    fs?: ToolFs
+    rules?: PermissionRule[]
+    /** 「工作区之外」那一档（round 75；缺省 = 缺省档 ask，与落盘缺省一致） */
+    outsideMode?: WorkspaceMode
+  } = {}
 ): TestBed {
   const tmp = mkdtempSync(join(tmpdir(), 'kyclaw-tools-'))
   const rootRaw = join(tmp, 'ws')
@@ -38,11 +44,14 @@ export function createBed(
   const outside = realpathSync.native(outsideRaw)
   const roots: Workspace[] = [{ path: root, mode: options.mode ?? 'ask' }]
   const rules: PermissionRule[] = options.rules ?? []
+  const outsideMode = options.outsideMode ?? 'ask'
   const ctx = createToolContext({
     roots,
     classify: classifyToolCall,
     fs: options.fs,
-    permissionRules: () => rules
+    permissionRules: () => rules,
+    // 显式注入：不依赖 main/permission 的模块级注册表（用例之间互不影响）
+    outsideMode: () => outsideMode
   })
 
   return {

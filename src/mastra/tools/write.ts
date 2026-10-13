@@ -18,8 +18,8 @@ import {
 } from './guard'
 
 export const writeInputSchema = z.object({
-  path: z.string().min(1).describe('文件路径；相对路径以授权工作区为基准'),
-  content: z.string().describe('要写入的完整内容（覆盖原文件）')
+  path: z.string().min(1).describe('File path; relative paths resolve against the workspace root'),
+  content: z.string().describe('Full file content; replaces the existing file')
 })
 
 export type WriteInput = z.infer<typeof writeInputSchema>
@@ -29,8 +29,7 @@ export async function createWriteTool(ctx: ToolContext): Promise<Tool<WriteInput
 
   return createTool({
     id: 'write',
-    description:
-      '在授权工作区内创建或整体覆盖一个文本文件（父目录会自动创建）。覆盖已有文件前先用 read 看内容；改动旧文件优先用 edit 做精确替换。',
+    description: 'Create or fully overwrite a workspace text file; parent directories are created.',
     inputSchema: writeInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

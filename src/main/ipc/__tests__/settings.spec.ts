@@ -48,6 +48,7 @@ import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import type { ProviderConfig } from '../../../shared/providers'
 import { secretsPath } from '../../secrets'
+import { outsideMode } from '../../permission/outside-mode'
 import { readSettings, settingsPath, writeSettings } from '../../settings'
 import { registerSettingsIpc } from '../settings'
 
@@ -154,6 +155,7 @@ describe('settings 通道 handler', () => {
     for (const bad of [
       [{ theme: 'blue' }],
       [{ fontTier: 'huge' }],
+      [{ outsideWorkspaceMode: 'always' }],
       [{ evil: 1 }],
       [null],
       ['dark'],
@@ -163,6 +165,21 @@ describe('settings 通道 handler', () => {
       expect(() => handler(EVENT, ...bad), JSON.stringify(bad)).toThrow(IpcInputError)
     }
     expect(readSettings(settingsPath(dir))).toEqual(before)
+  })
+
+  it('round 75：「工作区之外」那一档经这条通道落盘，并刷进审批判定的运行期镜像', () => {
+    // handler 的返回面是 unknown（IPC 边界）；回吐的就是合并后的设置，按 readSettings 的读法收窄
+    const next = handlerOf(IPC_CHANNELS.settings.update)(EVENT, {
+      outsideWorkspaceMode: 'full'
+    }) as ReturnType<typeof readSettings>
+
+    expect(next.outsideWorkspaceMode).toBe('full')
+    expect(readSettings(settingsPath(dir)).outsideWorkspaceMode).toBe('full')
+    // 审批判定读的就是这个镜像（guard 的 ToolContext 缺省来源，见 permission/outside-mode.ts）
+    expect(outsideMode()).toBe('full')
+
+    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { outsideWorkspaceMode: 'ask' })
+    expect(outsideMode()).toBe('ask')
   })
 
   it('落盘失败时把错误抛给调用方（不静默吞掉用户的改动）', () => {

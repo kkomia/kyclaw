@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_REASONING_TRANSLATE, DEFAULT_SETTINGS } from '../../shared/settings'
+import {
+  DEFAULT_REASONING_TRANSLATE,
+  DEFAULT_SETTINGS,
+  LANGFUSE_PRESET
+} from '../../shared/settings'
 import { readSettings, settingsPath, updateSettings, writeSettings } from '../settings'
 
 let dir: string
@@ -23,6 +27,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large' as const,
       providers: [],
       workspaces: [],
+      outsideWorkspaceMode: 'full' as const,
       defaultWorkspace: null,
       projects: [],
       permissions: { rules: [] },
@@ -35,7 +40,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pinnedProjects: [],
       archivedThreads: [],
       archivedProjects: [],
-      langfuse: { endpoint: 'https://cloud.langfuse.com' },
+      langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: 'http://127.0.0.1:7890' },
       semanticRecall: {
         enabled: true,
         source: 'remote' as const,
@@ -55,7 +60,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
         provider: 'exa' as const,
         exaEndpoint: 'https://mcp.exa.ai/mcp',
         readerEndpoint: 'https://r.jina.ai'
-      }
+      },
+      updateUrl: ''
     }
 
     writeSettings(file, settings)
@@ -105,10 +111,10 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])
     expect(DEFAULT_SETTINGS.projects).toEqual([])
     expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
-    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: '' })
+    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' })
   })
 
-  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate、round 45 之前没有 webSearch）读出空值：升级不丢原有设置', () => {
+  it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate、round 45 之前没有 webSearch、round 63 之前没有 updateUrl、round 67 之前没有 langfuse.proxyUrl）读出空值：升级不丢原有设置', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
@@ -121,6 +127,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       fontTier: 'large',
       providers: [],
       workspaces: [],
+      // round 75：旧文件没有「工作区之外」那一档 → 补保守档 ask（缺了会整份设置当坏文件）
+      outsideWorkspaceMode: 'ask',
       defaultWorkspace: null,
       projects: [],
       permissions: { rules: [] },
@@ -133,7 +141,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       pinnedProjects: [],
       archivedThreads: [],
       archivedProjects: [],
-      langfuse: { endpoint: '' },
+      // round 67：T17 之前根本没有 langfuse 这一节（整节缺失）→ 补预置地址 + 空代理
+      langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
       semanticRecall: {
         enabled: true,
         source: 'remote',
@@ -153,8 +162,29 @@ describe('设置存储（userData 下的 settings.json）', () => {
         provider: 'exa',
         exaEndpoint: 'https://mcp.exa.ai/mcp',
         readerEndpoint: 'https://r.jina.ai'
-      }
+      },
+      updateUrl: ''
     })
+  })
+
+  it('round 67：T17 那版落盘的 langfuse 只有 endpoint（没有 proxyUrl）——补空串，地址原样留着', () => {
+    const file = settingsPath(dir)
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'dark',
+        fontTier: 'large',
+        providers: [],
+        workspaces: [],
+        langfuse: { endpoint: 'http://192.168.31.18:3000' }
+      }),
+      'utf8'
+    )
+
+    const settings = readSettings(file)
+    expect(settings.theme).toBe('dark')
+    // 老地址一个字符不改（用户想换新地址在设置页里改，迁移不替用户做决定）
+    expect(settings.langfuse).toEqual({ endpoint: 'http://192.168.31.18:3000', proxyUrl: '' })
   })
 
   it('round 48：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {
@@ -178,6 +208,29 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(Object.keys(settings)).not.toContain('modelCapabilities')
     // 落盘回写时也不会再带上那个键
     expect(JSON.stringify(settings)).not.toContain('modelCapabilities')
+  })
+
+  it('round 66：带旧 pptTemplate 键（已废除的全局模板设置）的文件照样读：迁移时剥掉，且不迁移进任何会话', () => {
+    const file = settingsPath(dir)
+    // appSettingsSchema 是 strictObject：不剥掉旧键的话，整份设置会被当成坏文件丢回默认值
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'dark',
+        fontTier: 'large',
+        providers: [],
+        workspaces: [],
+        pptTemplate: '学术紫'
+      }),
+      'utf8'
+    )
+
+    const settings = readSettings(file)
+    expect(settings.theme).toBe('dark')
+    expect(settings.fontTier).toBe('large')
+    expect(Object.keys(settings)).not.toContain('pptTemplate')
+    // 会话级的那份映射在 libsql 里（session_ppt_templates），settings 这一侧一个残留都不留
+    expect(JSON.stringify(settings)).not.toContain('学术紫')
   })
 
   it('思考翻译（round 32）：老文件没有这个字段时补成缺省（关着 + 预置服务）；落过盘的取值原样保留', () => {

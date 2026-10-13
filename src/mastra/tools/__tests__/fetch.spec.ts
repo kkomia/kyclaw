@@ -8,7 +8,8 @@ import { createServer, type Server } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { createFetchTool } from '../fetch'
+import type { Tool } from '@mastra/core/tools'
+import { createFetchTool, type FetchInput, type FetchToolOptions } from '../fetch'
 import { callTool, createBed, readText, type TestBed } from './helpers'
 
 let server: Server
@@ -124,9 +125,21 @@ afterEach(() => {
   bed.dispose()
 })
 
+/**
+ * 建工具：桩服务在 127.0.0.1，而 round 73 起 fetch **默认拒绝**本机/内网地址，
+ * 所以这里把桩主机显式写进白名单 —— 走的正是"用户白名单"那条路（判定规则本身由
+ * `_r73-fetch-egress.spec.ts` 钉，这个文件继续只管请求/响应/下载/审批这些既有面）。
+ */
+function fetchTool(options: FetchToolOptions = {}): Promise<Tool<FetchInput, string>> {
+  return createFetchTool(bed.ctx, {
+    egress: { allowHosts: () => [`127.0.0.1:${new URL(baseUrl).port}`] },
+    ...options
+  })
+}
+
 describe('fetch：请求与响应', () => {
   it('GET 文本：状态行 + content-type + 正文（中文原样）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/text` }))
 
     expect(out).toContain('HTTP 200')
@@ -135,7 +148,7 @@ describe('fetch：请求与响应', () => {
   })
 
   it('POST 透传：method / headers / body 都到服务端', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(
       await callTool(tool, {
         url: `${baseUrl}/echo`,
@@ -151,7 +164,7 @@ describe('fetch：请求与响应', () => {
   })
 
   it('非 2xx：状态码 + 正文都给模型（不是异常）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/404` }))
 
     expect(out).toContain('HTTP 404')
@@ -159,7 +172,7 @@ describe('fetch：请求与响应', () => {
   })
 
   it('二进制（content-type 是 image/png）：只回元信息，不回字节', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/binary` }))
 
     expect(out).toContain('二进制响应')
@@ -168,13 +181,13 @@ describe('fetch：请求与响应', () => {
   })
 
   it('没有 content-type 但有 NUL 字节：按二进制处理（保守）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/binary-no-type` }))
     expect(out).toContain('二进制响应')
   })
 
   it('超大文本：超过 64KB 首尾保留 + 截断说明（中间行不在）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/big` }))
 
     expect(out).toContain('line-0001')
@@ -184,19 +197,19 @@ describe('fetch：请求与响应', () => {
   })
 
   it('GET 带 body：中文人话错误', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     await expect(callTool(tool, { url: `${baseUrl}/text`, body: 'x' })).rejects.toThrow(
       /GET 请求不能带 body/
     )
   })
 
   it('非 http(s) 协议：拒绝', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     await expect(callTool(tool, { url: 'ftp://example.com/x' })).rejects.toThrow(/只支持 http/)
   })
 
   it('超时：中文人话错误（不是挂着）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     await expect(callTool(tool, { url: `${baseUrl}/slow`, timeout_ms: 500 })).rejects.toThrow(
       /请求超时/
     )
@@ -205,7 +218,7 @@ describe('fetch：请求与响应', () => {
 
 describe('fetch：save_to 下载', () => {
   it('2xx：流式落盘（父目录自动建），回执带路径与字节数', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/download`, save_to: 'dl/out.bin' }))
 
     const target = join(bed.root, 'dl', 'out.bin')
@@ -217,7 +230,7 @@ describe('fetch：save_to 下载', () => {
   })
 
   it('非 2xx：不写文件（避免把 404 页面当"下载成功"），状态码与正文照回', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const out = String(await callTool(tool, { url: `${baseUrl}/404`, save_to: 'dl/404.txt' }))
 
     expect(existsSync(join(bed.root, 'dl', '404.txt'))).toBe(false)
@@ -227,7 +240,7 @@ describe('fetch：save_to 下载', () => {
   })
 
   it('save_to 在工作区外：拒绝（fail closed），不落盘', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     await expect(
       callTool(tool, { url: `${baseUrl}/download`, save_to: join(bed.outside, 'x.bin') })
     ).rejects.toThrow(/授权工作区/)
@@ -235,7 +248,7 @@ describe('fetch：save_to 下载', () => {
   })
 
   it('save_to 指向目录：拒绝', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     await expect(callTool(tool, { url: `${baseUrl}/download`, save_to: '.' })).rejects.toThrow(
       /目录/
     )
@@ -244,7 +257,7 @@ describe('fetch：save_to 下载', () => {
 
 describe('fetch：审批 gate', () => {
   it('默认问；full 工作区免审；规则放行；save_to 越界不问（执行 fail closed）', async () => {
-    const tool = await createFetchTool(bed.ctx)
+    const tool = await fetchTool()
     const gate = tool.requireApproval as unknown as (input: {
       url: string
       save_to?: string
@@ -270,7 +283,7 @@ describe('fetch：阅读模式（mode: "reader"）', () => {
   const readerEndpoint = (): string => `${baseUrl}/r`
 
   it('走阅读服务拉 Markdown 正文；默认模式一字未改（仍然直接抓目标地址）', async () => {
-    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const tool = await fetchTool({ endpoint: readerEndpoint })
 
     const out = String(await callTool(tool, { url: 'https://example.com/x', mode: 'reader' }))
     expect(out).toContain('HTTP 200')
@@ -283,11 +296,11 @@ describe('fetch：阅读模式（mode: "reader"）', () => {
   })
 
   it('配了 Jina Key 就带 Authorization: Bearer（升配额）；没配就不带', async () => {
-    const withoutKey = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const withoutKey = await fetchTool({ endpoint: readerEndpoint })
     await callTool(withoutKey, { url: 'https://example.com/x', mode: 'reader' })
     expect(readerSeen.authorization).toBeUndefined()
 
-    const withKey = await createFetchTool(bed.ctx, {
+    const withKey = await fetchTool({
       endpoint: readerEndpoint,
       apiKey: () => 'jina-key-1'
     })
@@ -296,7 +309,7 @@ describe('fetch：阅读模式（mode: "reader"）', () => {
   })
 
   it('阅读模式也能 save_to：落盘的是干净正文', async () => {
-    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const tool = await fetchTool({ endpoint: readerEndpoint })
     const out = String(
       await callTool(tool, { url: 'https://example.com/x', mode: 'reader', save_to: 'doc.md' })
     )
@@ -306,7 +319,7 @@ describe('fetch：阅读模式（mode: "reader"）', () => {
   })
 
   it('阅读服务非 2xx：人话 + "可以改用默认模式"的出口', async () => {
-    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const tool = await fetchTool({ endpoint: readerEndpoint })
     await expect(callTool(tool, { url: 'https://boom.test/x', mode: 'reader' })).rejects.toThrow(
       /阅读模式抓取失败：HTTP 500/
     )
@@ -316,7 +329,7 @@ describe('fetch：阅读模式（mode: "reader"）', () => {
   })
 
   it('阅读模式只做 GET：带 method: "POST" 直接拒（中文人话）', async () => {
-    const tool = await createFetchTool(bed.ctx, { endpoint: readerEndpoint })
+    const tool = await fetchTool({ endpoint: readerEndpoint })
     await expect(
       callTool(tool, { url: 'https://example.com/x', mode: 'reader', method: 'POST', body: 'x' })
     ).rejects.toThrow(/只支持 GET/)

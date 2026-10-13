@@ -54,12 +54,13 @@ afterEach(() => {
 })
 
 /** 摆一份"用户在设置页填好地址"的落盘设置 */
-function setEndpoint(endpoint: string): void {
-  writeSettings(settingsPath(dir), { ...DEFAULT_SETTINGS, langfuse: { endpoint } })
+function setEndpoint(endpoint: string, proxyUrl = ''): void {
+  writeSettings(settingsPath(dir), { ...DEFAULT_SETTINGS, langfuse: { endpoint, proxyUrl } })
 }
 
 describe('readLangfuseConfig：三项齐才导出', () => {
   it('什么都没配 → null（默认关，也就是"内容不出机器"）', () => {
+    // 默认设置里地址是预置那台（LANGFUSE_PRESET），但没密钥 → 依然不导出
     expect(readLangfuseConfig(dir)).toBeNull()
   })
 
@@ -71,6 +72,7 @@ describe('readLangfuseConfig：三项齐才导出', () => {
 
   it('只写密钥、没填地址 → null（地址是开关：清空它保存等于关闭）', () => {
     writeLangfuseKeys(secretsPath(dir), PUBLIC_KEY, SECRET_KEY)
+    setEndpoint('')
 
     expect(readLangfuseConfig(dir)).toBeNull()
   })
@@ -84,6 +86,36 @@ describe('readLangfuseConfig：三项齐才导出', () => {
       publicKey: PUBLIC_KEY,
       secretKey: SECRET_KEY
     })
+  })
+
+  it('填了代理 → 配置里带 proxyUrl（没写协议补 http://；只影响这一路）', () => {
+    setEndpoint('http://100.66.1.1:3000', ' 127.0.0.1:7890 ')
+    writeLangfuseKeys(secretsPath(dir), PUBLIC_KEY, SECRET_KEY)
+
+    expect(readLangfuseConfig(dir)).toEqual({
+      endpoint: 'http://100.66.1.1:3000',
+      publicKey: PUBLIC_KEY,
+      secretKey: SECRET_KEY,
+      proxyUrl: 'http://127.0.0.1:7890'
+    })
+  })
+
+  it('设置里没填代理 → 回落环境变量（HTTPS_PROXY / HTTP_PROXY 都认）', () => {
+    setEndpoint('http://100.66.1.1:3000')
+    writeLangfuseKeys(secretsPath(dir), PUBLIC_KEY, SECRET_KEY)
+    const before = { ...process.env }
+    try {
+      delete process.env.LANGFUSE_PROXY_URL
+      delete process.env.HTTPS_PROXY
+      delete process.env.https_proxy
+      delete process.env.ALL_PROXY
+      delete process.env.all_proxy
+      process.env.HTTP_PROXY = 'http://10.0.0.9:3128'
+
+      expect(readLangfuseConfig(dir)?.proxyUrl).toBe('http://10.0.0.9:3128')
+    } finally {
+      process.env = before
+    }
   })
 })
 
@@ -101,7 +133,8 @@ describe('密钥纪律：明文只进不出', () => {
     expect(settings).not.toContain(PUBLIC_KEY)
     expect(settings).not.toContain(SECRET_KEY)
     expect(readSettings(settingsPath(dir)).langfuse).toEqual({
-      endpoint: 'https://cloud.langfuse.com'
+      endpoint: 'https://cloud.langfuse.com',
+      proxyUrl: ''
     })
   })
 

@@ -32,14 +32,14 @@ export const GREP_MAX_LINE_CHARS = 400
 const SKIPPED_DIRS = new Set(['.git'])
 
 export const grepInputSchema = z.object({
-  pattern: z.string().min(1).describe('正则表达式（JavaScript 语法）'),
+  pattern: z.string().min(1).describe('Regular expression (JavaScript syntax)'),
   path: z
     .string()
     .min(1)
     .optional()
-    .describe('起始目录（工作区内）；缺省 = 工作区根（有多个工作区时必须给）'),
-  glob: z.string().min(1).optional().describe('只搜匹配该 glob 的文件，例如 *.ts、src/**/*.ts'),
-  ignoreCase: z.boolean().optional().describe('true = 忽略大小写（缺省区分）')
+    .describe('Directory to search; defaults to the workspace root (required with several workspaces)'),
+  glob: z.string().min(1).optional().describe('Only search files matching this glob, for example *.ts'),
+  ignoreCase: z.boolean().optional().describe('true = case-insensitive (default is case-sensitive)')
 })
 
 export type GrepInput = z.infer<typeof grepInputSchema>
@@ -50,7 +50,7 @@ export async function createGrepTool(ctx: ToolContext): Promise<Tool<GrepInput, 
   return createTool({
     id: 'grep',
     description:
-      '在工作区内用正则搜索文本，返回 `路径:行号: 行内容`，最多 100 条命中。二进制文件与 .git 自动跳过。',
+      'Search workspace text with a regular expression; returns `path:line: text`, max 100 matches, where path is absolute while your own answer should use workspace-relative paths. Binary files and .git are skipped.',
     inputSchema: grepInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

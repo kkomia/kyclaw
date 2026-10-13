@@ -182,7 +182,9 @@ describe('resolveLayout：显式优先、缺数据退自动、按内容自动挑
       })
     ).toBe('table')
     expect(resolveLayout({ layout: 'stats', title: '结论' })).toBe('content')
-    expect(resolveLayout({ layout: 'closing' })).toBe('closing')
+    // 空 closing 页排不出来（没有兜底文案了）→ null（跳过），不给一张空页；给了文字才出
+    expect(resolveLayout({ layout: 'closing' })).toBeNull()
+    expect(resolveLayout({ layout: 'closing', title: '讨论与答疑' })).toBe('closing')
     expect(resolveLayout({ layout: 'stats', bullets: ['a'] })).toBe('content')
   })
 })
@@ -267,8 +269,8 @@ describe('schema：新字段的上限都被拒，提示告诉模型怎么改', (
   })
 })
 
-describe('向后兼容：老形状照旧（cover → content → closing）', () => {
-  it('title + slides[{title,bullets}] 仍是封面 + 正文页 + 自动结尾页', async () => {
+describe('向后兼容：老形状照旧（cover → content）', () => {
+  it('title + slides[{title,bullets}] 是封面 + 正文页；**不再自动补结尾页**', async () => {
     const { data, slides, theme } = await renderPptx({
       title: '季度汇报',
       slides: [
@@ -278,23 +280,21 @@ describe('向后兼容：老形状照旧（cover → content → closing）', ()
       ]
     })
 
-    // 封面 + 两页有内容的（空对象那页跳过）+ 自动结尾页
-    expect(slides).toBe(4)
+    // 封面 + 两页有内容的（空对象那页跳过）；模型没给结尾页就**没有**结尾页
+    expect(slides).toBe(3)
     const entries = readZipEntries(data)
     expect(pageNames(entries)).toEqual([
       'ppt/slides/slide1.xml',
       'ppt/slides/slide2.xml',
-      'ppt/slides/slide3.xml',
-      'ppt/slides/slide4.xml'
+      'ppt/slides/slide3.xml'
     ])
     expect(pageXml(entries, 1)).toContain('季度汇报')
     expect(pageXml(entries, 2)).toContain('营收增长 12%')
     expect(pageXml(entries, 3)).toContain('下一步：扩产')
-    expect(pageXml(entries, 4)).toContain('谢谢观看')
     expect([...PPT_THEME_NAMES]).toContain(theme)
   })
 
-  it('自己给了 closing 页就不补自动结尾页；没有文档标题（不出封面）也不补', async () => {
+  it('结尾页只在你显式给时才有：文字原样落盘，没给文字的空 closing 页被跳过', async () => {
     const explicit = await renderPptx({
       title: '季度汇报',
       slides: [{ title: '结论' }, { layout: 'closing' as const, title: '讨论与答疑' }]
@@ -302,8 +302,17 @@ describe('向后兼容：老形状照旧（cover → content → closing）', ()
     expect(explicit.slides).toBe(3)
     const explicitEntries = readZipEntries(explicit.data)
     expect(pageXml(explicitEntries, 3)).toContain('讨论与答疑')
+    // 兜底文案已经删掉：自动补的「谢谢观看」占位页不该再出现
     expect(pageXml(explicitEntries, 3)).not.toContain('谢谢观看')
 
+    // 只给 layout 不给文字的空 closing 页排不出来（没有兜底文案）→ 跳过，不出一张空页
+    const empty = await renderPptx({
+      title: '季度汇报',
+      slides: [{ title: '结论' }, { layout: 'closing' as const }]
+    })
+    expect(empty.slides).toBe(2)
+
+    // 没有文档标题（不出封面）也不会凭空多出一页
     const noCover = await renderPptx({ slides: [{ title: '只有一页' }] })
     expect(noCover.slides).toBe(1)
     expect(pageXml(readZipEntries(noCover.data), 1)).toContain('只有一页')

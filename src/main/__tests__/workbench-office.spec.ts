@@ -51,6 +51,21 @@ function rawShape(paragraphs: string, placeholder?: string): string {
   return `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr/>${ph}</p:nvSpPr><p:txBody>${paragraphs}</p:txBody></p:sp>`
 }
 
+/** 一个表格形状（`<p:graphicFrame>` 里的 `<a:tbl>`，与 pptxgenjs 写出来的形状同构） */
+function rawTable(rows: readonly (readonly string[])[]): string {
+  const cell = (text: string): string =>
+    `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>`
+  const tr = rows.map((row) => `<a:tr h="457200">${row.map(cell).join('')}</a:tr>`).join('')
+  return (
+    '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Table 0"/>' +
+    '<p:cNvGraphicFramePr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/>' +
+    '<a:ext cx="0" cy="0"/></p:xfrm><a:graphic><a:graphicData ' +
+    'uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/>' +
+    '<a:tblGrid><a:gridCol w="914400"/></a:tblGrid>' +
+    `${tr}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`
+  )
+}
+
 describe('extractDocx：Word → markdown', () => {
   it('真件读回：标题（Word 的 Title 样式 → `#`）/ 小标题 / 正文 / 项目符号都在 markdown 里', async () => {
     const bytes = await renderDocx({
@@ -233,7 +248,7 @@ describe('parseTableText：csv / tsv', () => {
 })
 
 describe('extractPptx：PPT → 逐页文字提要', () => {
-  it('真件读回：封面 + 内容 + 自动结尾页，一页一张卡（产出器不写标题占位符 → 不给 title）', async () => {
+  it('真件读回：封面 + 内容，一页一张卡（产出器不写标题占位符 → 不给 title）', async () => {
     const { data, slides } = await renderPptx({
       title: '汇报',
       slides: [{ title: '进展', bullets: ['第一条', '第二条'] }]
@@ -241,13 +256,12 @@ describe('extractPptx：PPT → 逐页文字提要', () => {
 
     const result = extractPptx(data)
 
-    // round 62：create_ppt 自动补一页结尾页（封面 + 内容 + 结尾 = 3 页）；正文要点带「●」圆点
-    // 前缀（主题化版式的点缀），封面外每页含页脚（文档标题 + 页码）——预览如实读全部文本。
-    expect(slides).toBe(3)
+    // create_ppt 不再自动补结尾页（模型没给就没有）；正文要点带「●」圆点前缀（主题化版式的点缀），
+    // 封面外每页含页脚（文档标题 + 页码）——预览如实读全部文本。
+    expect(slides).toBe(2)
     expect(result.slides).toEqual([
       { index: 1, lines: ['汇报'] },
-      { index: 2, lines: ['进展', '● 第一条', '● 第二条', '汇报', '2'] },
-      { index: 3, lines: ['谢谢观看', '汇报', '3'] }
+      { index: 2, lines: ['进展', '● 第一条', '● 第二条', '汇报', '2'] }
     ])
     expect(result.truncated).toBe(false)
   })
@@ -303,6 +317,73 @@ describe('extractPptx：PPT → 逐页文字提要', () => {
       'ppt/slides/slide1.xml': slideXml(shape(['']) + shape(['有字']))
     })
     expect(extractPptx(bytes).slides).toEqual([{ index: 1, lines: ['有字'] }])
+  })
+
+  it('表格（<a:tbl>）的单元格文字也抽得到：按行列顺序，一行一句', () => {
+    const bytes = zipOf({
+      'ppt/slides/slide1.xml': slideXml(
+        shape(['市场速览']) +
+          rawTable([
+            ['项目', '最新', '变动'],
+            ['创业板指', '—', '-2.61%']
+          ])
+      )
+    })
+
+    expect(extractPptx(bytes).slides).toEqual([
+      {
+        index: 1,
+        lines: ['市场速览', '项目 | 最新 | 变动', '创业板指 | — | -2.61%']
+      }
+    ])
+  })
+
+  it('表格里的空单元格留位（列不错位），行内文字顺序 = XML 里的顺序', () => {
+    const bytes = zipOf({
+      'ppt/slides/slide1.xml': slideXml(
+        rawTable([
+          ['甲', '', '丙'],
+          ['1', '2']
+        ]) + shape(['表下面的话'])
+      )
+    })
+
+    expect(extractPptx(bytes).slides).toEqual([
+      { index: 1, lines: ['甲 |  | 丙', '1 | 2', '表下面的话'] }
+    ])
+  })
+
+  it('真件读回：create_ppt 产出的 table 版式页里，缺值占位 `—` 与数字都在（这正是模型自检要核的）', async () => {
+    const { data } = await renderPptx({
+      title: '今日新闻日报',
+      slides: [
+        {
+          layout: 'table',
+          title: '市场速览',
+          table: {
+            headers: ['项目', '最新', '变动'],
+            rows: [
+              ['上证指数', '3797.24', '-0.43%'],
+              ['创业板指', '—', '-2.61%']
+            ]
+          }
+        }
+      ]
+    })
+
+    const result = extractPptx(data)
+    const tablePage = result.slides.find((slide) =>
+      slide.lines.some((line) => line.includes('上证指数'))
+    )
+
+    expect(tablePage).toBeDefined()
+    expect(tablePage?.lines).toEqual(
+      expect.arrayContaining([
+        '项目 | 最新 | 变动',
+        '上证指数 | 3797.24 | -0.43%',
+        '创业板指 | — | -2.61%'
+      ])
+    )
   })
 
   it('包读不通（不是 zip / 中央目录坏了）给人话，不吐栈', () => {

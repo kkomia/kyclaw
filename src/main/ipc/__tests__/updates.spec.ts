@@ -36,12 +36,14 @@ const EVENT = { sender: { id: 1 } }
 const UNCONFIGURED: UpdateState = {
   currentVersion: '1.0.0',
   configured: false,
+  builtinUrl: null,
   status: { phase: 'idle' }
 }
 
 const CONFIGURED: UpdateState = {
   currentVersion: '1.0.0',
   configured: true,
+  builtinUrl: null,
   status: { phase: 'up-to-date' }
 }
 
@@ -105,8 +107,8 @@ describe('updates 通道', () => {
     const backend = fakeBackend()
     current = createUpdater({
       currentVersion: '1.0.0',
-      source: { kind: 'url', url: 'http://127.0.0.1:8555/', forceDevConfig: true },
-      backend
+      resolveSource: () => ({ kind: 'url', url: 'http://127.0.0.1:8555/', forceDevConfig: true }),
+      backend: async () => backend
     })
 
     await expect(handlerOf(IPC_CHANNELS.updates.check)(EVENT)).resolves.toMatchObject({

@@ -260,10 +260,10 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     expect(out).toContain('；结构校验通过')
 
     const entries = readZipEntries(readFileSync(file))
-    // 封面 + 章节 + 数字卡 + 自动结尾页
+    // 封面 + 章节 + 数字卡（模型没给结尾页 → 没有结尾页）
     expect(
       [...entries.keys()].filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
-    ).toHaveLength(4)
+    ).toHaveLength(3)
     const stats = zipText(entries, 'ppt/slides/slide3.xml')
     expect(stats).toContain('val="1F5FA9"')
     expect(stats).toContain('微软雅黑')
@@ -292,6 +292,69 @@ describe('create_excel / create_ppt / create_docx：落盘', () => {
     const document = zipText(entries, 'word/document.xml')
     expect(document).toContain('目标')
     expect(document).toContain('三步走。')
+  })
+})
+
+describe('断言：用户点名的硬要求写进 expect，回执逐条报', () => {
+  it('create_ppt：断言全过时回执照旧（不多一句"断言"）', async () => {
+    const tool = await createPptTool(bed.ctx)
+    const out = String(
+      await callTool(tool, {
+        title: '汇报',
+        slides: [{ title: '结论', bullets: ['增长 12%'] }],
+        // 页数含封面：这份是 封面 + 正文 = 2 页（工具不再自动补结尾页）
+        expect: { pages: 2, contains: [{ page: 2, text: '增长 12%' }] }
+      })
+    )
+
+    expect(out).toContain('；结构校验通过')
+    expect(out).not.toContain('断言')
+  })
+
+  it('create_ppt：页数不够 + 那一页没有这句话 → 照落盘，但回执点名哪条没过、差在哪', async () => {
+    const tool = await createPptTool(bed.ctx)
+    const out = String(
+      await callTool(tool, {
+        title: '汇报',
+        slides: [{ title: '结论', bullets: ['增长 12%'] }],
+        expect: { pages: 6, contains: [{ page: 1, text: '这句话没有' }] }
+      })
+    )
+
+    // 断言不过**不拦落盘**（产出物已经写在磁盘上了，改不改由模型决定）
+    expect(existsSync(join(bed.root, '汇报.pptx'))).toBe(true)
+    expect(out).toContain('断言：必须正好 6 页（包内 2 页）')
+    expect(out).toContain('断言：第 1 页必须含「这句话没有」')
+    expect(out).toContain('第 1 页没有这段文字')
+    expect(out).not.toContain('；结构校验通过')
+  })
+
+  it('create_excel：张数断言不过就点名；文本断言按整本工作簿核', async () => {
+    const tool = await createExcelTool(bed.ctx)
+    const out = String(
+      await callTool(tool, {
+        sheets: [{ name: '销量', rows: [['名称', 42]] }],
+        expect: { sheets: 2, contains: [{ text: '名称' }] }
+      })
+    )
+
+    expect(out).toContain('断言：必须正好 2 张工作表（包内 1 张工作表）')
+    // 文本断言过了就不出现在回执里（回执只报没过的那几条）
+    expect(out).not.toContain('工作簿里必须含')
+  })
+
+  it('create_docx：正文里没有那句话就点名（断言按正文部件核）', async () => {
+    const tool = await createDocxTool(bed.ctx)
+    const out = String(
+      await callTool(tool, {
+        title: '方案',
+        blocks: [{ type: 'paragraph', text: '三步走。' }],
+        expect: { contains: [{ text: '必须出现的这句话' }] }
+      })
+    )
+
+    expect(out).toContain('断言：正文必须含「必须出现的这句话」')
+    expect(out).toContain('word/document.xml')
   })
 })
 
@@ -415,6 +478,24 @@ describe('输入上限：超限被 schema 拒（每件一例）', () => {
     })
     expect(parsed.success).toBe(false)
     expect(issuesOf(parsed)).toContain('文档最多 1000 个内容块')
+  })
+
+  it('create_ppt：断言形状（pages 必须正整数；contains 最多 20 条）', () => {
+    const ok = pptInputSchema.safeParse({
+      slides: [{ title: 'A' }],
+      expect: { pages: 6, contains: [{ page: 2, text: 'x' }] }
+    })
+    expect(ok.success).toBe(true)
+
+    const zero = pptInputSchema.safeParse({ slides: [{ title: 'A' }], expect: { pages: 0 } })
+    expect(zero.success).toBe(false)
+
+    const many = pptInputSchema.safeParse({
+      slides: [{ title: 'A' }],
+      expect: { contains: Array.from({ length: 21 }, () => ({ text: 'x' })) }
+    })
+    expect(many.success).toBe(false)
+    expect(issuesOf(many)).toContain('最多 20 条断言')
   })
 
   it('create_report：正文超过 200000 字符被拒', () => {

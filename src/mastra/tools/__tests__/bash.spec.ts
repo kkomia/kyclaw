@@ -11,7 +11,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Tool } from '@mastra/core/tools'
 import {
+  BASH_MAX_OUTPUT_BYTES,
   bashToolDescription,
+  bashTruncationHint,
   createBashTool,
   findGitBash,
   findGitOnPath,
@@ -251,17 +253,38 @@ describe.runIf(hasBash)('bash：真进程执行', () => {
     }
   })
 
-  it('超过 64KB：首尾保留 + 截断说明（中间行不在）', async () => {
+  it('超过 32KB：首尾保留 + 截断说明（中间不在），且说明给出下一步（round 71）', async () => {
     const tool = await createBashTool(bed.ctx)
+    // 头 20000 + 标记 13 + 尾 20000 = 40013 字节，稳定跨过 32KB 上限。
+    // 标记在命令里拆开拼（回显那行会原样带上命令行 —— 直接写整串标记，断言会被回显带偏）
     const out = String(
       await callTool(tool, {
-        command: 'awk \'BEGIN { for (i = 1; i <= 20000; i++) print "line-" i }\''
+        command: `node -e "process.stdout.write('H'.repeat(20000) + ('MID'+'DLE-MARKER') + 'T'.repeat(20000))"`
       })
     )
-    expect(out).toContain('line-1\n')
-    expect(out).toContain('line-20000')
-    expect(out).not.toContain('line-10000')
-    expect(out).toMatch(/\[输出已截断：共 \d+ 字节，仅保留前 32768 字节与后 32768 字节\]/)
+    // 只看正文段（[cwd: ...] 之后、退出码之前）：回显的命令行里也有那些字符
+    const body = out.split(`[cwd: ${bed.root}]\n\n`)[1]?.split('\n\n[退出码')[0] ?? ''
+    expect(body).toContain('H'.repeat(64))
+    expect(body).toContain('T'.repeat(64))
+    expect(body).not.toContain('MIDDLE-MARKER')
+    // 说明必须报出这次的上下限切点（32KB 的一半一半）；总字节数含握手行，故只断言下界
+    expect(body).toContain('仅保留前 16384 字节与后 16384 字节]')
+    const total = Number(/\[输出已截断：共 (\d+) 字节/.exec(body)?.[1])
+    expect(total).toBeGreaterThanOrEqual(40013)
+    // 说明要可行动：说清怎么拿到被省掉的那部分（不能只说"已截断"）
+    expect(body).toContain('head')
+    expect(body).toContain('tail')
+    expect(body).toContain('grep')
+    expect(body).toContain('写进文件')
+  })
+
+  it('未到上限（20000 字节）不截断：说明一个字段都不出现', async () => {
+    const tool = await createBashTool(bed.ctx)
+    const out = String(
+      await callTool(tool, { command: `node -e "process.stdout.write('x'.repeat(20000))"` })
+    )
+    expect(out).not.toContain('输出已截断')
+    expect(out).toContain('x'.repeat(64))
   })
 
   it('超时：终止整个进程树（fork 出的孙进程也不留）', async () => {
@@ -450,24 +473,53 @@ describe.runIf(realPowershell !== null)('bash：PowerShell 分支（真跑）', 
 describe('bash 工具的口径文案按是否回落切（round 33）', () => {
   it('Git Bash：描述说 bash 语法；系统指令追加 Git Bash 那行', () => {
     const text = bashToolDescription({ kind: 'git-bash', path: 'D:\\Git\\bin\\bash.exe' })
-    expect(text).toContain('在 Git Bash 里执行')
-    expect(text).toContain('bash 语法，不是 PowerShell')
-    expect(shellGuidance({ kind: 'git-bash', path: 'x' })).toContain('当前运行的是 Git Bash')
+    expect(text).toContain('Run a shell command in Git Bash')
+    expect(text).toContain('bash syntax rather than PowerShell')
+    expect(shellGuidance({ kind: 'git-bash', path: 'x' })).toContain('bash runs Git Bash')
   })
 
   it('回落 PowerShell：描述与指令都点名 PowerShell，不让人拿 bash 语法往里灌', () => {
     const shell = { kind: 'powershell' as const, path: 'C:\\ps\\powershell.exe' }
     const text = bashToolDescription(shell)
-    expect(text).toContain('在 Windows PowerShell 里执行')
-    expect(text).toContain('命令请写 PowerShell 语法，不是 bash')
+    expect(text).toContain('Run a shell command in Windows PowerShell')
+    expect(text).toContain('write PowerShell syntax rather than bash')
     expect(text).toContain('Start-Process')
     const line = shellGuidance(shell)
-    expect(line).toContain('没有 Git Bash，已回落')
+    expect(line).toContain('no Git Bash and falls back to it')
     expect(line).toContain('Get-ChildItem')
   })
 
   it('一个 shell 都没有：描述与指令如实说不可用', () => {
-    expect(bashToolDescription(null)).toContain('无法执行')
-    expect(shellGuidance(null)).toContain('既没有 Git Bash 也没有 PowerShell')
+    expect(bashToolDescription(null)).toContain('commands cannot run')
+    expect(shellGuidance(null)).toContain('neither Git Bash nor PowerShell')
+  })
+})
+
+describe('bash 输出上限（round 71：64KB → 32KB）', () => {
+  it('上限常量 = 32KB；工具描述按它现算，不写死数字', () => {
+    expect(BASH_MAX_OUTPUT_BYTES).toBe(32 * 1024)
+    const text = bashToolDescription({ kind: 'git-bash', path: 'x' })
+    expect(text).toContain('32KB')
+    expect(text).not.toContain('64KB')
+    expect(bashToolDescription({ kind: 'powershell', path: 'x' })).toContain('32KB')
+  })
+
+  it('截断说明的下一步按 shell 给：bash 给 head/tail/grep，PowerShell 给 Select-Object/Select-String', () => {
+    const bash = bashTruncationHint({ kind: 'git-bash', path: 'x' })
+    expect(bash).toContain('head')
+    expect(bash).toContain('tail')
+    expect(bash).toContain('grep')
+
+    const ps = bashTruncationHint({ kind: 'powershell', path: 'x' })
+    expect(ps).toContain('Select-Object -First')
+    expect(ps).toContain('Select-String')
+    // 两条口径都要说清"写文件后再用 read 分段读"这条兜底
+    expect(bash).toContain('read')
+    expect(ps).toContain('read')
+  })
+
+  it('系统指令里的 bash 上限与常量同一个数（防漂）', async () => {
+    const { KYCLAW_INSTRUCTIONS } = await import('../../agents/kyclaw')
+    expect(KYCLAW_INSTRUCTIONS).toContain(`${BASH_MAX_OUTPUT_BYTES / 1024}KB per bash result`)
   })
 })

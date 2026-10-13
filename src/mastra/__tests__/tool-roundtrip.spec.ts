@@ -281,4 +281,27 @@ describe('交付链路（round 50）：deliver_file 的结构化结果过线', (
       '已经交给你了。'
     ])
   }, 30_000)
+
+  it('一次给了多件：回的是可读回执（字符串），不是错误面也不是交付卡（round 70）', async () => {
+    scripts.length = 0
+    scripts.push(() =>
+      toolCallScript('call-deliver-many', 'deliver_file', {
+        path: 'alpha.txt\nbeta.txt'
+      })
+    )
+    scripts.push(() => textScript('那我一件一件交。'))
+
+    const parts = sseParts(await chat([user('这两份都交给我')], 'thread-roundtrip-deliver-many'))
+
+    const output = parts.find(
+      (part) => part.type === 'tool-output-available' && part.toolCallId === 'call-deliver-many'
+    )
+    expect(typeof output?.output).toBe('string')
+    expect(String(output?.output)).toContain('一次只交付一件')
+    // 回执不是错误：模型拿得到它，照常续跑（这就是"不抛错"的判据）
+    expect(parts.some((part) => part.type === 'tool-output-error')).toBe(false)
+    expect(parts.filter((part) => part.type === 'text-delta').map((part) => part.delta)).toEqual([
+      '那我一件一件交。'
+    ])
+  }, 30_000)
 })

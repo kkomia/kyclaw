@@ -188,6 +188,7 @@ describe('压缩服务（假 memory + 假模型）', () => {
       summary: '上一次的摘要',
       summarized: 5,
       kept: 2,
+      level: 'summary',
       createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString(),
       // round 59：老记录（round 58 之前压的）没有 token 读数——两个字段就是 null
       tokensBefore: null,
@@ -268,6 +269,7 @@ describe('压缩服务（假 memory + 假模型）', () => {
       summary: '## 要点\n- 上一轮定下用 libsql 存摘要',
       summarized: 4,
       kept: 2,
+      level: 'summary',
       createdAt: new Date(2026, 9, 10, 12, 0, 0).toISOString(),
       tokensBefore: 41_000,
       tokensAfter: 6_500
@@ -628,6 +630,7 @@ describe('注入处理器（输入处理器）', () => {
     summary: '## 要点\n- 之前聊过缓存',
     summarized: 4,
     kept: 10,
+    level: 'summary',
     createdAt: new Date(2026, 9, 11, 9, 0, 0).toISOString(),
     tokensBefore: 88_000,
     tokensAfter: 21_000
@@ -706,6 +709,7 @@ describe('压缩存储（真 libsql）', () => {
       summary: '第一次摘要',
       summarized: 4,
       kept: 10,
+      level: 'summary',
       createdAt: new Date(2026, 9, 11, 10, 0, 0).toISOString(),
       // round 59：两个 token 列真的落库、真的读回来（不是只在内存里）
       tokensBefore: 527_000,
@@ -724,7 +728,7 @@ describe('压缩存储（真 libsql）', () => {
 
   // round 59：老库（round 58 及更早）没有 tokens_before / tokens_after 两列——ensureTable 要补上，
   // 旧行读出来归一成 null（不编造 0）。这里手工造一张老形状的表来走这条路。
-  it('round 59 列迁移：老表补两列、旧行读出 null、迁移后的表能读写新列（重复迁移不报错）', async () => {
+  it('round 59/72 列迁移：老表补 token 与 level 两列、旧行读出 null / summary、迁移后的表能读写新列（重复迁移不报错）', async () => {
     const legacyDir = mkdtempSync(join(tmpdir(), 'kyclaw-compaction-legacy-'))
     const legacyStorage = new LibSQLStore({
       id: 'kyclaw-compaction-legacy',
@@ -754,6 +758,8 @@ describe('压缩存储（真 libsql）', () => {
         summary: '老摘要',
         summarized: 4,
         kept: 2,
+        // round 75：老行没有 level 列（那时只有摘要这一条路）→ 归一成 summary，不编造档位
+        level: 'summary',
         createdAt: new Date(2026, 9, 11, 10, 0, 0).toISOString(),
         tokensBefore: null,
         tokensAfter: null
@@ -765,6 +771,7 @@ describe('压缩存储（真 libsql）', () => {
         summary: '新摘要',
         summarized: 6,
         kept: 2,
+        level: 'snip',
         createdAt: new Date(2026, 9, 11, 11, 0, 0).toISOString(),
         tokensBefore: 120_000,
         tokensAfter: 30_000
@@ -838,6 +845,7 @@ describe('压缩路由（Hono + 压缩服务：多数假件，一条真接线）
         summary: '摘要',
         summarized: 4,
         kept: 10,
+        level: 'summary' as const,
         createdAt: new Date().toISOString(),
         tokensBefore: 527_000,
         tokensAfter: 53_700
@@ -918,6 +926,7 @@ describe('压缩路由（Hono + 压缩服务：多数假件，一条真接线）
       summary: '摘要',
       summarized: 3,
       kept: 10,
+      level: 'summary',
       createdAt: new Date().toISOString(),
       // round 59：回包要带上分界线用的两个 token 字段（strict schema：少了就 parse 报错）
       tokensBefore: 527_000,

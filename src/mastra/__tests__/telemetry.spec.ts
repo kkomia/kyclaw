@@ -12,7 +12,12 @@
  * 边界（报告里也写明）：真是 Langfuse 后端（云账号 / docker 自托管）**没有**接，
  * 所以"trace 在 Langfuse 界面里可见"这一步未验证——这里验证的是 exporter 真把数据发出去了。
  */
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import {
+  createServer,
+  request as request_,
+  type IncomingMessage,
+  type ServerResponse
+} from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -20,7 +25,13 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { startAgentServer, type AgentServerHandle } from '../../main/agent/service'
-import { langfuseConfigOf, normalizeLangfuseEndpoint } from '../telemetry'
+import {
+  langfuseConfigOf,
+  normalizeLangfuseEndpoint,
+  normalizeProxyUrl,
+  resolveProxyUrl
+} from '../telemetry'
+import { stopLangfuseRelays } from '../langfuse-relay'
 import { settingsPath, writeSettings } from '../../main/settings'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 
@@ -66,6 +77,63 @@ async function startCollector(): Promise<{
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      })
+  }
+}
+
+/**
+ * 假 HTTP 代理（round 67）：把收到的请求行原样记下来，再按**绝对 URI** 转发到真正的目标。
+ * "请求行是绝对形式"正是走 HTTP 正向代理的标志（直连时只会是 `/api/public/otel/v1/traces`），
+ * 所以 seen 里有这一条 = 代理真被用上了。
+ */
+async function startFakeProxy(): Promise<{
+  url: string
+  seen: string[]
+  close: () => Promise<void>
+}> {
+  const seen: string[] = []
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    seen.push(`${request.method} ${request.url}`)
+    let target: URL
+    try {
+      target = new URL(request.url ?? '')
+    } catch {
+      response.writeHead(400)
+      response.end()
+      return
+    }
+    const upstream = request_(
+      {
+        hostname: target.hostname,
+        port: target.port === '' ? undefined : Number(target.port),
+        path: `${target.pathname}${target.search}`,
+        method: request.method,
+        headers: { ...request.headers, host: target.host }
+      },
+      (up: IncomingMessage) => {
+        response.writeHead(up.statusCode ?? 502, up.headers)
+        up.pipe(response)
+      }
+    )
+    upstream.on('error', () => {
+      if (response.headersSent) {
+        response.destroy()
+        return
+      }
+      response.writeHead(502)
+      response.end()
+    })
+    request.pipe(upstream)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  return {
+    url: `http://127.0.0.1:${port}`,
+    seen,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()
@@ -135,6 +203,24 @@ describe('Langfuse 判定口径', () => {
     expect(normalizeLangfuseEndpoint('')).toBe('')
   })
 
+  it('代理地址归一：去空白；没写协议补 http://（否则 URL 会把 IP 当协议）', () => {
+    expect(normalizeProxyUrl('  127.0.0.1:7890 ')).toBe('http://127.0.0.1:7890')
+    expect(normalizeProxyUrl('http://proxy.lan:8080/')).toBe('http://proxy.lan:8080/')
+    expect(normalizeProxyUrl('socks5://p:1080')).toBe('socks5://p:1080')
+    expect(normalizeProxyUrl('   ')).toBe('')
+  })
+
+  it('代理来源：设置项优先；没填才看环境变量（大小写都认，最后 ALL_PROXY）', () => {
+    expect(resolveProxyUrl('http://setting:1', { HTTPS_PROXY: 'http://env:2' })).toBe(
+      'http://setting:1'
+    )
+    expect(resolveProxyUrl('', { LANGFUSE_PROXY_URL: 'http://lf:3' })).toBe('http://lf:3')
+    expect(resolveProxyUrl('', { HTTPS_PROXY: 'http://env:2' })).toBe('http://env:2')
+    expect(resolveProxyUrl('', { http_proxy: 'http://env:4' })).toBe('http://env:4')
+    expect(resolveProxyUrl('', { ALL_PROXY: 'http://env:5' })).toBe('http://env:5')
+    expect(resolveProxyUrl(null, {})).toBe('')
+  })
+
   it('三项齐才算开启；缺任何一项都是 null（默认关就是地址为空这一路）', () => {
     expect(
       langfuseConfigOf({ endpoint: 'https://cloud.langfuse.com', publicKey: 'pk', secretKey: 'sk' })
@@ -150,9 +236,98 @@ describe('Langfuse 判定口径', () => {
       expect(langfuseConfigOf(bad), JSON.stringify(bad)).toBeNull()
     }
   })
+
+  it('代理是纯加法：没填就不带这个字段（老配置的形状一个字不变）', () => {
+    expect(
+      langfuseConfigOf({
+        endpoint: 'http://100.66.1.1:3000',
+        publicKey: 'pk',
+        secretKey: 'sk',
+        proxyUrl: '   '
+      })
+    ).toEqual({ endpoint: 'http://100.66.1.1:3000', publicKey: 'pk', secretKey: 'sk' })
+    expect(
+      langfuseConfigOf({
+        endpoint: 'http://100.66.1.1:3000',
+        publicKey: 'pk',
+        secretKey: 'sk',
+        proxyUrl: ' 127.0.0.1:7890 '
+      })
+    ).toEqual({
+      endpoint: 'http://100.66.1.1:3000',
+      publicKey: 'pk',
+      secretKey: 'sk',
+      proxyUrl: 'http://127.0.0.1:7890'
+    })
+  })
 })
 
-describe('Langfuse 真链路（假 OTLP 端点）', () => {
+describe('Langfuse 真链路（假 OTLP 端点 + 假代理）', () => {
+  it('配了代理：span 先打到本机中转 → 再由代理转发到端点（代理请求行是绝对 URI）', async () => {
+    const collector = await startCollector()
+    const proxy = await startFakeProxy()
+    try {
+      const server = await startAgentServer({
+        dataDir: dir,
+        model: mockModel(),
+        langfuse: () =>
+          langfuseConfigOf({
+            endpoint: collector.url,
+            proxyUrl: proxy.url,
+            publicKey: PUBLIC_KEY,
+            secretKey: SECRET_KEY
+          })
+      })
+      stopped.push(server)
+      expect(server.telemetry).toEqual({ langfuse: true })
+
+      await chatOnce(server)
+      await server.stop()
+      stopped.length = 0
+
+      // 数据经代理到了端点：认证头、路径、服务名一个不少
+      expect(collector.requests.length).toBeGreaterThan(0)
+      expect(collector.requests[0].url).toBe('/api/public/otel/v1/traces')
+      expect(collector.requests[0].headers.authorization).toBe(
+        `Basic ${Buffer.from(`${PUBLIC_KEY}:${SECRET_KEY}`).toString('base64')}`
+      )
+      expect(collector.requests[0].body).toContain('kyclaw')
+      // 代理真被用上了：请求行是绝对形式（`POST http://host:port/...`）——直连不会长这样
+      expect(proxy.seen).toContain(`POST ${collector.url}/api/public/otel/v1/traces`)
+    } finally {
+      await proxy.close()
+      await collector.close()
+    }
+  }, 30_000)
+
+  it('没配代理：不吃代理（一个请求都不进假代理，链路照常）', async () => {
+    const collector = await startCollector()
+    const proxy = await startFakeProxy()
+    try {
+      const server = await startAgentServer({
+        dataDir: dir,
+        model: mockModel(),
+        langfuse: () =>
+          langfuseConfigOf({
+            endpoint: collector.url,
+            publicKey: PUBLIC_KEY,
+            secretKey: SECRET_KEY
+          })
+      })
+      stopped.push(server)
+
+      await chatOnce(server)
+      await server.stop()
+      stopped.length = 0
+
+      expect(collector.requests.length).toBeGreaterThan(0)
+      expect(proxy.seen).toEqual([])
+    } finally {
+      await proxy.close()
+      await collector.close()
+    }
+  }, 30_000)
+
   it('配齐后：一轮对话的 span 会发到 OTLP 端点，带 Basic 认证与服务名', async () => {
     const collector = await startCollector()
     try {
@@ -230,4 +405,9 @@ describe('Langfuse 真链路（假 OTLP 端点）', () => {
     }
     // 同上一例：真起服务 + 真跑一轮，满载下 5s 会顶穿
   }, 30_000)
+})
+
+afterAll(async () => {
+  // 中转是进程级登记表（server.unref 过，不会钉住进程）；测试收尾一并收干净
+  await stopLangfuseRelays()
 })
