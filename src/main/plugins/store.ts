@@ -160,21 +160,6 @@ export function removeDirRobust(dir: string, deps: RemoveDirDeps = {}): void {
   }
 }
 
-/** skills 目录下的技能目录名列表（只看目录） */
-export function listSkillDirs(skillsDir: string): string[] {
-  try {
-    return readdirSync(skillsDir).filter((name) => {
-      try {
-        return statSync(join(skillsDir, name)).isDirectory()
-      } catch {
-        return false
-      }
-    })
-  } catch {
-    return []
-  }
-}
-
 export interface PluginSettingsStore {
   read: () => AppSettings
   save: (patch: {

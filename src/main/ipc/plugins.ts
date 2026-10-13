@@ -24,9 +24,19 @@ import {
   refreshMarketplace,
   removeMarketplaceFiles
 } from '../plugins/marketplace'
-import { listSkillDirs, pluginSettingsStore, pluginsDirs } from '../plugins/store'
+import { installedSkillViews, skillSourcesFor } from '../plugins/skills'
+import { pluginsDirs, pluginSettingsStore } from '../plugins/store'
 
-export function registerPluginIpc(userDataDir: string): void {
+/**
+ * round 64：内置技能根目录（`resources/skills`）。由调用方（main/index.ts，那边才有 app）
+ * 算好传进来 —— 本模块不 import electron，测试给个临时目录就能钉住"内置技能进总览"这条行为。
+ * 缺省 = 没有内置技能（老调用方/单测形状不变）。
+ */
+export interface PluginIpcOptions {
+  builtinSkillsDir?: string | null
+}
+
+export function registerPluginIpc(userDataDir: string, options: PluginIpcOptions = {}): void {
   const dirs = pluginsDirs(userDataDir)
   const store = pluginSettingsStore(userDataDir)
 
@@ -36,16 +46,16 @@ export function registerPluginIpc(userDataDir: string): void {
       ...marketplace,
       ...readMarketplacePlugins(marketplace)
     }))
-    const installedSkills = listSkillDirs(dirs.skills).map((dir) => {
-      const record = settings.installedPlugins.find((item) => item.skillDirs.includes(dir))
-      const prefix = record === undefined ? '' : `${record.id}-`
-      return {
-        dir,
-        name: prefix !== '' && dir.startsWith(prefix) ? dir.slice(prefix.length) : dir,
-        pluginId: record?.id ?? null,
-        pluginName: record?.name ?? null
-      }
-    })
+    // 技能（round 64）：内置 + 插件一份清单两处用（插件页「技能」面板 / composer 的引用菜单）。
+    // 名字走 SKILL.md 的 frontmatter（插件技能没有 frontmatter name 时退回"目录名去前缀"，
+    // 与 round 10 的行为一致）；内置技能带 source='builtin' 标记。
+    const installedSkills = installedSkillViews(
+      skillSourcesFor({
+        skillsDir: dirs.skills,
+        installed: settings.installedPlugins,
+        builtinDir: options.builtinSkillsDir ?? null
+      })
+    )
     return { marketplaces, installed: settings.installedPlugins, installedSkills }
   }
 

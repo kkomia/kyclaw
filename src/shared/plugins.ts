@@ -257,13 +257,20 @@ export const marketplaceViewSchema = pluginMarketplaceSchema.extend({
 })
 
 export const installedSkillViewSchema = z.strictObject({
-  /** `<userData>/skills` 下的目录名 */
+  /** `<userData>/skills` 下的目录名（内置技能 = 它在 `resources/skills` 下的目录名） */
   dir: z.string().min(1),
-  /** 去掉插件前缀后的技能名（显示用） */
+  /** 技能名（SKILL.md 的 frontmatter `name`；没有就用目录名去掉插件前缀；显示与查找都用它） */
   name: z.string().min(1),
   /** 来自哪个已安装插件（对不上就 null） */
   pluginId: z.string().nullable(),
-  pluginName: z.string().nullable()
+  pluginName: z.string().nullable(),
+  /**
+   * round 64：技能来源标记。**内置**技能会给 `'builtin'`（随包分发的 office 四件套），
+   * 插件技能不带这个字段 —— 老回包形状原样保留（渲染端不认识的字段忽略即可）。
+   * 内置技能也进 installedSkills：插件页的「技能」面板与 composer 的 `+ → 引用技能`
+   * 都读这一份，用户在那里就能看到并引用它们。
+   */
+  source: z.enum(['builtin', 'plugin']).optional()
 })
 
 export const pluginsOverviewSchema = z.strictObject({
