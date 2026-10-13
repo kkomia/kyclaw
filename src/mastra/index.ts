@@ -19,6 +19,9 @@
  *   落 libsql 的 `usage_runs` 表（见 usage.ts 的头注：v7 的 UI 流 finish part 不带 usage）。
  * - 会话↔项目映射（T18）：同一份 libsql 里的 `session_projects` 表（见 session-projects.ts），
  *   在这里建好并注入 agent（工具按会话取根：项目 → 默认工作区下的会话子目录 → 授权列表）。
+ * - 会话↔PPT 模板映射（round 66）：同一份 libsql 里的 `session_ppt_templates` 表
+ *   （见 session-ppt-templates.ts），在这里建好并注入 agent —— create_ppt 不指定 theme 时
+ *   按**本会话**取缺省模板（模板选择是会话级的，不落全局设置）。
  * - 追踪（T17）：Langfuse exporter **默认关**；地址 + 公私钥配齐（选项 `langfuse` 现读）才挂上
  *   observability 入口，判定与装配在 telemetry.ts。
  * - 产出物（模块 4）：五个格式工具在 agent 侧注册（tools/report|excel|ppt|docx.ts）；PDF 那件走
@@ -45,11 +48,15 @@ import type { Project } from '../shared/projects'
 import {
   DEFAULT_SEMANTIC_RECALL,
   type McpServerConfig,
+  type NetworkSettings,
   type PermissionRule,
   type SemanticRecallSettings,
   type Workspace
 } from '../shared/settings'
 import type { WebSearchRuntime } from '../shared/search'
+import type { SkillSource } from '../shared/skills'
+import { setSkillRuntimeFactsSource, type SkillRuntimeFactsSource } from './skills/runtime'
+import type { AuthoringRuntime } from '../shared/authoring'
 import { createKyclawAgent, KYCLAW_AGENT_ID, type ModelResolver } from './agents/kyclaw'
 import {
   compactionSqlClient,
@@ -71,6 +78,11 @@ import type { PdfPrinter } from './tools/artifacts'
 import type { WebSearchDeps } from './search/backends'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
+import { createSessionPptSourceStore, type SessionPptSourceStore } from './session-ppt-sources'
+import {
+  createSessionPptTemplateStore,
+  type SessionPptTemplateStore
+} from './session-ppt-templates'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
 import {
   createUsageRecorder,
@@ -151,6 +163,16 @@ export interface KyclawMastra {
   usage: UsageStore
   /** 会话↔项目映射的表读写口 + 内存镜像（/api/projects/mappings 与工具取根共用一份） */
   sessionProjects: SessionProjectStore
+  /**
+   * round 66：会话↔PPT 模板映射的表读写口 + 内存镜像
+   * （/api/ppt/templates 与 create_ppt 的缺省模板共用一份）
+   */
+  sessionPptTemplates: SessionPptTemplateStore
+  /**
+   * round 76：会话↔PPT **源结构**的表读写口（create_ppt 记、edit_ppt 读改）。
+   * 不带内存镜像：它只被 edit_ppt 读（一次编辑读一次，本来就是异步），见 session-ppt-sources.ts 头注。
+   */
+  sessionPptSources: SessionPptSourceStore
   /** round 19：上下文压缩（记录读写 + 摘要服务；注入处理器与 /api/threads/:id/compact 共用） */
   compaction: CompactionService
   /** T17：本次装配有没有挂上 Langfuse 导出（设置页拿它说"已开启 / 重启后开启"） */
@@ -232,12 +254,47 @@ export async function createKyclawMastra(options: {
   webSearch?: () => WebSearchRuntime
   /** round 45：搜索依赖（测试注入假 fetch / 客户端；生产不传） */
   searchDeps?: WebSearchDeps
+  /**
+   * round 73：fetch 出站边界的白名单（**现读**的取值函数；缺省 = 一个本机/内网主机都不放行）。
+   * 由 main 侧从 settings.json 的 `network` 读好注入（本模块不读盘，与 workspaces 同一口径）。
+   */
+  network?: () => NetworkSettings
+  /**
+   * round 64：技能来源（**现读**：内置技能目录 + 已装插件复制进来的技能目录）。
+   * 由 main 侧算好注入（本模块不 import electron，打包态的内置目录要看 process.resourcesPath）；
+   * 缺省 = 没有技能（指令里不出现技能清单，use_skill 回"暂无可用技能"）。
+   */
+  skillSources?: () => readonly SkillSource[]
+  /**
+   * round 68：**本部署事实**（`render_ppt` 能不能真渲染页图 + 当前模型能不能读图），现读取值函数。
+   * `use_skill` 加载技能时把它拼在全文末尾（见 skills/runtime.ts）：技能正文只写"知识"，
+   * "这台机器现在有什么"由这里注入 —— 一份手册适配无数台机器。
+   *
+   * 缺省 = 没有（加载技能时那一段如实写"未知"，不编造）。
+   * 取值函数由 main 侧算好（路径/探测都在那边，本模块不 import electron、不碰探测）。
+   */
+  skillRuntimeFacts?: SkillRuntimeFactsSource
+  /**
+   * round 65：让模型自己落地技能 / MCP 的运行时（现读）。同样由 main 侧注入（写的是应用数据目录
+   * 与 settings.json）；缺省 = 没有（四个作者工具回人话，不抛错）。
+   */
+  authoring?: () => AuthoringRuntime | null
 }): Promise<KyclawMastra> {
   const { Mastra: MastraClass } = await import('@mastra/core/mastra')
   const { LibSQLStore: LibSQLStoreClass, LibSQLVector: LibSQLVectorClass } =
     await import('@mastra/libsql')
   const { Memory: MemoryClass } = await import('@mastra/memory')
   const { chatRoute } = await import('@mastra/ai-sdk')
+
+  /**
+   * round 68：本部署事实装进技能侧的注册表 —— `use_skill` 的构造在 agents/kyclaw.ts，
+   * 它的参数表这次不动（那份文件由另一处改动持有），注册表是"不碰它也接得上"的那条通道：
+   * 装配时装一次，`use_skill` 每次加载技能**现读**（换模型、装/卸 PowerPoint 下一轮就反映出来）。
+   * 没注入 = 不装（加载技能时那一段如实写"未知"）。见 skills/runtime.ts 头注。
+   */
+  if (options.skillRuntimeFacts !== undefined) {
+    setSkillRuntimeFactsSource(options.skillRuntimeFacts)
+  }
 
   const storage = new LibSQLStoreClass({ id: 'kyclaw-storage', url: libsqlUrl(options.dataDir) })
   // 语义召回（round 28）：起不来就没有 embedder（这次运行不召回），Memory 装法完全不变。
@@ -304,6 +361,10 @@ export async function createKyclawMastra(options: {
   await usage.ensureTable()
   // 会话↔项目映射（T18）同库同寿命：表在这里建好；内存镜像是工具同步取根的来源
   const sessionProjects = createSessionProjectStore(storage)
+  // round 66：会话↔PPT 模板映射同库同寿命（模板选择是会话级的，不再落全局设置）
+  const sessionPptTemplates = createSessionPptTemplateStore(storage)
+  // round 76：会话↔PPT 源结构同库同寿命（create_ppt 记、edit_ppt 读改；表在第一次读写时建）
+  const sessionPptSources = createSessionPptSourceStore(storage)
   // 上下文压缩（round 19）：记录表同库；摘要服务用当前模型解析器，记账并进 usage
   const compactionStore = createCompactionStore(compactionSqlClient(storage))
   await compactionStore.ensureTable()
@@ -331,7 +392,17 @@ export async function createKyclawMastra(options: {
         printPdf: options.printPdf,
         // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
         webSearch: options.webSearch,
-        searchDeps: options.searchDeps
+        searchDeps: options.searchDeps,
+        // round 73：fetch 出站边界的白名单（现读设置；撤掉就恢复拦截）
+        network: options.network,
+        // round 66：**这个会话**固定的 PPT 模板（create_ppt 的缺省模板；现读内存镜像，同步）
+        pptTemplate: (threadId) => sessionPptTemplates.get(threadId) ?? '',
+        // round 76：会话级 PPT 源结构（create_ppt 落盘时记、edit_ppt 读回来改；直连库，异步）
+        pptSources: sessionPptSources,
+        // round 64：技能来源（现读）——指令里的技能清单 + use_skill 读全文共用这一份
+        ...(options.skillSources === undefined ? {} : { skillSources: options.skillSources }),
+        // round 65：作者能力（现读）——create_skill / add_mcp_server 等落盘走这一份运行时
+        ...(options.authoring === undefined ? {} : { authoring: options.authoring })
       })
     },
     storage,
@@ -375,6 +446,8 @@ export async function createKyclawMastra(options: {
     memory,
     usage,
     sessionProjects,
+    sessionPptTemplates,
+    sessionPptSources,
     compaction,
     telemetry: { langfuse: observability !== null },
     recall

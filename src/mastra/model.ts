@@ -15,6 +15,15 @@
  * 依赖形态：这里除了 zod 全是 ESM-only 的 AI SDK 包（`@ai-sdk/*` / `ai/test`），
  * 而主进程产物是 CJS——运行时依赖一律动态 import()（Rollup 会把 external 的动态 import
  * 原样留在 CJS 产物里），静态 import 只留编译期擦除的类型。
+ *
+ * 兼容层的"工具结果里的图片"（round 68 补）：
+ *   - `@ai-sdk/openai-compatible` 的 `supportsMultiPartToolContent` **默认 false**，那时工具结果里的
+ *     多段内容（render_ppt 的页图走的就是它）会被 `JSON.stringify` 成一个字符串 —— **图静默消失**，
+ *     模型看不到，而且不报错。DeepSeek 官方包（`@ai-sdk/deepseek`）内建支持，所以只有"通用兼容层"
+ *     这一条需要显式打开；
+ *   - 打开有代价：**有些兼容端点不接受数组形态的 tool content**（回 400）。所以这里同时套一层
+ *     回落：这一轮 prompt 里真有媒体块、第一次调用又失败了，就去掉媒体块**重试一次**并打日志，
+ *     不让"一张模型本该看到的图"把整轮对话打成失败。细节见 withToolMediaFallback。
  */
 import type { LanguageModel } from 'ai'
 /** 类型专用：mock 的流 part 形状从这里取（import type 会被编译擦掉，不会把 ESM 带进 CJS 产物） */
@@ -25,6 +34,16 @@ import { isDeepSeekBaseUrl, OPENAI_COMPATIBLE_PROVIDER_NAME } from '../shared/pr
 
 /** 强制离线的环境变量（值必须是 '1'，避免 "0" 被当真的陷阱） */
 export const FORCE_MOCK_ENV = 'KYCLAW_FORCE_MOCK'
+
+/**
+ * 通用兼容层"工具结果里可以放多段内容"的逃生门：值 `0` / `off` / `false` 关掉。
+ * 默认**开着**（不关就静默丢图，见文件头注）；但万一遇到一种端点连"去掉图重试"都救不回来，
+ * 用户/排障至少还有一招把这一轮跑通（关掉之后行为与打开这个能力之前一致：图不进请求体）。
+ */
+export const TOOL_MEDIA_ENV = 'KYCLAW_TOOL_MEDIA_CONTENT'
+
+/** 回落时替掉媒体块的文字：让模型知道"这儿原本有图，是端点没接住"，而不是无声地少一块 */
+export const TOOL_MEDIA_OMITTED = '（图片已省略：当前模型端点不接受工具结果里的图片）'
 
 /** 内置 mock 的 provider/model 标识（写进模型对象，链路上看得见） */
 export const MOCK_PROVIDER_NAME = 'kyclaw-mock'
@@ -201,12 +220,106 @@ function mockChunks(prompt: PromptLike): MockStreamPart[] {
 }
 
 /**
+ * 通用兼容层是否开启"工具结果里的多段内容"（默认开）。`env` 可注入，测试不必动 process.env。
+ * 只认**关**的几个写法（'0' / 'off' / 'false'）：其余（含没设）都当开着 —— 默认值必须是"图能到"，
+ * 不然这个功能在换端点的第一天就静默失效，正是这次要修的问题。
+ */
+export function toolMediaEnabled(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): boolean {
+  const value = env[TOOL_MEDIA_ENV]?.trim().toLowerCase()
+  return !(value === '0' || value === 'off' || value === 'false')
+}
+
+/** doGenerate / doStream 同一个参数形状（从模型类型推，不额外引运行期符号） */
+type ModelCallOptions = Parameters<KyclawModel['doGenerate']>[0]
+
+/**
+ * 把 prompt 里**工具结果中的媒体块**换成一段说明文字。
+ * 只动 `role: 'tool'` 的 `output.type === 'content'`（render_ppt 的页图就是这条路）；
+ * 用户消息里的图片（附件）不碰 —— 那条路 AI SDK 走的是 `image_url`，
+ * `__tests__/vision-wire.spec.ts` 已在真服务上验过，不属于这次要兜的风险。
+ *
+ * `dropped === 0` = 这轮没有媒体块，调用方就别回落了（重试一遍同样的请求没有意义）。
+ */
+export function stripToolMedia(prompt: ModelCallOptions['prompt']): {
+  prompt: ModelCallOptions['prompt']
+  dropped: number
+} {
+  let dropped = 0
+  const next = prompt.map((message) => {
+    if (message.role !== 'tool') return message
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type !== 'tool-result' || part.output.type !== 'content') return part
+        const value = part.output.value.map((item) => {
+          if (item.type !== 'file') return item
+          dropped += 1
+          return { type: 'text' as const, text: TOOL_MEDIA_OMITTED }
+        })
+        return { ...part, output: { ...part.output, value } }
+      })
+    }
+  })
+  return { prompt: next, dropped }
+}
+
+/**
+ * 给兼容层的模型套一层"接不住就退回纯文字"：
+ *   - 成功 → 原样返回，多一层包装不改变任何行为；
+ *   - 失败且**这一轮 prompt 里真有媒体块** → 打一条日志（说清是哪一步、模型这次看不到图、怎么关），
+ *     去掉媒体块重发一次。回落到"没有图"至少等于打开这个能力之前的行为，不会比原来更差；
+ *   - 回落那次也失败 → 把**第一次**的错误抛出去（那是端点对这条请求给的直接原因），
+ *     并再打一条日志；绝不吞异常、绝不循环重试（只重试一次）。
+ *
+ * 只在**通用兼容层**这条路上套：DeepSeek 官方包自己就支持多段式工具结果，没有这个风险。
+ */
+export function withToolMediaFallback(model: KyclawModel): KyclawModel {
+  const attempt = async <T>(
+    options: ModelCallOptions,
+    run: (options: ModelCallOptions) => PromiseLike<T>
+  ): Promise<T> => {
+    try {
+      return await run(options)
+    } catch (cause) {
+      const stripped = stripToolMedia(options.prompt)
+      if (stripped.dropped === 0) throw cause
+
+      console.warn(
+        `[kyclaw] 这个模型端点没接住工具结果里的 ${stripped.dropped} 个图片块（多半是不支持数组形态的 ` +
+          `tool content）。已去掉图片重试一次：模型这一轮看不到那些图，正文里的文字与页图路径仍然有效。` +
+          `若反复如此，设 ${TOOL_MEDIA_ENV}=off 可不再尝试把图交给模型。`,
+        cause
+      )
+      try {
+        return await run({ ...options, prompt: stripped.prompt })
+      } catch (retryCause) {
+        console.warn('[kyclaw] 去掉图片重试仍然失败（上面那条是端点的原始错误）', retryCause)
+        throw cause
+      }
+    }
+  }
+
+  return {
+    specificationVersion: 'v4',
+    provider: model.provider,
+    modelId: model.modelId,
+    supportedUrls: model.supportedUrls,
+    doGenerate: (options) => attempt(options, (next) => model.doGenerate(next)),
+    doStream: (options) => attempt(options, (next) => model.doStream(next))
+  }
+}
+
+/**
  * 按配置造模型（resolveModel 与"测试连接"共用同一条装配路径）。
  * 调用前配置已被 `providerConfigProblems` 验过（openai-compatible 的 baseUrl 非空）。
+ * `env` 只影响通用兼容层的"工具结果里带图"开关（见 TOOL_MEDIA_ENV）。
  */
 export async function buildLanguageModel(
   config: ProviderConfig,
-  apiKey: string
+  apiKey: string,
+  env: Readonly<Record<string, string | undefined>> = process.env
 ): Promise<KyclawModel> {
   if (config.type === 'anthropic') {
     const { createAnthropic } = await import('@ai-sdk/anthropic')
@@ -219,12 +332,17 @@ export async function buildLanguageModel(
     return createDeepSeek({ apiKey, baseURL: baseUrl }).chat(config.model)
   }
 
+  const toolMedia = toolMediaEnabled(env)
   const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
-  return createOpenAICompatible({
+  const model = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: baseUrl,
-    apiKey
+    apiKey,
+    // 不开这一项，工具结果里的图片会被 JSON.stringify 成字符串**静默丢掉**（见文件头注）
+    supportsMultiPartToolContent: toolMedia
   }).chatModel(config.model)
+
+  return toolMedia ? withToolMediaFallback(model) : model
 }
 
 /**
@@ -251,5 +369,5 @@ export async function resolveModel(
     throw new ProviderConfigError(config.id, problems)
   }
 
-  return { model: await buildLanguageModel(config, apiKey), source: config.type }
+  return { model: await buildLanguageModel(config, apiKey, env), source: config.type }
 }

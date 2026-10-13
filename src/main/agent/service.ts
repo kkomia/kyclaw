@@ -16,19 +16,28 @@ import { createKyclawMastra } from '../../mastra/index'
 import { createMcpRouter } from '../../mastra/routes/mcp'
 import { createMemoryRouter } from '../../mastra/routes/memory'
 import { createProjectsRouter } from '../../mastra/routes/projects'
+import { createSessionPptTemplatesRouter } from '../../mastra/routes/session-ppt-templates'
 import { createThreadsRouter } from '../../mastra/routes/threads'
 import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
-import { resolveModel, type KyclawModel } from '../../mastra/model'
+import { resolveModel, selectProviderConfig, type KyclawModel } from '../../mastra/model'
+import { detectRenderer, type PptRenderer } from '../../mastra/tools/render-ppt'
+import type { SkillRuntimeFacts } from '../../mastra/skills/runtime'
+import { probedKeyOf, visionOf } from '../../shared/models'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import type { LangfuseExportConfig } from '../../mastra/telemetry'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { McpLifecycle } from '../mcp/lifecycle'
+import { pluginsDirs } from '../plugins/store'
+import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
 import type { Project } from '../../shared/projects'
+import type { SkillSource } from '../../shared/skills'
+import type { AuthoringRuntime } from '../../shared/authoring'
 import type {
   AppSettings,
   McpServerConfig,
+  NetworkSettings,
   PermissionRule,
   SemanticRecallSettings,
   Workspace
@@ -58,6 +67,9 @@ export const USAGE_ROUTE_PREFIX = '/api/usage'
 
 /** 项目映射 API 的挂载前缀（T18；会话↔项目映射的读/写） */
 export const PROJECTS_ROUTE_PREFIX = '/api/projects'
+
+/** 会话↔PPT 模板映射 API 的挂载前缀（round 66；模板选择的读/写） */
+export const SESSION_PPT_TEMPLATES_ROUTE_PREFIX = '/api/ppt'
 
 /** 端口尝试上限（显式端口被占时换端口重试的次数） */
 const DEFAULT_PORT_ATTEMPTS = 5
@@ -136,6 +148,24 @@ export interface AgentServerOptions {
    * 生产由 main/index.ts 注入"读设置 + 解密钥"的实现）。
    */
   webSearch?: () => WebSearchRuntime
+  /**
+   * round 73：fetch 出站边界的白名单（现读：设置页改了**下一轮工具调用**就生效，不必重启）。
+   * 缺省 = 从 dataDir/settings.json 的 `network` 读；旧落盘文件没有这个键也算"空表"（一律拒绝）——
+   * 与 shared/settings.ts 里 `network` 为什么是 optional 同一口径。
+   */
+  network?: () => NetworkSettings
+  /**
+   * round 64：技能（内置 office 四件套）根目录 = 打包后 `<resources>/skills`、
+   * 开发态仓库的 `resources/skills`。**路径只有 main/index.ts 算得出来**（要 app/process.resourcesPath），
+   * 所以由它注入；缺省 = 只有插件技能、没有内置技能。
+   */
+  builtinSkillsDir?: string | null
+  /**
+   * round 68：**本部署事实**（技能加载时拼在全文末尾的那一段：渲染器能不能用 + 当前模型能不能读图）。
+   * 缺省 = 现算（`skillRuntimeFactsFor`：设置里的视觉探测结论 + 本机 PowerPoint 探测）；
+   * 测试可以注入假件（不装 Office 的机器上也能钉住两种口径）。
+   */
+  skillRuntimeFacts?: () => SkillRuntimeFacts | null
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -258,6 +288,77 @@ function settingsModelResolver(dataDir: string): ModelResolver {
   }
 }
 
+/**
+ * round 65：装配 `shared/authoring.ts` 的**作者运行时**（技能 / MCP 落盘的那份依赖）。
+ * 抽成导出函数只为一件事：让 spec 能直接钉"写入落到哪"（skillsDir = `<dataDir>/skills`、
+ * 落盘走传入的 saveServers），而不是只能靠"读代码相信"。
+ *
+ * 现读口径与其它注入一致：`installedSkillDirs` / `readServers` 都是取值函数 —— 用户刚装的插件、
+ * 刚改的 MCP 配置，下一轮对话就反映出来。
+ */
+export function authoringRuntimeFor(options: {
+  /** 用户技能目录（生产 = `<dataDir>/skills`） */
+  skillsDir: string
+  /** 内置技能根目录（缺省 = 没有内置技能，内置名清单为空） */
+  builtinSkillsDir?: string | null
+  /** 插件复制进来的技能目录名（不许覆盖/删除） */
+  installedSkillDirs: readonly string[]
+  /** 现读 MCP 配置 */
+  readServers: () => readonly McpServerConfig[]
+  /** 整表落盘（与 PUT /api/mcp/servers 同一个函数） */
+  saveServers: (servers: McpServerConfig[]) => readonly McpServerConfig[]
+  /** 落盘成功后的连接对齐（尽力而为） */
+  onServersChanged?: () => void
+}): AuthoringRuntime {
+  return {
+    skillsDir: options.skillsDir,
+    pluginSkillDirs: [...options.installedSkillDirs],
+    // 内置技能名（`resources/skills/*` 的目录名）：同名不许占用（否则 use_skill 先命中内置那份）
+    builtinSkillNames: skillSourcesForFn({
+      skillsDir: '',
+      installed: [],
+      builtinDir: options.builtinSkillsDir ?? null
+    }).map((source) => source.dir),
+    readMcpServers: options.readServers,
+    saveMcpServers: options.saveServers,
+    ...(options.onServersChanged === undefined
+      ? {}
+      : { onMcpServersChanged: options.onServersChanged })
+  }
+}
+
+/**
+ * round 68：**本部署事实**的来源（`use_skill` 加载技能时拼在全文末尾的那一段，见
+ * `mastra/skills/runtime.ts`）。两件事都问本机，不问技能文件：
+ *
+ *   ① `render_ppt` 能不能真渲染 —— 走 render-ppt 的 `detectRenderer`（**同一条探测**：技能里说的
+ *      "能渲染"必须就是工具那一刻的实情，两处各写一份探测必然分叉）；
+ *   ② 当前模型能不能读图 —— 走消费侧同一套口径 `visionOf`（探测结论 > 注册表 > 保守 false），
+ *      provider 选哪一条同 `selectProviderConfig`（与 resolveModel 选的是同一条）。
+ *
+ * **现读**：每次加载技能都重算（换模型 / 装或卸 PowerPoint 之后下一轮就对）。
+ * 抽成导出函数只为一件事：spec 直接钉两种口径（不装 Office、没探过视觉的机器上也测得出来）。
+ * 拿不到结论（一条 provider 都没配 / 没有模型名）→ 相应字段给 `null`，那一段会如实写"未知"（不编造）。
+ */
+export function skillRuntimeFactsFor(options: {
+  /** 现读设置（生产 = dataDir/settings.json 的那份） */
+  settings: () => AppSettings
+  /** 渲染器探测（缺省 = render-ppt 的 detectRenderer；spec 注入假件） */
+  detectRenderer?: () => PptRenderer
+}): () => SkillRuntimeFacts | null {
+  const detect = options.detectRenderer ?? detectRenderer
+  return () => {
+    const settings = options.settings()
+    const provider = selectProviderConfig(settings.providers)
+    const model = provider?.model.trim() ?? ''
+    const vision =
+      provider === undefined || model === ''
+        ? null
+        : visionOf(model, settings.probedModels[probedKeyOf(provider.id, model)])
+    return { pptRenderer: detect(), vision }
+  }
+}
+
 export async function startAgentServer(options: AgentServerOptions): Promise<AgentServerHandle> {
   const [{ Hono }, { cors }, { MastraServer }] = await Promise.all([
     import('hono'),
@@ -291,33 +392,100 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       searchKey: null,
       readerKey: null
     }))
+  // round 73：fetch 出站边界的白名单现读（设置页 → `network.allowLocalHosts`）。
+  // 旧落盘文件没有 `network` 这个键 → 空表 = 一律拒绝（fail closed，与 fetch.ts 的判定一致）
+  const networkFor =
+    options.network ?? ((): NetworkSettings => settingsFor().network ?? { allowLocalHosts: [] })
+  // round 64：技能来源现读（内置目录 + 已装插件复制到 `<userData>/skills` 的那批）。
+  // 每轮现扫：用户刚装/卸的插件，下一轮对话就反映出来，不必重启。
+  const skillSourcesFor = (): readonly SkillSource[] =>
+    skillSourcesForFn({
+      skillsDir: pluginsDirs(options.dataDir).skills,
+      installed: settingsFor().installedPlugins,
+      builtinDir: options.builtinSkillsDir ?? null
+    })
+  // round 68：本部署事实（技能加载时拼在全文末尾）——现读；缺省从设置 + 本机渲染器探测算
+  const skillFactsFor = options.skillRuntimeFacts ?? skillRuntimeFactsFor({ settings: settingsFor })
   // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
   const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
-  const { mastra, storage, memory, usage, sessionProjects, compaction, telemetry, recall } =
-    await createKyclawMastra({
-      dataDir: options.dataDir,
-      resolveModel: resolveModelFor,
-      workspaces: workspacesFor,
-      defaultWorkspace: defaultWorkspaceFor,
-      projects: projectsFor,
-      permissionRules: permissionRulesFor,
-      mcpServers: mcpServersFor,
-      mcpTools: (gate) => mcpLifecycle.tools(gate),
-      langfuse: langfuseFor,
-      semanticRecall: semanticRecallFor,
-      embeddingKey: embeddingKeyFor,
-      ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
-      ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder }),
-      // 模块 4：产出物的 PDF 钩子（缺省没有 —— 无窗口环境/测试里 create_pdf 会明确报不支持）
-      ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf }),
-      // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
-      webSearch: webSearchFor
+  /**
+   * MCP 配置的落盘口（round 65 抽出来给两处共用）：MCP 管理路由 `PUT /api/mcp/servers` 与
+   * agent 侧的 add_mcp_server / remove_mcp_server **同一条路** —— 校验（路由/工具各自先跑
+   * shared/mcp.ts 的 mcpServersProblems）+ updateSettings 落盘，不另起第二套写盘实现。
+   */
+  const saveMcpServers = (servers: McpServerConfig[]): readonly McpServerConfig[] =>
+    updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers
+  /** 落盘成功后的连接对齐（尽力而为：失败只记日志，下一轮对话会再对齐） */
+  const onMcpServersChanged = (): void => {
+    mcpLifecycle.refresh().catch((error) => {
+      console.warn('[kyclaw] MCP 连接对齐失败（下一轮对话会再对齐）', error)
     })
+  }
+  /**
+   * round 65：让模型自己落地技能 / MCP 的运行时（工具层只调这几个函数，见 shared/authoring.ts）。
+   * 现读：skillsDir 是固定路径，插件技能目录与 MCP 列表每轮重新取（用户刚装的插件、刚改的配置
+   * 下一轮就反映出来）。
+   */
+  const authoringFor = (): AuthoringRuntime =>
+    authoringRuntimeFor({
+      skillsDir: pluginsDirs(options.dataDir).skills,
+      builtinSkillsDir: options.builtinSkillsDir ?? null,
+      installedSkillDirs: settingsFor().installedPlugins.flatMap((record) => record.skillDirs),
+      readServers: mcpServersFor,
+      saveServers: saveMcpServers,
+      onServersChanged: onMcpServersChanged
+    })
+  const {
+    mastra,
+    storage,
+    memory,
+    usage,
+    sessionProjects,
+    sessionPptTemplates,
+    sessionPptSources,
+    compaction,
+    telemetry,
+    recall
+  } = await createKyclawMastra({
+    dataDir: options.dataDir,
+    resolveModel: resolveModelFor,
+    workspaces: workspacesFor,
+    defaultWorkspace: defaultWorkspaceFor,
+    projects: projectsFor,
+    permissionRules: permissionRulesFor,
+    mcpServers: mcpServersFor,
+    mcpTools: (gate) => mcpLifecycle.tools(gate),
+    langfuse: langfuseFor,
+    semanticRecall: semanticRecallFor,
+    embeddingKey: embeddingKeyFor,
+    ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
+    ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder }),
+    // 模块 4：产出物的 PDF 钩子（缺省没有 —— 无窗口环境/测试里 create_pdf 会明确报不支持）
+    ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf }),
+    // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
+    webSearch: webSearchFor,
+    // round 73：fetch 出站边界的白名单（现读设置；撤掉就恢复拦截）
+    network: networkFor,
+    // round 64：技能来源（内置技能目录 + 插件的技能目录）——指令里的技能清单与 use_skill 共用
+    skillSources: skillSourcesFor,
+    // round 68：本部署事实（渲染器 / 读图能力）—— use_skill 加载技能时拼在全文末尾的那一段
+    skillRuntimeFacts: skillFactsFor,
+    // round 65：作者能力（技能 / MCP 落盘）——create_skill / add_mcp_server 等共用这份运行时
+    authoring: authoringFor
+  })
 
   // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
   // （退化为默认工作区），下一轮写入/重启还会再试 —— 一条副线不该让整个对话起不来。
   await sessionProjects.load().catch((error: unknown) => {
     console.warn('[kyclaw] 会话↔项目映射载入失败（这些会话按无项目处理，不影响对话）', error)
+  })
+  // round 66：会话↔PPT 模板映射同理（重启后"这个会话固定了哪套模板"要回来）。载入失败不挡服务：
+  // 退化为"没有固定模板"（create_ppt 按内容自动挑），不影响对话。
+  await sessionPptTemplates.load().catch((error: unknown) => {
+    console.warn(
+      '[kyclaw] 会话↔PPT 模板映射载入失败（这些会话按没有固定模板处理，不影响对话）',
+      error
+    )
   })
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
@@ -362,6 +530,14 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
         void sessionProjects.clear(threadId).catch((error: unknown) => {
           console.warn('[kyclaw] 删除会话后清理项目映射失败（不影响删除本身）', error)
         })
+        // round 66：模板映射同理（会话级的选择跟着会话一起消失）
+        void sessionPptTemplates.clear(threadId).catch((error: unknown) => {
+          console.warn('[kyclaw] 删除会话后清理 PPT 模板映射失败（不影响删除本身）', error)
+        })
+        // round 76：PPT 源结构同理（create_ppt 记的那些行跟会话一起走）
+        void sessionPptSources.clear(threadId).catch((error: unknown) => {
+          console.warn('[kyclaw] 删除会话后清理 PPT 源结构失败（不影响删除本身）', error)
+        })
         // round 19：压缩记录同理（它的 thread_id 指向已不存在的会话）
         void compaction.clear(threadId).catch((error: unknown) => {
           console.warn('[kyclaw] 删除会话后清理压缩记录失败（不影响删除本身）', error)
@@ -378,21 +554,22 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）
   app.route(PROJECTS_ROUTE_PREFIX, createProjectsRouter({ store: sessionProjects }))
 
+  // round 66：会话↔PPT 模板映射 API（对话页「PPT」胶囊的读/写；create_ppt 的缺省模板读同一份镜像）
+  app.route(
+    SESSION_PPT_TEMPLATES_ROUTE_PREFIX,
+    createSessionPptTemplatesRouter({ store: sessionPptTemplates })
+  )
+
   // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）；
   // 写完立即让 lifecycle 对齐连接（启停/删除当场生效，子进程随之下线/上线）
+  // round 65：这里的 saveServers / onServersChanged 与 agent 侧 add_mcp_server / remove_mcp_server
+  // **是同一对函数**（上面抽出来的）—— 界面与模型两条入口共用一条写盘路，校验不会分叉
   app.route(
     MCP_ROUTE_PREFIX,
     createMcpRouter({
       readServers: mcpServersFor,
-      saveServers: (servers) =>
-        updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers,
-      onServersChanged: () => {
-        // 对齐失败必须在这里落地：写盘已经成功，半个 URL / 起不来的 server 只该影响"这条连接"，
-        // 不能让 rejection 冒到主进程（Electron 未处理 rejection 会弹错，而 UI 还显示保存成功）
-        mcpLifecycle.refresh().catch((error) => {
-          console.warn('[kyclaw] MCP 连接对齐失败（下一轮对话会再对齐）', error)
-        })
-      }
+      saveServers: saveMcpServers,
+      onServersChanged: onMcpServersChanged
     })
   )
 
