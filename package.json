@@ -23,6 +23,7 @@
     "test:e2e": "pnpm run build && playwright test",
     "build": "electron-vite build",
     "fetch:llama": "node scripts/fetch-llama.mjs",
+    "fetch:libreoffice-kit": "node scripts/fetch-libreoffice-kit.mjs",
     "package": "node scripts/package.mjs",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
     "postinstall": "install-electron && electron-builder install-app-deps",

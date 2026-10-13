@@ -58,9 +58,11 @@ pnpm test:e2e
 
 两个都**默认关**，不配就什么都不做（不发请求、不报错、不弹窗）。
 
-- **更新**（electron-updater + generic 源）：地址由环境变量 `KYCLAW_UPDATE_URL` 现给，指向一个
-  放着 `latest.yml` 的静态目录（Gitee Release 直链 / 本机模拟源都行）；没给地址的开发态实例
-  安静待着，设置页「关于」栏只写「未配置更新源」。检出后自动下载，但**安装要用户点"重启并安装"**。
+- **更新**（electron-updater + generic 源）：地址优先看环境变量 `KYCLAW_UPDATE_URL`，其次看设置页
+  「关于」栏填的更新源（**改完当场生效，不用重启**；留空 = 用打包时烘焙进 resources/app-update.yml
+  的那个源）。两者都指向一个放着渠道文件（正式版 `latest.yml`、预发布 `beta.yml`）的静态目录
+  （MinIO / Gitee Release 直链 / 本机模拟源都行）；一个都没有时安静待着，设置页「关于」栏只写
+  「未配置更新源」。检出后自动下载，但**安装要用户点"重启并安装"**。
 - **追踪**（Langfuse）：设置页「追踪」栏填服务地址 + 公私钥（地址落 settings.json，密钥经
   safeStorage 落 secrets.json），三项齐了下一次启动开始上报。服务地址可以是官方云
   （`https://cloud.langfuse.com`）或自托管实例。

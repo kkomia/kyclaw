@@ -25,6 +25,22 @@ files:
   # resources/llama/（进程要从磁盘上直接执行 exe/dll，asar 里的东西起不来）。
   # 不加这条会被 asarUnpack 的 resources/** 规则再抄一份进 app.asar.unpacked（白胖 42MB）。
   - '!resources/llama/**'
+  # 内置技能（round 64：office 四件套的 SKILL.md）同路数：走下面的 extraResources 原样放到
+  # resources/skills/，不进 asar。理由不是"asar 读不了 .md"（Electron 的 fs 能读 asar 内的文件），
+  # 而是**技能目录要能被当普通目录遍历**（列文件清单、将来放 reference/scripts 子目录），
+  # 且与插件的技能目录（userData 下的真目录）保持同一形态——少一条"asar 内路径"的特殊分支。
+  - '!resources/skills/**'
+  # render_ppt 随包的 LibreOffice 渲染引擎（round 68）：同样走下面的 extraResources 原样放到
+  # resources/libreoffice-kit/。**必须不进 asar**：里面的 bin/libreoffice-kit.exe（178MB）
+  # 与 program/ 要从磁盘上直接执行（asar 里的 exe 起不来），且 kit 自己用常规 Node 解析去
+  # 同目录找引擎包与 koffi —— asar 内那条路径它算不出来。不加这条会被 asarUnpack 的
+  # resources/** 规则再抄一份进 app.asar.unpacked（白胖 194MB）。
+  - '!resources/libreoffice-kit/**'
+  # 历史构建输出目录（round 62/63 的 dist-alt / dist-r63 等）**不进包**：electron-builder 只自动排除
+  # 它自己的输出目录（directories.output，即 dist/），其他 dist-* 会被当普通目录收进去 ——
+  # 实测 `pnpm package` 出来的 app.asar 里塞了 4.3GB 的旧构建产物（dist-r63 的 asar 又把 dist-alt
+  # 整个卷进去，层层套娃）。安装包因此能到 GB 级。
+  - '!dist*/**'
 # 本机嵌入引擎（模块 3B）：`pnpm fetch:llama` 下到 resources/llama/ 的裁剪后运行时（42MB），
 # 原样拷到安装目录的 resources/llama/（主进程按 process.resourcesPath/llama 找它）。
 # .cache 是本地的压缩包缓存（获取脚本用），不进包。
@@ -34,6 +50,34 @@ extraResources:
     filter:
       - '**/*'
       - '!.cache/**'
+  # 内置技能（round 64）：仓库 `resources/skills/<技能名>/SKILL.md` 原样拷到安装目录的
+  # resources/skills/（主进程按 process.resourcesPath/skills 找它，开发态用仓库那份）。
+  # 只有 .md 与子目录，几 KB 级——不打进 asar（见上面 files 里的排除，避免两份）。
+  - from: resources/skills
+    to: skills
+    filter:
+      - '**/*'
+  # render_ppt 的随包 LibreOffice 渲染引擎（round 68）：`pnpm fetch:libreoffice-kit` 落的
+  # npm 平铺目录（194MB 未压缩）原样拷到安装目录的 resources/libreoffice-kit/，
+  # 主进程按 process.resourcesPath/libreoffice-kit 找它的 cli.js（开发态用仓库那份，见 render-ppt.ts
+  # 的 kitRootCandidates）。
+  # `licenses/` 与 `sources/` 必须跟着走（MPL-2.0 的分发义务：许可文本 + 源码配方/补丁，
+  # 见 resources/skills/THIRD_PARTY_NOTICES.md 第 3 节），所以这里**不裁剪**任何子目录。
+  #
+  # **为什么拆成两条**：electron-builder 的 filter 里有一句写死的
+  # `if (relative === "node_modules") return false`（app-builder-lib/out/util/filter.js）——
+  # `from` 目录**根上**的那一级 node_modules 永远拷不过去（只放过嵌套的）。kit 的引擎包与 koffi
+  # 全在它自己的 node_modules 里，所以那一级单独列一条、`from` 直接指到 node_modules 上
+  # （那时它自己是根，里面的 @deepseek-ai / koffi … 就不再被那句拦掉）。
+  - from: resources/libreoffice-kit
+    to: libreoffice-kit
+    filter:
+      - '**/*'
+      - '!node_modules/**'
+  - from: resources/libreoffice-kit/node_modules
+    to: libreoffice-kit/node_modules
+    filter:
+      - '**/*'
 # asar 里 dlopen 不了 .node：libsql 的原生绑定（@libsql/win32-x64-msvc/index.node）必须解出来，
 # 运行时经 Electron 的 asar 路径重定向落到 app.asar.unpacked。
 # resources/** 是 electron-vite 的 ?asset 资源（托盘/窗口图标），主进程按真实路径读，同样得在 asar 外。

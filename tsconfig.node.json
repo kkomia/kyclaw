@@ -3,6 +3,7 @@
   "include": [
     "electron.vite.config.*",
     "vitest.config.*",
+    "vitest.native-specs.*",
     "src/main/**/*",
     "src/preload/**/*",
     "src/mastra/**/*"

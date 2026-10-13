@@ -27,6 +27,17 @@ const UNPACKED_DIR = join(DIST_DIR, 'win-unpacked', 'resources', 'app.asar.unpac
 /** 本机嵌入引擎的运行时（模块 3B）：`pnpm fetch:llama` 落的裁剪后 llama.cpp 目录 */
 const LLAMA_DIR = join(ROOT, 'resources', 'llama')
 const LLAMA_EXE = 'llama-server.exe'
+/** 随包的 LibreOffice 渲染引擎（round 68）：`pnpm fetch:libreoffice-kit` 落的 npm 平铺目录 */
+const KIT_DIR = join(ROOT, 'resources', 'libreoffice-kit')
+const KIT_CLI_RELATIVE = 'node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js'
+/**
+ * 随包引擎包里的关键件（**相对引擎包目录**）。`bin/libreoffice-kit.exe` 是自包含的引擎本体，
+ * `licenses/` 与 `sources/` 是 MPL-2.0 的分发义务（许可文本 + 源码配方，见 THIRD_PARTY_NOTICES 第 3 节），
+ * 三者缺一都说明这份 kit 是坏的或打包配置被改坏了。`program/` 不是硬需求（引擎起不来时才有用），
+ * 但它 12MB 且随包能省事，所以缺了也当异常。
+ */
+const KIT_ENGINE_RELATIVE = 'node_modules/@deepseek-ai/libreoffice-kit-win32-x64'
+const KIT_ENGINE_FILES = ['bin/libreoffice-kit.exe', 'program', 'sources', 'licenses']
 
 function fail(message) {
   console.error(`[package] ${message}`)
@@ -123,6 +134,15 @@ function main() {
       )
     }
 
+    // round 68：`render_ppt` 的随包 LibreOffice 渲染引擎。缺了它应用不会崩（渲染会退到
+    // PowerPoint COM / 逐页文字结构），但"随包渲染能力"这件事就落空了 —— 出包时是明确缺件。
+    if (!existsSync(join(KIT_DIR, ...KIT_CLI_RELATIVE.split('/')))) {
+      fail(
+        `缺随包的 LibreOffice 渲染引擎：${join(KIT_DIR, ...KIT_CLI_RELATIVE.split('/'))}\n` +
+          '  先跑一次 `pnpm fetch:libreoffice-kit`（从 npm 拉取 + integrity 校验，约 194MB）再出包'
+      )
+    }
+
     const cleared = cleanStaleOutputs()
     if (cleared.length > 0) {
       console.log(`[package] 预清上一次的打包输出：${cleared.join('、')}`)
@@ -173,6 +193,31 @@ function main() {
     if (engineBytes < 30 * 1024 * 1024) {
       fail(`resources/llama 只有 ${(engineBytes / 1024 / 1024).toFixed(1)} MB——裁剪结果不完整？`)
     }
+    // round 68：随包的 LibreOffice 渲染引擎同样走 extraResources（`resources/libreoffice-kit/`）。
+    // 它必须**在 asar 之外**：里面的 exe 要从磁盘直接执行，kit 也靠常规 Node 解析去同目录找引擎包。
+    const kitOutDir = join(DIST_DIR, 'win-unpacked', 'resources', 'libreoffice-kit')
+    if (!existsSync(join(kitOutDir, ...KIT_CLI_RELATIVE.split('/')))) {
+      fail(
+        `resources/libreoffice-kit 没有进包（electron-builder.yml 的 extraResources 被改坏了？）\n` +
+          `  应有：${join(kitOutDir, ...KIT_CLI_RELATIVE.split('/'))}`
+      )
+    }
+    const kitEngineDir = join(kitOutDir, ...KIT_ENGINE_RELATIVE.split('/'))
+    const kitMissing = KIT_ENGINE_FILES.filter(
+      (relative) => !existsSync(join(kitEngineDir, ...relative.split('/')))
+    )
+    if (kitMissing.length > 0) {
+      fail(
+        `随包渲染引擎不完整，缺：${kitMissing.join('、')}（许可与源码配方也必须随包，见 THIRD_PARTY_NOTICES 第 3 节）`
+      )
+    }
+    const kitBytes = listFiles(kitOutDir).reduce(
+      (sum, name) => sum + statSync(join(kitOutDir, name)).size,
+      0
+    )
+    if (kitBytes < 150 * 1024 * 1024) {
+      fail(`resources/libreoffice-kit 只有 ${(kitBytes / 1024 / 1024).toFixed(1)} MB——引擎没进包？`)
+    }
     // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新。
     // 通道文件名跟着版本走：预发布（0.1.0-beta.N）是 beta.yml，正式版才是 latest.yml
     // （electron-builder 的 channel 语义，与包内 app-update.yml 的 `channel: beta` 配对）。
@@ -193,6 +238,9 @@ function main() {
     console.log(`[package] 解包的原生绑定：${libsqlBindings.join('、')}`)
     console.log(
       `[package] 本机嵌入引擎：resources/llama 共 ${(engineBytes / 1024 / 1024).toFixed(1)} MB（未压缩）`
+    )
+    console.log(
+      `[package] 随包渲染引擎：resources/libreoffice-kit 共 ${(kitBytes / 1024 / 1024).toFixed(1)} MB（未压缩，含许可与源码配方）`
     )
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error))

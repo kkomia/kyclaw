@@ -1,6 +1,8 @@
 node_modules
 dist
 dist-alt
+dist-r63
+dist-r68
 out
 .DS_Store
 .eslintcache
@@ -9,3 +11,10 @@ out
 .superpowers/
 # 本机嵌入引擎的运行时（模块 3B）：二进制不入库，用 `pnpm fetch:llama` 获取（已 pin 版本 + SHA256 校验）
 resources/llama/
+# render_ppt 随包的 LibreOffice 渲染引擎（round 68）：194MB 级二进制，不入库，
+# 用 `pnpm fetch:libreoffice-kit` 获取（版本 pin 在脚本里，npm 按 package-lock 的 integrity 校验）
+resources/libreoffice-kit/
+
+# 构建产物与临时目录（不入库）
+*.tsbuildinfo
+.tmp-native-sweep/
