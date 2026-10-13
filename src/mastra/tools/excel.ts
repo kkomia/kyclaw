@@ -8,6 +8,8 @@
  *     Excel 打开时不会执行它（要真公式得用 Excel 自己再编辑）。
  *   - 表名按 Excel 的硬约束归一：非法字符换空格、最长 31 字符、空名兜底、重名加序号后缀
  *     （ExcelJS 对重名会报错，这里先自己收敛掉，免得整个产出物失败）。
+ *   - **断言**（`expect`）：用户说"必须 3 张表""表里必须有这几个字"时写进来；文本断言按**整本
+ *     工作簿**的单元格文字核（不分工作表），没过不拦落盘、但回执会点名差在哪。
  *   - 内容与落盘分离：`renderXlsx` 是纯入口（表数据 → 字节，无 IO），工具只负责解析路径与写文件。
  *   - 依赖：exceljs（纯 JS，无原生依赖）。主进程产物是 CJS 而它的出口只有 `default` 命名空间，
  *     所以动态 import 后走 `.default`（Node 的 CJS 互操作把 module.exports 放在 default 上）。
@@ -28,6 +30,8 @@ const MAX_SHEETS = 50
 const MAX_ROWS_PER_SHEET = 5000
 /** Excel 的硬限制：单元格字符串 32767 字符，超了文件会坏 */
 const MAX_CELL_CHARS = 32767
+/** 断言条数上限：回执里要逐条报，太多会把上下文吃光 */
+const MAX_EXPECTS = 20
 
 /** 单元格值：只允许这三种标量 + null（空单元格）；对象/公式不在 v1 范围 */
 const cellSchema = z.union([
@@ -43,22 +47,49 @@ export const excelInputSchema = z.object({
   sheets: z
     .array(
       z.object({
-        name: z.string().min(1).describe('工作表名（超过 31 字符或含 []:*?/\\ 会被自动归一）'),
+        name: z
+          .string()
+          .min(1)
+          .describe('Sheet name; names over 31 characters or containing []:*?/\\ are normalised'),
         rows: z
           .array(z.array(cellSchema))
           .max(MAX_ROWS_PER_SHEET, `一张表最多 ${MAX_ROWS_PER_SHEET} 行，请拆分工作表`)
           .describe(
-            `二维单元格数组（外层是行，最多 ${MAX_ROWS_PER_SHEET} 行）：数字保持数字，字符串原样，` +
-              `null 是空单元格；不支持公式——要计算的值请先算好再写数字，` +
-              `\`=\` 开头的字符串会被当普通文本原样写入（最长 ${MAX_CELL_CHARS} 字符）`
+            `Two-dimensional cell array, outer array is rows, at most ${MAX_ROWS_PER_SHEET} rows: numbers stay numbers, strings are written as-is, ` +
+              `null is an empty cell. Formulas are not supported: compute values yourself and write the numbers, ` +
+              `and a string starting with \`=\` is written as plain text (at most ${MAX_CELL_CHARS} characters)`
           )
       })
     )
     .min(1)
     .max(MAX_SHEETS, `最多 ${MAX_SHEETS} 张工作表，请拆分工作簿`)
-    .describe(`工作表列表（按顺序落在工作簿里；最多 ${MAX_SHEETS} 张）`),
-  title: z.string().optional().describe('不给 path 时用它派生文件名；缺省取第一个工作表名'),
-  path: z.string().optional().describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名）')
+    .describe(`Sheets in order, at most ${MAX_SHEETS}`),
+  title: z
+    .string()
+    .optional()
+    .describe('Used to derive the file name when path is omitted; defaults to the first sheet name'),
+  expect: z
+    .object({
+      sheets: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Exact number of sheets the user asked for'),
+      contains: z
+        .array(z.object({ text: z.string().min(1).describe('Text that must appear') }))
+        .max(MAX_EXPECTS, `最多 ${MAX_EXPECTS} 条断言，请精选`)
+        .optional()
+        .describe('Text the user named as required, checked across all cell text in the workbook')
+    })
+    .optional()
+    .describe(
+      'Hard requirements the user stated, such as an exact sheet count or specific text; each one is checked and misses are reported in the result'
+    ),
+  path: z
+    .string()
+    .optional()
+    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
 })
 
 export type ExcelInput = z.infer<typeof excelInputSchema>
@@ -135,11 +166,10 @@ export async function createExcelTool(ctx: ToolContext): Promise<Tool<ExcelInput
   return createTool({
     id: 'create_excel',
     description:
-      '把二维表格数据写成 Excel 工作簿（.xlsx），落到当前会话工作区并返回文件路径与字节数。' +
-      '每个 sheet 一张工作表，rows 是二维单元格数组（数字保持数字、字符串原样）。' +
-      '**不支持公式单元格**：要计算的值请先算好再写数字；`=` 开头的字符串会被当普通文本原样写入。' +
-      '适合明细表、清单、数据导出；要排版好看的报告用 create_report，要幻灯片用 create_ppt。' +
-      '执行前会请求用户批准。',
+      'Write tabular data as an Excel workbook (.xlsx); saved to the session workspace, returns path and bytes. ' +
+      'Each sheets entry is one worksheet; rows is a two-dimensional cell array. ' +
+      'Use it for detail tables, lists and data exports. ' +
+      'Not for a table that is part of prose (create_report / create_docx) or one page of a deck (create_ppt).',
     inputSchema: excelInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
@@ -156,11 +186,12 @@ export async function createExcelTool(ctx: ToolContext): Promise<Tool<ExcelInput
       const abs = artifactTarget(ctx, planInput(input), 'xlsx', '表格', session)
       const bytes = await renderXlsx(input.sheets)
 
-      // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明
+      // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明（断言没过也照写）
       const check = checkPackage(bytes, {
         kind: 'xlsx',
         sheets: input.sheets.length,
-        texts: sampleText(input.sheets)
+        texts: sampleText(input.sheets),
+        assert: { count: input.expect?.sheets, contains: input.expect?.contains }
       })
       assertPackage(check)
 

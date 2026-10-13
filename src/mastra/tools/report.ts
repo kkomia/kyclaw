@@ -35,21 +35,20 @@ export const reportInputSchema = z.object({
     .min(1)
     .max(MAX_TITLE_CHARS, `标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
     .describe(
-      `报告标题（写进页首与 <title>；不给 path 时也用它派生文件名；最长 ${MAX_TITLE_CHARS} 字）`
+      `Report title, rendered in the header and in <title>; also derives the file name when path is omitted; at most ${MAX_TITLE_CHARS} characters`
     ),
   html: z
     .string()
     .min(1)
     .max(MAX_HTML_CHARS, `正文最多 ${MAX_HTML_CHARS} 字符，请拆分内容`)
     .describe(
-      `报告正文的 HTML 片段（h2/h3、p、ul/ol、table、pre/code、blockquote 都带样式；` +
-        `最多 ${MAX_HTML_CHARS} 字符）。` +
-        '不要再写 <html>/<head>/<style> 外壳，也不用重复一级标题——模板已经带上标题'
+      `Body HTML fragment; h2/h3, p, ul/ol, table, pre/code and blockquote are styled, at most ${MAX_HTML_CHARS} characters. ` +
+        'Do not wrap it in <html>/<head>/<style> and do not repeat the top-level title, which the template already adds'
     ),
   path: z
     .string()
     .optional()
-    .describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名，如 报告.html）')
+    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
 })
 
 export type ReportInput = z.infer<typeof reportInputSchema>
@@ -59,15 +58,20 @@ export const pdfInputSchema = z.object({
     .string()
     .max(MAX_TITLE_CHARS, `标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
     .optional()
-    .describe(`PDF 文档标题（页首与 <title>；不给就写「报告」；最长 ${MAX_TITLE_CHARS} 字）`),
+    .describe(
+      `Document title, rendered in the header and in <title>; defaults to 「报告」; at most ${MAX_TITLE_CHARS} characters`
+    ),
   html: z
     .string()
     .min(1)
     .max(MAX_HTML_CHARS, `正文最多 ${MAX_HTML_CHARS} 字符，请拆分内容`)
     .describe(
-      `文档正文的 HTML 片段（与 create_report 同一套样式与写法；最多 ${MAX_HTML_CHARS} 字符）`
+      `Body HTML fragment, same markup and styling as create_report; at most ${MAX_HTML_CHARS} characters`
     ),
-  path: z.string().optional().describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名）')
+  path: z
+    .string()
+    .optional()
+    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
 })
 
 export type PdfInput = z.infer<typeof pdfInputSchema>
@@ -78,10 +82,9 @@ export async function createReportTool(ctx: ToolContext): Promise<Tool<ReportInp
   return createTool({
     id: 'create_report',
     description:
-      '生成一份排版好的 HTML 报告（单文件、自带样式、浏览器可看可打印，离线也不丢样式），' +
-      '落到当前会话工作区并返回文件路径与字节数。适合说明性长文、方案、总结、带表格的盘点。' +
-      '只要 PDF 就用 create_pdf；结构化数据用 create_excel；演示用 create_ppt；正式文档用 create_docx。' +
-      '执行前会请求用户批准。',
+      'Write a styled single-file HTML report (self-contained, readable and printable in a browser, no network needed); ' +
+      'saved to the session workspace, returns path and bytes. ' +
+      'Not for a document the user will edit (create_docx), a deck (create_ppt), a data table (create_excel) or a file to print and send (create_pdf).',
     inputSchema: reportInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
@@ -112,9 +115,9 @@ export async function createPdfTool(
   return createTool({
     id: 'create_pdf',
     description:
-      '把 HTML 内容导出成 PDF（A4、带背景色、留白边距），落到当前会话工作区并返回文件路径与字节数。' +
-      '适合要发给别人、要打印或要归档的成品文档；正文写法与 create_report 完全一致。' +
-      '执行前会请求用户批准。',
+      'Export HTML to PDF (A4, background colours, page margins); saved to the session workspace, returns path and bytes. ' +
+      'Body markup is identical to create_report. ' +
+      'Not for on-screen reading or a file the user will edit: create_report for that.',
     inputSchema: pdfInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

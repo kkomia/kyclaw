@@ -2,22 +2,34 @@
  * create_ppt：把结构化内容写成**带设计系统**的 .pptx 演示文稿（模块 4 格式③；round 62 模板化）。
  *
  * 口径：
- *   - **主题**：内置六套（见 ./ppt-themes，含配色 / 字体 / 强调形状风格）；入参 `theme` 不给就
- *     按（文档标题 + 各页标题）确定性自动挑 —— 同一输入两次同主题。
+ *   - **新做一份**：改一份已有的演示文稿请用 `edit_ppt`（只发改动，见 tools/ppt-edit.ts）——
+ *     两者共用 `renderPptx` 与 `checkPackage`，没有第二套渲染/自检实现。
+ *   - round 76：落盘成功后把这份 deck 的**源结构 + 文件指纹**记进会话级映射
+ *     （`session_ppt_sources`，装配时经 options.sources 注入）；记不上不影响这次产出。
+ *   - **模板**：十套（配色 / 字体 / 封面构图 / 强调形状风格，数据在 shared/ppt-templates.ts）。
+ *     用哪一套（round 66）：显式 `theme` > **本会话**在对话页固定的模板（会话级映射，按 threadId
+ *     现读）> 按（文档标题 + 各页标题）确定性自动挑 —— 同一输入两次同主题（见 resolveTheme）。
  *   - **版式**八种：cover / section / content / stats / table / two-column / quote / closing。
  *     每页可用 `layout` 指定；不指定（或指定的版式缺数据）按内容**确定性自动挑**（见 resolveLayout）。
  *   - **统一点缀**：正文类页面标题下一条 accent 短线；除封面外每页页脚「左=文档标题、右=页码」；
- *     封面 / 章节页 / 结尾页按主题 motif 加装饰色块；要点每条一个 accent 圆点。
+ *     封面按模板构图加装饰（居中 = 该模板 motif 的色块；band = 左侧通栏色带 + 左对齐标题），
+ *     章节页 / 结尾页按模板 motif 加装饰色块；要点每条一个 accent 圆点。
  *   - **向后兼容**：老的 `title` + `slides[{title,bullets}]` 形状照旧 —— 文档标题出封面、有
- *     title/bullets 的页走 content、末尾自动补一页 closing（自己给了 closing 页就不补）。
+ *     title/bullets 的页走 content。**结尾页以模型给的为准**：不再自动补一页只写「谢谢观看」的
+ *     占位页 —— 那是无信息页，技能里明令禁止，工具层不该反过来批量生产它。没给就没有。
  *   - 一页既排不出内容（没有任何版式可挑）也没有显式 layout 时跳过（JSON 里常有多余空对象）；
  *     全都空则补一页占位，免得产出物是"零页演示文稿"（PowerPoint 打不开）。
  *   - 版式固定 **16:9**（LAYOUT_16x9）；所有文本框开 `fit: 'shrink'`（PowerPoint 侧"溢出自动缩小"）。
+ *   - **断言**（`expect`）：用户说"必须 6 页""第 3 页必须有这句话"时写进来。落盘前真解包逐条核
+ *     （页数按包内 slide 部件数；文本只看那一页的 slide 部件，图表文字与演讲者备注不算），
+ *     没过**不拦落盘**，但回执会点名"哪一条没过、差在哪"，改不改由模型决定。
  *   - 内容与落盘分离：`renderPptx` 是纯入口（幻灯片数据 → 字节 + 实际页数 + 主题名，无 IO）。
  *   - 依赖：pptxgenjs（纯 JS，无原生依赖；Node 侧 `write({outputType:'nodebuffer'})` 直接回 Buffer）。
  */
 import type { Tool } from '@mastra/core/tools'
+import { coverPlan, motifBoxes, type PptBox } from '../../shared/ppt-templates'
 import { z } from '../../shared/zod'
+import { sha256Of, type SessionPptSourceStore } from '../session-ppt-sources'
 import { assertPackage, checkPackage } from './artifact-check'
 import {
   artifactNeedsApproval,
@@ -26,10 +38,10 @@ import {
   type ArtifactInput
 } from './artifacts'
 import { approvalSessionOf, sessionKey, type ToolContext } from './guard'
-import { PPT_FONT, PPT_THEME_NAMES, resolveTheme, type PptTheme } from './ppt-themes'
+import { PPT_FONT, PPT_TEMPLATE_NAMES, resolveTheme, type PptTheme } from './ppt-themes'
 
 /** 输入上限（round 38 登记"输入规模无上限" + round 62 覆盖新字段）：超限让模型知道怎么改 */
-const MAX_SLIDES = 60
+export const MAX_SLIDES = 60
 const MAX_BULLETS_PER_SLIDE = 30
 const MAX_BULLET_CHARS = 500
 const MAX_TITLE_CHARS = 200
@@ -44,6 +56,8 @@ const MAX_CELL_CHARS = 200
 const MAX_QUOTE_CHARS = 300
 const MAX_QUOTE_SOURCE_CHARS = 120
 const MAX_COLUMN_BULLETS = 12
+/** 断言条数上限：回执里要逐条报，太多会把上下文吃光 */
+const MAX_EXPECTS = 20
 
 /** 八种版式（`layout` 取值；顺序也是文档里介绍的顺序） */
 export const PPT_LAYOUTS = [
@@ -59,20 +73,17 @@ export const PPT_LAYOUTS = [
 
 export type PptLayout = (typeof PPT_LAYOUTS)[number]
 
-/** 结尾页没给文字时的兜底（自己给了 closing 页就用那页的 title） */
-const DEFAULT_CLOSING = '谢谢观看'
-
 const statSchema = z.object({
   value: z
     .string()
     .min(1)
     .max(MAX_STAT_VALUE_CHARS, `数字卡的数值最长 ${MAX_STAT_VALUE_CHARS} 字，请精简（如 "12%"）`)
-    .describe('大号数字（原样显示，如 "12%" / "3.2 亿"；最长 24 字）'),
+    .describe('Large figure, shown verbatim, for example "12%" or "3.2 亿"'),
   label: z
     .string()
     .min(1)
     .max(MAX_STAT_LABEL_CHARS, `数字卡的标签最长 ${MAX_STAT_LABEL_CHARS} 字，请精简`)
-    .describe('数字下面的说明文字（最长 60 字）')
+    .describe('Caption under the figure')
 })
 
 const tableSchema = z.object({
@@ -80,7 +91,7 @@ const tableSchema = z.object({
     .array(z.string().max(MAX_CELL_CHARS, `单元格最长 ${MAX_CELL_CHARS} 字，请精简`))
     .max(MAX_TABLE_COLS, `表格最多 ${MAX_TABLE_COLS} 列，请减少列数`)
     .optional()
-    .describe(`表头（可选；给了就按主题色底纹加粗，最多 ${MAX_TABLE_COLS} 列）`),
+    .describe('Header row; when given it is bold on a theme-coloured fill'),
   rows: z
     .array(
       z
@@ -90,8 +101,7 @@ const tableSchema = z.object({
     .min(1, 'table 版式至少要有一行数据；不要表格请改用 content 版式')
     .max(MAX_TABLE_ROWS, `表格最多 ${MAX_TABLE_ROWS} 行，请拆分页面或只留关键行`)
     .describe(
-      `数据行（二维字符串数组，每行一个数组；最多 ${MAX_TABLE_ROWS} 行、${MAX_TABLE_COLS} 列，` +
-        `单元格最长 ${MAX_CELL_CHARS} 字；数字也写成字符串）`
+      'Data rows, a two-dimensional string array with one array per row; numbers are written as strings too'
     )
 })
 
@@ -100,12 +110,12 @@ const quoteSchema = z.object({
     .string()
     .min(1)
     .max(MAX_QUOTE_CHARS, `引言最长 ${MAX_QUOTE_CHARS} 字，请精简`)
-    .describe(`引言正文（大字号展示；最长 ${MAX_QUOTE_CHARS} 字）`),
+    .describe('Quote body, shown in large type'),
   source: z
     .string()
     .max(MAX_QUOTE_SOURCE_CHARS, `出处最长 ${MAX_QUOTE_SOURCE_CHARS} 字，请精简`)
     .optional()
-    .describe('出处（右下角小字，如 "—— 彼得·德鲁克"；最长 120 字）')
+    .describe('Source, small text in the bottom right, for example "—— 彼得·德鲁克"')
 })
 
 const columnSchema = z.object({
@@ -113,102 +123,163 @@ const columnSchema = z.object({
     .string()
     .max(MAX_TITLE_CHARS, `分栏标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
     .optional()
-    .describe('这一栏的小标题（可选）'),
+    .describe('Small heading for this column (optional)'),
   bullets: z
     .array(z.string().max(MAX_BULLET_CHARS, `单条要点最长 ${MAX_BULLET_CHARS} 字，请精简`))
     .max(MAX_COLUMN_BULLETS, `一栏最多 ${MAX_COLUMN_BULLETS} 条要点，请精简或拆页`)
     .optional()
-    .describe(`这一栏的要点（每条一个圆点；最多 ${MAX_COLUMN_BULLETS} 条）`)
+    .describe('Bullet points in this column, one dot each')
 })
 
+/**
+ * 一页（`slides` 的元素）：create_ppt 与 edit_ppt 的 replace / insert **共用这一份**。
+ * 分开写两份的下场是字段说明漂移 —— 而模型看到的是描述，漂了就等于两个工具教它两套填法。
+ */
+export const pptSlideSchema = z.object({
+  layout: z
+    .enum(PPT_LAYOUTS)
+    .optional()
+    .describe(
+      'Layout for this slide: cover / section / content for bullet points / stats for number cards / ' +
+        'table / two-column / quote / closing. When omitted it is picked from the data given for this slide'
+    ),
+  title: z
+    .string()
+    .max(MAX_TITLE_CHARS, `每页标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
+    .optional()
+    .describe('Slide title; adding it shows the title with a theme-coloured rule under it'),
+  subtitle: z
+    .string()
+    .max(MAX_SUBTITLE_CHARS, `副标题最长 ${MAX_SUBTITLE_CHARS} 字，请精简`)
+    .optional()
+    .describe('Slide subtitle, used by the cover layout only'),
+  bullets: z
+    .array(z.string().max(MAX_BULLET_CHARS, `单条要点最长 ${MAX_BULLET_CHARS} 字，请精简`))
+    .max(MAX_BULLETS_PER_SLIDE, `一页最多 ${MAX_BULLETS_PER_SLIDE} 条要点，请拆分页面`)
+    .optional()
+    .describe('Body bullet points, each with a theme-coloured dot; shorter reads better'),
+  section: z
+    .string()
+    .max(MAX_SECTION_CHARS, `章节名最长 ${MAX_SECTION_CHARS} 字，请精简`)
+    .optional()
+    .describe('Section name; setting it makes a section slide with a large auto-numbered index'),
+  stats: z
+    .array(statSchema)
+    .max(MAX_STATS, `一页最多 ${MAX_STATS} 张数字卡，请精简或拆页`)
+    .optional()
+    .describe('KPI number cards, which make a stats slide with the cards side by side'),
+  table: tableSchema
+    .optional()
+    .describe('Table, which makes a table slide with a themed header row and banded data rows'),
+  quote: quoteSchema
+    .optional()
+    .describe(
+      'Quote, which makes a quote slide with large type and the source at the bottom right'
+    ),
+  columns: z
+    .array(columnSchema)
+    .length(2, 'two-column 版式要正好两栏（columns 给两个元素）')
+    .optional()
+    .describe(
+      'Two columns, which make a two-column slide and must be exactly two: for comparisons or before/after'
+    )
+})
+
+export type PptSlide = z.infer<typeof pptSlideSchema>
+
+/** 页数上下限单独拎出来：edit_ppt 在插入/替换后也要按同一把尺子量一次 */
+export const pptSlidesSchema = z
+  .array(pptSlideSchema)
+  .min(1)
+  .max(MAX_SLIDES, `最多 ${MAX_SLIDES} 页，请拆分演示文稿`)
+
+/** 硬要求（用户说"必须 6 页""第 3 页必须有这句话"）：create_ppt 与 edit_ppt 共用 */
+export const pptExpectSchema = z
+  .object({
+    pages: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        'Page count the user asked for, counted as PowerPoint would count it, including the cover and any closing slide you add'
+      ),
+    contains: z
+      .array(
+        z.object({
+          page: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              'Page number, 1-based and including the cover, matching PowerPoint page order; when omitted any page may contain the text'
+            ),
+          text: z
+            .string()
+            .min(1)
+            .describe('Text that must appear verbatim on that page, as one contiguous run')
+        })
+      )
+      .max(MAX_EXPECTS, `最多 ${MAX_EXPECTS} 条断言，请精选`)
+      .optional()
+      .describe(
+        'Text the user named as required, checked per page; chart text and speaker notes do not count'
+      )
+  })
+  .describe(
+    'Hard requirements the user stated, such as an exact page count or text on a given page; each one is checked and misses are reported in the result'
+  )
+
+/**
+ * round 67：字段说明**只留"这是什么 + 关键边界"**，字数与版式细节由 pptx 技能手册承载
+ * （指令里已写明"动手前先 use_skill 读 pptx 那份"）。
+ * 为什么非改不可：实测这套 schema 的中文说明在 DeepSeek 分词器下 2.39 字/token，
+ * 每多写 100 个中文字 = 每轮多 42 个 token（见 .superpowers/sdd/.../_r67-probe/）。
+ */
 export const pptInputSchema = z.object({
   title: z
     .string()
     .max(MAX_TITLE_CHARS, `标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
     .optional()
-    .describe(
-      `演示文稿标题（会单独生成一张封面；不给 path 时也用它派生文件名；最长 ${MAX_TITLE_CHARS} 字）`
-    ),
+    .describe('Deck title; also adds a cover slide and derives the file name when path is omitted'),
   subtitle: z
     .string()
     .max(MAX_SUBTITLE_CHARS, `副标题最长 ${MAX_SUBTITLE_CHARS} 字，请精简`)
     .optional()
-    .describe(`封面副标题（只在封面出现，如日期/单位/一句话说明；最长 ${MAX_SUBTITLE_CHARS} 字）`),
+    .describe('Cover subtitle, shown on the cover slide only, for example a date or a team name'),
   theme: z
-    .enum(PPT_THEME_NAMES)
+    .enum(PPT_TEMPLATE_NAMES)
     .optional()
     .describe(
-      `配色主题（决定底色/字色/强调色与装饰块风格）：${PPT_THEME_NAMES.join(' / ')}。` +
-        '写方案/汇报用 商务蓝，技术/产品发布用 科技暗，创意/活动用 暖橙 或 紫罗兰，' +
-        '克制/学术用 极简黑白 或 墨绿；不填就按标题自动配一套（同一份内容每次都配到同一套）'
+      `Colour theme, ten of them; pairing themes with occasions is covered in the pptx skill manual: ${PPT_TEMPLATE_NAMES.join(' / ')}. ` +
+        'When omitted the theme fixed by the user for this conversation is used, otherwise one is picked from the title. Set it only when the user asks for a different theme'
     ),
-  slides: z
-    .array(
-      z.object({
-        layout: z
-          .enum(PPT_LAYOUTS)
-          .optional()
-          .describe(
-            '这一页的版式：cover 封面（大标题+subtitle）/ section 章节页（section 字段，自动带序号）/ ' +
-              'content 正文要点（bullets）/ stats 数字卡片（stats）/ table 表格（table）/ ' +
-              'two-column 左右分栏（columns 两栏）/ quote 引言（quote）/ closing 结尾页。' +
-              '不填就按这一页给了什么数据自动选（见各字段的说明）'
-          ),
-        title: z
-          .string()
-          .max(MAX_TITLE_CHARS, `每页标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
-          .optional()
-          .describe(`这一页的标题（最长 ${MAX_TITLE_CHARS} 字；加了它就会显示标题与主题色短线）`),
-        subtitle: z
-          .string()
-          .max(MAX_SUBTITLE_CHARS, `副标题最长 ${MAX_SUBTITLE_CHARS} 字，请精简`)
-          .optional()
-          .describe('这一页的副标题（只在 cover 版式用）'),
-        bullets: z
-          .array(z.string().max(MAX_BULLET_CHARS, `单条要点最长 ${MAX_BULLET_CHARS} 字，请精简`))
-          .max(MAX_BULLETS_PER_SLIDE, `一页最多 ${MAX_BULLETS_PER_SLIDE} 条要点，请拆分页面`)
-          .optional()
-          .describe(
-            `正文要点（content / two-column 版式的 bullets 用这个）：每条前面一个主题色圆点，` +
-              `最多 ${MAX_BULLETS_PER_SLIDE} 条、每条最长 ${MAX_BULLET_CHARS} 字；要点写短更像成品`
-          ),
-        section: z
-          .string()
-          .max(MAX_SECTION_CHARS, `章节名最长 ${MAX_SECTION_CHARS} 字，请精简`)
-          .optional()
-          .describe(
-            `章节名（写了它就是一张 section 章节页：大号序号 + 章节名；序号按章节页出现顺序自动排；` +
-              `最长 ${MAX_SECTION_CHARS} 字）`
-          ),
-        stats: z
-          .array(statSchema)
-          .max(MAX_STATS, `一页最多 ${MAX_STATS} 张数字卡，请精简或拆页`)
-          .optional()
-          .describe(
-            `KPI 数字卡（写了它就是一张 stats 页）：一眼看的成绩，如 ` +
-              `[{ value: "12%", label: "营收同比增长" }, { value: "3.2 亿", label: "全年营收" }]；` +
-              `一页 1-${MAX_STATS} 张，卡片横排`
-          ),
-        table: tableSchema
-          .optional()
-          .describe('表格（写了它就是一张 table 页）：表头用主题色、数据行隔行浅底'),
-        quote: quoteSchema
-          .optional()
-          .describe('引言（写了它就是一张 quote 页）：大字号引言 + 右下角出处'),
-        columns: z
-          .array(columnSchema)
-          .length(2, 'two-column 版式要正好两栏（columns 给两个元素）')
-          .optional()
-          .describe(
-            '左右分栏（写了它就是一张 two-column 页，必须正好两栏）：做对比、优缺点、"现状/目标"这类内容'
-          )
-      })
+  slides: pptSlidesSchema.describe('Slides in order, placed after the cover'),
+  expect: pptExpectSchema.optional(),
+  path: z
+    .string()
+    .optional()
+    .describe(
+      'Output path relative to the session workspace; when omitted the file name derives from the title'
     )
-    .min(1)
-    .max(MAX_SLIDES, `最多 ${MAX_SLIDES} 页，请拆分演示文稿`)
-    .describe(`幻灯片列表（按顺序排在封面之后；最多 ${MAX_SLIDES} 页）`),
-  path: z.string().optional().describe('落盘路径（相对当前会话工作区；不给就按标题派生文件名）')
 })
+
+/**
+ * **落库的源结构**（round 76）：渲染这份 .pptx 用的那份输入 —— create_ppt 落盘时记、edit_ppt 读回来改。
+ *
+ * 就是输入里除 `expect` / `path` 之外的全部字段（那两个是"这一次调用"的要求，不是文档本身）。
+ * `theme` 记的是**当时实际用的那套名**（渲染回执里的 rendered.theme）：改版沿用同一套模板，
+ * 免得用户换了一次会话模板、下一版整份换了配色。
+ */
+export const pptDeckSourceSchema = pptInputSchema.pick({
+  title: true,
+  subtitle: true,
+  theme: true,
+  slides: true
+})
+
+export type PptDeckSource = z.infer<typeof pptDeckSourceSchema>
 
 export type PptInput = z.infer<typeof pptInputSchema>
 
@@ -232,6 +303,10 @@ export interface PptQuote {
   source?: string
 }
 
+/**
+ * 渲染侧的只读视图：字段与 `pptSlideSchema` **一一对应**（那份面向模型、这份面向渲染；
+ * `readonly` 是"渲染不改输入"的表态）。加字段时两处一起改 —— 这是唯一一处刻意的重复。
+ */
 export interface PptSlideInput {
   layout?: PptLayout
   title?: string
@@ -257,9 +332,6 @@ export interface PptxResult {
   slides: number
   theme: string
 }
-
-/** 16:9 画布（英寸）：pptxgenjs 的 LAYOUT_16x9 = 10 × 5.625 */
-const CANVAS = { w: 10, h: 5.625 } as const
 
 /** 正文类页面的栅格（英寸）：标题 → 强调短线 → 内容 → 页脚 */
 const FRAME = {
@@ -287,14 +359,17 @@ type PptxTableCell = PptxTableRows[number][number]
 
 /**
  * 渲染演示文稿（纯入口：没有 IO，测试拿返回值解包断言）。
- * 页数 = 封面（有文档标题时）+ 每张排得出版式的页 + 自动结尾页（有封面且没给 closing 时）。
+ * 页数 = 封面（有文档标题时）+ 每张排得出版式的页（含模型显式给的 `closing` 页）。
+ * **没有自动结尾页**：模型不给结尾页就没有结尾页。
+ * `defaultTheme` = **这个会话**在对话页固定的模板名（按 threadId 现读；空串 / 不认得都退到自动挑，
+ * 见 resolveTheme）。
  */
-export async function renderPptx(input: PptxInput): Promise<PptxResult> {
+export async function renderPptx(input: PptxInput, defaultTheme?: string): Promise<PptxResult> {
   const { default: PptxGenJS } = await import('pptxgenjs')
   const pptx = new PptxGenJS()
   pptx.layout = 'LAYOUT_16x9'
 
-  const theme = resolveTheme(input)
+  const theme = resolveTheme(input, defaultTheme)
   const plan = planPages(input)
   const footerLeft = input.title?.trim() ?? ''
 
@@ -320,7 +395,27 @@ export async function renderPptx(input: PptxInput): Promise<PptxResult> {
   }
 }
 
-export async function createPptTool(ctx: ToolContext): Promise<Tool<PptInput, string>> {
+/** createPptTool 的装配选项（round 66：**这个会话**在对话页固定的模板） */
+export interface CreatePptToolOptions {
+  /**
+   * 这条会话在对话页「PPT」胶囊里固定的模板名（**现读**的取值函数，参数 = 会话 id）。
+   * 缺省 = 没有固定模板（按内容自动挑）。空串 / 不认得的名字同样退到自动挑。
+   *
+   * 为什么按 threadId 问：模板选择是**会话级**的（round 66）—— 同一时刻不同会话各有一套，
+   * 甚至有的会话没选。取值函数在工具执行那一刻用 `sessionKey(context)` 调（那时拿得到线程 id）。
+   */
+  getDefaultTheme?: (threadId: string) => string
+  /**
+   * round 76：这份 deck 的**源结构**记到哪（`edit_ppt` 之后就在它的基础上发增量）。
+   * 缺省 = 不记（本部署没挂存储；产出照常，只是之后 edit_ppt 会照实说"没有源结构"）。
+   */
+  sources?: Pick<SessionPptSourceStore, 'record'>
+}
+
+export async function createPptTool(
+  ctx: ToolContext,
+  options: CreatePptToolOptions = {}
+): Promise<Tool<PptInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
 
   const planInput = (input: PptInput): ArtifactInput => ({
@@ -331,17 +426,11 @@ export async function createPptTool(ctx: ToolContext): Promise<Tool<PptInput, st
   return createTool({
     id: 'create_ppt',
     description:
-      '生成 .pptx 演示文稿（模板化：内置主题 + 八种版式 + 统一的标题短线与页脚），' +
-      '落到当前会话工作区并返回文件路径与字节数。' +
-      `theme 指定配色主题（${PPT_THEME_NAMES.join(' / ')}），不填就按标题自动配一套（同一份内容每次都同一套）。` +
-      'slides 每项一页，可用 layout 指定版式（cover 封面 / section 章节 / content 正文要点 / ' +
-      'stats 数字卡片 / table 表格 / two-column 左右分栏 / quote 引言 / closing 结尾），' +
-      '不指定就按这一页给的数据自动选：给 stats 出 KPI 卡、给 table 出表格、给 quote 出引言、' +
-      '给 columns 出分栏、给 bullets 出要点页。' +
-      '文档 title 会另出一张封面，并在末尾自动补一页结尾页（自己给了 closing 页就不补）。' +
-      `上限：一页最多 30 条要点、${MAX_STATS} 张数字卡、表格 ${MAX_TABLE_ROWS} 行 ${MAX_TABLE_COLS} 列，超出请拆分页面。` +
-      '要点要写短（文本框开了"溢出自动缩小"，但短句才像成品）。适合汇报、提案、讲解稿；' +
-      '要打印成文档用 create_pdf / create_docx，要数据表用 create_excel。执行前会请求用户批准。',
+      'Build a .pptx deck from a template system; saved to the session workspace, returns path and bytes. ' +
+      'Each `slides` entry is one page; an omitted `layout` is picked from that page data. A document `title` adds a cover slide; ' +
+      'when you want a closing slide, add it yourself with real content (nothing is appended for you). ' +
+      'A deck made earlier in this conversation is changed page by page with edit_ppt, which takes only the edits. ' +
+      'Not for a document to read or print (create_docx / create_pdf), a report (create_report) or a data table (create_excel).',
     inputSchema: pptInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>
@@ -356,26 +445,69 @@ export async function createPptTool(ctx: ToolContext): Promise<Tool<PptInput, st
     execute: async (input, context) => {
       const session = sessionKey(context)
       const abs = artifactTarget(ctx, planInput(input), 'pptx', '演示文稿', session)
-      const rendered = await renderPptx(input)
+      // 缺省模板按**本会话**取（round 66：模板选择是会话级的）；显式 theme 仍然最优先（见 resolveTheme）
+      const rendered = await renderPptx(input, options.getDefaultTheme?.(session))
 
-      // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明
+      // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明（断言没过也照写，
+      // 让模型自己决定改还是报用户 —— 见 artifact-check 的 assertItems）
       const check = checkPackage(rendered.data, {
         kind: 'pptx',
         slides: rendered.slides,
-        texts: sampleText(input)
+        texts: pptSampleText(input),
+        assert: { count: input.expect?.pages, contains: input.expect?.contains }
       })
       assertPackage(check)
 
-      return await saveArtifact(ctx, abs, rendered.data, `${input.slides.length} 页演示文稿`, {
-        session,
-        check: check.note
-      })
+      // 回执带**最终用的模板名**（用户与测试都靠它确认"选的模板真用上了"）
+      const receipt = await saveArtifact(
+        ctx,
+        abs,
+        rendered.data,
+        `${input.slides.length} 页演示文稿，模板「${rendered.theme}」`,
+        { session, check: check.note }
+      )
+
+      // round 76：把这份 deck 的**源结构**记进会话级映射，edit_ppt 之后就在它的基础上改。
+      // 记的是**实际用的模板名**（rendered.theme）——改版沿同一套配色，不会因为用户在对话页换了
+      // 模板、下一版整份换风格。落库失败**不影响这次产出**（文件已经写好了）：记一条日志，
+      // 之后 edit_ppt 会照实说"这个会话里没有它的源结构"，不会假装成功。
+      if (options.sources !== undefined) {
+        try {
+          await options.sources.record({
+            threadId: session,
+            path: abs,
+            sourceJson: JSON.stringify(deckSourceOf(input, rendered.theme)),
+            pages: rendered.slides,
+            sha256: sha256Of(rendered.data),
+            size: rendered.data.byteLength
+          })
+        } catch (error: unknown) {
+          console.warn('[kyclaw] create_ppt 的源结构没能落库（edit_ppt 会照实说没有源）', error)
+        }
+      }
+
+      return receipt
     }
   })
 }
 
-/** 自检的样本文本：封面标题优先，否则第一页第一个非空文本（取不到就给空数组，该检查项不出现） */
-function sampleText(input: PptInput): string[] {
+/** 入参 → 落库的源结构（除 `expect` / `path` 之外的全部；theme 用实际生效的那套名） */
+function deckSourceOf(input: PptInput, theme: string): PptDeckSource {
+  // 过一遍 schema：把"实际用的模板名"收成十套之一（渲染器只可能回注册表里的名字），
+  // 顺带保证落库的 JSON 一定是能读回来的形状
+  return pptDeckSourceSchema.parse({
+    title: input.title,
+    subtitle: input.subtitle,
+    theme,
+    slides: [...input.slides]
+  })
+}
+
+/**
+ * 自检的样本文本：封面标题优先，否则第一页第一个非空文本（取不到就给空数组，该检查项不出现）。
+ * edit_ppt 改完也走这一份（同一个"这份包该有什么文字"的口径）。
+ */
+export function pptSampleText(input: PptxInput): string[] {
   const cover = input.title?.trim() ?? ''
   if (cover !== '') return [cover]
 
@@ -388,11 +520,24 @@ function sampleText(input: PptInput): string[] {
   return []
 }
 
-interface PlannedPage {
+/**
+ * 排定的一页：**画什么**（layout + slide）＋ **它是从哪来的**（`slideIndex`）。
+ *
+ * `slideIndex` 是 `edit_ppt` 的"页号 → 源结构下标"映射的依据（见 tools/ppt-edit.ts），
+ * 所以它必须与 planPages 的挑选逻辑**同一处**算 —— 另算一份就会漂：
+ *   - `-1` = 封面（由文档 `title` 生成，源 `slides` 里没有对应条目）；
+ *   - `-2` = 内容全空时的那张占位页（见 renderPptx：零页演示文稿打不开）。
+ */
+export const PPT_PAGE_COVER = -1
+export const PPT_PAGE_PLACEHOLDER = -2
+
+export interface PlannedPage {
   layout: PptLayout
   slide: PptSlideInput
   /** 章节页的序号（1 起，按章节页出现顺序；非章节页为 0） */
   sectionIndex: number
+  /** 源 `slides` 里的下标；封面 / 占位页见 PPT_PAGE_COVER / PPT_PAGE_PLACEHOLDER */
+  slideIndex: number
 }
 
 interface PageContext {
@@ -407,30 +552,37 @@ interface PageContext {
 
 /**
  * 先把"要出哪几页"排定，再逐页画 —— 页码要知道总页数之前就定下来，不能边画边数。
- * 自动结尾页只补在"有封面且没有显式 closing 页"的文档里（显式页永远优先，不重复出）。
+ * **不自动补结尾页**：篇幅以模型给的为准（想要结尾页就自己写一张有内容的 `closing` 页）。
+ * 从前这里会补一张只写「谢谢观看」的占位页 —— 技能里明令禁止这种"无信息页"，工具层不该反过来
+ * 批量生产它。
+ *
+ * 导出给 edit_ppt 用（"物理页序 → 源结构下标"的唯一依据；`slides` 里排不出内容的页不占页号）。
  */
-function planPages(input: PptxInput): PlannedPage[] {
+export function planPages(input: PptxInput): PlannedPage[] {
   const pages: PlannedPage[] = []
   const coverTitle = input.title?.trim() ?? ''
   if (coverTitle !== '') {
     pages.push({
       layout: 'cover',
       slide: { title: coverTitle, subtitle: trimText(input.subtitle) },
-      sectionIndex: 0
+      sectionIndex: 0,
+      slideIndex: PPT_PAGE_COVER
     })
   }
 
   let sections = 0
-  for (const slide of input.slides) {
+  input.slides.forEach((slide, index) => {
     const layout = resolveLayout(slide)
-    if (layout === null) continue
+    if (layout === null) return
     if (layout === 'section') sections += 1
-    pages.push({ layout, slide, sectionIndex: layout === 'section' ? sections : 0 })
-  }
+    pages.push({
+      layout,
+      slide,
+      sectionIndex: layout === 'section' ? sections : 0,
+      slideIndex: index
+    })
+  })
 
-  if (coverTitle !== '' && !pages.some((page) => page.layout === 'closing')) {
-    pages.push({ layout: 'closing', slide: {}, sectionIndex: 0 })
-  }
   return pages
 }
 
@@ -476,7 +628,8 @@ function layoutReady(layout: PptLayout, slide: PptSlideInput): boolean {
     case 'quote':
       return trimText(slide.quote?.text) !== undefined
     case 'closing':
-      return true
+      // 没有兜底文案了：空 closing 页排不出来（退到自动挑，挑不出来就跳过）—— 免得出一张空页
+      return trimText(slide.title) !== undefined
   }
 }
 
@@ -508,32 +661,33 @@ function drawPage(ctx: PageContext, page: PlannedPage): void {
   }
 }
 
-/** 封面：大标题 + 副标题 + 主题色短线 + 主题装饰块（不出页脚，页码从第 2 页起） */
+/**
+ * 封面：大标题 + 副标题 + 主题色短线 + 装饰（不出页脚，页码从第 2 页起）。
+ * 构图照 `coverPlan(theme)` 走 —— 居中封面（装饰块 = 该模板 motif）与 band 封面（左侧色带 + 左对齐标题块）
+ * 是同一份几何的两个分支，渲染端的预览卡也读它（"画廊里看到的"就是"生成出来的"）。
+ */
 function drawCover(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
-  addMotif(ctx)
+  const plan = coverPlan(ctx.theme)
+  for (const box of plan.decor) addRect(ctx, box, ctx.theme.accent)
+
   addBox(ctx.slide, trimText(page.slide.title) ?? '', {
-    x: 0.8,
-    y: 1.8,
-    w: 8.4,
-    h: 1.35,
-    fontSize: 40,
+    ...plan.title,
+    fontSize: plan.titleSize,
     bold: true,
     color: ctx.theme.title,
-    align: 'center',
+    align: plan.align,
     valign: 'middle'
   })
-  addTitleRule(ctx, 4.5, 3.32)
+  addRect(ctx, plan.rule, ctx.theme.accent)
+
   const subtitle = trimText(page.slide.subtitle)
   if (subtitle !== undefined) {
     addBox(ctx.slide, subtitle, {
-      x: 0.8,
-      y: 3.55,
-      w: 8.4,
-      h: 0.6,
-      fontSize: 18,
+      ...plan.subtitle,
+      fontSize: plan.subtitleSize,
       color: ctx.theme.muted,
-      align: 'center',
+      align: plan.align,
       valign: 'middle'
     })
   }
@@ -820,11 +974,11 @@ function drawQuote(ctx: PageContext, page: PlannedPage): void {
   addFooter(ctx)
 }
 
-/** 结尾页：一句话 + 短线 + 装饰块（文字默认"谢谢观看"，自己给了 title 就用它） */
+/** 结尾页：一句话 + 短线 + 装饰块（文字 = 模型给的 `title`；没有兜底文案，见 layoutReady） */
 function drawClosing(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   addMotif(ctx)
-  addBox(ctx.slide, trimText(page.slide.title) ?? DEFAULT_CLOSING, {
+  addBox(ctx.slide, trimText(page.slide.title) ?? '', {
     x: 1.2,
     y: 2.25,
     w: 7.6,
@@ -887,12 +1041,17 @@ function addTitleRule(
   y: number = FRAME.ruleY,
   w: number = FRAME.ruleW
 ): void {
+  addRect(ctx, { x, y, w, h: FRAME.ruleH }, ctx.theme.accent)
+}
+
+/** 一个矩形色块（装饰色块 / 短线 / 封面色带共用这一处；颜色一律走模板 token） */
+function addRect(ctx: PageContext, box: PptBox, color: string): void {
   ctx.slide.addShape(ctx.pptx.ShapeType.rect, {
-    x,
-    y,
-    w,
-    h: FRAME.ruleH,
-    fill: { color: ctx.theme.accent }
+    x: box.x,
+    y: box.y,
+    w: box.w,
+    h: box.h,
+    fill: { color }
   })
 }
 
@@ -965,63 +1124,13 @@ function addBullets(
 }
 
 /**
- * 封面 / 章节页 / 结尾页的装饰色块（形状风格跟主题走，同一主题三处一致）。
- * 三套形状都**避开页脚区**（y ≥ 4.9 的横带只留给页脚细线与页码）：章节页/结尾页也带页脚，
+ * 封面 / 章节页 / 结尾页的装饰色块（形状风格跟模板走，同一模板三处一致）。
+ * 形状几何在 shared/ppt-templates.ts 的 motifBoxes（渲染端的预览卡读同一份）；三套形状都
+ * **避开页脚区**（y ≥ 4.9 的横带只留给页脚细线与页码）：章节页/结尾页也带页脚，
  * 装饰压在页脚上会让 muted 字色贴在强调色底上（对比度不够）。
  */
 function addMotif(ctx: PageContext): void {
-  const { pptx, slide, theme } = ctx
-  if (theme.motif === 'bar') {
-    // 左侧通栏竖条 + 左上横块（L 形）
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 0,
-      y: 0,
-      w: 0.22,
-      h: CANVAS.h,
-      fill: { color: theme.accent }
-    })
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 0.22,
-      y: 0,
-      w: 1.5,
-      h: 0.22,
-      fill: { color: theme.accent }
-    })
-    return
-  }
-  if (theme.motif === 'block') {
-    // 顶部通栏色带 + 右下角方块
-    slide.addShape(pptx.ShapeType.rect, {
-      x: 0,
-      y: 0,
-      w: CANVAS.w,
-      h: 0.35,
-      fill: { color: theme.accent }
-    })
-    slide.addShape(pptx.ShapeType.rect, {
-      x: CANVAS.w - 1,
-      y: 4.35,
-      w: 0.6,
-      h: 0.6,
-      fill: { color: theme.accent }
-    })
-    return
-  }
-  // corner：右上横块 + 右下横块
-  slide.addShape(pptx.ShapeType.rect, {
-    x: CANVAS.w - 2.6,
-    y: 0,
-    w: 2.6,
-    h: 0.3,
-    fill: { color: theme.accent }
-  })
-  slide.addShape(pptx.ShapeType.rect, {
-    x: CANVAS.w - 1.6,
-    y: CANVAS.h - 0.225,
-    w: 1.6,
-    h: 0.225,
-    fill: { color: theme.accent }
-  })
+  for (const box of motifBoxes(ctx.theme.motif)) addRect(ctx, box, ctx.theme.accent)
 }
 
 /** 去掉空白的要点（模型偶尔给空串） */
