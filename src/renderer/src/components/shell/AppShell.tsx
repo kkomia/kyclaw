@@ -2,8 +2,10 @@ import { PanelRightOpen } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { useShellStore } from '@renderer/lib/shell-store'
+import { startupMark } from '@renderer/lib/startup-timing'
 import { SettingsNav } from '@renderer/features/settings/SettingsNav'
 import { SessionsController } from '@renderer/features/sessions/SessionsController'
+import { useNewSessionShortcut } from '@renderer/features/sessions/use-new-session-shortcut'
 import { Workbench } from '@renderer/features/workbench/Workbench'
 import { IconButton } from '../ui/icon-button'
 import { ContentRegion } from './ContentRegion'
@@ -43,8 +45,14 @@ function collapseWidthThreshold(): number {
  *
  * round 48（用户口径）：工作台面板属于对话区——切到对话以外的页面（设置/插件等）自动收起，
  * 面板状态与标签保留，回到对话由用户再自己展开。
+ *
+ * round 64（用户口径）：全局快捷键 Ctrl+K / Cmd+K = 新建会话，挂在**壳**上
+ * （useNewSessionShortcut）——它按路由无关，所以设置页/插件页按也生效，
+ * 与侧栏顶部那个「新建会话」按钮同一个动作。
  */
 export function AppShell(): React.JSX.Element {
+  // 全局快捷键（Ctrl+K / Cmd+K）：等价于点侧栏的「新建会话」——壳常驻，任何路由都收得到
+  useNewSessionShortcut()
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
   const workPanelWidth = useShellStore((state) => state.workPanelWidth)
@@ -78,6 +86,11 @@ export function AppShell(): React.JSX.Element {
   useEffect(() => {
     if (!inChat) setWorkPanelOpen(false)
   }, [inChat, setWorkPanelOpen])
+
+  // round 73：冷启动打点 —— 壳已挂载（DOM 出来了、路由开始渲染内容列）
+  useEffect(() => {
+    startupMark('外壳挂载')
+  }, [])
 
   return (
     <div

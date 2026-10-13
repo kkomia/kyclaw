@@ -1,5 +1,6 @@
 import { DefaultChatTransport } from 'ai'
 import type { ChatTransport, UIMessage } from 'ai'
+import type { AgentEndpoint } from '@shared/ipc'
 import { threadMemoryBody } from '@shared/threads'
 import { probedKeyOf, requestProviderOptions } from '@shared/models'
 import { useSettingsStore } from './settings-store'
@@ -18,12 +19,37 @@ export function agentChatUrl(baseUrl: string): string {
   return `${baseUrl}/chat/kyclaw-agent`
 }
 
-export async function getTransport(): Promise<ChatTransport<UIMessage>> {
-  const { baseUrl, token } = await window.kyclaw.agent.endpoint()
+/**
+ * 端点解析一次拿到手的那一份。
+ *
+ * **为什么单独有这个函数**：一份端点可以喂给同一屏上的多个取数口 —— ChatPage 就是这么用的
+ * （解析一次 → 既拼 chat 传输、又交给会话级 PPT 模板预取），省掉一次重复的 IPC 往返，
+ * 也让"这一屏用的是哪一份端点"只有一个来源。
+ *
+ * **刻意不做缓存**（这是既有契约，见 `lib/__tests__/agent.spec.ts` 的"取端点在先：每次调用都等
+ * endpoint() 的结果"）：要不要复用是**调用方**的事 —— 需要共享就在一屏的入口解析一次再往下传，
+ * 而不是让这里背一个全局可变值。全局缓存会让"换端点 / 服务重启后再取"这类场景无从表达，
+ * 也会让同一份模块状态跨用例泄漏（`window.kyclaw.agent.endpoint` 是可被替换的）。
+ *
+ * **必须是 async 的**（别改成同步返回）：桥根本不在时（jsdom 里没装 kyclaw、主进程没起）
+ * `window.kyclaw.agent` 这一下会抛，同步抛会从 effect 里炸出去把整页带崩；`async` 把抛转成
+ * rejected promise，交给调用方那条 `.catch` 落到错误卡 —— "服务没起来"这条路径靠的就是它
+ * （routes.spec / app.spec 直接渲染 App 且不装桥，钉的正是这件事）。
+ */
+export async function resolveAgentEndpoint(): Promise<AgentEndpoint> {
+  return window.kyclaw.agent.endpoint()
+}
+
+/** 用一份已解析的端点拼对话传输（URL 与 Bearer 头只在这一处拼） */
+export function transportFor(endpoint: AgentEndpoint): ChatTransport<UIMessage> {
   return new DefaultChatTransport({
-    api: agentChatUrl(baseUrl),
-    headers: { Authorization: `Bearer ${token}` }
+    api: agentChatUrl(endpoint.baseUrl),
+    headers: { Authorization: `Bearer ${endpoint.token}` }
   })
+}
+
+export async function getTransport(): Promise<ChatTransport<UIMessage>> {
+  return transportFor(await resolveAgentEndpoint())
 }
 
 /**

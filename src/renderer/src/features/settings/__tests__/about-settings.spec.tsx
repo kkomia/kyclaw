@@ -1,14 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { UpdateState } from '@shared/ipc'
+import { defaultSettings } from '@shared/settings'
 import { AboutSettings } from '../AboutSettings'
 import { updateStatusText } from '../status-text'
 
 /**
- * 设置页「关于」组（T17）：当前版本 + 手动检查 + 一行状态。
+ * 设置页「关于」组（T17 / round 63）：当前版本 + 手动检查 + 一行状态 + 更新源（填地址、保存、校验）。
  * 这里盯的是"用户看到的那几件事"：版本、状态文案随推送走、没配源时按钮不可点（不骚扰）、
- * 下载完成后才出现「重启并安装」。
+ * 下载完成后才出现「重启并安装」、更新源填错了挡在保存这一步。
  */
 function renderAbout(initial?: UpdateState): ReturnType<typeof installKyclawBridge> {
   const bridge = installKyclawBridge()
@@ -20,10 +22,18 @@ function renderAbout(initial?: UpdateState): ReturnType<typeof installKyclawBrid
 const STATUS: UpdateState = {
   currentVersion: '1.0.0',
   configured: true,
+  builtinUrl: null,
   status: { phase: 'idle' }
 }
 
+/** 打包件那套：内置源地址一并给出来（输入框的占位提示就是它） */
+const BUNDLED: UpdateState = {
+  ...STATUS,
+  builtinUrl: 'http://192.168.31.18:9000/kyclaw/releases/'
+}
+
 beforeEach(() => {
+  useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -35,7 +45,7 @@ afterEach(() => {
 describe('状态文案（纯函数）', () => {
   it('每个相位一句人话；没配源与还没读到分开说', () => {
     const of = (status: UpdateState['status'], configured = true): string =>
-      updateStatusText({ currentVersion: '1.0.0', configured, status })
+      updateStatusText({ currentVersion: '1.0.0', configured, builtinUrl: null, status })
 
     expect(updateStatusText(null)).toBe('正在读取…')
     expect(of({ phase: 'idle' })).toBe('尚未检查')
@@ -136,5 +146,120 @@ describe('「关于」组', () => {
 
     const text = screen.getByTestId('about-settings').textContent ?? ''
     expect(/\p{Extended_Pictographic}/u.test(text)).toBe(false)
+  })
+})
+
+describe('「关于」组：更新源（round 63）', () => {
+  it('打包件里带内置源：输入框留空，占位提示就是那个地址', async () => {
+    renderAbout(BUNDLED)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-url')).toHaveAttribute(
+        'placeholder',
+        'http://192.168.31.18:9000/kyclaw/releases/'
+      )
+    )
+    expect(screen.getByTestId('about-update-url')).toHaveValue('')
+  })
+
+  it('填地址 + 保存：写进设置（settings:update），输入框随后以落盘值为准', async () => {
+    const bridge = renderAbout(BUNDLED)
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    fireEvent.change(screen.getByTestId('about-update-url'), {
+      target: { value: '  https://mine.example.com/releases/  ' }
+    })
+    fireEvent.click(screen.getByTestId('about-update-url-save'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        updateUrl: 'https://mine.example.com/releases/'
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-url')).toHaveValue(
+        'https://mine.example.com/releases/'
+      )
+    )
+    expect(useSettingsStore.getState().settings.updateUrl).toBe(
+      'https://mine.example.com/releases/'
+    )
+  })
+
+  it('保存成功后主进程的广播自动生效（configured 变了，界面不用自己刷新）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.updates.state.mockResolvedValue({ ...BUNDLED, configured: false })
+    render(<AboutSettings />)
+    await waitFor(() => expect(screen.getByTestId('about-check')).toBeDisabled())
+
+    fireEvent.change(screen.getByTestId('about-update-url'), {
+      target: { value: 'https://mine.example.com/releases/' }
+    })
+    fireEvent.click(screen.getByTestId('about-update-url-save'))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalled())
+
+    // 主进程重配后推一次新状态（更新源配上了）
+    bridge.updates.push({ ...STATUS, status: { phase: 'idle' } })
+
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    expect(screen.getByTestId('about-update-status')).toHaveTextContent('尚未检查')
+  })
+
+  it('填的地址不是 http(s)：挡在保存这一步（不写盘），输入框给出错误态，内容留着好改', async () => {
+    const bridge = renderAbout(BUNDLED)
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    for (const bad of ['ftp://host/releases', '没写全', 'http://']) {
+      fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: bad } })
+      fireEvent.click(screen.getByTestId('about-update-url-save'))
+
+      await waitFor(() =>
+        expect(screen.getByTestId('about-update-url-error')).toHaveTextContent('地址无效')
+      )
+      expect(screen.getByTestId('about-update-url')).toHaveAttribute('aria-invalid', 'true')
+      expect(screen.getByTestId('about-update-url')).toHaveValue(bad)
+      expect(bridge.update).not.toHaveBeenCalled()
+    }
+  })
+
+  it('改一下就把错误态清掉', async () => {
+    renderAbout(BUNDLED)
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: 'nope' } })
+    fireEvent.click(screen.getByTestId('about-update-url-save'))
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-url-error')).toHaveTextContent('地址无效')
+    )
+
+    fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: 'https://ok/' } })
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('about-update-url-error')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('about-update-url')).not.toHaveAttribute('aria-invalid')
+  })
+
+  it('清空保存 = 跟随内置源（空串也照样落盘）', async () => {
+    const bridge = installKyclawBridge()
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), updateUrl: 'https://mine.example.com/releases/' },
+      loaded: true
+    })
+    bridge.updates.state.mockResolvedValue(BUNDLED)
+    render(<AboutSettings />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-url')).toHaveValue(
+        'https://mine.example.com/releases/'
+      )
+    )
+
+    fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('about-update-url-save'))
+
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ updateUrl: '' }))
+    await waitFor(() => expect(screen.getByTestId('about-update-url')).toHaveValue(''))
+    expect(useSettingsStore.getState().settings.updateUrl).toBe('')
   })
 })

@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 import { publishContextItem } from '@renderer/features/chat/composer-inbox'
@@ -70,7 +71,7 @@ function settingsWithProvider(model: string, extra: Partial<AppSettings> = {}): 
 }
 
 describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', () => {
-  it('max 768 / 圆角 24 / 输入区自适应（48–170）/ 工具条 48 / 发送钮 36', () => {
+  it('max 768 / 圆角 24 / 输入区自适应（56–170）/ 工具条 48 / 发送钮 36', () => {
     setup()
 
     expect(screen.getByTestId('composer')).toHaveClass(
@@ -310,7 +311,7 @@ describe('round 7 · ＋菜单与引用', () => {
     fireEvent.keyDown(skills, { key: 'ArrowRight' })
     await tick()
 
-    // 内置技能（读取文件…）不在菜单里；装进来的技能在
+    // 菜单只列清单里的技能（round 64：内置技能也在这一份清单里，见下一条用例）
     expect(screen.queryByTestId('composer-ref-skill-读取文件')).not.toBeInTheDocument()
     fireEvent.click(await screen.findByTestId('composer-ref-skill-demo-p1-s1'))
 
@@ -331,7 +332,36 @@ describe('round 7 · ＋菜单与引用', () => {
     expect(box?.firstElementChild).toHaveTextContent('【引用】技能：整理笔记')
   })
 
-  it('引用技能：还没有安装技能时给一条禁用说明（也不列内置技能）', async () => {
+  it('引用技能：内置技能进菜单且不带「来自插件」这类错误归属（round 64）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.plugins.overview.mockResolvedValue({
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'docx', name: 'docx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'demo-p1-s1', name: '整理笔记', pluginId: 'demo-p1', pluginName: 'p1' }
+      ]
+    })
+    setup()
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+
+    const skills = screen.getByTestId('composer-ref-skills')
+    skills.focus()
+    fireEvent.keyDown(skills, { key: 'ArrowRight' })
+    await tick()
+
+    // 内置技能在菜单里，行上只有名字（归属与分组在插件页的「技能」面板里给）
+    const builtin = await screen.findByTestId('composer-ref-skill-pptx')
+    expect(builtin).toHaveTextContent('pptx')
+    expect(builtin).not.toHaveTextContent('来自')
+    expect(screen.getByTestId('composer-ref-skill-docx')).toHaveTextContent('docx')
+    // 插件带来的技能同在这一份清单里；整个子菜单不出现任何归属文案
+    expect(screen.getByTestId('composer-ref-skill-demo-p1-s1')).toHaveTextContent('整理笔记')
+    expect(screen.queryByText(/来自/)).not.toBeInTheDocument()
+  })
+
+  it('引用技能：一条技能都没有时给一条禁用说明', async () => {
     installKyclawBridge()
     setup()
     fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
@@ -341,7 +371,7 @@ describe('round 7 · ＋菜单与引用', () => {
     fireEvent.keyDown(skills, { key: 'ArrowRight' })
     await tick()
 
-    expect(screen.getByRole('menuitem', { name: '还没有安装技能' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: '还没有可引用的技能' })).toHaveAttribute(
       'data-disabled'
     )
     expect(screen.queryByTestId('composer-ref-skill-读取文件')).not.toBeInTheDocument()
@@ -1689,5 +1719,95 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
     await tick()
 
     expect(screen.queryByTestId('composer-pending')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * round 66 · 输入卡里**不嵌**「选择项目」（用户口径："放到对话框上面，不要嵌入到里面"）。
+ * 卡片的结构回到纯输入件：附件行 → 输入区 → notice → 工具条（+ 卡片外的上下两行由对话页挂，
+ * 见 welcome-hero.spec 的竖排顺序用例）。这里钉的是"没嵌进去"：
+ *   - 卡片子树里没有 `composer-project` / `composer-project-row`；
+ *   - 渲染 Composer 时（哪怕给了 threadId）也不会凭空多出这一枚 —— 它的宿主是对话页，不是卡片。
+ */
+describe('round 66 · 卡片里不嵌「选择项目」', () => {
+  it('给了 threadId 也没有项目行 / 项目胶囊（宿主是对话页，不是卡片）', () => {
+    setup({ threadId: 't1' })
+
+    const composer = screen.getByTestId('composer')
+    expect(within(composer).queryByTestId('composer-project')).toBeNull()
+    expect(within(composer).queryByTestId('composer-project-row')).toBeNull()
+    expect(screen.queryByTestId('composer-project')).toBeNull()
+    expect(screen.queryByTestId('composer-project-row')).toBeNull()
+  })
+
+  it('卡片里第一件流内内容仍是附件行（结构回到纯输入件，附件行照常挂在卡内）', async () => {
+    setup({ threadId: 't1' })
+
+    fireEvent.change(screen.getByTestId('composer-file-input'), {
+      target: { files: [new File(['内容'], 'note.txt', { type: 'text/plain' })] }
+    })
+    const pending = await screen.findByTestId('composer-pending')
+
+    // 附件行没被挤走、也没被谁包起来：还在卡片里、在输入区之前
+    expect(screen.getByTestId('composer').contains(pending)).toBe(true)
+    expect(
+      (pending.compareDocumentPosition(screen.getByTestId('composer-input')) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+        0
+    ).toBe(true)
+  })
+})
+
+/**
+ * round 64 · 输入区默认高度（用户实拍："默认对话输入框高度偏低，可以调整高一点"、
+ * "空态尤其明显"）。
+ *   - 常态：最小高 48 → **56**（单行时给一行字留出上下余量）；
+ *   - 初始页（空会话）：再高一档 **72** —— 那一屏没有消息，输入框是主角；
+ *   - 两档都只在语义层 token 里写 px，组件只引用语义名；换档走 --motion-main 过渡（不硬切）。
+ * token 值直接从语义层源码读（jsdom 不做布局，断言"真的更高"只能看声明）。
+ */
+describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档）', () => {
+  /** 读语义层源码：路径经参数传进来（Vite 不会把 new URL(..., import.meta.url) 静态改写成资源地址） */
+  function readSource(relativePath: string): string {
+    return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+  }
+  const SEMANTIC_CSS = readSource('../../../styles/tokens/semantic.css')
+
+  function pxTokenOf(name: string): number {
+    const match = new RegExp(`--${name}:\\s*(\\d+)px`).exec(SEMANTIC_CSS)
+    if (match === null) throw new Error(`语义层没有 ${name}`)
+    return Number(match[1])
+  }
+
+  it('常态最小高走 --composer-input-min-height，且比原来那档（48）更高', () => {
+    setup()
+
+    const input = screen.getByTestId('composer-input')
+    expect(input).toHaveClass('min-h-(--composer-input-min-height)')
+    expect(input).not.toHaveClass('min-h-(--composer-input-min-height-hero)')
+    expect(pxTokenOf('composer-input-min-height')).toBeGreaterThan(48)
+  })
+
+  it('初始页（hero）：换 --composer-input-min-height-hero 一档，且更高；换档有过渡（不硬切）', () => {
+    setup({ hero: true })
+
+    const input = screen.getByTestId('composer-input')
+    expect(input).toHaveClass('min-h-(--composer-input-min-height-hero)')
+    expect(input).not.toHaveClass('min-h-(--composer-input-min-height)')
+    expect(input).toHaveClass('transition-[min-height]')
+    expect(pxTokenOf('composer-input-min-height-hero')).toBeGreaterThan(
+      pxTokenOf('composer-input-min-height')
+    )
+    // 封顶没变：长内容照旧到 max 之后内部滚动
+    expect(input).toHaveClass('max-h-(--composer-input-max-height)')
+    expect(input).toHaveClass('overflow-y-auto')
+  })
+
+  it('两档都是语义 token（组件里不出现写死的高度 px）', () => {
+    const source = readSource('../Composer.tsx')
+
+    expect(source).not.toMatch(/minHeight:\s*['"]?\d+px/)
+    expect(source).toContain('min-h-(--composer-input-min-height)')
+    expect(source).toContain('min-h-(--composer-input-min-height-hero)')
   })
 })

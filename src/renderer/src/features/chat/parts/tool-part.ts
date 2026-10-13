@@ -3,7 +3,12 @@
  *
  * 单独成模块的原因：react-refresh 要求组件文件只导出组件（T18 起就是这条纪律）。
  * 状态文案与语气口径见 ToolCard 头注（AI SDK 的 tool part 状态机，spec §7.1）。
+ *
+ * round 75：MCP 工具改成每台 server 一个元工具（`mcp__<serverId>__meta`）之后，工具卡要认的是
+ * **被调用的真名与真入参**，壳由 `toToolCardPart` 剥掉（原读取逻辑原样留在 rawToolCardPart）。
  */
+import { resolveMcpToolCallInput, resolveMcpToolCallName } from '@shared/mcp'
+
 export interface ToolCardPart {
   toolName: string
   state: string
@@ -57,8 +62,12 @@ export function isToolPart(part: { type?: unknown }): boolean {
   return typeof part.type === 'string' && part.type.startsWith('tool-')
 }
 
-/** 把 AI SDK 的 tool part 收成 ToolCard 认的形状（toolName / state / input / output / errorText） */
-export function toToolCardPart(part: MessagePart): ToolCardPart | null {
+/**
+ * 原始读取（未解包）：把 AI SDK 的 tool part 收成 ToolCard 认的形状
+ * （toolName / state / input / output / errorText）。round 75 拆出来时**逻辑一字未改**，
+ * 只让 toToolCardPart 在外面套一层元工具解包。
+ */
+function rawToolCardPart(part: MessagePart): ToolCardPart | null {
   if (part.type === 'dynamic-tool') {
     if (typeof part.toolName !== 'string' || part.toolName === '') return null
     return {
@@ -76,6 +85,23 @@ export function toToolCardPart(part: MessagePart): ToolCardPart | null {
     input: part.input,
     output: part.output,
     errorText: typeof part.errorText === 'string' ? part.errorText : undefined
+  }
+}
+
+/**
+ * 工具卡认的形状：MCP 元工具（`mcp__<serverId>__meta`，round 75「渐进披露」）的 `call` 剥成
+ * **被调用的真名与真入参**。工具卡按工具名判图标、显「服务名 · 工具名」、算行详情与入参面板，
+ * 用户不该看见"一个 server 一个壳"这层内部结构 —— 服务端的闸门本来就在真名上工作
+ * （见 shared/mcp 的 resolveMcpToolCallName / resolveMcpToolCallInput）。
+ * 不是元工具 / 不是 call / 形状不对 → 原样返回（认不出就不猜）。
+ */
+export function toToolCardPart(part: MessagePart): ToolCardPart | null {
+  const raw = rawToolCardPart(part)
+  if (raw === null) return null
+  return {
+    ...raw,
+    toolName: resolveMcpToolCallName(raw.toolName, raw.input),
+    input: resolveMcpToolCallInput(raw.toolName, raw.input)
   }
 }
 

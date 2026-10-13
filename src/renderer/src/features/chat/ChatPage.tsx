@@ -4,32 +4,39 @@ import type { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
 import { cn } from '@renderer/components/ui/cn'
-import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
+import { resolveAgentEndpoint, threadRequestOptions, transportFor } from '@renderer/lib/agent'
 import { compactThread, fetchThreadCompaction, truncateThread } from '@renderer/lib/threads-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { shouldCompact, thresholdTokensOf } from '@renderer/lib/compact'
+import { startupMark } from '@renderer/lib/startup-timing'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { OutgoingMessage } from './composer-attachments'
 import {
   allowForSession,
-  isAllowedForSession,
-  isDangerousTool,
+  isAllowedForSessionNow,
   pendingApprovals,
   resolveApprovalWorkspace
 } from './approval'
 import type { ApprovalRequest } from './approval'
 import type { ApprovalDecision } from './ApprovalCard'
 import type { ComposerNotice } from './ComposerControls'
-import { createThreadChatRuntime, threadChat, dropThreadChat } from './thread-chats'
+import { createThreadChatRuntime, threadChat, dropThreadChat, pendingChat } from './thread-chats'
 import type { ThreadChatRuntime, TurnOutcome } from './thread-chats'
 import { publishDraft } from './composer-inbox'
 import { ApprovalDock } from './ApprovalDock'
+import { CapabilityRow } from './CapabilityRow'
 import { ChatHeader } from './ChatHeader'
+import type { ChatView } from './ChatHeader'
+import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { MessageList } from './MessageList'
+import { PptTemplateChip } from './PptTemplatePicker'
+import { ProjectChip } from './ProjectChip'
+import { usePptTemplatesStore } from './ppt-templates-store'
 import { WelcomeHero } from './WelcomeHero'
+import { TrajectoryView } from '@renderer/features/trajectory/TrajectoryView'
 
 /**
  * 对话页（T7 起，T9 接会话）。
@@ -47,9 +54,20 @@ import { WelcomeHero } from './WelcomeHero'
  * 空会话时消息区与占位等分剩余高度，输入框落到竖直中位、标题在它上方居中偏上；首条消息到达后
  * 占位收到 0，输入框平滑落回常规底部（不重挂、不硬切）。口径见 ActiveChat 的 `hero`。
  *
- * round 62（本轮 P0）：**排队队列挂在会话 store 上**（`sessions-store` 的 `queues`，按 threadId 存），
+ * round 62：**排队队列挂在会话 store 上**（`sessions-store` 的 `queues`，按 threadId 存），
  * 不再放 ActiveChat 的组件内 ref —— 切会话就是卸载（`key={activeId}`），队列与计数会跟着蒸发；
  * 现在切走再切回队列原样还在，轮末（或切回来那一刻）照常补发。
+ *
+ * round 76（输入卡先出来）：**这三层不再各自早退**。原来"端点没解析 / 会话没定 / 历史没回灌"
+ * 三档都是 `return <ChatFrame>…</ChatFrame>`，输入卡（在 ActiveChat 的页脚里）就成了整条链的
+ * 最后一环 —— 生产 bundle 加载快，用户先看到的是"正在连接…"，能打字要等一千多毫秒。现在：
+ *   - ChatPage 三档都渲染**同一挂** ChatSession（transport/threadId 可以为 null）；
+ *   - ChatSession 把"消息区画什么"与"输入卡挡什么"收进一枚 `pending`（connecting / loading /
+ *     error），**输入卡从第一帧就挂着**，只有消息区换内容 —— 所以载入过程中也能聚焦、能打字；
+ *   - 未就绪时发送一律挡住（按钮禁用 + 回车不发 + 工具条一行状态文字），就绪后自动恢复；
+ *     那一段里 `useChat` 先挂在占位 Chat 上（见 thread-chats 的 `pendingChat`）。
+ * "会话 id 未定 → 定下来"会让这一挂按 key 换挂（切会话=换一挂的既有口径），那一下的
+ * 草稿/附件/焦点由 composer-carryover 过桥带走。
  */
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
@@ -88,12 +106,20 @@ function syncErrorOf(pendingSync: PendingSync): Error {
  *  配合 header 自身 pl-2 + 标题按钮 px-2 → 标题左缘 = 内容卡左缘 + 16px（不再被居中列推开）。
  *  内层 = **限宽内容列**（.content-column，P0 回归口径不变：消息区 + 发送框都挂在它里面，
  *  否则会横向铺满主列被覆盖层侧栏裁掉；routes.spec / chat-flow.spec 认的也是它）。
- *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 限宽列。 */
+ *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 限宽列。
+ *
+ *  轨迹层（本轮）：`overlay` 是挂在**限宽列之外**的覆盖层（同层、同级）。为什么不让轨迹也进
+ *  限宽列：时间轴 + 步骤列表 + 明细面板三件并排，800px 的对话列放不下；轨迹是"看数据"的视图，
+ *  铺满主列理所当然。两块内容**同时挂载**，靠 opacity 交叉淡入（不硬切、也不重挂输入框：
+ *  草稿/焦点/在跑的流全程不丢）。 */
 function ChatFrame({
   header,
+  overlay,
   children
 }: {
   header?: React.ReactNode
+  /** 覆盖层（当前只有轨迹层）：与限宽列同级、整幅可铺 */
+  overlay?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   return (
@@ -105,16 +131,35 @@ function ChatFrame({
       {header === undefined ? null : (
         <div className="ml-(--content-safe-left) shrink-0">{header}</div>
       )}
-      <div data-testid="chat-column" className="content-column flex min-h-0 flex-1 flex-col">
-        {children}
+      <div className="[position:relative] flex min-h-0 flex-1 flex-col">
+        {/* 这一层是**覆盖层的定位基准**（与限宽列同级、比 chat-page 少一条顶部栏）。
+            它刻意**不写 `.relative` 这个类**、而是用等价的 `[position:relative]`：对话页的
+            消息导览轨按 `closest('.relative')` 认"整幅 chat 页根"（round 21 的既定口径），
+            多一个带这个类的祖先会把轨道的基准缩到"顶部栏以下"，轨道会整体上移半条栏高。
+            要改这层：先看 chat-flow.spec 里那条"定位基准是 chat 页根"的用例。 */}
+        <div data-testid="chat-column" className="content-column flex min-h-0 flex-1 flex-col">
+          {children}
+        </div>
+        {overlay}
       </div>
     </section>
   )
 }
 
+/**
+ * 会话还没定下来时用的**占位会话 id**（round 76）。
+ *
+ * 为什么要有：输入卡要从这一屏的**第一帧**就在（能聚焦、能打字），而那时端点/会话列表/历史
+ * 回灌都还没回来。Composer 与 ActiveChat 里一堆"按会话记账"的东西（发送队列、草稿归属、
+ * 权限的会话记忆）需要一个 string，所以拿这一枚顶着；真 id 一到就换掉 —— 换 id 会让这一挂按
+ * key 重挂（"换会话 = 换一挂"的既有口径），那一下的草稿/附件/焦点由 composer-carryover 过桥带走。
+ * 这一枚**永远不会**带着请求发出去：实例没就绪时发送是挡住的（见 ActiveChat 的 `pending`）。
+ */
+export const PENDING_THREAD_ID = 'kyclaw-pending'
+
 export function ChatPage(): React.JSX.Element {
   const [transport, setTransport] = useState<ChatTransport<UIMessage> | null>(null)
-  const [error, setError] = useState<Error | null>(null)
+  const [endpointError, setEndpointError] = useState<Error | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const activeId = useSessionsStore((state) => state.activeId)
   const ensureLoaded = useSessionsStore((state) => state.ensureLoaded)
@@ -125,73 +170,104 @@ export function ChatPage(): React.JSX.Element {
 
   useEffect(() => {
     let alive = true
-    getTransport()
-      .then((created) => {
-        if (alive) setTransport(created)
+    // 端点**在这一屏只解析一次**：拿到手之后既拼 chat 传输、又交给 PPT 模板预取（见下）。
+    // 拆成 resolveAgentEndpoint + transportFor 就是为了这件事 —— 原先两处各自
+    // `agent.endpoint()`，一次页面加载会多问主进程一次（error-card 那条"端点恰好被解析 2 次"
+    // 的用例就是被这一次多出来的 IPC 顶穿的）。
+    // round 76：这一趟的等待**不再挡住输入卡** —— 端点没回来时这一屏照常渲染，只是发送挡着、
+    // 状态位写着「正在连接…」（见下面的 ChatSession 与 ActiveChat 的 `pending`）。
+    // 主进程那侧同时改成"挂起等一会儿"（见 main/ipc/agent.ts）：服务晚起几百毫秒不再直接失败。
+    resolveAgentEndpoint()
+      .then((endpoint) => {
+        if (!alive) return
+        // round 73：冷启动打点 —— 服务端点到手（此前一直卡在「正在连接…」）
+        startupMark('服务端点就绪')
+        setTransport(transportFor(endpoint))
+        // round 66：端点在手之后拉一遍会话级 PPT 模板映射 —— 放在这里而不是上面那个 effect，
+        // 是因为"服务还没起来"时 `agent.endpoint` 会抛（启动竞态），拉早了这一趟就白跑；
+        // 拿到 transport 说明端点一定在了（切到某个会话时胶囊当场读得到，不闪一下）。
+        // 这一轮补一句：**复用它刚解析出来的这一份端点**（不再重复问主进程）。
+        // 预取失败只记日志、这个会话退化成"没选模板"，绝不能把对话页推进错误态 ——
+        // 所以它**不进下面这条链**（不进 catch、也不 await），与改动前的 `void` 同形状。
+        void usePptTemplatesStore.getState().ensureLoaded(endpoint)
       })
       .catch((cause) => {
-        if (alive) setError(toError(cause))
+        if (alive) setEndpointError(toError(cause))
       })
     return () => {
       alive = false
     }
   }, [reloadToken])
 
-  const retry = useCallback(() => {
-    setError(null)
+  const retryEndpoint = useCallback(() => {
+    setEndpointError(null)
     setReloadToken((token) => token + 1)
   }, [])
 
-  if (error) {
-    return (
-      <ChatFrame>
-        <div className="px-4 pt-6">
-          <ErrorCard error={error} onRetry={retry} />
-        </div>
-      </ChatFrame>
-    )
-  }
-
-  if (!transport) {
-    return (
-      <ChatFrame>
-        <p data-testid="chat-connecting" className="p-4 text-b2 text-ink-tertiary">
-          正在连接…
-        </p>
-      </ChatFrame>
-    )
-  }
-
-  if (activeId === null) {
-    return (
-      <ChatFrame>
-        <p data-testid="chat-loading" className="p-4 text-b2 text-ink-tertiary">
-          正在载入会话…
-        </p>
-      </ChatFrame>
-    )
-  }
-
-  // key = 会话 id：切换会话就换一挂（Chat 实例在注册表里活着，流不中断）
-  return <ChatSession key={activeId} threadId={activeId} transport={transport} />
+  /**
+   * 三档都在**同一挂**里表达（round 76）：不再各自 `return <ChatFrame>…</ChatFrame>` ——
+   * 那几个早退分支会把输入卡一起卸掉（"可输入"被压在整条链的最后，用户实报的观感问题）。
+   * 现在一律交给 ChatSession：它把"消息区画什么"与"输入卡挡什么"放在同一棵树上，
+   * 输入卡因此**从第一帧就在**，只换消息区。
+   *
+   * key = 会话 id（未定时用占位 id）：切换会话就换一挂（Chat 实例在注册表里活着，流不中断）。
+   */
+  return (
+    <ChatSession
+      key={activeId ?? PENDING_THREAD_ID}
+      transport={transport}
+      threadId={activeId}
+      endpointError={endpointError}
+      onRetryEndpoint={retryEndpoint}
+    />
+  )
 }
 
 export interface ChatSessionProps {
-  transport: ChatTransport<UIMessage>
-  threadId: string
+  /** 端点还没解析出来时是 null（这一屏照常渲染，只是发送挡着） */
+  transport: ChatTransport<UIMessage> | null
+  /** 会话还没定下来（列表还在拉）时是 null */
+  threadId: string | null
   /** 测试注入：默认走服务端回灌 + sessions-store 的完成处理 */
   runtime?: ThreadChatRuntime
+  /** 端点解析失败（这一屏取数链的第一环）：消息区给错误卡 + 重试 */
+  endpointError?: Error | null
+  onRetryEndpoint?: () => void
 }
 
-export function ChatSession({ transport, threadId, runtime }: ChatSessionProps): React.JSX.Element {
+export function ChatSession({
+  transport,
+  threadId,
+  runtime,
+  endpointError = null,
+  onRetryEndpoint
+}: ChatSessionProps): React.JSX.Element {
   const [reloadToken, setReloadToken] = useState(0)
+  /**
+   * 会话实例还没定下来时用的那枚占位 id（真 id 一到就换，见 PENDING_THREAD_ID）。
+   * 这一挂里所有"按会话记账"的地方都用它，保证"实例未就绪"这一段也有一个确定的 string。
+   */
+  const sessionThreadId = threadId ?? PENDING_THREAD_ID
+  /**
+   * 本轮新增：**对话 / 轨迹**这一对页签的状态挂在这里 —— 它与页签、两块内容同层
+   * （页签在 ChatHeader 里，两块内容在下面），放在更外面会让"换会话"带走它、放更里面
+   * 又拿不到两边的兄弟关系。两块内容始终挂载（见下面的层），所以这个 state 不用持久化。
+   */
+  const [view, setView] = useState<ChatView>('chat')
+  /**
+   * 轨迹的取数信号：会话行的 `updatedAt`。一轮结束会刷新会话列表（handleTurnEnd），
+   * 那个时间戳随之变化 —— 于是"跑完一轮回到轨迹页"看到的是新的那份，不需要另铺一条回调。
+   */
+  const trajectoryRevision = useSessionsStore(
+    (state) => state.threads.find((thread) => thread.id === sessionThreadId)?.updatedAt ?? ''
+  )
   /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
   const [turnNotice, setTurnNotice] = useState<string | null>(null)
   /**
    * 解析结果与它对应的 key 一起存：key 变了（换会话/重试）就自然回到"载入中"，
    * 不需要在 effect 里同步 setState 清场（那会触发级联渲染）。
    */
-  const resolveKey = `${threadId}#${reloadToken}`
+  const resolveKey = `${sessionThreadId}#${reloadToken}`
   const [resolved, setResolved] = useState<{
     key: string
     chat: Chat<UIMessage> | null
@@ -200,36 +276,51 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
 
   const defaultRuntime = useMemo(
     () =>
-      createThreadChatRuntime(transport, (finishedThreadId, outcome) => {
-        // 出错/用户主动停止不算"完成"，不通知也不生成标题；
-        // "还停在等审批"的挂起轮同样不算 —— 审批卡还等着用户，标题与完成通知都该等 resume 之后那轮
-        if (outcome.isError || outcome.isAbort || outcome.awaitingApproval) return
-        void useSessionsStore.getState().handleTurnEnd(finishedThreadId)
-      }),
+      transport === null
+        ? null
+        : createThreadChatRuntime(transport, (finishedThreadId, outcome) => {
+            // 出错/用户主动停止不算"完成"，不通知也不生成标题；
+            // "还停在等审批"的挂起轮同样不算 —— 审批卡还等着用户，标题与完成通知都该等 resume 之后那轮
+            if (outcome.isError || outcome.isAbort || outcome.awaitingApproval) return
+            void useSessionsStore.getState().handleTurnEnd(finishedThreadId)
+          }),
     [transport]
   )
   const baseRuntime = runtime ?? defaultRuntime
   /**
    * round 33：包一层 onTurnEnd —— 不论 runtime 是注入的还是默认的，都在这里按 finishReason
    * 算出轮末提示（null = 清除），再原样交给下游回调。
+   * round 76：端点还没到时 `defaultRuntime` 是 null（没有 transport 就拼不出 runtime）——
+   * 这一层跟着判空，下面就绪之前压根不会去解析会话实例。
    */
-  const activeRuntime = useMemo<ThreadChatRuntime>(
-    () => ({
-      ...baseRuntime,
-      onTurnEnd: (id, outcome) => {
-        setTurnNotice(turnNoticeOf(outcome))
-        baseRuntime.onTurnEnd(id, outcome)
-      }
-    }),
+  const activeRuntime = useMemo<ThreadChatRuntime | null>(
+    () =>
+      baseRuntime === null
+        ? null
+        : {
+            ...baseRuntime,
+            onTurnEnd: (id, outcome) => {
+              setTurnNotice(turnNoticeOf(outcome))
+              baseRuntime.onTurnEnd(id, outcome)
+            }
+          },
     [baseRuntime]
   )
   const clearTurnNotice = useCallback(() => setTurnNotice(null), [])
 
+  /**
+   * 会话实例的解析（历史回灌）——**只有真会话 id 到了才做**：占位 id 不是服务端的会话，
+   * 拿它去拉历史只会白跑一趟。就绪之前输入卡照常挂着（发送挡着，见下面的 `pending`）。
+   */
   useEffect(() => {
+    if (threadId === null || activeRuntime === null) return
     let alive = true
     threadChat(threadId, activeRuntime).then(
       (created) => {
-        if (alive) setResolved({ key: resolveKey, chat: created, error: null })
+        if (!alive) return
+        // round 73：冷启动打点 —— 历史回灌完成（输入框就此才可能出现）
+        startupMark('历史回灌')
+        setResolved({ key: resolveKey, chat: created, error: null })
       },
       (cause) => {
         if (alive) setResolved({ key: resolveKey, chat: null, error: toError(cause) })
@@ -241,53 +332,146 @@ export function ChatSession({ transport, threadId, runtime }: ChatSessionProps):
   }, [threadId, activeRuntime, resolveKey])
 
   const current = resolved !== null && resolved.key === resolveKey ? resolved : null
-  const chat = current?.chat ?? null
   const resolveError = current?.error ?? null
+  /**
+   * round 76：输入卡从第一帧就挂着 —— `useChat` 必须拿到一个实例，没就绪这段先给它一枚**占位
+   * Chat**（消息恒空、发送一律被挡）。实例到手之后 useChat 会跟着换过来（@ai-sdk/react 的
+   * `useChat` 按 chat 身份重订阅，见它的 `chatKey`）。产物线任何请求都不会走占位那一枚：
+   * 它的 transport 一被调用就抛。
+   */
+  const chat = current?.chat ?? pendingChat()
+  /**
+   * 会话实例就绪 = 端点到了 + 会话 id 定了 + 历史回灌成了（三者缺一，发送就不该放行：
+   * 少任一环，发出去的请求要么打不到地方、要么带着空上下文）。异常那两档另有错误卡 + 重试。
+   */
+  const ready = transport !== null && threadId !== null && current?.chat != null
 
   const retry = useCallback(() => {
-    dropThreadChat(threadId)
+    dropThreadChat(threadId ?? sessionThreadId)
     setReloadToken((token) => token + 1)
-  }, [threadId])
+  }, [threadId, sessionThreadId])
 
-  if (resolveError) {
-    return (
-      <ChatFrame>
-        <div className="px-4 pt-6">
-          <ErrorCard error={resolveError} onRetry={retry} />
-        </div>
-      </ChatFrame>
-    )
-  }
+  /**
+   * 就绪之前的那一档（消息区画什么 + 输入卡挡什么，一次说清；null = 就绪）：
+   * 出错的排在前面（错误卡 + 重试是给用户看的唯一出口），其次"端点还在解析"，
+   * 最后才是"会话/历史还在载入"。三档都**不卸载输入卡**。
+   */
+  const pending: ActiveChatPending | null = ready
+    ? null
+    : endpointError !== null
+      ? { kind: 'error', error: endpointError, retry: onRetryEndpoint ?? retry }
+      : resolveError !== null
+        ? { kind: 'error', error: resolveError, retry }
+        : transport === null
+          ? { kind: 'connecting' }
+          : { kind: 'loading' }
 
-  if (!chat) {
-    return (
-      <ChatFrame>
-        <p data-testid="chat-loading" className="p-4 text-b2 text-ink-tertiary">
-          正在载入会话…
-        </p>
-      </ChatFrame>
-    )
-  }
-
+  /**
+   * 两块内容**同时挂载**、交叉淡入：
+   *   - 对话层留在文档里（`opacity-0` + `inert`）——输入框草稿、焦点、正在跑的流、滚动位置全不丢；
+   *     它继续占着布局（限宽列那层），所以切页签不会让页脚跳一下；
+   *   - 轨迹层是整幅覆盖层（限宽列之外），激活时铺满主列、不激活时透明且不吃事件。
+   * 两块都走主档时长的 opacity 过渡 —— 不硬切（雷点 5）。
+   *
+   * round 76：这一棵树**不因"就绪与否"换形状** —— 顶栏与轨迹层等就绪才挂（它们要真会话 id），
+   * 而消息区 + 页脚那一格始终挂着（输入卡就在页脚里），所以"载入中 → 就绪"不重挂输入卡。
+   */
   return (
-    <ChatFrame header={<ChatHeader threadId={threadId} />}>
-      <ActiveChat
-        chat={chat}
-        threadId={threadId}
-        turnNotice={turnNotice}
-        onClearTurnNotice={clearTurnNotice}
-      />
+    <ChatFrame
+      header={
+        ready ? (
+          <ChatHeader threadId={sessionThreadId} view={view} onViewChange={setView} />
+        ) : undefined
+      }
+      overlay={
+        ready ? (
+          <div
+            data-testid="trajectory-layer"
+            data-active={view === 'trajectory' ? 'true' : undefined}
+            aria-hidden={view === 'trajectory' ? undefined : true}
+            inert={view !== 'trajectory'}
+            className={cn(
+              'absolute inset-0 flex min-h-0 flex-col bg-surface pl-(--content-safe-left) transition-opacity duration-(--motion-main) ease-main motion-reduce:transition-none',
+              view === 'trajectory' ? 'z-10 opacity-100' : 'pointer-events-none opacity-0'
+            )}
+          >
+            <TrajectoryView
+              threadId={sessionThreadId}
+              active={view === 'trajectory'}
+              revision={trajectoryRevision}
+            />
+          </div>
+        ) : undefined
+      }
+    >
+      <div
+        data-testid="chat-pane"
+        aria-hidden={view === 'chat' ? undefined : true}
+        inert={view !== 'chat'}
+        className={cn(
+          'flex min-h-0 flex-1 flex-col transition-opacity duration-(--motion-main) ease-main motion-reduce:transition-none',
+          view === 'chat' ? 'opacity-100' : 'pointer-events-none opacity-0'
+        )}
+      >
+        <ActiveChat
+          chat={chat}
+          threadId={sessionThreadId}
+          pending={pending}
+          turnNotice={turnNotice}
+          onClearTurnNotice={clearTurnNotice}
+        />
+      </div>
     </ChatFrame>
   )
 }
 
+/**
+ * 会话实例就绪之前的那一档（round 76）：**一次说清两件事** —— 消息区画什么、输入卡挡什么。
+ * 放在一枚判定里而不是各自传几个 boolean，是为了"载入中"与"出错了"这两档不可能被拆成
+ * 自相矛盾的两半（例如消息区在报错、输入卡却像没事一样能发）。
+ *   - `connecting`：端点在解析（主进程那侧正挂起等服务起来）
+ *   - `loading`：会话 id 或历史回灌还没到
+ *   - `error`：端点和历史任一环失败（消息区错误卡 + 重试；输入卡只挡发送、不重复解释）
+ */
+export type ActiveChatPending =
+  { kind: 'connecting' } | { kind: 'loading' } | { kind: 'error'; error: Error; retry: () => void }
+
 interface ActiveChatProps {
   chat: Chat<UIMessage>
   threadId: string
+  /** 实例就绪之前的那一档；null = 就绪（正常发消息） */
+  pending: ActiveChatPending | null
   /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
   turnNotice: string | null
   /** 新一轮开始（发送 / 重试 / 编辑重发 / 审批续跑）时清掉上一轮的提示 */
   onClearTurnNotice: () => void
+}
+
+/**
+ * 实例就绪之前消息区里的占位（round 76）：还在载入就一行状态，出错了就错误卡 + 重试。
+ * 与改动前"整页换成错误卡"是同一句话、同一个重试入口，区别只是**不再把输入卡一起卸掉**
+ * （草稿、附件、焦点都留在原地）。
+ */
+function PendingNotice({
+  pending
+}: {
+  pending: Exclude<ActiveChatPending, null>
+}): React.JSX.Element {
+  if (pending.kind === 'error') {
+    return (
+      <div className="px-4 pt-6">
+        <ErrorCard error={pending.error} onRetry={pending.retry} />
+      </div>
+    )
+  }
+  return (
+    <p
+      data-testid={pending.kind === 'connecting' ? 'chat-connecting' : 'chat-loading'}
+      className="p-4 text-b2 text-ink-tertiary"
+    >
+      {pending.kind === 'connecting' ? '正在连接…' : '正在载入会话…'}
+    </p>
+  )
 }
 
 /** 编辑/重试/撤回先要在服务端截断的那一步失败了：带着原动作重试 */
@@ -300,9 +484,12 @@ interface PendingSync {
 function ActiveChat({
   chat,
   threadId,
+  pending,
   turnNotice,
   onClearTurnNotice
 }: ActiveChatProps): React.JSX.Element {
+  /** 实例就绪（round 76）：没就绪时不发不发、也不去服务端动历史，消息区画占位 */
+  const ready = pending === null
   /**
    * round 62：排队队列**在会话 store 里**（按 threadId 存，见 sessions-store 的 `queues`）。
    *
@@ -391,7 +578,8 @@ function ActiveChat({
     () =>
       pendingApprovals(messages[messages.length - 1]).filter((request) => {
         const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
-        return workspace === null || !isAllowedForSession(threadId, request.toolName, workspace)
+        // round 71：红线命令不算"本会话允许"命中的（否则会被藏起来 + 自动放行）
+        return !isAllowedForSessionNow(threadId, request, workspace, workspaces)
       }),
     [messages, workspaces, threadId]
   )
@@ -403,8 +591,10 @@ function ActiveChat({
     messageCountRef.current = messages.length
   }, [messages.length])
 
-  /** 压缩记录随会话挂载读一次（分界线的数据面；取不到就停在无分界线态，不打扰对话） */
+  /** 压缩记录随会话挂载读一次（分界线的数据面；取不到就停在无分界线态，不打扰对话）。
+   *  round 76：**就绪了才读** —— 未就绪时 threadId 还是占位 id，拿它去问服务端只会白跑一趟 404。 */
   useEffect(() => {
+    if (!ready) return
     let alive = true
     void fetchThreadCompaction(threadId).then(
       (record) => {
@@ -417,7 +607,7 @@ function ActiveChat({
     return () => {
       alive = false
     }
-  }, [threadId])
+  }, [ready, threadId])
 
   /**
    * 跑一轮压缩（自动触发与手动入口共用）：进行中压缩中置忙；失败不抛出，
@@ -544,13 +734,15 @@ function ActiveChat({
    *   - 决策本身经 addToolApprovalResponse 回灌（走 respondToApproval）；`sendAutomaticallyWhen`
    *     （thread-chats 里挂的 `canResumeAfterApproval`，approval.ts）会在所有审批都有回应后自动把
    *     消息发回服务端执行。
-   * 两个记忆入口都要求工作区明确、且不是危险档（delete/move 服务端永远问、不吃记忆；审批卡
-   * 不显示这两个入口，这里再守一道 —— 防任何调用方绕出"点了却不生效"的规则）。
+   * 两个记忆入口都要求工作区明确（规则是 (工具 × 工作区) 粒度的，判不出工作区就没有规则可写）。
+   * round 76（用户口径"允许就是永久允许"）：delete / move 与其它写类**同一套**——这里不再按工具
+   * 身份分叉（服务端的 gate 一直吃 (工具 × 工作区) 规则，卡上不给入口才是两边的口径打架）。审批
+   * 档位与判定链一个字没动：区内 full 免审、区内 ask 按规则/逐次问、区外按「工作区之外」那一档。
    */
   const decideApproval = useCallback(
     (request: ApprovalRequest, decision: ApprovalDecision) => {
       const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
-      if (workspace !== null && !isDangerousTool(request.toolName)) {
+      if (workspace !== null) {
         if (decision === 'session' || decision === 'forever') {
           allowForSession(threadId, request.toolName, workspace)
         }
@@ -578,11 +770,12 @@ function ActiveChat({
   /**
    * 会话记忆命中的待批调用直接放行（"本会话允许"之后不再弹卡）。
    * round 62：与手动决策共用 respondToApproval —— 自动续跑那次请求同样带线程上下文。
+   * round 71：红线命令不在此列（`isAllowedForSessionNow` 再挡一道，服务端的红线是 bypass-immune）。
    */
   useEffect(() => {
     for (const request of pendingApprovals(messages[messages.length - 1])) {
       const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
-      if (workspace !== null && isAllowedForSession(threadId, request.toolName, workspace)) {
+      if (isAllowedForSessionNow(threadId, request, workspace, workspaces)) {
         respondToApproval(request, { approved: true })
       }
     }
@@ -597,12 +790,14 @@ function ActiveChat({
   }, [status, onClearTurnNotice])
 
   const flushNext = useCallback(() => {
+    // round 76：实例没就绪就不动队列（补发也会真的发出去 —— 那时占位 Chat 会当场抛）
+    if (!ready) return
     // round 62：队列在 store 里（切会话不丢）；取走即出队，不会重复补发同一条
     const next = useSessionsStore.getState().takeQueuedMessage(threadId)
     if (next === null) return
     // 走统一发送入口：补发同样过"超阈值先压缩"的预检（用户排队时可能已越过阈值）
     dispatch(next)
-  }, [dispatch, threadId])
+  }, [dispatch, ready, threadId])
 
   /**
    * 一轮结束（从 busy 回到 ready）→ 补发排队的下一条。
@@ -614,6 +809,8 @@ function ActiveChat({
    * round 62：**首次挂载**（previousStatus 还是 null）也看一次队列 —— 组件是按会话 id 重挂的，
    * "切走再切回"时看不到"忙 → 空闲"那一下（那一轮的流是在别处收的尾），而队列还躺在 store 里：
    * 有排队就补发，不让它一直排着（这一档不动用量信号：没发生新的轮末）。
+   * round 76：**没就绪就整段跳过**（`ready` 在依赖里）—— 那一段的 `status` 来自占位 Chat
+   * （恒为 'ready'），要是照旧记账，就会把"还没开始的这一屏"当成一轮轮末。
    *
    * round 62 的另一条口径（`set-state-in-effect` 的豁免，下一行显式写下来）：`flushNext()` 会一路
    * 走到 `sendMessage`，同步那一段里有几处 setState（清压缩提示 / 置压缩中位）——于是 react-hooks
@@ -625,6 +822,7 @@ function ActiveChat({
    */
   const previousStatus = useRef<string | null>(null)
   useEffect(() => {
+    if (!ready) return
     // 挂载时 previousStatus.current 还是 null：等价于"刚才很忙"（重挂时看不到轮末那一下）
     const firstRun = previousStatus.current === null
     const wasBusy =
@@ -634,7 +832,7 @@ function ActiveChat({
     if (!firstRun) setUsageVersion((version) => version + 1)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 理由见上面这条注释
     if (!waitingApproval) flushNext()
-  }, [status, flushNext, waitingApproval])
+  }, [ready, status, flushNext, waitingApproval])
 
   /**
    * 发送：等审批期间与"流式中"同一口径 —— **不发**，进队列。
@@ -643,16 +841,20 @@ function ActiveChat({
    * （决策 → resume → 收尾）真正结束再发，语义与"流式中发送"完全一致。
    * round 62：排队内容落在会话 store 上（切会话不丢）；闸门用 `isLocked()`（现读 ref，
    * 预检在途的那段窗口也算忙）。
+   * round 76：**实例没就绪直接丢**（输入卡那边已经挡住了：按钮禁用、回车不发、挂着「正在载入
+   * 会话…」）。这里再守一道是为了防任何旁路 —— 未就绪时发出去只会打到占位 Chat 上当场抛。
+   * 也**不排队**：排队意味着"稍后一定发"，而那时连会话是谁都还不知道（占位 id 上排队等于丢）。
    */
   const submit = useCallback(
     (message: OutgoingMessage) => {
+      if (!ready) return
       if (isLocked()) {
         useSessionsStore.getState().enqueueMessage(threadId, message)
         return
       }
       dispatch(message)
     },
-    [isLocked, dispatch, threadId]
+    [dispatch, isLocked, ready, threadId]
   )
 
   /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致）。
@@ -793,8 +995,39 @@ function ActiveChat({
    *      "空会话 + 记录"只有测试造得出来）；
    *   2. **"正在压缩"是例外**：它是正在发生的事，首条消息发出前的自动预压也得让用户看得见
    *      （那一步可能挺久），所以压缩中不按初始页算 —— 输入框正常落位、分界线显示进行中。
+   *
+   * round 64：除布局外它还给两处定档（同一枚"这一屏是不是初始页"的事实，不另算一套）——
+   * 输入区在初始页高一档（Composer 的 `hero`）。
+   *
+   * round 66：它同时是**两枚能力 chip 的生死线**（同一个生命周期，用户口径"进入到对话之后就不要
+   * 显示这个「选择项目」了"）——卡片上方的「选择项目」行与卡片下方的 PPT 行都只在初始页出现，
+   * 进对话两行一起退场（round 76 起是常挂 + 收合，见 CollapsibleRow）。三处共用这一枚判定。
+   *
+   * round 76：**加一个前提 `ready`** —— 会话实例就绪前不算初始页。两个理由：
+   *   ① 那两行里的「选择项目」与「PPT」都是会话级控件（按 threadId 读写映射），实例没就绪时
+   *      没有可动的对象（threadId 还是占位 id）；
+   *   ② 就绪那一刻整页才"落位"成初始页 —— 页脚带 `animate-message-in`（淡入 + 上浮）、
+   *      标题与两行跟着它一起进场、占位撑开把输入框送到竖直中位。就绪之前是"还没开始"的
+   *      常规底部布局（输入区常态档），不是硬切：档位与占位都带主档过渡。
    */
-  const hero = messages.length === 0 && !error && !waitingApproval && !compacting
+  const hero = ready && messages.length === 0 && !error && !waitingApproval && !compacting
+
+  /**
+   * round 76：交给输入卡的挂起态（`null` = 就绪）。出错那一档**不带状态行** —— 错误卡就在消息区里
+   * （"为什么发不出去"已经交代了），输入卡这一行再说一遍后端的事就是小字解释（雷点 2）；
+   * 但**发送照样挡住**（按钮禁用 + 回车不发），只是不重复解释。
+   */
+  const composerPending =
+    pending === null
+      ? null
+      : {
+          label:
+            pending.kind === 'connecting'
+              ? '正在连接…'
+              : pending.kind === 'loading'
+                ? '正在载入会话…'
+                : null
+        }
 
   /**
    * round 59：分界线的固定下标（锚点在手时用；否则 undefined = MessageList 自己按时间戳算）。
@@ -814,22 +1047,28 @@ function ActiveChat({
           **必须自带 flex 列身份**（round 59 用户实拍回归）：MessageList 的 frame 是
           `flex min-h-0 flex-1 flex-col`，包在块级父级里 flex-1 不生效、滚动区不受高度约束，
           消息内容会溢到页脚（输入框）下面。
-          round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列 */}
+          round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列
+          round 76：就绪之前这一格画占位/错误卡（PendingNotice），**页脚那一格照常挂着** ——
+          输入卡因此从第一帧就在，载入过程中也能聚焦、能打字。 */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <MessageList
-          messages={messages}
-          status={status}
-          // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
-          // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
-          // round 19：压缩进行中也不给（两边都动同一批消息）
-          onEdit={actionsLocked ? undefined : editResend}
-          // round 61：撤回 / 重新生成与编辑同一道闸（都能在服务端动历史，与流式/挂起轮/压缩互斥）
-          onUndo={actionsLocked ? undefined : undoMessage}
-          onRegenerate={actionsLocked ? undefined : regenerateReply}
-          compaction={hero ? null : compaction}
-          compacting={compacting}
-          compactionIndex={compactionIndex}
-        />
+        {pending === null ? (
+          <MessageList
+            messages={messages}
+            status={status}
+            // 流式中不给编辑入口：避免编辑触发的请求和当前这条流并发；
+            // 等审批期间同样不给——编辑重发会先截断掉那条挂起消息，服务端 run 快照还在（决策会对着空气回灌）；
+            // round 19：压缩进行中也不给（两边都动同一批消息）
+            onEdit={actionsLocked ? undefined : editResend}
+            // round 61：撤回 / 重新生成与编辑同一道闸（都能在服务端动历史，与流式/挂起轮/压缩互斥）
+            onUndo={actionsLocked ? undefined : undoMessage}
+            onRegenerate={actionsLocked ? undefined : regenerateReply}
+            compaction={hero ? null : compaction}
+            compacting={compacting}
+            compactionIndex={compactionIndex}
+          />
+        ) : (
+          <PendingNotice pending={pending} />
+        )}
       </div>
 
       {/* 初始页的页脚浮起（淡入 + 上浮，比标题晚 80ms 起步）；
@@ -873,31 +1112,92 @@ function ActiveChat({
             workspaces={workspaces}
             onDecide={decideApproval}
           />
+          {/* round 66：「选择项目」在输入卡**上方**单独一行（用户口径："放到对话框上面，
+              不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片下方那行同一口径），
+              不描边、不铺底，只 hover 铺一层浅灰（它是卡片外的独立控件，不是卡内嵌件）。
+              **只在初始页（空会话）出现**：与卡片下方那枚 PPT 胶囊同一个生命周期，进对话两行一起退场
+              （用户口径："进入到对话之后就不要显示这个「选择项目」了"）。
+              round 76：退场不再是 `{hero ? … : null}` 的整块卸载（离场硬切、雷点 5）——
+              改成常挂 + 收合（见 CollapsibleRow）：淡出 + 高度收到 0（含外边距），主档时长。 */}
+          <CollapsibleRow
+            active={hero}
+            testId="composer-project-row"
+            className="mx-auto mb-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
+          >
+            <ProjectChip threadId={threadId} />
+          </CollapsibleRow>
+          {/* 就绪之前：`threadId` 给 null（会话级控件——权限 chip、@ 文件、上下文环——在那一刻
+              没有可动的对象，与其拿占位 id 去问服务端要个 404，不如先不出现），发送被 `pending` 挡住。 */}
           <Composer
-            threadId={threadId}
+            threadId={ready ? threadId : null}
             busy={busy}
             queuedCount={queuedCount}
+            // round 64：初始页（空会话）输入区高一档 —— 那一屏没有消息，输入框是主角（见 Composer 头注）
+            hero={hero}
+            // round 76：实例就绪之前发送一律挡住 + 工具条那一行露一句状态（见 Composer 的 `pending`）
+            pending={composerPending}
             onSend={submit}
             onStop={() => {
               void stop()
             }}
             onCompact={compactManually}
             compactBusy={compacting}
-            compactDisabled={locked}
+            // round 76：没就绪时「压缩上下文」也点不得（那一条同样要真会话 id）
+            compactDisabled={locked || !ready}
             externalNotice={compactNotice}
             usageVersion={usageVersion}
           />
+          {/* round 65：输入卡正下方这一行（与卡片同列宽、左缘对齐），**只在初始页**（空会话）出现；
+              已经有对话在跑时整行收合。
+              round 66：PPT 的选择是**会话级**的（按 threadId 读/写）—— 换个会话就是另一份，新会话不预选。
+              round 75：这一行从"只放 PPT"变成**一排能力入口**（用户口径：第一次打开的人不知道这个 agent
+              能干什么）——左起是四枚能力胶囊（文档 / 表格 / 报告 / 研究，点一下把起始提示词追加进输入框，
+              见 CapabilityRow），右侧仍是 PPT 模板胶囊（**没有重复**：那枚是模板选择器，不是能力入口）。
+              两者同一个生命周期，由上面这道判定一起出现、一起退场。
+              画廊展开方向因此固定朝下（初始页下方是空白；Radix 还会做碰撞避让，避不开自己翻边）。
+              round 76：退场同样改成常挂 + 收合（见 CollapsibleRow），与上面那行**同拍**一起走。 */}
+          <CollapsibleRow
+            active={hero}
+            testId="composer-capabilities"
+            className="mx-auto mt-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
+          >
+            <CapabilityRow threadId={threadId} />
+            <PptTemplateChip threadId={threadId} side="bottom" />
+          </CollapsibleRow>
         </div>
       </div>
 
       {/* round 59：初始页的下半格弹性占位 —— 与消息区等分剩余高度，输入框因此落在**竖直中位**
           （标题不占高度，见 WelcomeHero）；首条消息到达时它收到 0（flex-grow 过渡，主档 .3s），
-          输入框平滑落到常规底部，不硬切 */}
+          输入框平滑落到常规底部，不硬切。
+          round 64 修正（用户实拍"对话框有些偏下，居中一点好"）：等分只让**页脚**居中，页脚里卡片
+          上下还有别的件，卡片的实际中心并不在窗口中心上。
+          round 66 重推（「选择项目」从卡内移到卡片**上方**单独一行，卡片矮了 36、上方多 40）：
+            记 above = 卡上方那段（pt-4 16 + 选择行 8+32 = 56）
+               below = 卡下方那段（PPT 行 8+32 + pb-6 24 = 64）
+            自由高度在「消息区」与「本占位」之间等分，于是
+              卡片中心 − 窗口中心 = (above − below − mt) / 2     ← 卡片高度在两边约掉，与它无关
+            取 mt = 72px（mt-18 = 4.5rem）：(56 − 64 − 72) / 2 = **−40px** —— 卡片中心落在窗口中心
+            上方 40px，与 round 64/65 两轮用户已看过、未再提"偏下"的那个位置**逐像素一致**
+            （上一轮卡片中心也是 −40：那枚 chip 从卡内移到卡上方，卡片只是变矮，中心不动）。
+            附：本布局里 above ≈ below，所以卡片中心 ≈ 这条"卡上/卡下两行 + 卡片"整组的中心，
+            即这 40px 偏上就是整组的视觉居中略偏上（大约光学中心）。margin 与 flex-grow 一起过渡，
+            首条消息到达时与占位收合同步落回（不硬切）。要再上提/下移，旋钮就是这条 mt。
+          round 76 复核（两行从"条件渲染"改成"常挂 + 收合"，见 CollapsibleRow）：**结论不变，仍是
+            mt-18**。把两行的"在/不在"四种组合都代进去就能看出为什么 —— 两行都是 **+40 一段**
+            （外边距 8 + 内容 32），只是分居卡片上下：
+              两行都在（初始页/展开）：above = 16+40 = 56，below = 40+24 = 64 → 差 −8
+              两行都不在（进对话/收合）：above = 16     ，below = 24      → 差 −8
+            收合是**含外边距**一起收的（grid 项 overflow-hidden 把 mb-2/mt-2 一起裁掉），所以中间
+            那些"只在一行"的过渡帧同样满足 above−below = −(8 + 仍在的那行 40 − 已在的那行 40)……
+            两行同拍一起走，每帧两边同步加减同一个 40，差值恒为 −8。于是 (above − below − mt)/2
+            = (−8 − 72)/2 = −40 与上一轮逐像素一致：**卡片中心不上不下地停在同一个位置**，
+            收合过程里它也不会飘（mt 与占位收合一起过渡，同一档时长）。 */}
       <div
         data-testid="welcome-spacer"
         className={cn(
-          'h-0 basis-0 transition-[flex-grow] duration-(--motion-main) ease-main motion-reduce:transition-none',
-          hero ? 'grow' : 'grow-0'
+          'h-0 basis-0 transition-[flex-grow,margin-top] duration-(--motion-main) ease-main motion-reduce:transition-none',
+          hero ? 'grow mt-18' : 'grow-0'
         )}
       />
     </div>

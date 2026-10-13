@@ -18,6 +18,7 @@
  * **原始 error 一律 `console.error` 留底**，生产排障有落点（T9 之后复核指出过：只落文案、原文丢了）。
  */
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
+import { startupMark } from '@renderer/lib/startup-timing'
 import { create } from 'zustand'
 import type { ThreadSummary } from '@shared/threads'
 import { notifyTurnDone } from '../../lib/notify'
@@ -28,8 +29,9 @@ import {
   generateThreadTitle,
   renameThread
 } from '../../lib/threads-api'
-import { dropThreadChat } from '../chat/thread-chats'
 import type { OutgoingMessage } from '../chat/composer-attachments'
+import { usePptTemplatesStore } from '../chat/ppt-templates-store'
+import { dropThreadChat } from '../chat/thread-chats'
 import { useProjectsStore } from '../projects/projects-store'
 
 /** 新建会话的草稿 id（第一轮请求带着它，服务端据此建线程） */
@@ -132,6 +134,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
         }))
       } finally {
         loadPromise = null
+        // round 73：冷启动打点 —— 会话列表有结果了（成功失败都算；首屏就此从"载入中"出来）
+        startupMark('会话列表就绪')
       }
     })()
     return loadPromise
@@ -201,6 +205,10 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
         : [created, ...state.threads],
       draftTitles: withoutKey(state.draftTitles, threadId)
     }))
+    // round 66：服务端现在认识这条会话了 —— 草稿期间在「PPT」胶囊里挑的模板这一笔补记上
+    // （不 await 的写法会让"发出去的第一轮 create_ppt"与这次 PUT 赛跑，等它落地再返回）。
+    // 补写失败不抛：会话已经建好了，模板没记上只是这个会话按自动挑跑（store 自己记日志）。
+    await usePptTemplatesStore.getState().flushDraft(threadId)
   },
 
   remove: async (threadId) => {

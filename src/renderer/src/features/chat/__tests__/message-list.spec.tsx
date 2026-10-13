@@ -5,6 +5,7 @@ import type { UIMessage } from 'ai'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { MessageList } from '@renderer/features/chat/MessageList'
 import { createMockTransport } from './mock-transport'
+import { nextFrame } from './next-frame'
 
 /**
  * 消息流渲染（Step 1）：
@@ -176,6 +177,8 @@ describe('流式逐段呈现（mock transport）', () => {
     await act(async () => {
       control.push('（kyclaw 离线模式）')
     })
+    // round 73：流式正文按帧上屏（每帧合流一次），推完增量先让出一帧
+    await nextFrame()
     const list = screen.getByTestId('message-list')
     expect(list).toHaveTextContent('（kyclaw 离线模式）')
     expect(list).not.toHaveTextContent('我是 kyclaw')
@@ -183,6 +186,7 @@ describe('流式逐段呈现（mock transport）', () => {
     await act(async () => {
       control.push('你好，')
     })
+    await nextFrame()
     expect(list).toHaveTextContent('（kyclaw 离线模式）你好，')
     expect(list).not.toHaveTextContent('我是 kyclaw')
 
@@ -190,6 +194,7 @@ describe('流式逐段呈现（mock transport）', () => {
       control.push('我是 kyclaw。')
       control.finish()
     })
+    // finish 之后 streaming=false：结束那一拍与 props 同步渲染，不等帧也对
     expect(list).toHaveTextContent('（kyclaw 离线模式）你好，我是 kyclaw。')
 
     // 流结束后回到可发送态

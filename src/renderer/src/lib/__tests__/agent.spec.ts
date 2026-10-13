@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage, UIMessageChunk } from 'ai'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
-import { getTransport, threadRequestOptions } from '@renderer/lib/agent'
+import { getTransport, resolveAgentEndpoint, threadRequestOptions } from '@renderer/lib/agent'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
 
@@ -52,6 +52,19 @@ describe('getTransport', () => {
     await getTransport()
 
     expect(endpoint).toHaveBeenCalledTimes(1)
+  })
+
+  it('桥不在（主进程没起 / 没装 kyclaw）时是**异步**失败：同步抛会从 effect 里炸出去把整页带崩', async () => {
+    // 这条钉的是形状而不是内容：`resolveAgentEndpoint` 必须是 async ——
+    // `window.kyclaw` 不存在时那一下要变成 rejected promise（交给 ChatPage 的 .catch 落错误卡），
+    // 不能同步抛（同步抛会从 effect 里穿出去，App 直接白页；routes.spec / app.spec 就是这么钉的）。
+    clearKyclawBridge()
+
+    let promise: Promise<unknown> | null = null
+    expect(() => {
+      promise = resolveAgentEndpoint()
+    }).not.toThrow()
+    await expect(promise).rejects.toThrow()
   })
 
   it('带 Bearer token POST 到 /chat/kyclaw-agent，并把 SSE 解成 chunk', async () => {

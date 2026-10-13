@@ -1,20 +1,27 @@
 import { useState } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 import type { ThreadCompaction } from '@shared/threads'
-import { formatCompactTokens } from './compaction-line'
+import { formatCompactTokens, LEVEL_DONE, LEVEL_LABEL, levelOf } from './compaction-line'
 import { TraceFold } from './parts/TraceFold'
 
 /**
- * 「上下文已压缩」分界线（round 19 起，round 59 换成对话事件的形态）。
+ * 「上下文已压缩/精简/去重/折叠」分界线（round 19 起，round 59 换成对话事件的形态，
+ * round 76 按档分文案）。
  *
  * 形态照 Kimi 桌面版：一行分界线 = `[发丝线][标签][查看摘要][发丝线]` —— 标签居中、
- * 细线在文字左右两侧（发丝线走仓内 hairline 口径）。标签为
- * 「上下文已压缩（527k → ~53.7k tokens）」：`after` 是服务端的**估算**值，所以带 `~`
- * （口径见 src/mastra/compaction.ts 的 estimateTokens）；两个数字缺任一 → 括号整段不显示，
- * 只留「上下文已压缩」。数字格式的单一出处：compaction-line.ts 的 formatCompactTokens。
+ * 细线在文字左右两侧（发丝线走仓内 hairline 口径）。标签按**档位**说人话：
+ *   - `snip`   → 「上下文已精简（527k → ~53.7k tokens）」
+ *   - `dedupe` → 「上下文已去重（…）」
+ *   - `fold`   → 「上下文已折叠（…）」
+ *   - `summary`（老记录缺 level 也走它）→ 「上下文已压缩（…）」
+ * token 那一段四档共用（`after` 是服务端的**估算**值，所以带 `~`，口径见
+ * src/mastra/compaction.ts 的 estimateTokens）；两个数字缺任一 → 括号整段不显示。
+ * 数字格式的单一出处：compaction-line.ts 的 formatCompactTokens。
  *
- * 「查看摘要」是强调色文字按钮（compaction-view-summary）：点开/收起下方摘要 fold —— 内容与
- * 元数据行沿用 round 19 那一套（TraceFold + compaction-summary），文案「查看摘要」⇄「收起摘要」。
+ * 按钮也按档：`summary` 档是「查看摘要 / 收起摘要」（点开的是摘要原文）；
+ * 机械档（snip / dedupe / fold）点开的是"这一次是怎么省的"说明（没有摘要可看），
+ * 所以写「查看详情 / 收起详情」。展开内容与元数据行沿用 round 19 那一套
+ * （TraceFold + compaction-summary），不另造一套交互。
  *
  * 压缩进行中：同一位置显示「正在压缩上下文…」（根节点保留 `data-compacting`，文字带既有 pulse
  * 动效口径）。**输入框区不再显示压缩的进行/成功状态**（round 59：压缩是对话流里的一件事）；
@@ -31,18 +38,22 @@ export interface CompactionMarkerProps {
   compacting: boolean
 }
 
+/** 档位 → 分界线标签上的说法在 compaction-line.ts（纯映射；放组件文件里会踩
+ *  react-refresh/only-export-components 那条 lint）。 */
+
 function localTime(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
-/** 「上下文已压缩（before → ~after tokens）」；缺任一数字就只说"已压缩" */
+/** 「上下文已<档>（before → ~after tokens）」；缺任一数字就只说"已<档>" */
 function labelOf(compaction: ThreadCompaction | null): string {
-  if (compaction === null) return '上下文已压缩'
+  if (compaction === null) return LEVEL_LABEL.summary
+  const label = LEVEL_LABEL[levelOf(compaction)]
   const { tokensBefore, tokensAfter } = compaction
-  if (tokensBefore === null || tokensAfter === null) return '上下文已压缩'
-  return `上下文已压缩（${formatCompactTokens(tokensBefore)} → ~${formatCompactTokens(tokensAfter)} tokens）`
+  if (tokensBefore === null || tokensAfter === null) return label
+  return `${label}（${formatCompactTokens(tokensBefore)} → ~${formatCompactTokens(tokensAfter)} tokens）`
 }
 
 export function CompactionMarker({
@@ -53,6 +64,9 @@ export function CompactionMarker({
   if (compaction === null && !compacting) return null
 
   const expanded = compaction !== null && open
+  const level = compaction === null ? 'summary' : levelOf(compaction)
+  // 有摘要可看的只有摘要档；机械档展开的是"这次是怎么省的"
+  const summary = level === 'summary'
 
   return (
     <div
@@ -78,7 +92,7 @@ export function CompactionMarker({
             onClick={() => setOpen(!open)}
             className="shrink-0 cursor-pointer text-c1 text-accent-text hover:underline"
           >
-            {expanded ? '收起摘要' : '查看摘要'}
+            {expanded ? (summary ? '收起摘要' : '收起详情') : summary ? '查看摘要' : '查看详情'}
           </button>
         )}
         <span aria-hidden="true" className="h-(--hairline-width) flex-1 bg-hairline" />
@@ -92,7 +106,7 @@ export function CompactionMarker({
           >
             <p className="text-b2 whitespace-pre-wrap text-ink-secondary">{compaction.summary}</p>
             <p className="pt-2 text-c1 text-ink-tertiary">
-              已压缩 {compaction.summarized} 条消息 · 保留最近 {compaction.kept} 条 ·{' '}
+              {LEVEL_DONE[level]} {compaction.summarized} 条消息 · 保留最近 {compaction.kept} 条 ·{' '}
               {localTime(compaction.createdAt)}
             </p>
           </div>

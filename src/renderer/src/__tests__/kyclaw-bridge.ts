@@ -289,7 +289,12 @@ export function agentApiStub(): KyclawAgentApi {
 
 /** 更新面：未配源的默认状态（挂载时拉一次、之后测试想推就 push） */
 export function updatesApiStub(
-  initial: UpdateState = { currentVersion: '1.0.0', configured: false, status: { phase: 'idle' } }
+  initial: UpdateState = {
+    currentVersion: '1.0.0',
+    configured: false,
+    builtinUrl: null,
+    status: { phase: 'idle' }
+  }
 ): UpdatesApiStub {
   const listeners = new Set<(state: UpdateState) => void>()
   let current = initial

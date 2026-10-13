@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { Link, MemoryRouter } from 'react-router'
+import { Link, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
 
@@ -334,5 +335,60 @@ describe('AppShell · round 39（全屏 / 浮动钮让位）', () => {
     })
     expect(panel).toHaveClass('w-0')
     expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+  })
+})
+
+/** round 64（用户口径）：Ctrl+K / Cmd+K = 新建会话，挂在**壳**上（全局，与当前路由无关） */
+describe('AppShell · round 64（Ctrl+K 新建会话）', () => {
+  function LocationProbe(): React.JSX.Element {
+    return <div data-testid="location">{useLocation().pathname}</div>
+  }
+
+  function renderShellWithProbe(path: string): void {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <AppShell />
+        <LocationProbe />
+      </MemoryRouter>
+    )
+  }
+
+  beforeEach(() => {
+    resetSessionsStore()
+  })
+
+  it('设置页按 Ctrl+K：开一个无项目草稿（activeId 落位）并回对话页', () => {
+    renderShellWithProbe('/settings')
+    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    })
+
+    expect(useSessionsStore.getState().activeId).not.toBeNull()
+    expect(screen.getByTestId('location')).toHaveTextContent('/chat')
+  })
+
+  it('macOS 上按 Cmd+K（metaKey）走同一条路', () => {
+    renderShellWithProbe('/plugins')
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    })
+
+    expect(useSessionsStore.getState().activeId).not.toBeNull()
+    expect(screen.getByTestId('location')).toHaveTextContent('/chat')
+  })
+
+  it('别的键不新建（Ctrl+Shift+K / 普通 k；也不抢工作台的 Ctrl+Shift+E）', () => {
+    renderShellWithProbe('/chat')
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k' })
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true, shiftKey: true })
+      fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true })
+    })
+
+    expect(useSessionsStore.getState().activeId).toBeNull()
   })
 })

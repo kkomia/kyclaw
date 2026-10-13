@@ -6,6 +6,7 @@ import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
 import { truncateThread } from '@renderer/lib/threads-api'
 import { createMockTransport, type MockTransport } from './mock-transport'
+import { nextFrame } from './next-frame'
 
 /**
  * 会话级行为：流式中发送排队、停止、编辑=截断重发（R2：先服务端 truncate，再客户端截断）、
@@ -259,6 +260,8 @@ describe('停止', () => {
     await act(async () => {
       control.push('半句回答')
     })
+    // round 73：流式正文按帧上屏，推完增量让出一帧内容才落屏
+    await nextFrame()
     expect(screen.getByTestId('message-list')).toHaveTextContent('半句回答')
 
     await act(async () => {

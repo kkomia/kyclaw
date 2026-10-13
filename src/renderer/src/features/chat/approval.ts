@@ -1,29 +1,44 @@
 /**
  * 审批 part 的读取与记忆（T13）。
  *
- * 四个纯函数 + 一份模块级内存：
+ * 五个纯函数 + 一份模块级内存：
  *   1. `approvalRequestOf` / `pendingApprovals` / `hasPendingApproval`：从 AI SDK 的 tool part
- *      里认出"正在等审批"的调用（`state='approval-requested'` + `approval.id`）；
+ *      里认出"正在等审批"的调用（`state='approval-requested'` + `approval.id`）。
+ *      round 75：里面就把 MCP 元工具（`mcp__<serverId>__meta`）的 `call` 解包成**真名与真入参**
+ *      （见 `@shared/mcp` 的 resolveMcpToolCallName / resolveMcpToolCallInput）—— 服务端闸门按真名
+ *      判，渲染端按真名记，两边的粒度才是同一个（审批记忆、永久规则都吃这里的 toolName）；
  *   2. `resolveApprovalWorkspace`：按渲染端那份设置判这次调用落在哪个工作区 —— 只用于
  *      审批记忆的粒度（工具 + 工作区）与"永久允许"写哪条规则，**不是安全边界**（边界在
  *      服务端 guard：路径只认引擎归一后的 abs）。round28：目标字段按工具身份取
  *      （bash=cwd、fetch=save_to、其余=path，与服务端 guard 的能力类口径一致）；能力类工具
  *      没给显式目标时只有授权列表恰好一条才绑得上（多工作区判不出 → 不给记忆入口，保守方向）；
- *      危险档（delete/move，永远问、不吃规则）由 `isDangerousTool` 拦下，不给记忆入口；
  *   3. `approvalDetailOf`：审批卡上"这次在批什么"的正文（bash 命令 / fetch URL / move 目标）；
- *   4. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = **对话（thread）+ 工具 + 工作区**。
+ *   4. `approvalScopeNote`（round 75）：审批卡上"**为什么问你**"的那一行 —— 服务端按"目标落在哪个
+ *      区"判（见 `mastra/tools/guard.ts` 的 needsApproval），这里用同一把尺复算一遍说清范围：
+ *      区外的目标说"按「工作区之外」那一档"，区内的说"这个文件夹现在是「每次询问」档"；
+ *   5. 会话记忆（"本会话允许"）：模块级 Set，应用退出即清空；粒度 = **对话（thread）+ 工具 + 工作区**。
  *
  * 工作区判定与工具名归一都走 shared/permissions 的同一把尺，和服务端的规则匹配保持一致。
  */
-import type { Workspace } from '@shared/settings'
+import type { Workspace, WorkspaceMode } from '@shared/settings'
 import { normalizeToolName, normalizeWorkspacePath, toolBasename } from '@shared/permissions'
+import { resolveMcpToolCallInput, resolveMcpToolCallName } from '@shared/mcp'
+import { assessCommandRisk, type CommandRisk, type ZoneOf } from '@shared/command-risk'
 
 /** 一次待审批的工具调用（从 tool part 里抽出来的最小信息） */
 export interface ApprovalRequest {
   /** 服务端给的审批 id（T11 口径：`runId::toolCallId`）；回灌时原样交回 */
   approvalId: string
   toolCallId: string
+  /**
+   * 工具名：MCP 元工具（`mcp__<serverId>__meta`）的 `call` **已经解包**成被调用的真名
+   * `mcp__<server>__<tool>`（round 75）—— 审批记忆、永久规则、卡片标题都按它认。
+   */
   toolName: string
+  /**
+   * 入参：与 toolName 配套，元工具调用给的是**真入参**（`call.args`）—— 卡片的目标 / 正文 /
+   * 红线复算都看它，元工具那层壳对用户是透明的。
+   */
   input: unknown
   /**
    * 入参里的目标（展示用）：path 优先，没有就依次看 cwd（bash）、save_to（fetch）；
@@ -73,7 +88,7 @@ export function approvalPath(input: unknown, toolName?: string): string | null {
 }
 
 /**
- * 能力类工具（整名；镜像 `src/mastra/tools/guard.ts` 的 capabilityOf —— 渲染端不引主进程
+ * 能力类工具（整名；镜像 `src/mastra/tools/guard.ts` 的头注"目标抽取" —— 渲染端不引主进程
  * 代码，两处口径必须一起改）：bash 的显式目标是 cwd、fetch 是 save_to、git_add/commit 是 path。
  */
 export type ApprovalCapability = 'shell' | 'network' | 'git'
@@ -94,8 +109,10 @@ export function capabilityToolOf(toolName: string): ApprovalCapability | null {
 
 /**
  * 危险档（delete/move；`mcp__x__delete` 这类末段命中的也算 —— 与 main/permission/classify
- * 同一口径）：服务端**永远问**、Full access 与"永久允许"规则都不生效。审批卡据此隐藏
- * 「本会话允许 / 永久允许」入口 —— 点了只会写一条永不生效的规则。
+ * 同一口径）。**round 76 起没有人再用它当闸**：用户口径"允许就是永久允许" —— 审批卡上
+ * delete / move 与其它写类同一套入口，"本会话允许 / 永久允许"照给（规则粒度同样是
+ * (工具 × 工作区)，服务端 gate 一直吃它）。保留这个分类镜像，是因为"这两样是破坏性的"仍是
+ * 一个有意义的事实（将来要给破坏性操作加提示/二次确认，尺子已经在这）；生产代码里不再引用。
  */
 const DANGEROUS_BASENAMES = new Set(['delete', 'move'])
 
@@ -107,6 +124,48 @@ export function isDangerousTool(toolName: string): boolean {
 export interface ApprovalDetail {
   kind: 'command' | 'url' | 'move-to'
   text: string
+}
+
+/**
+ * 这次调用的目标是不是"落在授权工作区之外"（round 71 起；round 75 改了含义）。
+ *
+ * 服务端的判定在 `mastra/tools/guard.ts` 的 `zoneOfCall`（抽取实现 `shared/command-risk.ts`）；
+ * 渲染端拿同一份抽取**现算一遍**，卡片才能说清"为什么问"。不是安全边界 —— 真判定在主进程；
+ * 这里判错顶多是提示少一行/多一行，不会放行任何东西。
+ *
+ * round 75 起它只回答一件事：**这个命令里有工作区之外的目标（或形态落不到工作区里）** ——
+ * 服务端据此走"区外档"（默认每次询问）。"递归删除"之类与目标无关的形态**不再**在这里命中
+ * （`full` 就是真免审：区内的 `rm -rf` 不问）。
+ *
+ * 与主进程唯一的差异是 `ZoneOf`：主进程走路径引擎（realpath，防链接逃逸），这里只做词法前缀
+ * 比较；相对路径看不出会话根的实时基准，只在明显往上爬（`..`）时按"工作区外"报（宁松不误报）。
+ */
+export function approvalRiskOf(
+  input: unknown,
+  workspaces: readonly Workspace[]
+): CommandRisk | null {
+  if (!isRecord(input)) return null
+  const command = input.command
+  if (typeof command !== 'string' || command.trim() === '') return null
+  return assessCommandRisk(command, approvalPathZone(workspaces))
+}
+
+function approvalPathZone(workspaces: readonly Workspace[]): ZoneOf {
+  return (raw) => {
+    const token = raw.trim()
+    // `~` / `$VAR` / `%VAR%`：展开成什么在渲染端证明不了 —— 与主进程同口径，按"外"
+    if (token === '' || /^[~$%]/.test(token)) return 'outside'
+    if (isRelativePath(token)) {
+      return token.split(/[\\/]/).includes('..') ? 'outside' : 'inside'
+    }
+    const normalized = normalizeWorkspacePath(token)
+    for (const workspace of workspaces) {
+      const root = normalizeWorkspacePath(workspace.path)
+      if (root === '') continue
+      if (normalized === root || normalized.startsWith(`${root}/`)) return 'inside'
+    }
+    return 'outside'
+  }
 }
 
 /**
@@ -141,17 +200,24 @@ export function approvalRequestOf(part: unknown): ApprovalRequest | null {
   // 带 approved 的是"已经回应过"的 part（AI SDK 用同一个 approval 对象表达回应），不算待批
   if (approval.approved !== undefined) return null
 
-  const toolName =
+  const rawToolName =
     typeof candidate.toolName === 'string' ? candidate.toolName : toolNameFromType(candidate.type)
   const toolCallId = candidate.toolCallId
-  if (toolName === null || typeof toolCallId !== 'string' || toolCallId === '') return null
+  if (rawToolName === null || typeof toolCallId !== 'string' || toolCallId === '') return null
+
+  // round 75：MCP 元工具（`mcp__<serverId>__meta`）的 `call` 剥成真名与真入参 —— 服务端闸门本来
+  // 就在真名上工作，渲染端不剥的话「本会话允许」的粒度会从"某个工具"塌成"某个 server"
+  // （记成 `mcp__x__meta` → 之后这台 server 的任何调用都被自动回灌放行），"永久允许"写下的
+  // 规则也永远命中不了真名。不是元工具 / 不是 call → 原样（认不出就不猜）。
+  const toolName = resolveMcpToolCallName(rawToolName, candidate.input)
+  const input = resolveMcpToolCallInput(rawToolName, candidate.input)
 
   return {
     approvalId,
     toolCallId,
     toolName,
-    input: candidate.input,
-    path: approvalPath(candidate.input)
+    input,
+    path: approvalPath(input)
   }
 }
 
@@ -261,12 +327,50 @@ export function canResumeAfterApproval(
 }
 
 /**
+ * 审批卡上"为什么这次要问你"的那一行（round 75）。服务端按"目标落在哪个区"判审批（见
+ * `mastra/tools/guard.ts` 的 needsApproval），这里用同一把尺**复算一遍**，把"作用范围"写在卡上 ——
+ * 用户看不到"为什么这个删了没问、那个问了"就必须靠这句话说清。
+ *
+ * 两种来源：
+ *   - **区外**（`approvalRiskOf` 命中：目标在工作区之外，或命令形态本身落不到工作区里）→
+ *     把那句话 + "工作区之外那一档现在是什么"一起说；
+ *   - **区内的 ask 档**（目标确实在这个文件夹里，只是这一档是「每次询问」）→ 点名是哪个文件夹、
+ *     以及去哪儿改成「完全访问」。
+ * 判不出（工作区绑不上 / 那一档本来就是 full）→ null：宁可不解释，也不说一句可能不成立的话。
+ *
+ * 不是安全边界（真判定在主进程），判错顶多提示少一行/多一行。
+ */
+export function approvalScopeNote(
+  input: unknown,
+  toolName: string,
+  workspaces: readonly Workspace[],
+  outsideMode: WorkspaceMode
+): string | null {
+  const risk = approvalRiskOf(input, workspaces)
+  if (risk !== null) {
+    const tier = outsideMode === 'full' ? '「完全访问」' : '「每次询问」'
+    return `${risk.reason}工作区之外的操作按「工作区之外」那一档判定（现在是${tier}，可在「设置 → 工作区」里改）。`
+  }
+
+  const path = resolveApprovalWorkspace(input, workspaces, toolName)
+  if (path === null) return null
+  const workspace = workspaces.find(
+    (candidate) => normalizeWorkspacePath(candidate.path) === normalizeWorkspacePath(path)
+  )
+  if (workspace === undefined || workspace.mode !== 'ask') return null
+  return (
+    `「${workspace.path}」这一档是「每次询问」：里面的写、删、移都会先问你` +
+    '（在「设置 → 工作区」里可以改成「完全访问」）。'
+  )
+}
+
+/**
  * 这次调用落在哪个工作区（渲染端口径，用于审批记忆粒度）：
  *   - 目标字段按工具身份取（见 approvalPath）；绝对路径按前缀找包含它的工作区，相对路径
  *     归**第一个工作区** —— 与服务的 resolveTarget 同一顺序（相对路径在任何工作区根下都能解出，
  *     服务端也是按列表顺序取第一个）；
  *   - 能力类工具（bash/fetch/git_add/commit）没给显式目标：执行层的根 = 会话根，审批层拿不到
- *     会话 —— 只有授权列表**恰好一条**才绑得上（与服务端 guard.capabilityNeedsApproval 同口径）；
+ *     会话 —— 只有授权列表**恰好一条**才绑得上（与服务端 guard 的"无目标"那一档同口径）；
  *     多工作区判不出 → null（不给记忆入口，保守方向）；
  *   - 判不出（没有目标 / 没有工作区）回 null。
  */
@@ -307,8 +411,9 @@ function isRelativePath(path: string): boolean {
  * "会话"取 UI 里那个词义（侧栏的会话 = 一个聊天线程，threadId）：用户在某个对话里说
  * "本会话允许"，就只对那个对话里的同类调用不再打扰；换个对话照旧问。
  * 只活在当前渲染进程里（重启应用即清空），不落盘、不过桥 —— 这是"这次先放过它"的语义。
- * 记忆入口只在工作区明确时才给（放行范围说不清的不给）：判不出工作区的、以及危险档
- * （delete/move，服务端永远问、不吃记忆）都只给"允许一次 / 拒绝"。
+ * 记忆入口只在工作区明确、且目标没踩区外时才给（放行范围说不清的不给）。round 76 起对
+ * delete / move 与其它工具一视同仁（用户口径：允许就是永久允许）—— 粒度同样是
+ * (对话 × 工具 × 工作区)。
  */
 const sessionAllowed = new Set<string>()
 
@@ -324,6 +429,27 @@ export function allowForSession(threadId: string, tool: string, workspace: strin
 /** 这个对话里、这个工具在这个工作区是否已被放行（命中就自动批准，不再打扰用户） */
 export function isAllowedForSession(threadId: string, tool: string, workspace: string): boolean {
   return sessionAllowed.has(sessionKey(threadId, tool, workspace))
+}
+
+/**
+ * 会话记忆这次到底算不算数（round 71；round 75 跟着新口径收窄）：**区外的目标不吃"本会话允许"**。
+ *
+ * 为什么：`isAllowedForSession` 的粒度是 (对话 × 工具 × 工作区)，与服务端那条"永久允许"规则同一
+ * 粒度 —— 用户在**普通** bash 卡上点过一次"本会话允许"（如 ask 工作区里跑 `pnpm test`），
+ * 这条记忆就会把同一个对话里**之后任意** bash 调用直接回灌放行，包括工作区外的破坏性目标
+ * （ChatPage 的 dock 把它藏起来、并自动 `approved: true`）。区外那一档（默认每次询问）是用户
+ * 对"这台机器上其它地方"的显式选择，不该被某一次"这个文件夹里放行"的点头静默盖过 ——
+ * 所以这里按同一把尺再挡一次（服务端那道判定照旧在，两边都不放行才算真不放行）。
+ */
+export function isAllowedForSessionNow(
+  threadId: string,
+  request: ApprovalRequest,
+  workspace: string | null,
+  workspaces: readonly Workspace[]
+): boolean {
+  if (workspace === null) return false
+  if (approvalRiskOf(request.input, workspaces) !== null) return false
+  return isAllowedForSession(threadId, request.toolName, workspace)
 }
 
 /** 测试用：清空会话记忆（模块级状态不随 render 重置） */

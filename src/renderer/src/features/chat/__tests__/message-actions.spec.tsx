@@ -9,11 +9,13 @@ import { createMockTransport, type MockTransport } from './mock-transport'
 
 /**
  * 消息动作行（round 61）：
- *   - 助手消息：「复制」（正文 parts 的拼接，不含思考/工具/文件；成功短暂变「已复制」）、
+ *   - 助手消息：「复制」（正文 parts 的拼接，不含思考/工具/文件；成功不弹文字，图标转对勾）、
  *     「重新生成」（**只有最后一条助手消息**；先 truncate 这条助手消息、再 regenerate）；
  *   - 用户消息：「编辑」（既有，R2）+「撤回」（二次确认 → 服务端 truncate → 客户端移除这条及
  *     之后的 UI 消息 → 原文回到输入框）；
  *   - 闸门：流式中 / 等审批 / 压缩中整行不出现（与「编辑」同一道）。
+ * round 63：四个动作都是**图标按钮**（钮上零文字、名字只在 aria-label / title 上）——
+ * 用例因此按 testid + 无障碍名查，并且每题都钉住"钮里没有可见文字"。
  * 全部走真实交互路径（点动作钮 / 确认弹窗），底层注入假 transport + 假 runtime，
  * threads-api 整体 mock（服务端截断的真行为由 threads.spec 跑）。
  */
@@ -63,6 +65,11 @@ function send(text: string): void {
   fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
 }
 
+/** 图标按钮里那枚 svg 的 class（lucide 会带上 `lucide-<名字>`，用来断言换了哪枚图标） */
+function iconOf(button: HTMLElement): string {
+  return button.querySelector('svg')?.getAttribute('class') ?? ''
+}
+
 /** 完成一轮对话（发出去 → 推一段回答 → 收尾） */
 async function turn(control: MockTransport, question: string, answer: string): Promise<void> {
   await act(async () => {
@@ -98,7 +105,7 @@ afterEach(() => {
 })
 
 describe('助手消息动作行', () => {
-  it('一轮跑完才出现；复制的是正文 parts 的拼接（不含思考/工具）；点了短暂变「已复制」', async () => {
+  it('一轮跑完才出现；复制的是正文 parts 的拼接（不含思考/工具）；点了图标转对勾、不弹文字', async () => {
     const writeText = vi.fn(async () => undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
 
@@ -120,17 +127,29 @@ describe('助手消息动作行', () => {
     })
 
     const copy = await screen.findByTestId('message-copy')
+    // 图标按钮：钮上零可见文字，语义只在 aria-label / title（round 63）
+    expect(copy).toHaveTextContent('')
+    expect(copy).toHaveAttribute('aria-label', '复制')
+    expect(copy).toHaveAttribute('title', '复制')
+    expect(iconOf(copy)).toContain('lucide-copy')
+
     // 复制内容 = 正文 parts（思考与工具调用都不在里头）
     vi.useFakeTimers()
     fireEvent.click(copy)
     await act(async () => {})
     expect(writeText).toHaveBeenCalledWith('回答第一段，第二段')
-    expect(screen.getByTestId('message-copy')).toHaveTextContent('已复制')
+    // 成功反馈只有图标（对勾）与无障碍名的变化，依旧零可见文字
+    const copied = screen.getByTestId('message-copy')
+    expect(iconOf(copied)).toContain('lucide-check')
+    expect(copied).toHaveAttribute('aria-label', '已复制')
+    expect(copied).toHaveTextContent('')
 
     act(() => {
       vi.advanceTimersByTime(1500)
     })
-    expect(screen.getByTestId('message-copy')).toHaveTextContent('复制')
+    const restored = screen.getByTestId('message-copy')
+    expect(iconOf(restored)).toContain('lucide-copy')
+    expect(restored).toHaveAttribute('aria-label', '复制')
   })
 
   it('纯工具轮（没有正文）不给「复制」空钮；「重新生成」照旧出现', async () => {
@@ -322,8 +341,17 @@ describe('用户消息「撤回」', () => {
       control.push('答')
       control.finish()
     })
-    expect(screen.getByTestId('message-undo')).toBeInTheDocument()
-    // 既有「编辑」照旧
-    expect(screen.getByTestId('message-edit')).toBeInTheDocument()
+    // 两枚都是图标按钮：钮上零文字，名字在 aria-label / title，图标各自就位
+    const undo = screen.getByTestId('message-undo')
+    expect(undo).toHaveAttribute('aria-label', '撤回')
+    expect(undo).toHaveAttribute('title', '撤回')
+    expect(undo).toHaveTextContent('')
+    expect(iconOf(undo)).toContain('lucide-undo-2')
+    // 既有「编辑」照旧（也一样是图标按钮）
+    const edit = screen.getByTestId('message-edit')
+    expect(edit).toHaveAttribute('aria-label', '编辑')
+    expect(edit).toHaveAttribute('title', '编辑')
+    expect(edit).toHaveTextContent('')
+    expect(iconOf(edit)).toContain('lucide-pencil')
   })
 })

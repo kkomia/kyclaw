@@ -40,8 +40,9 @@ import type { ReferenceKind } from './reference-markers'
 
 /**
  * Composer 的控件族（round 7，用户实拍 #10 图4/图5/图7/图8/图10）：
- *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文）——round 13 起技能子菜单
- *     只列**插件装进来的技能**（内置技能默认就暴露给 agent，不再出现）；
+ *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文）——「引用技能」列
+ *     `plugins:overview` 的技能清单（round 64 起内置技能也在这一份里）；子菜单只给名字、不写归属，
+ *     归属与分组在插件页的「技能」面板里（免得把内置技能说成「来自插件」）；
  *   - `PermissionChip`：权限两档（每次询问 / 完全访问）——**只走引擎既有两档**，
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
@@ -74,11 +75,12 @@ export interface PlusMenuProps {
   /** 可引用的插件（已启用的 MCP server；空列表时菜单里给一条禁用说明） */
   plugins: ReadonlyArray<{ id: string; name: string }>
   /**
-   * 可引用的技能 = **插件装进来的技能**（round 13：内置技能默认就暴露给 agent，不再进这个菜单；
-   * 空列表时菜单里给一条禁用说明）。
+   * 可引用的技能（`plugins:overview` 的 installedSkills：**内置与插件一份清单**，round 64 起内置的
+   * office 四件套也在里面；空列表时菜单里给一条禁用说明）。子菜单只列名字——归属与分组在插件页的
+   * 「技能」面板里给，这里不写，内置技能就不会被说成「来自插件」。
    */
   skills: ReadonlyArray<{ dir: string; name: string }>
-  /** 打开菜单时拉一次数据（技能的安装状态可能在别处刚变过；挂载时另有一次，见 Composer） */
+  /** 打开菜单时拉一次数据（技能的可用状态可能在别处刚变过；挂载时另有一次，见 Composer） */
   onOpenMenu?: () => void
 }
 
@@ -107,7 +109,7 @@ export function PlusMenu({
       testId: 'composer-ref-skills',
       items:
         skills.length === 0
-          ? [{ id: 'empty', label: '还没有安装技能', disabled: true }]
+          ? [{ id: 'empty', label: '还没有可引用的技能', disabled: true }]
           : skills.map((skill) => ({
               id: skill.dir,
               label: skill.name,

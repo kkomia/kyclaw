@@ -7,7 +7,8 @@ import { formatToolName } from '@shared/mcp'
 import type { Workspace } from '@shared/settings'
 import {
   approvalDetailOf,
-  isDangerousTool,
+  approvalRiskOf,
+  approvalScopeNote,
   resolveApprovalWorkspace,
   type ApprovalRequest
 } from './approval'
@@ -26,10 +27,16 @@ import { approvalDiff, type DiffLine } from './approval-diff'
  *   - 本会话允许：这次会话里同工具 + 同工作区不再打扰（内存，不落盘）；
  *   - 永久允许：写成设置里的规则（settings.permissions.rules），重启后仍生效；
  *   - 拒绝：这次调用不执行（模型会拿到拒绝继续）。
- * 「本会话/永久允许」两个记忆入口只在**工作区判得出、且不是危险档**时才给：
- *   - 工作区判不出（round28 起 bash 按 cwd、fetch 按 save_to 判；都没有且授权列表不止一条
- *     就判不出）→ 放行范围说不清，只给"允许一次 / 拒绝"；
- *   - 危险档（delete/move，服务端永远问、不吃规则）→ 隐藏记忆入口：点了只会写一条永不生效的规则。
+ * round 75 起卡片还会写一行**为什么会问**（`approvalScopeNote`）：服务端按"目标落在哪个区"判
+ * （区内的 full 工作区免审、区外按「工作区之外」那一档），用户在卡上就能看出这次批的是哪一档。
+ * 「本会话/永久允许」两个记忆入口只在**工作区判得出、且没踩区外**时才给（round 76 起对
+ * delete/move 与其它写类一视同仁 —— 用户口径"允许就是永久允许"：能点就真的会生效）：
+ *   - 工作区判不出（bash 按 cwd、fetch 按 save_to 判；都没有且授权列表不止一条就判不出）→
+ *     放行范围说不清，只给"允许一次 / 拒绝"；
+ *   - 区外的目标（`approvalRiskOf` 命中）→ 隐藏：规则绑的是"某个工作区"，区外的目标绑不上，
+ *     卡片改用它上方那行话说清"按区外档判"。
+ * round 76 之前 delete/move 走的是另一条（隐藏入口，口头解释是"它们的授权走工作区档位"）——
+ * 那条已按用户口径撤掉：这两个工具的规则同样是 (工具 × 工作区)，服务端 gate 一直就吃它。
  *
  * 展示形状与工具卡同一族（圆角面板 + 一条 hairline），diff 区用底色分层、不再套第二层框线（雷点 7）。
  * 行级 diff 的 +/- 用 --Colors-DiffAdd / --Colors-DiffDelete（经 semantic 的 --diff-add / --diff-delete）。
@@ -52,6 +59,8 @@ const TOOL_LABELS: Record<string, string> = {
   create_pdf: '导出 PDF',
   create_excel: '生成 Excel',
   create_ppt: '生成 PPT',
+  // round 76：改已有的一份演示文稿（与 create_ppt 同一族，命名照上面的动词口径）
+  edit_ppt: '修改 PPT',
   create_docx: '生成 Word'
 }
 
@@ -76,11 +85,16 @@ export function ApprovalCard({
 }: ApprovalCardProps): React.JSX.Element {
   const workspace = resolveApprovalWorkspace(request.input, workspaces, request.toolName)
   const detail = approvalDetailOf(request.toolName, request.input)
-  // 记忆入口的两个条件：工作区判得出 + 不是危险档（危险档服务端永远问、规则不生效）
-  const rememberable = workspace !== null && !isDangerousTool(request.toolName)
+  // round 75：目标是不是落在工作区外 / 命令形态落不到工作区里（服务端按区外档判的那一类）
+  const risk = approvalRiskOf(request.input, workspaces)
+  // 记忆入口的两个条件（round 76 起对所有工具一视同仁，含 delete/move）：
+  // 工作区判得出 + 没踩区外（区外的目标绑不上某个工作区，规则也就无从写下）
+  const rememberable = workspace !== null && risk === null
   const diff = approvalDiff(request.toolName, request.input)
   // 与 ToolCard 一致（round 14）：MCP 工具显示「服务名 · 工具名」，认不出回落原样
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
+  const outsideMode = useSettingsStore((state) => state.settings.outsideWorkspaceMode)
+  const scope = approvalScopeNote(request.input, request.toolName, workspaces, outsideMode)
   const title =
     TOOL_LABELS[request.toolName.toLowerCase()] ?? formatToolName(request.toolName, mcpServers)
 
@@ -121,6 +135,16 @@ export function ApprovalCard({
         >
           {detail.kind === 'move-to' ? `→ ${detail.text}` : detail.text}
         </pre>
+      )}
+
+      {scope === null ? null : (
+        <p
+          data-testid="approval-scope"
+          data-kind={risk?.code ?? 'workspace-ask'}
+          className="rounded-control bg-(--fill-selected) px-2 py-1 text-c1 text-warning"
+        >
+          {scope}
+        </p>
       )}
 
       {diff === null || diff.length === 0 ? null : (

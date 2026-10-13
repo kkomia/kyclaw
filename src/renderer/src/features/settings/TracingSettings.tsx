@@ -3,15 +3,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { LANGFUSE_PRESET } from '@shared/settings'
 import type { LangfuseState } from '@shared/ipc'
 import { langfuseStatusText } from './status-text'
 
 /**
  * 设置页「追踪」组（T17）：Langfuse 开关，**默认关**。
  *
- * 分工（与「模型」栏同一套）：服务地址是普通设置，经 settings:update 落 settings.json；
+ * 分工（与「模型」栏同一套）：服务地址与代理是普通设置，经 settings:update 落 settings.json；
  * 公私钥只经 telemetry:set-langfuse-keys 写方向过一次（主进程加密落 secrets.json），
- * 读回来只有"有没有 / 要不要重录"。三项配齐 = 开启导出（缺一不导出、不报错）。
+ * 读回来只有"有没有 / 要不要重录"。三项（地址 + 两把密钥）配齐 = 开启导出（缺一不导出、不报错）。
+ *
+ * round 67：地址预填用户现用的那台自建实例（LANGFUSE_PRESET，可随手改成云版/别的实例）；
+ * 代理留空 = 直连（主进程会用 HTTPS_PROXY / HTTP_PROXY 等环境变量兜底，所以这栏空着不等于没代理）。
  *
  * 生效时机：exporter 随 agent 服务一起建 —— **改配置要重启应用才生效**，
  * 所以状态行说的是"已开启 / 已配置，重启应用后开启 / 未开启"（不编造当前会话没发生的事）。
@@ -19,6 +23,7 @@ import { langfuseStatusText } from './status-text'
  */
 interface Draft {
   endpoint: string
+  proxyUrl: string
   publicKey: string
   secretKey: string
 }
@@ -30,7 +35,8 @@ function messageOf(error: unknown): string {
 
 export function TracingSettings(): React.JSX.Element {
   const storedEndpoint = useSettingsStore((sample) => sample.settings.langfuse.endpoint)
-  const saveLangfuseEndpoint = useSettingsStore((sample) => sample.saveLangfuseEndpoint)
+  const storedProxyUrl = useSettingsStore((sample) => sample.settings.langfuse.proxyUrl)
+  const saveLangfuse = useSettingsStore((sample) => sample.saveLangfuse)
 
   const [state, setState] = useState<LangfuseState | null>(null)
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
@@ -68,8 +74,14 @@ export function TracingSettings(): React.JSX.Element {
 
   /** 表单值 = 草稿（用户改过就是它）或落盘值（没改过就是设置的真相） */
   const current: Draft = useMemo(
-    () => draft ?? { endpoint: storedEndpoint, publicKey: '', secretKey: '' },
-    [draft, storedEndpoint]
+    () =>
+      draft ?? {
+        endpoint: storedEndpoint,
+        proxyUrl: storedProxyUrl,
+        publicKey: '',
+        secretKey: ''
+      },
+    [draft, storedEndpoint, storedProxyUrl]
   )
 
   const patchDraft = (patch: Partial<Draft>): void => {
@@ -78,6 +90,7 @@ export function TracingSettings(): React.JSX.Element {
 
   const save = useCallback(async (): Promise<void> => {
     const endpoint = current.endpoint.trim()
+    const proxyUrl = current.proxyUrl.trim()
     const publicKey = current.publicKey.trim()
     const secretKey = current.secretKey.trim()
 
@@ -90,13 +103,13 @@ export function TracingSettings(): React.JSX.Element {
 
     setPending('saving')
     try {
-      await saveLangfuseEndpoint(endpoint)
+      await saveLangfuse({ endpoint, proxyUrl })
       if (publicKey.length > 0 && secretKey.length > 0) {
         const api = window.kyclaw?.telemetry
         if (!api) throw new Error('追踪通道不可用（window.kyclaw 缺失），密钥没有保存')
         await api.setLangfuseKeys(publicKey, secretKey)
       }
-      // 回到落盘真相：密钥草稿清空（永远不回显），地址以保存后的值为准
+      // 回到落盘真相：密钥草稿清空（永远不回显），地址与代理以保存后的值为准
       setDraft(undefined)
       await refreshState()
     } catch (caught) {
@@ -104,7 +117,7 @@ export function TracingSettings(): React.JSX.Element {
     } finally {
       setPending(undefined)
     }
-  }, [current, refreshState, saveLangfuseEndpoint])
+  }, [current, refreshState, saveLangfuse])
 
   const clearKeys = useCallback(async (): Promise<void> => {
     const api = window.kyclaw?.telemetry
@@ -138,11 +151,28 @@ export function TracingSettings(): React.JSX.Element {
         <Input
           data-testid="langfuse-endpoint"
           value={current.endpoint}
-          placeholder="https://cloud.langfuse.com"
+          placeholder={LANGFUSE_PRESET.endpoint}
           disabled={busy}
           onChange={(event) => patchDraft({ endpoint: event.target.value })}
         />
       </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-b2 text-ink-secondary">代理（可选）</span>
+        <Input
+          autoComplete="off"
+          data-testid="langfuse-proxy"
+          value={current.proxyUrl}
+          placeholder="http://127.0.0.1:7890"
+          disabled={busy}
+          onChange={(event) => patchDraft({ proxyUrl: event.target.value })}
+        />
+      </label>
+
+      <p className="text-c1 text-ink-secondary">
+        地址留空 = 关闭追踪；代理留空 = 直连（也可以用 HTTPS_PROXY / HTTP_PROXY
+        环境变量）。改完要重启应用才生效。
+      </p>
 
       <label className="flex flex-col gap-1">
         <span className="text-b2 text-ink-secondary">Public Key</span>

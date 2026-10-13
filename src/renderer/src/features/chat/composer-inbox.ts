@@ -57,11 +57,18 @@ export function subscribeContextItems(listener: ContextItemListener): () => void
  * 为什么还是 pub/sub：与上面那条同一个问题 —— 生产方（对话页的消息动作）与消费方（输入卡）
  * 之间没有 props 通路可走（草稿是 Composer 的内部 state，对话页拿不到写入口）。口径也照旧：
  * **不落 store、不持久化**，带 threadId 做归属过滤，没人在听（非对话路由）就丢掉。
+ *
+ * round 76：这条通道上又多了一类生产方（初始页的「能力入口」胶囊，点一下把起始提示词填进输入框），
+ * 它要的是**追加**而不是替换 —— 用户可能已经敲了半句话，点胶囊不该把它抹掉。于是多一个 `mode`
+ * 参数：缺省 `'replace'`（撤回回填的既有语义，**不能动**），`'append'` 由能力入口显式要。
+ * 两种语义的落点都在订阅方（Composer）：那里才知道输入框里现在有什么。
  */
 export interface ComposerDraft {
   threadId: string
-  /** 要放回输入框的原文（= 被撤回那条用户消息的文本 parts） */
+  /** 要放进输入框的文本（撤回时 = 被撤回那条用户消息的原文） */
   text: string
+  /** `'replace'` = 整段替换（缺省，撤回那条路）；`'append'` = 空框填入、非空则追加到末尾 */
+  mode?: 'replace' | 'append'
 }
 
 type ComposerDraftListener = (draft: ComposerDraft) => void

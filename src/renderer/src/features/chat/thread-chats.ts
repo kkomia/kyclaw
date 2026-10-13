@@ -119,3 +119,29 @@ export function createThreadChatRuntime(
 export function resetThreadChats(): void {
   chats.clear()
 }
+
+/**
+ * 会话实例就绪之前的**占位 Chat**（round 76）。
+ *
+ * 为什么要有：输入卡要从这一屏的第一帧就在，而 `useChat` 必须拿到一个 Chat 实例。这一枚只用来
+ * 占位 —— 消息恒空、状态恒 ready、不挂任何回调；真正的发送一律被 UI 挡住（ChatPage 的 `pending`：
+ * 按钮禁用 + 回车不发），所以它**永远不该**被用来发请求。
+ *
+ * 守卫写在 transport 上而不是靠自觉：真被调用到（挡板漏了一处）就当场抛 —— 宁可炸在这里，
+ * 也不要让它悄悄发到 DefaultChatTransport 的默认端点（`/api/chat`，跟我们本地服务不是一回事）。
+ *
+ * 单例、不进 `chats` 注册表：它与任何会话无关，`resetThreadChats` / `dropThreadChat` 都不该动它
+ * （本身无状态，跨用例共享是安全的）。
+ */
+let placeholder: Chat<UIMessage> | null = null
+export function pendingChat(): Chat<UIMessage> {
+  placeholder ??= new Chat<UIMessage>({
+    transport: {
+      sendMessages: async () => {
+        throw new Error('会话实例尚未就绪：不该有请求发出去')
+      },
+      reconnectToStream: async () => null
+    }
+  })
+  return placeholder
+}

@@ -17,7 +17,8 @@ import { PluginsPage } from '../PluginsPage'
  * 「插件」分区 = 插件市场（添加/刷新/移除）+ 跨市场插件汇总（安装/卸载），数据走 `plugins:overview` 桥；
  * 「MCP」分区沿用 round 9 的行式列表（开关启停 + 齿轮编辑 + ＋新增菜单，fetch 面；round 11 起
  * 「测试连接」在编辑对话框里，保存成功即关框）；
- * 「技能」分区 = 已安装（来自插件）+ 内置技能只读清单。
+ * 「技能」分区 = 内置技能一组 + 插件技能一组（round 64：内置技能也进 `installedSkills`，
+ * 按回包的 `source` 分两组）。
  *
  * 服务端（PUT /api/mcp/servers）的校验用 shared/mcp 的同一份实现模拟：启用的 server 配置不完整
  * 就回 400——界面必须把原因行内说出来，不假装成功（行为口径与 T12 一致，换的是布局与控件）。
@@ -202,13 +203,14 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('mcp-add')).toHaveTextContent('新增')
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
 
-    // 技能区：只有「已安装（来自插件）」+ 空态（round 13：内置技能整块下线）；没有新增按钮
+    // 技能区：插件技能一组 + 空态（这份 fixture 没有技能，内置一组不出标题）；计数 = 清单条数
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
     expect(screen.getByTestId('plugins-title')).toHaveTextContent('技能')
-    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看已安装的技能')
-    expect(screen.getByTestId('skills-installed-empty')).toHaveTextContent(
-      '还没有从插件装进来的技能'
-    )
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看内置与插件技能')
+    expect(screen.getByTestId('skills-plugins')).toHaveTextContent('插件技能')
+    expect(screen.getByTestId('skills-plugins-empty')).toHaveTextContent('还没有插件带来的技能')
+    // 没有内置技能就不留一个空标题
+    expect(screen.queryByTestId('skills-builtin')).not.toBeInTheDocument()
     expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
     expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
     expect(screen.queryByTestId('plugins-add')).not.toBeInTheDocument()
@@ -833,27 +835,79 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(await screen.findByTestId('plugins-error')).toHaveTextContent('插件通道不可用')
   })
 
-  it('技能分区：已安装条目（名字 + 来自哪个插件）与计数；内置技能块已下线（round 13）', async () => {
+  it('技能分区：内置与插件分两组，内置的不写「来自插件」，插件行写清来自谁（round 64）', async () => {
     installMockApi([])
     installPluginsBridge({
       marketplaces: [marketplaceView()],
       installed: [installedRecord()],
       installedSkills: [
+        { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'docx', name: 'docx', pluginId: null, pluginName: null, source: 'builtin' },
+        // 插件技能：老回包不带 source；带 source: 'plugin' 的也归插件一组
         { dir: 'demo-p1-s1', name: 's1', pluginId: 'demo-p1', pluginName: 'p1' },
+        { dir: 'demo-p1-s2', name: 's2', pluginId: 'demo-p1', pluginName: 'p1', source: 'plugin' },
+        // 认不出是哪个插件的技能（老回包的 pluginName 为 null）
         { dir: 'orphan-x', name: 'x', pluginId: null, pluginName: null }
       ]
     })
     render(<PluginsPage />)
 
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
-    const row = await screen.findByTestId('skill-installed-demo-p1-s1')
-    expect(row).toHaveTextContent('s1')
-    expect(row).toHaveTextContent('来自 p1')
-    expect(screen.getByTestId('skill-installed-orphan-x')).toHaveTextContent('来自插件')
-    // 计数 = 已安装数（2），不再把内置技能算进去
-    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('2')
-    expect(screen.queryByTestId('skills-installed-empty')).not.toBeInTheDocument()
-    expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
+
+    // 内置一组在前：只有名字，不出现「来自插件」这类错误归属
+    const builtin = await screen.findByTestId('skills-builtin')
+    expect(builtin).toHaveTextContent('内置技能')
+    const builtinRow = within(builtin).getByTestId('skill-installed-pptx')
+    expect(builtinRow).toHaveTextContent('pptx')
+    expect(builtinRow).not.toHaveTextContent('来自')
+    expect(within(builtin).getByTestId('skill-installed-docx')).toBeInTheDocument()
+
+    // 插件一组：来自哪个插件写在行上；认不出归属的行不给这一行（标题已经说明它来自插件）
+    const plugins = screen.getByTestId('skills-plugins')
+    expect(plugins).toHaveTextContent('插件技能')
+    expect(within(plugins).getByTestId('skill-installed-demo-p1-s1')).toHaveTextContent('来自 p1')
+    expect(within(plugins).getByTestId('skill-installed-demo-p1-s2')).toHaveTextContent('来自 p1')
+    expect(within(plugins).getByTestId('skill-installed-orphan-x')).not.toHaveTextContent(
+      '来自插件'
+    )
+    // 内置技能不进插件一组；两组不重不漏
+    expect(within(plugins).queryByTestId('skill-installed-pptx')).not.toBeInTheDocument()
+    expect(within(builtin).getAllByTestId(/^skill-installed-/)).toHaveLength(2)
+    expect(within(plugins).getAllByTestId(/^skill-installed-/)).toHaveLength(3)
+
+    // 计数 = 清单条数（内置也在这份清单里）
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('5')
+    expect(screen.queryByTestId('skills-plugins-empty')).not.toBeInTheDocument()
+  })
+
+  it('技能分区：只有内置技能时内置照列、插件一组给空态（round 64）', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'docx', name: 'docx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'xlsx', name: 'xlsx', pluginId: null, pluginName: null, source: 'builtin' },
+        { dir: 'pdf', name: 'pdf', pluginId: null, pluginName: null, source: 'builtin' }
+      ]
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+
+    const builtin = await screen.findByTestId('skills-builtin')
+    expect(builtin).toHaveTextContent('内置技能')
+    expect(within(builtin).getAllByTestId(/^skill-installed-/)).toHaveLength(4)
+    expect(builtin).not.toHaveTextContent('来自')
+    // 真正的空态是"没有插件技能"：内置技能不拿来填这一组
+    expect(screen.getByTestId('skills-plugins-empty')).toHaveTextContent(
+      '还没有插件带来的技能：去「插件」里安装一个插件。'
+    )
+    const pluginGroup = screen.getByTestId('skills-plugins')
+    expect(within(pluginGroup).queryByTestId('skill-installed-pptx')).not.toBeInTheDocument()
+    expect(within(pluginGroup).queryByTestId(/^skill-installed-/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('4')
   })
 })
 

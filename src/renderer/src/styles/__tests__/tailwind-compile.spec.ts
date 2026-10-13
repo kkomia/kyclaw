@@ -87,7 +87,26 @@ describe('Tailwind 编译护栏', () => {
     ['disabled:hover:bg-transparent', ['background-color: transparent']],
     ['disabled:active:bg-transparent', ['background-color: transparent']],
     ['disabled:text-(--text-disabled)', ['color: var(--text-disabled)']],
-    ['disabled:placeholder:text-(--text-disabled)', ['color: var(--text-disabled)']]
+    ['disabled:placeholder:text-(--text-disabled)', ['color: var(--text-disabled)']],
+    // round 64：输入卡两档最小高 + 换档过渡 + 草稿期能力行的居中偏移（初始页光学居中）
+    ['min-h-(--composer-input-min-height)', ['min-height: var(--composer-input-min-height)']],
+    [
+      'min-h-(--composer-input-min-height-hero)',
+      ['min-height: var(--composer-input-min-height-hero)']
+    ],
+    ['transition-[min-height]', ['transition-property: min-height']],
+    ['transition-[flex-grow,margin-top]', ['transition-property: flex-grow,margin-top']],
+    [
+      'max-h-(--radix-dropdown-menu-content-available-height)',
+      ['max-height: var(--radix-dropdown-menu-content-available-height)']
+    ],
+    ['mt-8', ['margin-top: calc(var(--spacing) * 8)']],
+    // round 66：空态占位的上提偏移（卡片上/下各一行后的重新推导值 = 72px）
+    // round 76 复核：两行从"条件渲染"改成"常挂 + 收合"（收合含外边距）后**结论不变**，
+    // 仍是 72px —— 推导见 ChatPage 里 welcome-spacer 的那段注释
+    ['mt-18', ['margin-top: calc(var(--spacing) * 18)']],
+    // round 76：初始页两行（CollapsibleRow）的收合 —— 高度与淡出走同一条过渡（主档时长，不硬切）
+    ['transition-[grid-template-rows,opacity]', ['transition-property: grid-template-rows,opacity']]
   ]
 
   it.each(UTILITY_CASES)('工具类 %s 生成 token 引用', async (candidate, declarations) => {

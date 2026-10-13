@@ -5,6 +5,7 @@ import {
   type AppSettingsPatch,
   type ArchivedProject,
   type ArchivedThread,
+  type LangfuseSettings,
   type ModelPrefs,
   type ReasoningTranslateSettings,
   type SemanticRecallSettings,
@@ -87,8 +88,11 @@ export interface SettingsState {
   archiveProject: (snapshot: ArchivedProject) => Promise<void>
   /** round 25：取消归档项目（项目与它的会话一并回侧栏；没归档过是幂等空操作） */
   unarchiveProject: (projectId: string) => Promise<void>
-  /** T17：保存 Langfuse 服务地址（追踪栏；密钥不在设置里，走 telemetry 通道） */
-  saveLangfuseEndpoint: (endpoint: string) => Promise<void>
+  /**
+   * round 67：保存追踪栏的地址与代理（合并写，给谁改谁）——地址留空 = 关闭导出，
+   * 代理留空 = 直连（回落 HTTPS_PROXY 等环境变量）。密钥仍走 telemetry 通道。
+   */
+  saveLangfuse: (patch: Partial<LangfuseSettings>) => Promise<void>
   /**
    * round 28：保存语义召回设置（记忆栏；给谁就改谁，缺省保持原值）。
    * 远程嵌入的 API Key 不在设置里，走 memory 通道（与 provider 密钥同一套）。
@@ -239,9 +243,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     set({ settings: await settingsApi().update({ archivedProjects: next }) })
   },
 
-  saveLangfuseEndpoint: async (endpoint) => {
-    // 与 provider 同族：失败抛给调用方，界面上要能看见"没存进去"
-    set({ settings: await settingsApi().update({ langfuse: { endpoint } }) })
+  /** round 67：追踪栏的地址 + 代理合并写（与语义召回/翻译/搜索栏同一口径） */
+  saveLangfuse: async (patch) => {
+    const current = get().settings.langfuse
+    set({ settings: await settingsApi().update({ langfuse: { ...current, ...patch } }) })
   },
 
   /** round 28：语义召回设置——合并写（给谁改谁），失败抛给调用方（同模型/追踪栏口径） */

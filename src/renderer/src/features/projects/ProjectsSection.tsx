@@ -21,6 +21,10 @@ import { useProjectsStore } from './projects-store'
  *      置顶排前）、在文件资源管理器中打开（projects:open-in-explorer）、重命名项目（projects:rename）、
  *      归档项目（settings.archivedProjects——侧栏隐藏该项目**及其会话**，取消归档一并回来）；
  *   4. 动作失败露在 `project-error` 一行（round 25 起经 unwrapIpcError 剥 IPC 包装）。
+ *
+ * round 64（用户口径："项目也要由项目菜单管理"）：组头的管理菜单里多一条「管理工作区」——
+ * 跳设置页的工作区栏（/settings/workspaces，默认工作区与授权目录都在那儿管），
+ * 与「新建空白项目 / 使用现有文件夹」两条创建路径同一个图标入口。
  */
 export function ProjectsSection(): React.JSX.Element {
   const navigate = useNavigate()
@@ -179,6 +183,7 @@ export function ProjectsSection(): React.JSX.Element {
         onCreateSession={(projectId) => openSessionIn(projectId)}
         onCreateBlank={() => setDialog({ mode: 'blank', key: Date.now() })}
         onCreateFolder={() => setDialog({ mode: 'folder', key: Date.now() })}
+        onManageWorkspaces={() => navigate('/settings/workspaces')}
         pinnedIds={pinnedIds}
         onActionError={(message) => setActionError(message)}
       />

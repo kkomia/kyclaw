@@ -7,6 +7,7 @@ import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
 import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { createMockTransport, type MockTransport } from './mock-transport'
+import { nextFrame } from './next-frame'
 
 /**
  * 切会话（spec §7.2 的目标语义）："切走生成继续、完成通知、切回看完整结果"。
@@ -113,6 +114,8 @@ describe('流式中切走：不掐流、可收回', () => {
     await act(async () => {
       control.push('前半句')
     })
+    // round 73：流式正文按帧上屏，推完增量让出一帧内容才落屏
+    await nextFrame()
     expect(screen.getByTestId('message-list')).toHaveTextContent('前半句')
 
     // 流式中切到 B：B 的历史回灌出来了；A 的流没有被掐断

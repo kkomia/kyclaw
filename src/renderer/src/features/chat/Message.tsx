@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { UIMessage } from 'ai'
-import { Paperclip } from 'lucide-react'
+import { Check, Copy, Pencil, Paperclip, RefreshCw, Undo2 } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
@@ -20,6 +20,8 @@ import { ReferenceChip } from './reference-chip'
  * 助手消息：左对齐的 part 流 —— 正文文本单出，**连续的过程 part（思考 / 工具调用）并成
  * 一个过程块**（round 6：TraceBlock，正文把块切开、块内保持原顺序）；
  * **正文下方**另有一行动作（round 61）：「复制」= 正文 parts 的拼接，「重新生成」= 同一条重试路径。
+ * round 63：四个动作（编辑 / 撤回 / 复制 / 重新生成）一律是**图标按钮**——钮上不写字，
+ * 名字只走 `aria-label` 与 `title`（详见 MessageAction 的头注）。
  * round 29：审批入口不在这条链上（待审批统一走输入框上方的 ApprovalDock，块内只留只读状态行）。
  * round 50：交付（deliver_file 的结果）单出一张卡 —— 它是"给用户看的东西"，不埋进会收起的
  * 过程块里（见 chunkParts 的头注）。
@@ -44,19 +46,24 @@ type MessagePart = UIMessage['parts'][number]
 type TextPartType = Extract<MessagePart, { type: 'text' }>
 type FilePartType = Extract<MessagePart, { type: 'file' }>
 
-/** 「已复制」这个反馈保持多久（到点退回「复制」） */
+/** 「已复制」这个反馈保持多久（到点把图标从对勾退回复制、名字退回「复制」） */
 const COPIED_RESET_MS = 1500
 
 /**
- * 消息动作钮（与「编辑」同一档：次要墨色、hover 反白、圆角内边距一致）。
- * 行内不给解释性小字、不用 emoji——动作本身就是全部信息。
+ * 消息动作钮（round 63：**图标按钮**，与 composer 的图标钮同一形态 —— 32 热区、圆形 hover 底、
+ * 次要墨色 → hover 转主墨色、`--motion-fast` 过渡）。
+ * 钮上一个字都不写：语义靠 `aria-label` + `title`（图标是装饰，对读屏隐藏）。
+ * 尺寸与间距照 composer（ComposerControls 的 ICON_TRIGGER_CLASS），点击热区 32×32 ≥ 28×28。
  */
 function MessageAction({
   testId,
+  label,
   onClick,
   children
 }: {
   testId: string
+  /** 无障碍名，也当 title 用（中文，如「复制」） */
+  label: string
   onClick: () => void
   children: React.ReactNode
 }): React.JSX.Element {
@@ -64,8 +71,10 @@ function MessageAction({
     <button
       type="button"
       data-testid={testId}
+      aria-label={label}
+      title={label}
       onClick={onClick}
-      className="rounded-control px-2 py-0.5 text-c2 text-ink-tertiary transition-colors duration-(--motion-fast) hover:bg-hover hover:text-ink-secondary"
+      className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink active:bg-active motion-reduce:transition-none"
     >
       {children}
     </button>
@@ -174,7 +183,7 @@ export function Message({
   const [draft, setDraft] = useState<string | null>(null)
   /** 撤回的二次确认弹窗（Kimi 口径：撤销会连带清掉这条之后的所有内容，先说清楚再动） */
   const [undoOpen, setUndoOpen] = useState(false)
-  /** 助手正文刚被复制（按钮短暂变「已复制」） */
+  /** 助手正文刚被复制（图标短暂转对勾、名字短暂转「已复制」，到点退回） */
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -246,13 +255,17 @@ export function Message({
             {onEdit || onUndo ? (
               <MessageActions>
                 {onEdit ? (
-                  <MessageAction testId="message-edit" onClick={() => setDraft(text)}>
-                    编辑
+                  <MessageAction testId="message-edit" label="编辑" onClick={() => setDraft(text)}>
+                    <Pencil aria-hidden="true" className="size-4" />
                   </MessageAction>
                 ) : null}
                 {onUndo ? (
-                  <MessageAction testId="message-undo" onClick={() => setUndoOpen(true)}>
-                    撤回
+                  <MessageAction
+                    testId="message-undo"
+                    label="撤回"
+                    onClick={() => setUndoOpen(true)}
+                  >
+                    <Undo2 aria-hidden="true" className="size-4" />
                   </MessageAction>
                 ) : null}
               </MessageActions>
@@ -341,7 +354,7 @@ export function Message({
    */
   const showActions = !streaming && (text !== '' || onRegenerate !== undefined)
 
-  /** 复制正文（不含思考 / 工具 / 文件）；成功短暂变「已复制」，失败只留日志（不假装复制了） */
+  /** 复制正文（不含思考 / 工具 / 文件）；成功把图标转成对勾、名字转「已复制」，失败只留日志（不假装复制了） */
   const copyText = (): void => {
     void navigator.clipboard
       ?.writeText(text)
@@ -397,13 +410,21 @@ export function Message({
       {showActions ? (
         <MessageActions>
           {text === '' ? null : (
-            <MessageAction testId="message-copy" onClick={copyText}>
-              {copied ? '已复制' : '复制'}
+            <MessageAction
+              testId="message-copy"
+              label={copied ? '已复制' : '复制'}
+              onClick={copyText}
+            >
+              {copied ? (
+                <Check aria-hidden="true" className="size-4" />
+              ) : (
+                <Copy aria-hidden="true" className="size-4" />
+              )}
             </MessageAction>
           )}
           {onRegenerate === undefined ? null : (
-            <MessageAction testId="message-regenerate" onClick={onRegenerate}>
-              重新生成
+            <MessageAction testId="message-regenerate" label="重新生成" onClick={onRegenerate}>
+              <RefreshCw aria-hidden="true" className="size-4" />
             </MessageAction>
           )}
         </MessageActions>

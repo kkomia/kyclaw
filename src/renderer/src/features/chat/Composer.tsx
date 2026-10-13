@@ -6,12 +6,14 @@ import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
+import { STARTUP_FINAL_MARK, startupMark } from '@renderer/lib/startup-timing'
 import { probedKeyOf, visionOf } from '@shared/models'
 import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
 import { resolveContextItem, subscribeContextItems, subscribeDrafts } from './composer-inbox'
+import { keepComposerCarryover, takeComposerCarryover } from './composer-carryover'
 import { ComposerSuggest } from './ComposerSuggest'
 import { ReferenceChipInner } from './reference-chip'
 import {
@@ -33,14 +35,19 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
 
 /**
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
- * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 48 / 最大 170，超出内部滚动）+
- * 底部工具条（48）：左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档
- * ask|full，当前会话工作区）；右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
+ * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 --composer-input-min-height（常态 56）/
+ * 最大 170，超出内部滚动；round 64 起初始页再高一档，见 ComposerProps.hero）+ 底部工具条（48）：
+ * 左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档 ask|full，当前会话工作区）；
+ * 右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
  * （T8 已配置 provider 的默认项；round 8 按用户实拍从左侧组移到右侧、发送钮之前）+ 发送/停止。
  * round 57：用量 ≥ 80% 时 ContextChip 会在环**左边**多渲染一枚「压缩上下文」胶囊（点即压缩）。
  *
  * 高度按 Kimi 实况页（a84af355 截图：单行输入 + 一行工具条），默认单行时紧凑，
  * 不再固定三段 "40 + 111 + 49" —— 那是首屏形态，常态下多出来的空白正是用户点名的"过高"。
+ * round 64 回调（用户又实拍"默认输入框高度偏低"）：常态最小高 48 → 56，初始页整档到 72 ——
+ * 两档都是语义 token，不是散落的 px。
+ * round 66（用户又实拍）：卡片里**不嵌**任何能力 chip 行了 ——「选择项目」在卡片**上方**单独一行、
+ * PPT 在卡片下方单独一行，两行都在对话页（ChatPage 的页脚）挂，卡片结构回到纯输入件。
  * 字号/提示不做小字说明（雷点 2）：键盘行为靠肌肉记忆与按钮语义，不写提示行；
  * 附件/引用的内容（名字/大小）是数据，不是解释性小字。
  *
@@ -65,6 +72,11 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 交互：Enter 发送 / Shift+Enter 换行（输入法合成中不拦截；**浮窗打开时** ↑/↓ 走条目、Enter 选中、
  * Esc 关浮窗）；流式中发送钮变停止（stop()）；流式中按下发送不丢内容 —— 交给上层排队
  * （round 62 起队列按会话挂在 sessions-store 上，切会话也不丢，见 ChatPage 的 submit / flushNext）。
+ *
+ * round 76：输入卡现在**从这一屏第一帧就挂着**（不再等端点/会话列表/历史回灌），所以多了一档
+ * "会话实例还没就绪"的 `pending`：那一段发送挡住（按钮禁用 + 回车不发 + 工具条一行状态文字），
+ * 输入框本身照常能聚焦、能打字、能加附件（那些都是本地的事）。会话 id 到位那一下这一挂会重挂
+ * 一次，草稿/附件/焦点由 composer-carryover 过桥带走（见下面的落位 effect）。
  */
 export interface ComposerProps {
   /** 当前会话 id（权限 chip 判"会话的工作区根"用；判不出就不渲染权限入口） */
@@ -91,6 +103,27 @@ export interface ComposerProps {
    * 「压缩上下文」胶囊，让它在用量越过出现线时及时露面（环自己也跟着变新）。
    */
   usageVersion?: number
+  /**
+   * round 64：**初始页（空会话）**——输入区给高一档的默认最小高（`--composer-input-min-height-hero`）。
+   *
+   * 用户实拍两条：①"默认对话输入框高度偏低，可以调整高一点" → 常态最小高从 48 提到 56；
+   * ②"空态尤其明显" → 初始页再高一档（72）：那一屏没有消息，输入框就是这一屏的主角，
+   * 高一点的盒子更像"可以往里写"的目标。两条都走语义 token（不写 px 魔法数字），
+   * 高度切换走 --motion-main 过渡（首条消息发出时不硬切）。
+   */
+  hero?: boolean
+  /**
+   * round 76：**会话实例还没就绪**时的那一档（`null` / 缺省 = 就绪）。
+   *
+   * 为什么要有：输入卡现在从这一屏的第一帧就在（不再等端点 / 会话列表 / 历史回灌），
+   * 但那一段时间里"发出去"是没有去处的 —— 所以**发送一律挡住**（按钮禁用、回车也不发），
+   * 并在工具条那一行露一句状态（`label`，如"正在连接…" / "正在载入会话…"），
+   * 位置就在发送钮左边（与既有的"已排队 N 条"同一格）——看得见、对得上指的是哪个动作。
+   *
+   * 出错那一档 `label` 是 null：错误卡已经在消息区把原因与重试说清楚了，这里不重复解释
+   * （雷点 2：不用小字解释后端），但**挡发仍然生效**。
+   */
+  pending?: { label: string | null } | null
 }
 
 let uidCounter = 0
@@ -132,10 +165,28 @@ export function Composer({
   compactBusy = false,
   compactDisabled = false,
   externalNotice = null,
-  usageVersion = 0
+  usageVersion = 0,
+  hero = false,
+  pending = null
 }: ComposerProps): React.JSX.Element {
+  /** 实例没就绪（round 76）：发送挡住 + 工具条那一行露状态（label 可能是 null，见 ComposerProps） */
+  const blocked = pending !== null
   const [draft, setDraft] = useState('')
+  /**
+   * 草稿的实时值。两个用它的地方都是"外部想动草稿"：① 草稿通道要**追加到末尾**时得知道
+   * 输入框里现在有什么（round 76），闭包里的 `draft` 是订阅那一刻的旧值；② 会话实例就绪
+   * 那一下输入卡会重挂一次，草稿要过桥带走（见 composer-carryover）。
+   */
+  const draftRef = useRef(draft)
+  useEffect(() => {
+    draftRef.current = draft
+  }, [draft])
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  /** 附件的实时值（与 draftRef 同一个用途：重挂前过桥带走，见 composer-carryover） */
+  const attachmentsRef = useRef(attachments)
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
   const [notice, setNotice] = useState<ComposerNotice | null>(null)
   /** 拖拽悬停中（只做视觉提示；收不收还是 pickFiles 说了算） */
   const [dragging, setDragging] = useState(false)
@@ -201,6 +252,11 @@ export function Composer({
   useEffect(() => {
     refreshSkills()
   }, [refreshSkills])
+
+  // round 73：冷启动打点 —— 输入框已经挂到 DOM 上（"能打字了"就是这一笔；链的终点）
+  useEffect(() => {
+    startupMark(STARTUP_FINAL_MARK)
+  }, [])
 
   /**
    * 建议浮窗（round 15）：`@` 文件 / `/` 插件·技能。`suggest` = 当前触发（含要替换的区间）；
@@ -340,6 +396,12 @@ export function Composer({
   }
 
   const canSend = draft.trim() !== '' || attachments.length > 0
+  /**
+   * round 76：能真的发出去 = 有内容 **且** 会话实例就绪。
+   * 挡板只作用于"发送"这一个动作：输入框照常能聚焦、能打字、能加附件（那些都是本地的事），
+   * 禁用态与工具条那一行的状态文字就是给用户的反馈，不会出现"看着能发、按了没反应"。
+   */
+  const sendable = canSend && !blocked
   /** 内部 notice（附件/权限）优先；没有时显示上层给的压缩结果 notice（round 19） */
   const shownNotice = notice ?? externalNotice
 
@@ -352,7 +414,8 @@ export function Composer({
   }
 
   const submit = (): void => {
-    if (!canSend) return
+    // round 76：实例没就绪就不发（草稿一个字都不动 —— 就绪之后接着发）
+    if (!sendable) return
     onSend(composeOutgoing({ text: draft, attachments }))
     setDraft('')
     setAttachments([])
@@ -470,15 +533,66 @@ export function Composer({
    * round 61：「撤回」确认后把原文放回输入框（对话页 → 输入卡，见 composer-inbox 的草稿通道）。
    * 只收本会话的事件；落草稿的同时把光标交回输入框末尾 —— 复用「渲染后落位」那套，
    * 顺带把焦点从刚关掉的确认弹窗手里拿回来（那一下的落位在弹窗卸载之后，见上面的落位 effect）。
+   *
+   * round 76：同一条通道上还有「能力入口」胶囊，它要 `mode: 'append'` —— 空框照旧直接填入，
+   * 已经有草稿就**追加到末尾**（用户已经写下的那半句一个字不丢；只有空白也算空框）。
+   * 缺省（撤回那一路）仍是整段替换：那条路是"把这条消息收回来重发"，语义上就该覆盖。
    */
   useEffect(() => {
     if (threadId === null) return
     return subscribeDrafts((draft) => {
       if (draft.threadId !== threadId) return
+      if (draft.mode === 'append' && draftRef.current.trim() !== '') {
+        const current = draftRef.current
+        const next = `${current}${current.endsWith('\n') ? '' : '\n'}${draft.text}`
+        setDraft(next)
+        setCaretToken(next.length)
+        return
+      }
       setDraft(draft.text)
       setCaretToken(draft.text.length)
     })
   }, [threadId])
+
+  /**
+   * round 76：会话实例就绪那一下，ChatPage 会**换 key 重挂**这一挂（"换会话 = 换一挂"的既有口径），
+   * 输入卡的草稿/附件/焦点都在组件内部 —— 不接一下，用户在那几百毫秒里敲的字就白敲了。
+   *
+   * 口径（边界收得很窄，见 composer-carryover）：
+   *   - **只在"实例还没就绪"的那一挂上留**（`pending` 非空 = 这一挂注定要重挂）；
+   *   - 普通换会话（真 id → 真 id）不留：草稿跟着那一挂一起消失，是既有口径。
+   * 接过来的草稿照样走"渲染后落位"那套：光标落到末尾、焦点交回输入框（用户接着敲）。
+   */
+  const pendingRef = useRef(pending)
+  useEffect(() => {
+    pendingRef.current = pending
+  }, [pending])
+  /**
+   * 接上一挂留下的那一小包（见 composer-carryover）。**只在挂载时读一次** —— 读的是组件外部
+   * （模块级过桥）的东西，不是渲染派生的状态，正是这条规则说的"与外部系统同步"；只是取回来要
+   * 落到 state 上，规则按"effect 里同步 setState"报。显式豁免：触发点是"重挂"这一次外部事件，
+   * 一次挂载最多读一次（过桥取走即清），不会级联。
+   */
+  useEffect(() => {
+    const carried = takeComposerCarryover()
+    if (carried === null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 理由见上面这条注释
+    if (carried.text !== '') setDraft(carried.text)
+    if (carried.attachments.length > 0) setAttachments(carried.attachments)
+    // 焦点交回输入框（光标落在末尾）：草稿非空、或重挂前它本来就 focus 着
+    if (carried.text !== '' || carried.focused) setCaretToken(carried.text.length)
+  }, [])
+  useEffect(
+    () => () => {
+      if (pendingRef.current === null) return
+      keepComposerCarryover({
+        text: draftRef.current,
+        attachments: attachmentsRef.current,
+        focused: textareaRef.current !== null && document.activeElement === textareaRef.current
+      })
+    },
+    []
+  )
 
   return (
     <div
@@ -646,7 +760,13 @@ export function Composer({
             submit()
           }}
           placeholder="输入你的问题"
-          className="relative z-10 field-sizing-content block max-h-(--composer-input-max-height) min-h-(--composer-input-min-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none placeholder:text-(--text-quaternary) focus-visible:shadow-none"
+          className={cn(
+            'relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-quaternary) focus-visible:shadow-none motion-reduce:transition-none',
+            // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
+            hero
+              ? 'min-h-(--composer-input-min-height-hero)'
+              : 'min-h-(--composer-input-min-height)'
+          )}
         />
       </div>
 
@@ -697,7 +817,16 @@ export function Composer({
         )}
 
         <span className="min-w-0 flex-1 truncate">
-          {queuedCount > 0 ? (
+          {/* round 76：实例没就绪时这一格先说"为什么按不动"（就在发送钮左边）；就绪后照旧显示排队条数 */}
+          {blocked && pending.label !== null ? (
+            <span
+              data-testid="composer-pending"
+              role="status"
+              className="text-c1 text-ink-tertiary"
+            >
+              {pending.label}
+            </span>
+          ) : queuedCount > 0 ? (
             <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
               已排队 {queuedCount} 条，当前回复结束后自动发出
             </span>
@@ -734,15 +863,16 @@ export function Composer({
             type="button"
             data-testid="composer-send"
             aria-label="发送"
-            disabled={!canSend}
+            disabled={!sendable}
             onClick={submit}
             className={cn(
               'flex size-9 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
-              canSend
+              sendable
                 ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
                 : // round 17（用户实拍"禁用态糊"）：图标从 Labels-Quaternary（30% 黑，糊在浅灰底上）
                   // 提到 Labels-Tertiary（55% 黑）——干净可辨、又不至于像可用（可用的墨色圆底完全另一档）。
                   // 线宽保持 2.4：20px 渲染时正好是 device 2px（2.4 × 20/24），在像素网格上不发虚。
+                  // round 76：实例未就绪时也走这一档（禁用态与"空输入"同一个观感：按不动）
                   'bg-(--fill-disabled) text-(--text-tertiary)'
             )}
           >

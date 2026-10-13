@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { Segmented } from '@renderer/components/ui/segmented'
 import { SessionActionsMenu } from '@renderer/features/sessions/SessionActionsMenu'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 
@@ -16,15 +17,24 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
  * round 26（可用性收口）：草稿（还没落成线程）与真实会话**同一份菜单与可用性**——
  * 置顶/归档/移至项目先物化（sessions-store.materialize）再执行，重命名/删除就地做；
  * 草稿名显示本地标题（draftTitles）或"新会话"占位。不再有"草稿只给静态标题"。
+ *
+ * 轨迹页签（本轮）：名称右边是「对话 / 轨迹」的分段切换 —— 轨迹是**并列的一等视图**，
+ * 不是藏在抽屉里的面板；切换由 `ChatSession` 持有状态（它与页签、两块内容同层），
+ * 这里只负责画与回调。两个 prop 都是可选的：不给就只画标题（旧的调用方与既有用例不受影响）。
  */
+export type ChatView = 'chat' | 'trajectory'
+
 export interface ChatHeaderProps {
   threadId: string
+  /** 当前视图；与 `onViewChange` 一起给才画分段切换 */
+  view?: ChatView
+  onViewChange?: (view: ChatView) => void
 }
 
 /** 未命名会话的占位标题（与侧栏列表同口径） */
 const UNTITLED = '新会话'
 
-export function ChatHeader({ threadId }: ChatHeaderProps): React.JSX.Element {
+export function ChatHeader({ threadId, view, onViewChange }: ChatHeaderProps): React.JSX.Element {
   const listed = useSessionsStore((state) => state.threads.find((thread) => thread.id === threadId))
   // round 26：草稿的本地标题（就地重命名改的是它；此时服务端还没有这条线程）
   const draftTitle = useSessionsStore((state) => state.draftTitles[threadId])
@@ -52,6 +62,19 @@ export function ChatHeader({ threadId }: ChatHeaderProps): React.JSX.Element {
             </button>
           }
         />
+        {/* 对话 / 轨迹：轨迹与对话并列（同一个头部带上的分段切换，切换由 ChatSession 持有） */}
+        {view === undefined || onViewChange === undefined ? null : (
+          <Segmented
+            className="ml-2"
+            ariaLabel="对话视图"
+            value={view}
+            onChange={onViewChange}
+            options={[
+              { value: 'chat', label: '对话', testId: 'view-tab-chat' },
+              { value: 'trajectory', label: '轨迹', testId: 'view-tab-trajectory' }
+            ]}
+          />
+        )}
       </header>
       {error === null ? null : (
         <p data-testid="chat-header-error" className="px-4 pb-1 text-c1 text-danger">

@@ -75,8 +75,12 @@
 
   /* 输入卡内部两段（§4.5：输入框内部最小 / 最大高 48px / 170px；§0.2 实测 111 与 114
      那对是"首屏整张输入框"，不是常态高度 —— 常态取自适应 + 这两个界）。
-     工具条：Kimi 实测 49（像素扫描误差 ±1），取 4 的倍数 48 —— 36 的按钮 + 上下 6。 */
-  --composer-input-min-height: 48px;
+     工具条：Kimi 实测 49（像素扫描误差 ±1），取 4 的倍数 48 —— 36 的按钮 + 上下 6。
+     round 64（用户实拍"默认对话输入框高度偏低，可以调整高一点"）：最小高 48 → 56。
+     初始页（空会话）另有一档 -hero 72：那一屏没有消息，输入框是这一屏的主角，给得更高一点
+     （组件侧只引用语义名，见 ComposerProps.hero；px 值只在本文件出现）。 */
+  --composer-input-min-height: 56px;
+  --composer-input-min-height-hero: 72px;
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 

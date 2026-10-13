@@ -1,5 +1,5 @@
 /**
- * round 59 · 压缩分界线（对话流里的「上下文已压缩」那一条）的两件纯逻辑，单独一处：
+ * round 59 · 压缩分界线（对话流里的「上下文已压缩」那一条）的纯逻辑，单独一处：
  *
  * 1. `formatCompactTokens`：标签里的 token 数（数字格式的**单一出处**）。
  *    百万级不说人话，一律折成 k：≥100k 取整（527k）、<100k 保留 1 位小数并去尾 `.0`
@@ -9,9 +9,34 @@
  *    它不再是"列顶一行"：落在**压缩时刻之后到达的第一条消息之前**（刚压完后面还没有新消息
  *    → 落在列表末尾，贴近输入框；之后新到达的消息排在它下面）；重开会话时按时间重算，
  *    位置不漂移。时间从哪来见下面 `messageCreatedAtOf`；位置规则见下面那个函数的头注。
+ *
+ * 3. round 76：分界线**按档说人话**的三张表（`levelOf` / `LEVEL_LABEL` / `LEVEL_DONE`）——
+ *    放在这里的原因很实际：CompactionMarker 是组件文件，往那里导出常量会踩
+ *    react-refresh/only-export-components（这个仓的 lint 当错误算）；这三样本来也是纯映射。
  */
 import type { UIMessage } from 'ai'
-import type { ThreadCompaction } from '@shared/threads'
+import type { CompactionLevel, ThreadCompaction } from '@shared/threads'
+
+/** 记录的档位（缺 level = round 75 之前的老记录 = 摘要档——那时只有那一条路） */
+export function levelOf(compaction: ThreadCompaction): CompactionLevel {
+  return compaction.level ?? 'summary'
+}
+
+/** 档位 → 分界线标签上的说法（四档各说自己在做什么；token 那一段四档共用） */
+export const LEVEL_LABEL: Readonly<Record<CompactionLevel, string>> = {
+  snip: '上下文已精简',
+  dedupe: '上下文已去重',
+  fold: '上下文已折叠',
+  summary: '上下文已压缩'
+}
+
+/** 档位 → 展开后的元数据行里"对被处理的那几条做了什么"的说法 */
+export const LEVEL_DONE: Readonly<Record<CompactionLevel, string>> = {
+  snip: '已精简',
+  dedupe: '已去重',
+  fold: '已折叠',
+  summary: '已压缩'
+}
 
 /** token 数的紧凑写法（分界线标签用） */
 export function formatCompactTokens(value: number): string {

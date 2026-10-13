@@ -85,6 +85,63 @@ describe('空会话的初始页', () => {
     expect(screen.getByText('帮你把活干完')).toBeInTheDocument()
     // 不多加任何小字/提示/菜单：标题块里只有这两行
     expect(hero.querySelectorAll('h1, p')).toHaveLength(2)
+
+    // round 66：初始页三样各就各位 —— 标题（页脚之上）→「选择项目」行（卡片上方）→ 输入卡 →
+    // PPT 行（卡片下方）。两枚 chip 都在**卡片外**，见下面那条竖排顺序用例
+    const composer = screen.getByTestId('composer')
+    expect(composer.contains(screen.getByTestId('composer-project'))).toBe(false)
+    expect(composer.contains(screen.getByTestId('composer-ppt-template'))).toBe(false)
+  })
+
+  it('初始页的竖排顺序：选择项目行 → 输入卡 → PPT 行（都在卡片外；DOM 顺序 + 几何方位都钉住）', async () => {
+    const control = createMockTransport()
+    await renderSession(control, runtimeOf(control))
+
+    const ORDER = (a: HTMLElement, b: HTMLElement): boolean =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+
+    const projectRow = screen.getByTestId('composer-project-row')
+    const composer = screen.getByTestId('composer')
+    const pptRow = screen.getByTestId('composer-capabilities')
+
+    // DOM 顺序：选择项目行在输入卡之前，PPT 行在输入卡之后；两行都不是卡片的孩子
+    expect(ORDER(projectRow, composer)).toBe(true)
+    expect(ORDER(composer, pptRow)).toBe(true)
+    expect(composer.contains(projectRow)).toBe(false)
+    expect(composer.contains(pptRow)).toBe(false)
+
+    // 时机：初始页两行都在（与 PPT 同一个生命周期，见下面两个用例）
+    expect(screen.getByTestId('composer-project')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-ppt-template')).toBeInTheDocument()
+    expect(projectRow.contains(screen.getByTestId('composer-project'))).toBe(true)
+    expect(pptRow.contains(screen.getByTestId('composer-ppt-template'))).toBe(true)
+
+    // 与卡片同列宽、左对齐（两行都用同一条 mx-auto + max-w + px-1 配方）
+    for (const row of [projectRow, pptRow]) {
+      expect(row).toHaveClass(
+        'mx-auto',
+        'w-full',
+        'max-w-(--chat-input-max-width)',
+        'items-center',
+        'px-1'
+      )
+    }
+    // 两行自己都不带描边 / 底色（雷点 7：卡片周围不再叠框线）
+    expect(projectRow.className).not.toMatch(/\bborder-/)
+    expect(projectRow.className).not.toMatch(/\bbg-/)
+
+    // round 76：初始页这两行是**展开态**的常挂容器（收合只发生在"进对话"那一下）——
+    // 同一档动效：主档时长、grid-template-rows 收合 + opacity 淡出（不硬切，雷点 5）
+    for (const testId of ['composer-project-row', 'composer-capabilities']) {
+      const collapse = screen.getByTestId(`${testId}-collapse`)
+      expect(collapse).toHaveAttribute('data-active', 'true')
+      expect(collapse).toHaveClass(
+        'grid-rows-[1fr]',
+        'opacity-100',
+        'transition-[grid-template-rows,opacity]',
+        'duration-(--motion-main)'
+      )
+    }
   })
 
   it('标题挂法：绝对定位在页脚（输入框那一格）之上，不占布局高度 → 输入框真·竖直居中', async () => {
@@ -103,7 +160,13 @@ describe('空会话的初始页', () => {
 
     // 分界线/消息区都还在（限宽列的既有口径不变），只是消息为空；下半格弹性占位撑着居中
     expect(screen.getByTestId('message-list')).toBeInTheDocument()
-    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow')
+    const spacer = screen.getByTestId('welcome-spacer')
+    expect(spacer).toHaveClass('grow')
+    // round 66：占位的上提偏移重推成 mt-18（72px）—— 卡片上/下各多一行后，卡片中心仍落在窗口中心
+    // 上方 40px（与 round 64/65 用户已看过、未再提"偏下"的位置逐像素一致；推导见 ChatPage 的注释）
+    expect(spacer).toHaveClass('mt-18')
+    expect(spacer).not.toHaveClass('mt-8')
+    expect(spacer).toHaveClass('transition-[flex-grow,margin-top]')
   })
 
   it('有历史消息的会话：不渲染初始页', async () => {
@@ -117,7 +180,21 @@ describe('空会话的初始页', () => {
 
     await screen.findByTestId('message-h1')
     expect(screen.queryByTestId('welcome-hero')).not.toBeInTheDocument()
-    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow-0')
+    const spacer = screen.getByTestId('welcome-spacer')
+    expect(spacer).toHaveClass('grow-0')
+    // round 64/66：常规布局不带那段上提偏移（输入框贴底、消息区占满剩余高度）
+    expect(spacer).not.toHaveClass('mt-18')
+    // round 66（用户口径："进入到对话之后就不要显示这个「选择项目」了"）：
+    // 已有对话里**两枚 chip 都不渲染** —— 卡片上方的选择项目行与卡片下方的 PPT 行整行消失
+    expect(screen.queryByTestId('composer-project')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-project-row')).not.toBeInTheDocument()
+    // round 76：常挂的收合容器同样不渲染（压根没进过初始页 = 没有对象可收）
+    expect(screen.queryByTestId('composer-project-row-collapse')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-ppt-template')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-capabilities')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-capabilities-collapse')).not.toBeInTheDocument()
+    // 输入卡照旧在（只是不再有那两行）
+    expect(screen.getByTestId('composer')).toBeInTheDocument()
   })
 })
 
@@ -141,6 +218,21 @@ describe('首条消息发出：标题离场、布局落到常规', () => {
     expect(screen.getByTestId('welcome-title')).toBeInTheDocument()
     // 常规布局：页脚不再被弹性占位顶上去
     expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow-0')
+    // round 66/76：发出去之后**两行一起退场**（「选择项目」在卡片上方、PPT 在卡片下方；
+    // 两枚与初始页同一个生命周期）。退场 ≠ 卸载：两行都还在 DOM 里，只是**收成 0 高 + 淡出**
+    // （主档时长、不硬切），收着的行 `inert` + pointer-events-none —— 既不吃点击也进不了 Tab。
+    for (const testId of ['composer-project-row', 'composer-capabilities']) {
+      expect(screen.getByTestId(testId)).toBeInTheDocument()
+      const collapse = screen.getByTestId(`${testId}-collapse`)
+      expect(collapse).toHaveAttribute('data-active', 'false')
+      expect(collapse).toHaveClass('grid-rows-[0fr]', 'opacity-0', 'pointer-events-none')
+      expect(collapse).toHaveAttribute('inert')
+      expect(collapse).toHaveAttribute('aria-hidden', 'true')
+    }
+    // 两枚 chip 跟着整行一起收着（不卸载）；输入卡照旧
+    expect(screen.getByTestId('composer-project')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-ppt-template')).toBeInTheDocument()
+    expect(screen.getByTestId('composer')).toBeInTheDocument()
     // 消息正常渲染
     expect(screen.getByTestId('message-list')).toHaveTextContent('第一个问题')
     expect(control.requests).toHaveLength(1)

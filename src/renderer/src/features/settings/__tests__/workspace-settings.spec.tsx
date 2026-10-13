@@ -6,7 +6,12 @@ import {
   PICKED_WORKSPACE
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { defaultSettings, type AppSettings, type Workspace } from '@shared/settings'
+import {
+  defaultSettings,
+  type AppSettings,
+  type PermissionRule,
+  type Workspace
+} from '@shared/settings'
 import { WorkspaceSettings } from '../WorkspaceSettings'
 
 /**
@@ -223,5 +228,110 @@ describe('工作区组 · 默认工作区（T18）', () => {
 
     expect(await screen.findByTestId('workspace-error')).toHaveTextContent('路径不存在或不可访问')
     expect(screen.getByTestId('default-workspace-path')).toHaveTextContent('未指定')
+  })
+})
+
+describe('工作区组 · 工作区之外那一档（round 75）', () => {
+  it('默认（没落过盘）：显示「每次询问」，与落盘缺省一致', async () => {
+    await mount(defaultSettings())
+
+    expect(screen.getByTestId('outside-mode')).toHaveTextContent('工作区之外')
+    expect(screen.getByTestId('outside-mode-ask')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('outside-mode-full')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('点「完全访问」→ 先弹确认；确认后 update({ outsideWorkspaceMode: "full" })', async () => {
+    const bridge = await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('outside-mode-full'))
+
+    expect(bridge.update).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByTestId('outside-full-confirm'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({ outsideWorkspaceMode: 'full' })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('outside-mode-full')).toHaveAttribute('aria-pressed', 'true')
+    )
+    expect(screen.getByTestId('outside-mode-ask')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('点「每次询问」（收紧方向）→ 直接切，不弹确认', async () => {
+    const bridge = await mount({ ...defaultSettings(), outsideWorkspaceMode: 'full' })
+
+    fireEvent.click(screen.getByTestId('outside-mode-ask'))
+
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ outsideWorkspaceMode: 'ask' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('outside-mode-ask')).toHaveAttribute('aria-pressed', 'true')
+    )
+    expect(screen.queryByTestId('outside-full-confirm')).not.toBeInTheDocument()
+  })
+
+  it('切失败：选中态不变（不乐观改），行内报错', async () => {
+    const bridge = await mount({ ...defaultSettings(), outsideWorkspaceMode: 'full' })
+    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
+
+    fireEvent.click(screen.getByTestId('outside-mode-ask'))
+
+    expect(await screen.findByTestId('workspace-error')).toHaveTextContent('磁盘满了')
+    expect(screen.getByTestId('outside-mode-full')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('与每个文件夹自己的档位分开摆：两条档位各自一个组', async () => {
+    await mount(withWorkspaces({ path: PROJECT, mode: 'ask' }))
+
+    expect(screen.getByTestId('outside-mode')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-0')).toHaveTextContent('工作区内')
+    // 文件夹那一组是 workspace-0-mode-*，「工作区之外」那一组是 outside-mode-*
+    expect(screen.getByTestId('workspace-0-mode-full')).toBeInTheDocument()
+    expect(screen.getByTestId('outside-mode-full')).toBeInTheDocument()
+  })
+})
+
+describe('工作区组 · 已记住的允许（round 71）', () => {
+  const RULES: PermissionRule[] = [
+    { tool: 'bash', workspace: PROJECT, mode: 'allow' },
+    { tool: 'mcp__x__write', workspace: OTHER, mode: 'allow' }
+  ]
+
+  function withRules(rules: PermissionRule[] = RULES): AppSettings {
+    return {
+      ...defaultSettings(),
+      workspaces: [{ path: PROJECT, mode: 'full' }],
+      permissions: { rules }
+    }
+  }
+
+  it('一条都没有：空态（规则表以前根本没界面读它）', async () => {
+    await mount(withRules([]))
+
+    expect(screen.getByTestId('permission-rules')).toHaveTextContent('已记住的允许')
+    expect(screen.getByTestId('permission-rules-empty')).toHaveTextContent('还没有记住任何允许')
+  })
+
+  it('列出每条规则的工具与文件夹', async () => {
+    await mount(withRules())
+
+    expect(screen.getByTestId('permission-rule-0-tool')).toHaveTextContent('bash')
+    expect(screen.getByTestId('permission-rule-0-workspace')).toHaveTextContent(PROJECT)
+    expect(screen.getByTestId('permission-rule-1-tool')).toHaveTextContent('mcp__x__write')
+    expect(screen.queryByTestId('permission-rules-empty')).not.toBeInTheDocument()
+  })
+
+  it('撤销一条：只摘掉那一条并落盘（其余原样）', async () => {
+    const bridge = await mount(withRules())
+
+    fireEvent.click(screen.getByTestId('permission-rule-0-revoke'))
+
+    await waitFor(() => {
+      expect(bridge.update).toHaveBeenCalledWith({ permissions: { rules: [RULES[1]] } })
+    })
+    await waitFor(() => {
+      expect(screen.queryByTestId('permission-rule-1')).not.toBeInTheDocument()
+    })
+    // 剩下那条顶到第一行（列表以落盘回吐为准）
+    expect(screen.getByTestId('permission-rule-0-tool')).toHaveTextContent('mcp__x__write')
   })
 })

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import type { OutgoingMessage } from '@renderer/features/chat/composer-attachments'
+import {
+  resetPptTemplatesStore,
+  usePptTemplatesStore
+} from '@renderer/features/chat/ppt-templates-store'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { resetSessionsStore, useSessionsStore } from '../sessions-store'
 
@@ -68,6 +72,10 @@ function installFakeServer(initial: ThreadRow[] = []): FakeServer {
         }
         return respond(row)
       }
+      // round 66：会话↔PPT 模板映射（草稿物化那一刻补写的就是它）
+      if (url.pathname === '/api/ppt/templates' && method === 'PUT') {
+        return respond({ ok: true })
+      }
       const renameMatch = /^\/api\/threads\/([^/]+)$/.exec(url.pathname)
       if (renameMatch && method === 'PATCH') {
         const id = decodeURIComponent(renameMatch[1])
@@ -126,6 +134,7 @@ let errorLog: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   installKyclawBridge()
   resetSessionsStore()
+  resetPptTemplatesStore()
   resetThreadChats()
   FakeNotification.instances = []
   vi.stubGlobal('Notification', FakeNotification)
@@ -394,6 +403,34 @@ describe('round 26：草稿物化（materialize）与就地编辑', () => {
       body: { threadId: draftId }
     })
     expect(useSessionsStore.getState().threads[0]?.title).toBeNull()
+  })
+
+  // round 66：会话级的 PPT 模板选择在**草稿**阶段只记本地（服务端还不认识这个会话 id），
+  // 物化完成这一刻补写那一笔 —— 发出去的第一轮 create_ppt 因此读得到它。
+  it('materialize：把草稿挑的 PPT 模板补写一条（草稿期间一个字节都不写）', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+    usePptTemplatesStore.getState().rememberDraft(draftId, '酒红')
+    expect(server.calls.some((call) => call.path === '/api/ppt/templates')).toBe(false)
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls).toContainEqual({
+      method: 'PUT',
+      path: '/api/ppt/templates',
+      body: { threadId: draftId, template: '酒红' }
+    })
+  })
+
+  it('materialize：草稿期间没挑过模板 → 不做任何模板写入（不凭空记账）', async () => {
+    const server = installFakeServer([])
+    await useSessionsStore.getState().ensureLoaded()
+    const draftId = useSessionsStore.getState().activeId!
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls.some((call) => call.path === '/api/ppt/templates')).toBe(false)
   })
 
   it('materialize：已在镜像里的会话是空操作（不发请求）；重复物化幂等', async () => {

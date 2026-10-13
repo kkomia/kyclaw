@@ -12,6 +12,7 @@ import {
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { isAllowedByRules } from '@shared/permissions'
 import { truncateThread, fetchThreadCompaction } from '@renderer/lib/threads-api'
 import { mapStoredMessages } from '@renderer/lib/message-map'
 import { defaultSettings } from '@shared/settings'
@@ -53,6 +54,14 @@ const APPROVAL_A = {
   toolName: 'write',
   input: { path: 'a.txt', content: '第一行\n第二行' },
   approvalId: 'run-1::call-a'
+}
+
+/** round 76：破坏性工具（delete）的审批 —— 入口与粒度都该与 write 一致 */
+const APPROVAL_DELETE = {
+  toolCallId: 'call-d1',
+  toolName: 'delete',
+  input: { path: 'a.txt', recursive: false },
+  approvalId: 'run-1::call-d1'
 }
 
 interface Session {
@@ -548,6 +557,120 @@ describe('审批卡全流程（挂起 → 决策 → 续跑）', () => {
     expect(await screen.findByTestId('approval-card')).toBeInTheDocument()
     // 没有自动放行：请求数还是 1（自动放行会立刻续跑出第二次请求）
     expect(second.requests).toHaveLength(1)
+  })
+
+  it('round 76：delete 卡上有「本会话允许」；点完同会话的下一次 delete 不再弹卡', async () => {
+    const control = createMockTransport()
+    const session = await renderSession(control)
+
+    await send('删掉 a.txt')
+    act(() => {
+      control.requestApproval(APPROVAL_DELETE)
+      control.finish()
+    })
+
+    const card = await screen.findByTestId('approval-card')
+    expect(card).toHaveAttribute('data-tool', 'delete')
+    expect(card).toHaveAttribute('data-workspace', WORKSPACE)
+    expect(screen.getByTestId('approval-allow-session')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('approval-allow-session'))
+
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(approvalIn(control, 1, 'call-d1')).toMatchObject({ approved: true })
+    // 只进内存：没有写设置（永久规则才落盘）
+    expect(bridge.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ permissions: expect.anything() })
+    )
+
+    // 续跑这一轮里又来一次 delete（同一个工作区）→ 自动放行，不再打扰用户
+    act(() => {
+      control.toolOutput('call-d1', '已删除 a.txt')
+      control.requestApproval({
+        toolCallId: 'call-d2',
+        toolName: 'delete',
+        input: { path: 'b.txt', recursive: false },
+        approvalId: 'run-1::call-d2'
+      })
+      control.finish()
+    })
+
+    await waitFor(() => expect(control.requests).toHaveLength(3))
+    expect(approvalIn(control, 2, 'call-d2')).toMatchObject({ approved: true })
+    // 自动放行走的是与手动决策同一条回灌出口（同样带线程上下文）
+    expect(control.requests[2].body).toEqual({
+      memory: { thread: THREAD_ID, resource: 'local-user' }
+    })
+    await expectNoApproval()
+
+    act(() => {
+      control.toolOutput('call-d2', '已删除 b.txt')
+      control.push('删完了。')
+      control.finish()
+    })
+    await waitFor(() =>
+      expect(session.onTurnEnd).toHaveBeenLastCalledWith(THREAD_ID, {
+        isError: false,
+        isAbort: false,
+        awaitingApproval: false
+      })
+    )
+  })
+
+  it('round 76：delete 的「本会话允许」不串到别的工具（同会话的 write 照旧弹卡）', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('删掉 a.txt，然后写一个')
+    act(() => {
+      control.requestApproval(APPROVAL_DELETE)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+    fireEvent.click(screen.getByTestId('approval-allow-session'))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+
+    act(() => {
+      control.toolOutput('call-d1', '已删除 a.txt')
+      control.requestApproval({ ...APPROVAL_A, approvalId: 'run-1::call-a' })
+      control.finish()
+    })
+
+    // 等退场动画跑完、write 的卡真的出现（delete 那张正在退场，getByTestId 可能撞上它）
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-card')).toHaveAttribute('data-tool', 'write')
+    )
+    // write 没被放行：审批停在原地等用户，没有自动续跑出第三次请求
+    expect(control.requests).toHaveLength(2)
+  })
+
+  it('round 76：delete 的「永久允许」写下真工具名，服务端那把尺（isAllowedByRules）命中', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await send('删掉 a.txt')
+    act(() => {
+      control.requestApproval(APPROVAL_DELETE)
+      control.finish()
+    })
+    await screen.findByTestId('approval-card')
+
+    fireEvent.click(screen.getByTestId('approval-allow-forever'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        permissions: { rules: [{ tool: 'delete', workspace: WORKSPACE, mode: 'allow' }] }
+      })
+    )
+    const rules = useSettingsStore.getState().settings.permissions.rules
+    expect(rules).toEqual([{ tool: 'delete', workspace: WORKSPACE, mode: 'allow' }])
+    // 服务端 gate（mastra/tools/guard.needsApproval 的区内 ask 档）拿这份规则过 isAllowedByRules：
+    // 规则名必须是真工具名 delete 才命中；粒度仍是 工具 × 工作区（move 不吃 delete 的规则）
+    expect(isAllowedByRules(rules, 'delete', WORKSPACE)).toBe(true)
+    expect(isAllowedByRules(rules, 'move', WORKSPACE)).toBe(false)
+
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    expect(approvalIn(control, 1, 'call-d1')).toMatchObject({ approved: true })
   })
 })
 

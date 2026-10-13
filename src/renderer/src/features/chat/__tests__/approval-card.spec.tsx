@@ -10,7 +10,9 @@ import type { ApprovalRequest } from '../approval'
  * "永久允许"只在判得出工作区时出现。
  * round 14：MCP 工具的标题显示「服务名 · 工具名」（与 ToolCard 同一口径）。
  * round28：bash 显示要执行的命令、fetch 显示 URL、move 显示目标位置；bash 按 cwd / fetch 按
- * save_to 判工作区（记忆入口能造出来）；delete/move（危险档）隐藏记忆入口。
+ * save_to 判工作区（记忆入口能造出来）。
+ * round 76（用户口径"允许就是永久允许"）：delete / move 与其它写类**同一套入口** ——
+ * 只要工作区判得出、目标没踩区外，卡上就有「本会话允许 / 永久允许」。
  */
 const WS: Workspace = { path: 'D:\\项目\\demo', mode: 'ask' }
 const WS2: Workspace = { path: 'E:\\另一个', mode: 'ask' }
@@ -256,8 +258,8 @@ describe('ApprovalCard · 看得见在批什么（round28）', () => {
   })
 })
 
-describe('ApprovalCard · 危险档隐藏记忆入口（round28）', () => {
-  it('delete / move（含 MCP 末段命中）：工作区判得出来也不给记忆入口（点了也不会生效）', () => {
+describe('ApprovalCard · 破坏性工具的决策入口（round 76：允许就是永久允许）', () => {
+  it('delete / move（含 MCP 末段命中）：与其它写类同一套入口（工作区判得出、没踩区外就给）', () => {
     for (const toolName of ['delete', 'move', 'mcp__x__delete']) {
       const view = render(
         <ApprovalCard
@@ -271,17 +273,28 @@ describe('ApprovalCard · 危险档隐藏记忆入口（round28）', () => {
         />
       )
 
-      expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
-      expect(screen.getByTestId('approval-deny')).toBeInTheDocument()
-      expect(screen.queryByTestId('approval-allow-session')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('approval-allow-forever')).not.toBeInTheDocument()
-      // 工作区本身判得出来（data 属性在）—— 藏的只是记忆入口
       expect(screen.getByTestId('approval-card')).toHaveAttribute('data-workspace', WS.path)
+      expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-allow-session')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-allow-forever')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-deny')).toBeInTheDocument()
       view.unmount()
     }
   })
 
-  it('对照组：普通写类工具的记忆入口不受影响（回归护栏）', () => {
+  it('风险提示照旧：move 的目标位置 + "为什么这次要问你"那一行都在（入口多两个，不多不少）', () => {
+    decideWith({
+      toolName: 'move',
+      input: { path: 'D:\\项目\\demo\\a.txt', to: 'docs/a.txt' },
+      path: 'D:\\项目\\demo\\a.txt'
+    })
+
+    expect(screen.getByTestId('approval-detail')).toHaveAttribute('data-kind', 'move-to')
+    expect(screen.getByTestId('approval-target')).toHaveTextContent('D:\\项目\\demo\\a.txt')
+    expect(screen.getByTestId('approval-scope')).toHaveTextContent('每次询问')
+  })
+
+  it('对照组：普通写类工具的入口一字不变（回归护栏）', () => {
     decideWith({
       toolName: 'write',
       input: { path: 'D:\\项目\\demo\\a.txt', content: 'x' },
@@ -290,5 +303,67 @@ describe('ApprovalCard · 危险档隐藏记忆入口（round28）', () => {
 
     expect(screen.getByTestId('approval-allow-session')).toBeInTheDocument()
     expect(screen.getByTestId('approval-allow-forever')).toBeInTheDocument()
+  })
+
+  it('对照组：判不出工作区时照旧只有允许一次 / 拒绝（入口条件里那条没动）', () => {
+    decideWith({ toolName: 'delete', input: { anything: 1 }, path: null })
+
+    expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
+    expect(screen.getByTestId('approval-deny')).toBeInTheDocument()
+    expect(screen.queryByTestId('approval-allow-session')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('approval-allow-forever')).not.toBeInTheDocument()
+  })
+})
+
+describe('ApprovalCard · 为什么这次要问你（round 75）', () => {
+  it('区内的 ask 档：写明"这一档是每次询问"+ 去哪儿改（记忆入口照旧）', () => {
+    decideWith({
+      toolName: 'bash',
+      input: { command: 'rm -rf build', cwd: 'D:\\项目\\demo' },
+      path: 'D:\\项目\\demo'
+    })
+
+    const scope = screen.getByTestId('approval-scope')
+    expect(scope).toHaveAttribute('data-kind', 'workspace-ask')
+    expect(scope).toHaveTextContent('每次询问')
+    expect(scope).toHaveTextContent('设置 → 工作区')
+    // 区内命令：工作区判得出来 → 记忆入口在（递归删除不再"永远问"）
+    expect(screen.getByTestId('approval-card')).toHaveAttribute('data-workspace', WS.path)
+    expect(screen.getByTestId('approval-allow-session')).toBeInTheDocument()
+    expect(screen.getByTestId('approval-allow-forever')).toBeInTheDocument()
+  })
+
+  it('工作区之外的删除目标：说清按「工作区之外」那一档，并且不给记忆入口', () => {
+    decideWith({
+      toolName: 'bash',
+      input: { command: 'rm -f "E:\\别的地方\\a.txt"', cwd: 'D:\\项目\\demo' },
+      path: 'D:\\项目\\demo'
+    })
+
+    const scope = screen.getByTestId('approval-scope')
+    expect(scope).toHaveAttribute('data-kind', 'outside-workspace')
+    expect(scope).toHaveTextContent('授权工作区之外')
+    expect(scope).toHaveTextContent('「工作区之外」那一档')
+    // 区外的目标绑不上某个工作区 → 不给记忆入口（点了也造不出生效的规则）
+    expect(screen.queryByTestId('approval-allow-session')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('approval-allow-forever')).not.toBeInTheDocument()
+  })
+
+  it('落不到工作区里的形态（磁盘级）：说清按区外那一档', () => {
+    decideWith({
+      toolName: 'bash',
+      input: { command: 'diskpart', cwd: 'D:\\项目\\demo' },
+      path: 'D:\\项目\\demo'
+    })
+
+    expect(screen.getByTestId('approval-scope')).toHaveAttribute('data-kind', 'disk-destructive')
+  })
+
+  it('对照组：普通命令 + full 工作区判得出但与解释无关时不写提示（宁缺勿错）', () => {
+    decideWith({ toolName: 'write', input: { path: 'D:\\项目\\demo\\a.txt', content: 'x' } }, [
+      { path: 'D:\\项目\\demo', mode: 'full' }
+    ])
+
+    expect(screen.queryByTestId('approval-scope')).not.toBeInTheDocument()
   })
 })

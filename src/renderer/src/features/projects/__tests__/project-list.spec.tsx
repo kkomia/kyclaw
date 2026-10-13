@@ -281,3 +281,90 @@ describe('ProjectList（round 25：项目行菜单与 ⊕）', () => {
     expect(props.onRenameProject).toHaveBeenCalledTimes(1)
   })
 })
+
+/** round 64（用户口径）：组头要有自己的菜单与开合 —— 和「任务」标签一个道理 */
+describe('ProjectList（round 64：组头折叠 + 管理入口 + 空态）', () => {
+  it('组头 = chevron + 「项目」+ 行尾图标按钮；点整行收起整组（aria-expanded / data-open，收起不卸载）', () => {
+    renderList()
+
+    const head = screen.getByTestId('project-section-toggle')
+    const fold = screen.getByTestId('project-section-list')
+    expect(head).toHaveTextContent('项目')
+    expect(head).toHaveAttribute('aria-expanded', 'true')
+    expect(fold).toHaveAttribute('data-open', 'true')
+    expect(head.querySelector('svg')?.getAttribute('class') ?? '').toContain('rotate-90')
+    // 组头在折叠内容**之外**：整组收起后管理入口还在
+    expect(fold).not.toContainElement(screen.getByTestId('project-section-head'))
+    // 行尾是图标按钮（不是文字按钮）
+    const manage = screen.getByTestId('project-add')
+    expect(manage).toHaveAccessibleName('项目管理')
+    expect(manage.querySelector('svg')).not.toBeNull()
+
+    fireEvent.click(head)
+    expect(head).toHaveAttribute('aria-expanded', 'false')
+    expect(fold).toHaveAttribute('data-open', 'false')
+    expect(head.querySelector('svg')?.getAttribute('class') ?? '').not.toContain('rotate-90')
+    // 收起 ≠ 卸载：项目行留在 DOM 里走 .trace-fold 的过渡
+    expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+
+    fireEvent.click(head)
+    expect(fold).toHaveAttribute('data-open', 'true')
+  })
+
+  it('组折叠状态持久化：保留 id __projects__，重挂载后仍收起；不冲掉项目行与「任务」组的收起项', () => {
+    window.localStorage.setItem('kyclaw.projects.collapsed', JSON.stringify(['p2', '__tasks__']))
+    const first = renderList()
+
+    fireEvent.click(screen.getByTestId('project-section-toggle'))
+
+    expect(JSON.parse(window.localStorage.getItem('kyclaw.projects.collapsed') ?? '[]')).toEqual(
+      expect.arrayContaining(['p2', '__tasks__', '__projects__'])
+    )
+
+    first.unmount()
+    renderList()
+
+    expect(screen.getByTestId('project-section-list')).toHaveAttribute('data-open', 'false')
+    // 同一份存储里的项目行收起项照旧生效（p2 收着、p1 开着）
+    expect(screen.getByTestId('project-item-p2')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('project-item-p1')).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('管理入口：「管理工作区」在创建两条路之后（可点；不接回调时禁用）', () => {
+    const props = { onManageWorkspaces: vi.fn() }
+    renderList(props)
+
+    pick('project-add', 'project-manage-workspaces')
+    expect(props.onManageWorkspaces).toHaveBeenCalledTimes(1)
+
+    // 菜单顺序：两条创建路径 ‖ 管理工作区
+    fireEvent.keyDown(screen.getByTestId('project-add'), { key: 'ArrowDown' })
+    expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual([
+      '新建空白项目',
+      '使用现有文件夹',
+      '管理工作区'
+    ])
+  })
+
+  it('管理入口未接回调时禁用（纯展示防线）', () => {
+    renderList()
+
+    fireEvent.keyDown(screen.getByTestId('project-add'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('project-manage-workspaces')).toHaveAttribute('data-disabled')
+  })
+
+  it('空态：没有项目时给一条可点的「使用现有文件夹」，组头与入口都还在（不留一行光秃秃的标题）', () => {
+    const props = { onCreateFolder: vi.fn() }
+    renderList({ projects: [], ...props })
+
+    const empty = screen.getByTestId('project-empty')
+    expect(empty).toHaveTextContent('使用现有文件夹')
+    fireEvent.click(empty)
+    expect(props.onCreateFolder).toHaveBeenCalledTimes(1)
+
+    expect(screen.getByTestId('project-section-toggle')).toBeInTheDocument()
+    expect(screen.getByTestId('project-add')).toBeInTheDocument()
+    // 没有项目时管理入口常显（不再等 hover）——第一次建项目要有落脚点
+    expect(screen.getByTestId('project-section-manage')).toHaveClass('opacity-100')
+  })
+})
