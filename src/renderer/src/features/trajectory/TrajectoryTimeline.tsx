@@ -107,7 +107,11 @@ export function TrajectoryTimeline({
                       (selectedIndex !== null && selectedIndex !== span.rowIndex) ||
                       (matchIndexes !== null && !matchIndexes.has(span.rowIndex))
                     return (
-                      <Tooltip key={span.rowIndex} label={spanTooltip(row, mcpServers)} side="bottom">
+                      <Tooltip
+                        key={span.rowIndex}
+                        label={spanTooltip(row, mcpServers)}
+                        side="bottom"
+                      >
                         <button
                           type="button"
                           data-testid={`trajectory-span-${span.rowIndex}`}

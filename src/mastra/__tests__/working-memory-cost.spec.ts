@@ -61,7 +61,10 @@ afterAll(async () => {
 
 describe('working memory 的系统提示：成本哨兵', () => {
   it('是库生成的样板 + 我们的模板，长度不越界', async () => {
-    const text = await built.memory.getSystemMessage({ threadId: 'wm-cost', resourceId: 'local-user' })
+    const text = await built.memory.getSystemMessage({
+      threadId: 'wm-cost',
+      resourceId: 'local-user'
+    })
 
     expect(text).not.toBeNull()
     const block = String(text)

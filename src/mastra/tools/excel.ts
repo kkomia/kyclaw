@@ -67,7 +67,9 @@ export const excelInputSchema = z.object({
   title: z
     .string()
     .optional()
-    .describe('Used to derive the file name when path is omitted; defaults to the first sheet name'),
+    .describe(
+      'Used to derive the file name when path is omitted; defaults to the first sheet name'
+    ),
   expect: z
     .object({
       sheets: z
@@ -89,7 +91,9 @@ export const excelInputSchema = z.object({
   path: z
     .string()
     .optional()
-    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
+    .describe(
+      'Output path relative to the session workspace; when omitted the file name derives from the title'
+    )
 })
 
 export type ExcelInput = z.infer<typeof excelInputSchema>

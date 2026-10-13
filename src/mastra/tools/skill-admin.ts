@@ -104,7 +104,9 @@ export const createSkillInputSchema = z.object({
     .array(skillFileSchema)
     .max(SKILL_FILES_MAX, `最多 ${SKILL_FILES_MAX} 个附带文件`)
     .optional()
-    .describe(`Optional supporting files such as reference/*.md or scripts/*, at most ${SKILL_FILES_MAX}`)
+    .describe(
+      `Optional supporting files such as reference/*.md or scripts/*, at most ${SKILL_FILES_MAX}`
+    )
 })
 
 export type CreateSkillInput = z.infer<typeof createSkillInputSchema>

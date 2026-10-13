@@ -65,7 +65,11 @@ function systemTextOf(prompt: unknown): string {
     .join('\n\n')
 }
 
-async function captureOnce(): Promise<{ captured: Captured; dir: string; server: AgentServerHandle }> {
+async function captureOnce(): Promise<{
+  captured: Captured
+  dir: string
+  server: AgentServerHandle
+}> {
   const dir = mkdtempSync(join(tmpdir(), 'kyclaw-r69-'))
   const ws = join(dir, 'ws')
   mkdirSync(ws, { recursive: true })

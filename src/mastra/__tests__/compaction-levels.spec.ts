@@ -130,7 +130,12 @@ function realisticSession(): ReturnType<typeof textMessage>[] {
     // —— 以下 10 条是保留窗口（最近几轮现场）——
     textMessage('m15', 'user', '现在改一下压缩逻辑'),
     // 保留窗口里也有一条大结果：**不能被碰**（这是"最近十轮是现场"的钉子）
-    toolMessage('m16', 'read', { path: 'src/mastra/compaction.ts' }, bigResult(70_000, 'compaction')),
+    toolMessage(
+      'm16',
+      'read',
+      { path: 'src/mastra/compaction.ts' },
+      bigResult(70_000, 'compaction')
+    ),
     textMessage('m17', 'user', '继续改'),
     textMessage('m18', 'assistant', '好。'),
     textMessage('m19', 'user', '再看一眼测试'),
@@ -148,7 +153,10 @@ function fakeMemory(messages: ReadonlyArray<{ id: string }>): {
 } {
   const deleteMessages = vi.fn(async () => undefined)
   return {
-    memory: { recall: vi.fn(async () => ({ messages })), deleteMessages } as unknown as CompactionMemory,
+    memory: {
+      recall: vi.fn(async () => ({ messages })),
+      deleteMessages
+    } as unknown as CompactionMemory,
     deleteMessages
   }
 }
@@ -253,7 +261,9 @@ describe('机械档的两档改写（纯函数，不改输入）', () => {
       expect(stage.messages[index]).toBe(session[index])
     }
     // 被换的那条：result 变成占位说明，参数（args）保留
-    const replaced = stage.messages[1] as { content: { parts: { toolInvocation: Record<string, unknown> }[] } }
+    const replaced = stage.messages[1] as {
+      content: { parts: { toolInvocation: Record<string, unknown> }[] }
+    }
     const invocation = replaced.content.parts[0]?.toolInvocation ?? {}
     expect(String(invocation.result)).toContain('[工具结果已精简]')
     expect(String(invocation.result)).toContain('package-lock.json')
@@ -287,7 +297,15 @@ describe('机械档的两档改写（纯函数，不改输入）', () => {
 
     expect(stage.rewritten).toBe(2)
     expect(stage.messages[0]).toBe(messages[0]) // 首次出现：原文留着
-    expect(String((stage.messages[1] as never as { content: { parts: { toolInvocation: { result: string } }[] } }).content.parts[0]?.toolInvocation.result)).toContain('[工具结果已去重]')
+    expect(
+      String(
+        (
+          stage.messages[1] as never as {
+            content: { parts: { toolInvocation: { result: string } }[] }
+          }
+        ).content.parts[0]?.toolInvocation.result
+      )
+    ).toContain('[工具结果已去重]')
     expect(JSON.stringify(stage.messages[1])).not.toContain('cfgcfg')
     expect(stage.freedChars).toBeGreaterThan(0)
     // 零信息损失：首次那份原文还在（模型按指路能找回）
@@ -557,7 +575,11 @@ describe('压缩分级：零成本档先上，够省就不调摘要模型', () =
     // 旧段（outside 保留窗口）只有那两条大结果 → 决策看得见它们
     expect(mechanicalDecision(messages.slice(0, 22), null)?.level).toBe('snip')
     // 换成一个"看不见"的旧段（这里只有正文）→ 机械档停不住
-    const noTools = messages.slice(0, 22).filter((message) => message.content.parts.some((part) => (part as { type?: string }).type === 'text'))
+    const noTools = messages
+      .slice(0, 22)
+      .filter((message) =>
+        message.content.parts.some((part) => (part as { type?: string }).type === 'text')
+      )
     expect(mechanicalDecision(noTools, null)).toBeNull()
   })
 
@@ -600,9 +622,7 @@ describe('注入处理器：机械档改的是"这一轮发给模型的那份"',
       })) as never,
       'memory'
     )
-    const live = [
-      { id: 'live-1', role: 'user', parts: [{ type: 'text', text: '这一轮的新问题' }] }
-    ]
+    const live = [{ id: 'live-1', role: 'user', parts: [{ type: 'text', text: '这一轮的新问题' }] }]
     messageList.add(
       live.map((message) => ({
         ...message,
@@ -616,10 +636,7 @@ describe('注入处理器：机械档改的是"这一轮发给模型的那份"',
     return { messageList, session, live }
   }
 
-  async function runProcessor(
-    messageList: MessageList,
-    record: ThreadCompaction
-  ): Promise<void> {
+  async function runProcessor(messageList: MessageList, record: ThreadCompaction): Promise<void> {
     const processor = createCompactionProcessor({ get: async () => record })
     const processInput = processor.processInput as unknown as (args: unknown) => Promise<unknown>
     await processInput({
@@ -679,7 +696,8 @@ describe('注入处理器：机械档改的是"这一轮发给模型的那份"',
   it('存储/界面的原文一字未动：会话消息对象没被改写，顺序也没变', async () => {
     const { messageList, session } = listWith(realisticSession())
     const resultBefore = String(
-      (session[1]?.content.parts[0] as { toolInvocation?: { result?: string } }).toolInvocation?.result
+      (session[1]?.content.parts[0] as { toolInvocation?: { result?: string } }).toolInvocation
+        ?.result
     )
 
     await runProcessor(messageList, snipRecord)
@@ -687,14 +705,18 @@ describe('注入处理器：机械档改的是"这一轮发给模型的那份"',
     // 交给处理器的那些消息对象（= 存储层的这一份）没被改过
     expect(
       String(
-        (session[1]?.content.parts[0] as { toolInvocation?: { result?: string } }).toolInvocation?.result
+        (session[1]?.content.parts[0] as { toolInvocation?: { result?: string } }).toolInvocation
+          ?.result
       )
     ).toBe(resultBefore)
     expect(resultBefore).toContain('lock —— 文件结尾标记')
     // 消息列的顺序不变（去重/裁剪不许把消息挪位置）
-    expect(messageList.get.all.db().map((message) => message.id).join(',')).toBe(
-      [...session.map((message) => message.id), 'live-1'].join(',')
-    )
+    expect(
+      messageList.get.all
+        .db()
+        .map((message) => message.id)
+        .join(',')
+    ).toBe([...session.map((message) => message.id), 'live-1'].join(','))
   })
 
   it('保留窗口内的新大结果不碰；本轮新发的消息也不碰；且不会把它当成"待落库"再存一遍', async () => {
@@ -826,7 +848,10 @@ describe('零成本档省下的钱（与摘要调用的对照）', () => {
     expect(outcome.compaction?.level).toBe('snip')
 
     // 处理器那边的真账：同一段会话、同一个档位，看这一轮 prompt 变成了多大
-    const messageList = new MessageList({ threadId: 'thread-consistency', resourceId: 'local-user' })
+    const messageList = new MessageList({
+      threadId: 'thread-consistency',
+      resourceId: 'local-user'
+    })
     const start = new Date(2026, 0, 1, 10, 0, 0).getTime()
     messageList.add(
       session.map((message, index) => ({

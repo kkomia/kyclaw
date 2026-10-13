@@ -82,7 +82,9 @@ export const addMcpServerInputSchema = z.object({
   enabled: z
     .boolean()
     .optional()
-    .describe('Whether to enable it. Defaults to false, which only writes the configuration; true is allowed only for a complete configuration')
+    .describe(
+      'Whether to enable it. Defaults to false, which only writes the configuration; true is allowed only for a complete configuration'
+    )
 })
 
 export type AddMcpServerInput = z.infer<typeof addMcpServerInputSchema>

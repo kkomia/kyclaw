@@ -512,7 +512,10 @@ export function createUsageRecorder(options: {
         contextInput,
         contextCachedInput,
         stepCount: stepCountOf(event),
-        cost: pricing === null ? null : computeCost(pricing, { input, output, cachedInput: cachedInput ?? undefined }),
+        cost:
+          pricing === null
+            ? null
+            : computeCost(pricing, { input, output, cachedInput: cachedInput ?? undefined }),
         createdAt: now().toISOString()
       })
     } catch (error) {

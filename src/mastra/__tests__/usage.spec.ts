@@ -188,7 +188,12 @@ describe('记账钩子：从 onFinish 事件取"上下文口径"（round 67）',
   it('末个 step 的 usage 落进 contextInput；stepNumber+1 落进 stepCount；整轮合计仍进 tokens', async () => {
     const row = await record({
       // AI SDK 的 totalUsage = 全部 step 之和（花费口径）
-      totalUsage: { inputTokens: 221_356, outputTokens: 3_928, totalTokens: 225_284, cachedInputTokens: 194_944 },
+      totalUsage: {
+        inputTokens: 221_356,
+        outputTokens: 3_928,
+        totalTokens: 225_284,
+        cachedInputTokens: 194_944
+      },
       stepNumber: 8,
       steps: [
         { usage: { inputTokens: 11_000 } },

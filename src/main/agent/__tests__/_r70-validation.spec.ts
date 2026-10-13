@@ -69,7 +69,11 @@ describe.runIf(enabled)('R70 探针 C：校验失败消息的可见面', () => {
             { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE }
           ]
           return {
-            stream: simulateReadableStream({ chunks: script, initialDelayInMs: 0, chunkDelayInMs: 0 })
+            stream: simulateReadableStream({
+              chunks: script,
+              initialDelayInMs: 0,
+              chunkDelayInMs: 0
+            })
           }
         }
         call += 1
@@ -79,9 +83,16 @@ describe.runIf(enabled)('R70 探针 C：校验失败消息的可见面', () => {
             type: 'tool-call',
             toolCallId: 'call-1',
             toolName: 'create_ppt',
-            input: JSON.stringify({ title: OVERLONG_TITLE, slides: [{ title: '一页', bullets: ['一个要点'] }] })
+            input: JSON.stringify({
+              title: OVERLONG_TITLE,
+              slides: [{ title: '一页', bullets: ['一个要点'] }]
+            })
           } as StreamPart,
-          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: USAGE }
+          {
+            type: 'finish',
+            finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+            usage: USAGE
+          }
         ]
         return {
           stream: simulateReadableStream({ chunks: script, initialDelayInMs: 0, chunkDelayInMs: 0 })
@@ -121,11 +132,17 @@ describe.runIf(enabled)('R70 探针 C：校验失败消息的可见面', () => {
         sse,
         nextRequestBodies: seenBodies
       }
-      writeFileSync(join(evidenceDir, `_r70-validation-${LABEL}.json`), `${JSON.stringify(report, null, 2)}\n`)
-      console.log(`[r70-C:${LABEL}] SSE 含校验文案=${report.sseHasTitleLimit}；SSE 含 Mastra 校验包裹=${report.sseHasValidationEnvelope}；下一次请求含校验文案=${report.nextRequestHasTitleLimit}`)
+      writeFileSync(
+        join(evidenceDir, `_r70-validation-${LABEL}.json`),
+        `${JSON.stringify(report, null, 2)}\n`
+      )
+      console.log(
+        `[r70-C:${LABEL}] SSE 含校验文案=${report.sseHasTitleLimit}；SSE 含 Mastra 校验包裹=${report.sseHasValidationEnvelope}；下一次请求含校验文案=${report.nextRequestHasTitleLimit}`
+      )
       // 把 SSE 里带 error 的片段单独打出来，便于肉眼确认它落在哪个 part
       for (const line of sse.split('\n')) {
-        if (line.includes('error') && line.includes('标题')) console.log('[r70-C] SSE 片段:', line.slice(0, 400))
+        if (line.includes('error') && line.includes('标题'))
+          console.log('[r70-C] SSE 片段:', line.slice(0, 400))
       }
       expect(sse.length).toBeGreaterThan(0)
     } finally {

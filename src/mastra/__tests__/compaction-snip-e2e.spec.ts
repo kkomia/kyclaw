@@ -65,8 +65,9 @@ const TAIL_MARK = 'HUGE-TAIL-最后一行'
 const HUGE_LINES = 1_200
 
 function hugeFile(): string {
-  const lines = Array.from({ length: HUGE_LINES }, (_, index) =>
-    `第 ${index + 1} 行：${'z'.repeat(100)}${index === 899 ? DEEP_MARK : ''}`
+  const lines = Array.from(
+    { length: HUGE_LINES },
+    (_, index) => `第 ${index + 1} 行：${'z'.repeat(100)}${index === 899 ? DEEP_MARK : ''}`
   )
   return [`${HEAD_MARK}`, ...lines, TAIL_MARK].join('\n')
 }

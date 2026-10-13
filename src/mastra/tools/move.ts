@@ -24,11 +24,16 @@ import {
 
 export const moveInputSchema = z.object({
   path: z.string().min(1).describe('Source path to move or rename (inside the workspace)'),
-  to: z.string().min(1).describe('Destination path (inside the workspace; relative to the workspace root)'),
+  to: z
+    .string()
+    .min(1)
+    .describe('Destination path (inside the workspace; relative to the workspace root)'),
   overwrite: z
     .boolean()
     .optional()
-    .describe('Overwrite an existing destination; default false. A destination that is a directory is always rejected')
+    .describe(
+      'Overwrite an existing destination; default false. A destination that is a directory is always rejected'
+    )
 })
 
 export type MoveInput = z.infer<typeof moveInputSchema>

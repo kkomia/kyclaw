@@ -38,13 +38,17 @@ export const webSearchInputSchema = z.object({
   query: z
     .string()
     .min(1)
-    .describe('Search query; natural language is fine. State the date range or version when looking for current information'),
+    .describe(
+      'Search query; natural language is fine. State the date range or version when looking for current information'
+    ),
   numResults: z
     .number()
     .int()
     .min(1)
     .optional()
-    .describe(`Number of results; defaults to ${WEB_SEARCH_DEFAULT_RESULTS}, maximum ${WEB_SEARCH_MAX_RESULTS}`)
+    .describe(
+      `Number of results; defaults to ${WEB_SEARCH_DEFAULT_RESULTS}, maximum ${WEB_SEARCH_MAX_RESULTS}`
+    )
 })
 
 export type WebSearchInput = z.infer<typeof webSearchInputSchema>

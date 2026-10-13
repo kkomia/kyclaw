@@ -136,9 +136,9 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
       })
     ).toBe(false)
     // round 76：edit_ppt 的 path 与 create_ppt 同一把尺（执行先 artifactTarget 再改，fail closed）
-    expect(
-      needsApproval(bed.ctx, 'edit_ppt', { path: join(bed.outside, 'x.pptx'), ops: [] })
-    ).toBe(false)
+    expect(needsApproval(bed.ctx, 'edit_ppt', { path: join(bed.outside, 'x.pptx'), ops: [] })).toBe(
+      false
+    )
   })
 
   it('外部工具（MCP，ask 档）：没有 full 也没有全名规则时一律问——path 只是它的一个入参，不能证明安全', () => {

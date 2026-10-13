@@ -17,7 +17,15 @@
  *   KYCLAW_R67_REAL=1 KYCLAW_R67_TASK="简单查下今天的新闻，做个简报 PPT 给我，简单做下就行" \
  *     pnpm exec vitest run src/main/agent/__tests__/_r67-real.spec.ts
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -121,7 +129,8 @@ describe.runIf(enabled)('R67 探针 B：真模型每轮开销与记账口径', (
       const seen: SeenRequest[] = []
       const originalFetch = globalThis.fetch
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
         if (!url.includes(host)) return originalFetch(input, init)
 
         let record: SeenRequest | null = null
@@ -192,10 +201,9 @@ describe.runIf(enabled)('R67 探针 B：真模型每轮开销与记账口径', (
         await new Promise((r) => setTimeout(r, 2_000))
         const durationMs = Date.now() - started
 
-        const usage = (await fetch(
-          `${server.baseUrl}/api/usage/context?threadId=r67-${LABEL}`,
-          { headers: { authorization: `Bearer ${server.token}` } }
-        ).then((r) => r.json())) as Record<string, unknown>
+        const usage = (await fetch(`${server.baseUrl}/api/usage/context?threadId=r67-${LABEL}`, {
+          headers: { authorization: `Bearer ${server.token}` }
+        }).then((r) => r.json())) as Record<string, unknown>
 
         const withUsage = seen.filter((request) => request.usage !== null)
         const sumPrompt = withUsage.reduce((sum, item) => sum + (item.usage?.promptTokens ?? 0), 0)
@@ -224,7 +232,9 @@ describe.runIf(enabled)('R67 探针 B：真模型每轮开销与记账口径', (
           `[r67-B] LLM 调用 ${seen.length} 次；Σprompt=${sumPrompt}（Σcache=${sumCached}）；最后一次 prompt=${last?.usage?.promptTokens ?? 'n/a'}`
         )
         console.log(`[r67-B] usage_runs 口径回包：${JSON.stringify(usage)}`)
-        console.log(`[r67-B] 耗时 ${(durationMs / 1000).toFixed(1)}s；产出 ${report.produced.join('、')}`)
+        console.log(
+          `[r67-B] 耗时 ${(durationMs / 1000).toFixed(1)}s；产出 ${report.produced.join('、')}`
+        )
         expect(seen.length).toBeGreaterThan(0)
       } finally {
         globalThis.fetch = originalFetch

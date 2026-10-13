@@ -46,7 +46,9 @@ export const docxBlockSchema = z.discriminatedUnion('type', [
     text: z
       .string()
       .max(MAX_PARAGRAPH_CHARS, `单段文字最长 ${MAX_PARAGRAPH_CHARS} 字，请拆成多段`)
-      .describe(`One paragraph; an empty string is skipped, at most ${MAX_PARAGRAPH_CHARS} characters`)
+      .describe(
+        `One paragraph; an empty string is skipped, at most ${MAX_PARAGRAPH_CHARS} characters`
+      )
   }),
   z.object({
     type: z.literal('bullets'),
@@ -75,7 +77,9 @@ export const docxInputSchema = z.object({
   title: z
     .string()
     .optional()
-    .describe('Document title, written as a Title paragraph; also derives the file name when path is omitted'),
+    .describe(
+      'Document title, written as a Title paragraph; also derives the file name when path is omitted'
+    ),
   blocks: z
     .array(docxBlockSchema)
     .min(1)
@@ -87,14 +91,20 @@ export const docxInputSchema = z.object({
         .array(z.object({ text: z.string().min(1).describe('Text that must appear') }))
         .max(MAX_EXPECTS, `最多 ${MAX_EXPECTS} 条断言，请精选`)
         .optional()
-        .describe('Text the user named as required, checked in the body text only, ignoring headers, footers and comments')
+        .describe(
+          'Text the user named as required, checked in the body text only, ignoring headers, footers and comments'
+        )
     })
     .optional()
-    .describe('Hard requirements the user stated, such as specific text that must appear; each one is checked and misses are reported in the result'),
+    .describe(
+      'Hard requirements the user stated, such as specific text that must appear; each one is checked and misses are reported in the result'
+    ),
   path: z
     .string()
     .optional()
-    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
+    .describe(
+      'Output path relative to the session workspace; when omitted the file name derives from the title'
+    )
 })
 
 export type DocxInput = z.infer<typeof docxInputSchema>

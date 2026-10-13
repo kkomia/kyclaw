@@ -37,10 +37,7 @@ export function NewSessionButton({ onNew }: NewSessionButtonProps): React.JSX.El
       <button
         type="button"
         data-testid="new-session"
-        className={cn(
-          navItemClass(),
-          'h-(--new-session-height) w-full bg-(--field-bg) px-2.5'
-        )}
+        className={cn(navItemClass(), 'h-(--new-session-height) w-full bg-(--field-bg) px-2.5')}
         onClick={() => {
           onNew?.()
           navigate('/chat')

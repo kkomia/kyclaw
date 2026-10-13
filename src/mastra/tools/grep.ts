@@ -37,8 +37,14 @@ export const grepInputSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('Directory to search; defaults to the workspace root (required with several workspaces)'),
-  glob: z.string().min(1).optional().describe('Only search files matching this glob, for example *.ts'),
+    .describe(
+      'Directory to search; defaults to the workspace root (required with several workspaces)'
+    ),
+  glob: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Only search files matching this glob, for example *.ts'),
   ignoreCase: z.boolean().optional().describe('true = case-insensitive (default is case-sensitive)')
 })
 

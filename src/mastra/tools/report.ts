@@ -48,7 +48,9 @@ export const reportInputSchema = z.object({
   path: z
     .string()
     .optional()
-    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
+    .describe(
+      'Output path relative to the session workspace; when omitted the file name derives from the title'
+    )
 })
 
 export type ReportInput = z.infer<typeof reportInputSchema>
@@ -71,7 +73,9 @@ export const pdfInputSchema = z.object({
   path: z
     .string()
     .optional()
-    .describe('Output path relative to the session workspace; when omitted the file name derives from the title')
+    .describe(
+      'Output path relative to the session workspace; when omitted the file name derives from the title'
+    )
 })
 
 export type PdfInput = z.infer<typeof pdfInputSchema>

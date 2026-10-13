@@ -24,7 +24,9 @@ export const deleteInputSchema = z.object({
   recursive: z
     .boolean()
     .optional()
-    .describe('Delete a non-empty directory tree; default false removes files and empty directories only')
+    .describe(
+      'Delete a non-empty directory tree; default false removes files and empty directories only'
+    )
 })
 
 export type DeleteInput = z.infer<typeof deleteInputSchema>

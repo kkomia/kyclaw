@@ -35,9 +35,7 @@ function toolsetInOrder(names: readonly string[]): Record<string, Tool> {
   return table
 }
 
-async function toolNamesWith(
-  mcp: Record<string, Tool>
-): Promise<string[]> {
+async function toolNamesWith(mcp: Record<string, Tool>): Promise<string[]> {
   const agent = await createKyclawAgent(resolveModel, undefined, {
     mcpTools: async () => mcp
   })

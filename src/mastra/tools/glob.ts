@@ -27,7 +27,9 @@ export const globInputSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('Directory to search; defaults to the workspace root (required with several workspaces)')
+    .describe(
+      'Directory to search; defaults to the workspace root (required with several workspaces)'
+    )
 })
 
 export type GlobInput = z.infer<typeof globInputSchema>

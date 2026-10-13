@@ -164,9 +164,7 @@ async function captureOnce(options: {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${server.token}` },
     body: JSON.stringify({
-      messages: [
-        { id: 'u-1', role: 'user', parts: [{ type: 'text', text: '在吗？' }] }
-      ],
+      messages: [{ id: 'u-1', role: 'user', parts: [{ type: 'text', text: '在吗？' }] }],
       memory: { thread: 'r67-overhead', resource: 'local-user' }
     })
   })
