@@ -60,6 +60,13 @@ export type FilePreview = z.infer<typeof filePreviewSchema>
 /** workbench:reveal 的回包：真正交给系统的那条绝对路径（测试与排障都看得到） */
 export const revealResultSchema = z.strictObject({ path: z.string().min(1) })
 
+/**
+ * workbench:open 的回包：真正交给**系统默认应用**的那条绝对路径。
+ * 形状与 reveal 一样（都是"我拿哪条路径去办的事"），但语义**不同**，别混用：
+ * reveal 是"在文件资源管理器里定位"，open 是"用本机装了的那件应用打开这个文件"。
+ */
+export const openResultSchema = z.strictObject({ path: z.string().min(1) })
+
 /* ── 文件字节（按格式渲染的那条通道） ────────────────────────────────────── */
 
 /**

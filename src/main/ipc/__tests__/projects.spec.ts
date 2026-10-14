@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -59,7 +59,7 @@ beforeEach(() => {
   mocks.openPath.mockReset()
   mocks.openPath.mockResolvedValue('')
   mocks.window = null
-  dir = mkdtempSync(join(tmpdir(), 'kyclaw-projects-ipc-'))
+  dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'kyclaw-projects-ipc-')))
   existing = join(dir, '现有项目')
   mkdirSync(existing, { recursive: true })
   realExisting = existing

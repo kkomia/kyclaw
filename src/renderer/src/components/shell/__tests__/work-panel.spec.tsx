@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WorkPanel } from '../WorkPanel'
+import { fireEvent, render, screen, type RenderResult } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { WorkPanel, type WorkPanelProps } from '../WorkPanel'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -13,21 +13,24 @@ afterEach(() => {
  * jsdom 里没有真实布局：容器宽（内容区）默认读出来是 0，所以按"容器宽未知"只夹 280–760；
  * 70% 这一层的换算在下面有一个把内容区宽度摆出来的用例，纯函数口径见 `shell-store.spec.ts`。
  */
-function renderPanel(props: Partial<{ open: boolean; fullscreen: boolean; width: number }> = {}): {
-  onWidthChange: ReturnType<typeof vi.fn>
-  container: HTMLElement
-  unmount: () => void
-} {
-  const onWidthChange = vi.fn()
-  const view = render(
+function panelElement(props: Partial<WorkPanelProps> = {}): React.JSX.Element {
+  return (
     <WorkPanel
       open={props.open ?? true}
       fullscreen={props.fullscreen}
+      spaceConstrained={props.spaceConstrained}
       width={props.width ?? 400}
-      onWidthChange={onWidthChange}
+      onWidthChange={props.onWidthChange}
     />
   )
-  return { onWidthChange, container: view.container, unmount: view.unmount }
+}
+
+function renderPanel(
+  props: Partial<Pick<WorkPanelProps, 'open' | 'fullscreen' | 'spaceConstrained' | 'width'>> = {}
+): { onWidthChange: Mock<(width: number) => void> } & RenderResult {
+  const onWidthChange = vi.fn<(width: number) => void>()
+  const view = render(panelElement({ ...props, onWidthChange }))
+  return { onWidthChange, ...view }
 }
 
 function drag(handle: HTMLElement, from: number, to: number): void {
@@ -161,5 +164,124 @@ describe('WorkPanel 拖拽调宽', () => {
     renderPanel({ width: 520 })
 
     expect(screen.getByTestId('work-panel')).not.toHaveClass('ml-(--content-safe-left)')
+  })
+
+  it('round 77：全屏的两种来源标出来（用户偏好 user / 空间不足的临时铺满 auto / 没全屏 none）', () => {
+    const docked = renderPanel({ fullscreen: false, spaceConstrained: false })
+    expect(screen.getByTestId('work-panel')).toHaveAttribute('data-fullscreen-source', 'none')
+
+    docked.unmount()
+    const user = renderPanel({ fullscreen: true, spaceConstrained: false })
+    expect(screen.getByTestId('work-panel')).toHaveAttribute('data-fullscreen-source', 'user')
+
+    user.unmount()
+    renderPanel({ fullscreen: true, spaceConstrained: true })
+    const panel = screen.getByTestId('work-panel')
+    expect(panel).toHaveAttribute('data-fullscreen-source', 'auto')
+    // 铺满的摆法与用户全屏完全同构（探针只需看布局，不必管来源）
+    expect(panel).toHaveClass('is-open', 'flex-1', 'ml-(--content-safe-left)')
+    expect(panel).not.toHaveClass('w-(--work-panel-width)')
+  })
+})
+
+/**
+ * round 79（实机边界，agent18 报）：拖到越界 → 转 auto（把手从 DOM 里拿掉）时指针捕获跟着消失，
+ * pointerup 落不到已卸载的节点上 → `dragging` 残留：面板永远 `transition-none`、线永远强调蓝。
+ * 判据：拖动中途把手没了就必须收尾，收尾后的状态要跟"从没拖过"一样。
+ */
+describe('WorkPanel 拖拽收尾（round 79：把手在拖动中途被拿掉）', () => {
+  it('拖到越界转 auto：过渡与强调线都收掉，恢复并排后还能正常拖', () => {
+    const view = renderPanel({ width: 400 })
+    const onWidthChange = view.onWidthChange
+
+    fireEvent.pointerDown(screen.getByTestId('work-panel-resizer'), {
+      button: 0,
+      pointerId: 1,
+      clientX: 800
+    })
+    expect(screen.getByTestId('work-panel')).toHaveClass('transition-none')
+
+    // 越界 → auto（AppShell 把 fullscreen 传进来）：把手这一刻从 DOM 里消失
+    view.rerender(
+      panelElement({ open: true, fullscreen: true, spaceConstrained: true, onWidthChange })
+    )
+    expect(screen.queryByTestId('work-panel-resizer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('transition-none')
+
+    // 指针随后在别处松开（落不到已卸载的手柄上）：不该再改宽度
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 300 })
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 100 })
+    expect(onWidthChange).not.toHaveBeenCalled()
+
+    // 恢复并排：新挂载的把手不带拖动高亮，面板也没留着 transition-none
+    view.rerender(panelElement({ open: true, width: 400, onWidthChange }))
+    const panel = screen.getByTestId('work-panel')
+    const line = screen.getByTestId('work-panel-resizer').querySelector('span[aria-hidden="true"]')
+    expect(panel).not.toHaveClass('transition-none')
+    expect(line).toHaveClass('bg-transparent')
+    expect(line).not.toHaveClass('bg-accent')
+
+    // 收尾没收坏：之后照常拖
+    drag(screen.getByTestId('work-panel-resizer'), 800, 700)
+    expect(onWidthChange).toHaveBeenCalledWith(500)
+  })
+
+  it('拖动中收面板（open=false，把手同样被拿掉）也收尾', () => {
+    const view = renderPanel({ open: true })
+    fireEvent.pointerDown(screen.getByTestId('work-panel-resizer'), {
+      button: 0,
+      pointerId: 1,
+      clientX: 800
+    })
+    expect(screen.getByTestId('work-panel')).toHaveClass('transition-none')
+
+    view.rerender(panelElement({ open: false, onWidthChange: view.onWidthChange }))
+
+    expect(screen.getByTestId('work-panel')).not.toHaveClass('transition-none')
+    expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
+  })
+
+  it('指针在窗口任意处松开/取消/丢失捕获都算收尾（不再依赖手柄那 6px 命中区）', () => {
+    const cases: Array<() => void> = [
+      () => fireEvent.pointerUp(window, { pointerId: 1, clientX: 700 }),
+      () => fireEvent.pointerCancel(window, { pointerId: 1 }),
+      () => fireEvent.lostPointerCapture(window, { pointerId: 1 })
+    ]
+
+    for (const end of cases) {
+      const { onWidthChange, unmount } = renderPanel()
+      fireEvent.pointerDown(screen.getByTestId('work-panel-resizer'), {
+        button: 0,
+        pointerId: 1,
+        clientX: 800
+      })
+      expect(screen.getByTestId('work-panel')).toHaveClass('transition-none')
+
+      end()
+
+      expect(screen.getByTestId('work-panel')).not.toHaveClass('transition-none')
+      // 收尾之后指针再动也不再改宽度
+      fireEvent.pointerMove(window, { pointerId: 1, clientX: 100 })
+      expect(onWidthChange).not.toHaveBeenCalled()
+      unmount()
+    }
+  })
+
+  it('别的指针动不影响当前拖动（多指同按不误伤）', () => {
+    const { onWidthChange } = renderPanel({ width: 400 })
+    drag(screen.getByTestId('work-panel-resizer'), 800, 700)
+    expect(onWidthChange).toHaveBeenCalledTimes(1)
+
+    // 换一个 pointerId 按下：这次拖动归它，前一次的 pointerId 事件不再改宽度
+    fireEvent.pointerDown(screen.getByTestId('work-panel-resizer'), {
+      button: 0,
+      pointerId: 2,
+      clientX: 800
+    })
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 0 })
+    expect(onWidthChange).toHaveBeenCalledTimes(1)
+
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 700 })
+    expect(onWidthChange).toHaveBeenLastCalledWith(500)
   })
 })

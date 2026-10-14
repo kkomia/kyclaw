@@ -27,6 +27,7 @@ export type ToolClass = 'read' | 'write' | 'dangerous'
 
 const TOOL_CLASSES: Record<string, ToolClass> = {
   read: 'read',
+  ask_user: 'read',
   glob: 'read',
   grep: 'read',
   write: 'write',
@@ -53,12 +54,18 @@ const TOOL_CLASSES: Record<string, ToolClass> = {
   create_report: 'write',
   create_pdf: 'write',
   create_excel: 'write',
+  // 增量编辑：edit_excel 是"改已有的一份 .xlsx"（同一个 path 就地覆盖，见 mastra/tools/excel-edit.ts），
+  // 与 create_excel 同档同表，执行同样必过引擎
+  edit_excel: 'write',
   create_ppt: 'write',
   // round 76：edit_ppt 是"改上一版那份 .pptx"（同一个 path 就地覆盖，见 mastra/tools/ppt-edit.ts），
   // 与 create_ppt **同档同表**：默认问、目标工作区 full 或命中"永久允许"规则才免审，
   // 执行同样必过引擎（目标解析不出去即拒，见下面的 WORKSPACE_FILE_TOOLS）。
   edit_ppt: 'write',
   create_docx: 'write',
+  // 增量编辑：edit_docx 是"改上一版那份 .docx"（同一个 path 就地覆盖，见 mastra/tools/docx-edit.ts），
+  // 与 create_docx 同档同表，执行同样必过引擎
+  edit_docx: 'write',
   // round 68 修订：render_ppt 是**派生只读产物** —— 它把已有 deck 逐页导成页图给模型看，
   // 写入**只落在派生目录** `<deck 名>_页图/`（目标越界一律拒绝、一个文件都不写，见
   // mastra/tools/render-ppt.ts），不碰用户的文件。所以按**只读档免审**：非 full 工作区里
@@ -104,9 +111,13 @@ const WORKSPACE_FILE_TOOLS = new Set([
   'create_report',
   'create_pdf',
   'create_excel',
+  // edit_excel 与 create_excel 同理（同一份 .xlsx、同一个引擎）
+  'edit_excel',
   'create_ppt',
   // round 76：edit_ppt 与 create_ppt 是同一件事的两步（新做 / 就地改），执行都过同一个引擎
   'edit_ppt',
+  // edit_docx 与 create_docx 同理（同一份 .docx、同一个引擎）
+  'edit_docx',
   'create_docx'
   // round 68 修订：render_ppt 不在这张表里 —— 它已按**只读档免审**（见上面的 TOOL_CLASSES），
   // needsApproval 在"只读放行"那一步就返回了，走不到这张表的判定。

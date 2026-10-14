@@ -223,7 +223,7 @@ export function Message({
                       data-testid="message-image"
                       src={part.url}
                       alt={part.filename ?? '图片'}
-                      className="max-h-64 max-w-64 rounded-panel border-(length:--hairline-width) border-hairline object-contain"
+                      className="max-h-64 max-w-64 rounded-panel border-(length:--hairline-width) border-surface-border object-contain"
                     />
                   ) : (
                     <span

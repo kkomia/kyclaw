@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  assertOpenable,
   DIR_ENTRY_LIMIT,
   listDir,
   PREVIEW_BYTES,
@@ -158,9 +159,58 @@ describe('trimIncompleteTail：UTF-8 边界', () => {
 })
 
 describe('revealTarget', () => {
+  /**
+   * 交给系统的那条路径经 `resolveInsideWorkspace`（`realpathSync.native`）归一 —— Windows 上会把
+   * tmpdir 的 8.3 短名（本机 `C:\LMSTUD~1`）展开成长名，断言按归一后的写。
+   */
+  const canonical = (path: string): string => realpathSync.native(path)
+
   it('回绝对路径（目录与文件都行）；不存在给人话', () => {
-    expect(revealTarget(root, '')).toBe(root)
-    expect(revealTarget(root, 'src/index.ts')).toBe(join(root, 'src', 'index.ts'))
+    expect(revealTarget(root, '')).toBe(canonical(root))
+    expect(revealTarget(root, 'src/index.ts')).toBe(canonical(join(root, 'src', 'index.ts')))
     expect(() => revealTarget(root, 'src/没有.ts')).toThrow(/不在磁盘上/)
+  })
+})
+
+/**
+ * round 77：`workbench:open` 的扩展名闸门。这张表就是"什么能交给 ShellExecute"的唯一定义 ——
+ * 工作区里的文件模型也能写，`.exe` / `.bat` / `.js` / `.lnk` 交过去是**执行**，绝不能放行。
+ */
+describe('assertOpenable：只放行文档与媒体', () => {
+  it('文档与媒体放行（含旧版 Office 与纯文本）：不抛', () => {
+    for (const name of [
+      '方案.docx',
+      '旧方案.doc',
+      '台账.xlsx',
+      '旧台账.xls',
+      '汇报.pptx',
+      '旧汇报.ppt',
+      '报告.pdf',
+      '图片.PNG',
+      '名单.csv',
+      '说明.md',
+      '笔记.txt',
+      'src/子目录/数据.json'
+    ]) {
+      expect(() => assertOpenable(name), name).not.toThrow()
+    }
+  })
+
+  it('可执行 / 脚本 / 快捷方式 / 没有扩展名：一律拒，并指路「在文件资源管理器中定位」', () => {
+    for (const name of [
+      '安装包.exe',
+      '更新.bat',
+      'run.cmd',
+      'x.ps1',
+      'x.js',
+      'x.vbs',
+      'x.msi',
+      'x.lnk',
+      'noext'
+    ]) {
+      expect(() => assertOpenable(name), name).toThrow(/不用系统应用打开这类文件/)
+    }
+    expect(() => assertOpenable('noext')).toThrow(/没有扩展名/)
+    expect(() => assertOpenable('安装包.exe')).toThrow(/在文件资源管理器中定位/)
   })
 })

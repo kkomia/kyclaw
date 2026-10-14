@@ -21,7 +21,13 @@ export interface Bed {
 
 export function setupWorkbench(options: { workspaces?: number } = {}): Bed {
   resetWorkbenchStore()
-  useShellStore.setState({ sidebarCollapsed: false, workPanelOpen: true })
+  useShellStore.setState({
+    sidebarCollapsed: false,
+    workPanelOpen: true,
+    workPanelWidth: 400,
+    workPanelFullscreen: false,
+    workPanelFit: null
+  })
   const workspaces = Array.from({ length: options.workspaces ?? 1 }, (_value, index) => ({
     path: `D:\\工作区${index === 0 ? '' : index}`,
     mode: 'ask' as const

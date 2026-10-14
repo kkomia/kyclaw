@@ -10,7 +10,8 @@
  * 又不能经 kyclaw 的 toolOptions 注入（那一轮那个文件由别处持有），所以走这条已有的注册表通道。
  * 于是"设置页改了档位 → 下一轮工具调用就按新档位判"，与 permissionRules 的现读口径一致。
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   appSettingsSchema,
@@ -22,7 +23,9 @@ import {
   type AppSettings
 } from '../shared/settings'
 import { DEFAULT_WEB_SEARCH } from '../shared/search'
+import { defaultWorkspacePatch } from './projects'
 import { setOutsideMode } from './permission/outside-mode'
+import { checkWorkspacePath } from './workspace'
 
 export function settingsPath(userDataDir: string): string {
   return join(userDataDir, SETTINGS_FILE)
@@ -51,9 +54,11 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
   const record = raw as Record<string, unknown>
   const next = { ...record }
+  if (next.globalRules === undefined) next.globalRules = ''
   if (next.permissions === undefined) next.permissions = { rules: [] }
   if (next.mcpServers === undefined) next.mcpServers = []
   if (next.defaultWorkspace === undefined) next.defaultWorkspace = null
+  if (next.defaultWorkspaceInitialized === undefined) next.defaultWorkspaceInitialized = false
   if (next.projects === undefined) next.projects = []
   if (next.langfuse === undefined) {
     next.langfuse = { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' }
@@ -145,10 +150,77 @@ export function readSettings(file: string): AppSettings {
   return settings
 }
 
+/**
+ * 首次启动默认工作区：用持久标记区分旧 profile 与用户后来主动移除默认工作区。
+ * 坏配置保持原样；初始化失败不阻塞窗口启动，也不提前写完成标记。
+ */
+export function initializeDefaultWorkspace(userDataDir: string, homePath: string): void {
+  const file = settingsPath(userDataDir)
+  const recommended = join(homePath, 'kyclaw', '工作区')
+
+  try {
+    const fileExists = existsSync(file)
+    const raw = fileExists ? JSON.parse(readFileSync(file, 'utf8')) : undefined
+    if (fileExists && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) {
+      console.warn('[kyclaw] 默认工作区初始化跳过：settings.json 不是对象')
+      return
+    }
+
+    const parsed = appSettingsSchema.safeParse(
+      raw === undefined ? defaultSettings() : migrateStoredSettings(raw)
+    )
+    if (!parsed.success) {
+      console.warn('[kyclaw] 默认工作区初始化跳过：settings.json 配置不合法')
+      return
+    }
+    if (parsed.data.defaultWorkspaceInitialized) return
+
+    const rawRecord = raw as Record<string, unknown> | undefined
+    const workspaces = rawRecord?.workspaces
+    const defaultWorkspace = rawRecord?.defaultWorkspace
+    const isLegacyEmptyProfile =
+      raw === undefined ||
+      (Array.isArray(workspaces) &&
+        workspaces.length === 0 &&
+        (defaultWorkspace === undefined || defaultWorkspace === null))
+
+    if (!isLegacyEmptyProfile) {
+      writeSettings(file, { ...parsed.data, defaultWorkspaceInitialized: true })
+      return
+    }
+
+    mkdirSync(recommended, { recursive: true })
+    const checked = checkWorkspacePath(recommended)
+    if (!checked.ok) {
+      console.warn(`[kyclaw] 默认工作区初始化跳过：推荐路径不可用（${checked.reason}）`)
+      return
+    }
+
+    const next = defaultWorkspacePatch(parsed.data, checked.path)
+    writeSettings(file, {
+      ...parsed.data,
+      ...next,
+      defaultWorkspaceInitialized: true
+    })
+    console.info(`[kyclaw] 默认工作区已初始化：${checked.path}`)
+  } catch (error) {
+    console.warn('[kyclaw] 默认工作区初始化失败（不影响窗口启动）', error)
+  }
+}
+
 /** 写：目录不存在就建（userData 首次创建），同步写——用户改完就该立刻落盘 */
 export function writeSettings(file: string, settings: AppSettings): void {
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx'
+    })
+    renameSync(temporary, file)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
   // 写这一侧也刷一次：`updateSettings` 是设置的唯一写口，落盘即生效（与读侧同一条通道）
   setOutsideMode(settings.outsideWorkspaceMode)
 }

@@ -31,7 +31,13 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
         title: win?.getTitle()
       }
     })
-    expect(window).toMatchObject({ width: 1280, height: 800, visible: true, title: 'kyclaw' })
+    expect(window).toMatchObject({ visible: true, title: 'kyclaw' })
+    // 几何不能要求逐像素相等：宿主显示缩放不是整数倍时（本机 225%），Windows/Chromium 会把窗口
+    // 的物理像素取整，`getBounds()` 回来的 DIP 就差 1~2px（实测 1281×802，内容盒 1280×802；
+    // 探针 `_r84-window-bounds-probe` 证到 scaleFactor=2.25）。所以比"默认 1280×800 ± 4"：
+    // 换成别的几何默认值（1024×768 / 1440×900…）照样红，DPI 取整不误伤。
+    expect(Math.abs((window.width ?? 0) - 1280)).toBeLessThanOrEqual(4)
+    expect(Math.abs((window.height ?? 0) - 800)).toBeLessThanOrEqual(4)
 
     // 最大化按钮真的切状态（不是画着好看的）
     await page.getByTestId('window-maximize').click()

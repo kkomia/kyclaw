@@ -12,6 +12,7 @@ import { classifyToolCall, isWorkspaceFileTool } from '../classify'
 describe('classifyToolCall：内置文件工具', () => {
   it('只读三件套（read / glob / grep）→ read', () => {
     expect(classifyToolCall('read')).toBe('read')
+    expect(classifyToolCall('ask_user')).toBe('read')
     expect(classifyToolCall('glob')).toBe('read')
     expect(classifyToolCall('grep')).toBe('read')
   })
@@ -45,18 +46,24 @@ describe('classifyToolCall：内置文件工具', () => {
     expect(classifyToolCall('Delete')).toBe('dangerous')
   })
 
-  it('模块 4 产出物五件 + round 76 的 edit_ppt → write（默认问；不是"未知名字碰巧落在 write"）', () => {
+  it('模块 4 产出物 + 增量编辑四件（edit_ppt / edit_docx / edit_excel）→ write（默认问；不是"未知名字碰巧落在 write"）', () => {
     for (const name of [
       'create_report',
       'create_pdf',
       'create_excel',
+      // edit_excel 与 create_excel 同理（就地改已有的一份 .xlsx）
+      'edit_excel',
       'create_ppt',
       'create_docx',
       // round 76：edit_ppt 是"就地改已有的一份 .pptx"，与 create_ppt 同档
-      'edit_ppt'
+      'edit_ppt',
+      // edit_docx 与 create_docx 同理（就地改已有的一份 .docx）
+      'edit_docx'
     ]) {
       expect(classifyToolCall(name), name).toBe('write')
     }
+    // 大小写与空白同样不敏感（与既有表项同口径）
+    expect(classifyToolCall(' Edit_Excel ')).toBe('write')
   })
 
   it('round 45 联网搜索：web_search 与 fetch 同档（write = 默认问那一档）', () => {
@@ -98,7 +105,7 @@ describe('classifyToolCall：MCP / 外部工具', () => {
 })
 
 describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判定）', () => {
-  it('五件套 + 产出物五件 + edit_ppt 是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
+  it('五件套 + 产出物 + 增量编辑三件（edit_ppt / edit_docx / edit_excel）是；MCP 名一律不是（末段同名的 mcp__a__write 也不是）', () => {
     for (const name of [
       'read',
       'glob',
@@ -112,8 +119,12 @@ describe('isWorkspaceFileTool：内置工作区文件工具的身份（整名判
       'create_excel',
       'create_ppt',
       'create_docx',
+      // edit_excel 与 create_excel 同一个引擎（artifactTarget 先解析再改），同类
+      'edit_excel',
       // round 76：edit_ppt 与 create_ppt 同一个引擎（artifactTarget 先解析再改），同类
-      'edit_ppt'
+      'edit_ppt',
+      // edit_docx 与 create_docx 同一个引擎，同类
+      'edit_docx'
     ]) {
       expect(isWorkspaceFileTool(name), name).toBe(true)
     }

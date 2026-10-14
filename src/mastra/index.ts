@@ -79,11 +79,22 @@ import type { WebSearchDeps } from './search/backends'
 import { ProviderConfigError } from './model'
 import { createSessionProjectStore, type SessionProjectStore } from './session-projects'
 import { createSessionPptSourceStore, type SessionPptSourceStore } from './session-ppt-sources'
+import { createSessionDocxSourceStore, type SessionDocxSourceStore } from './session-docx-sources'
 import {
   createSessionPptTemplateStore,
   type SessionPptTemplateStore
 } from './session-ppt-templates'
 import { langfuseObservabilityQuietly, type LangfuseExportConfig } from './telemetry'
+import { createAskUserRoutes } from './routes/ask-user'
+import { createSessionTaskStore, type SessionTaskStore } from './session-tasks'
+import { createTasksContext, type TasksContext } from './tasks-context'
+import { prepareTaskChatParams } from './tasks-chat'
+import { AskUserRuntime } from './ask-user-runtime'
+import { createSessionPlanStore, type SessionPlanStore } from './session-plan'
+import { createPlanRuntime, planRefOf, type PlanRuntime, type PlanSuspension } from './plan-runtime'
+import { createPlanRoutes } from './routes/plans'
+import { planRefSchema } from '../shared/plan'
+import { createRulesProcessor, type RulesProcessorDependencies } from './rules'
 import {
   createUsageRecorder,
   createUsageStore,
@@ -156,6 +167,10 @@ export const KYCLAW_WORKING_MEMORY_TEMPLATE = `# 用户信息
 `
 
 export interface KyclawMastra {
+  tasks: SessionTaskStore
+  tasksContext: TasksContext
+  plans: SessionPlanStore
+  planRuntime: PlanRuntime
   mastra: Mastra
   storage: LibSQLStore
   memory: MastraMemory
@@ -173,12 +188,18 @@ export interface KyclawMastra {
    * 不带内存镜像：它只被 edit_ppt 读（一次编辑读一次，本来就是异步），见 session-ppt-sources.ts 头注。
    */
   sessionPptSources: SessionPptSourceStore
+  /**
+   * 会话↔**Word 源结构**的表读写口（create_docx 记、edit_docx 读改）。与 PPT 那份同形，
+   * 同样不带内存镜像（只被 edit_docx 一次编辑读一次，本来就是异步），见 session-docx-sources.ts 头注。
+   */
+  sessionDocxSources: SessionDocxSourceStore
   /** round 19：上下文压缩（记录读写 + 摘要服务；注入处理器与 /api/threads/:id/compact 共用） */
   compaction: CompactionService
   /** T17：本次装配有没有挂上 Langfuse 导出（设置页拿它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
   /** round 28：本次装配的语义召回状态（/api/memory/recall 与设置页状态行读它） */
   recall: RecallRuntime
+  rules: { processorRegistered: boolean }
 }
 
 /** libsql 的 file: URL 只认正斜杠（Windows 的反斜杠会被当转义字符） */
@@ -211,6 +232,7 @@ function userFacingError(error: Error): { status: 400 | 500; message: string } {
 export async function createKyclawMastra(options: {
   dataDir: string
   resolveModel: ModelResolver
+  rules?: Pick<RulesProcessorDependencies, 'readGlobalRules' | 'readProjectRules' | 'onDiagnostics'>
   /** 授权工作区（工具权限边界）；缺省 = 没有工作区 */
   workspaces?: () => readonly Workspace[]
   /** 默认工作区（T18：没项目的会话在它下面的会话子目录里干活）；缺省 = 没指认 */
@@ -284,7 +306,9 @@ export async function createKyclawMastra(options: {
   const { LibSQLStore: LibSQLStoreClass, LibSQLVector: LibSQLVectorClass } =
     await import('@mastra/libsql')
   const { Memory: MemoryClass } = await import('@mastra/memory')
-  const { chatRoute } = await import('@mastra/ai-sdk')
+  const { handleChatStream } = await import('@mastra/ai-sdk')
+  const { registerApiRoute } = await import('@mastra/core/server')
+  const { createUIMessageStreamResponse } = await import('ai')
 
   /**
    * round 68：本部署事实装进技能侧的注册表 —— `use_skill` 的构造在 agents/kyclaw.ts，
@@ -365,6 +389,8 @@ export async function createKyclawMastra(options: {
   const sessionPptTemplates = createSessionPptTemplateStore(storage)
   // round 76：会话↔PPT 源结构同库同寿命（create_ppt 记、edit_ppt 读改；表在第一次读写时建）
   const sessionPptSources = createSessionPptSourceStore(storage)
+  // 会话↔Word 源结构同库同寿命（create_docx 记、edit_docx 读改；表在第一次读写时建）
+  const sessionDocxSources = createSessionDocxSourceStore(storage)
   // 上下文压缩（round 19）：记录表同库；摘要服务用当前模型解析器，记账并进 usage
   const compactionStore = createCompactionStore(compactionSqlClient(storage))
   await compactionStore.ensureTable()
@@ -378,54 +404,191 @@ export async function createKyclawMastra(options: {
   })
   // 追踪（T17）：默认关——没配齐（或建不起来）就没有 observability，Mastra 自己走 no-op
   const observability = await langfuseObservabilityQuietly(options.langfuse?.() ?? null)
-  const mastra = new MastraClass({
-    agents: {
-      [KYCLAW_AGENT_ID]: await createKyclawAgent(options.resolveModel, memory, {
-        workspaces: options.workspaces,
-        defaultWorkspace: options.defaultWorkspace,
-        projects: options.projects,
-        projectOf: (threadId) => sessionProjects.get(threadId),
-        permissionRules: options.permissionRules,
-        mcpServers: options.mcpServers,
-        mcpTools: options.mcpTools,
-        // 模块 4：产出物的 PDF 钩子（缺省没有；有 electron 的那一侧才给得出真实现）
-        printPdf: options.printPdf,
-        // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
-        webSearch: options.webSearch,
-        searchDeps: options.searchDeps,
-        // round 73：fetch 出站边界的白名单（现读设置；撤掉就恢复拦截）
-        network: options.network,
-        // round 66：**这个会话**固定的 PPT 模板（create_ppt 的缺省模板；现读内存镜像，同步）
-        pptTemplate: (threadId) => sessionPptTemplates.get(threadId) ?? '',
-        // round 76：会话级 PPT 源结构（create_ppt 落盘时记、edit_ppt 读回来改；直连库，异步）
-        pptSources: sessionPptSources,
-        // round 64：技能来源（现读）——指令里的技能清单 + use_skill 读全文共用这一份
-        ...(options.skillSources === undefined ? {} : { skillSources: options.skillSources }),
-        // round 65：作者能力（现读）——create_skill / add_mcp_server 等落盘走这一份运行时
-        ...(options.authoring === undefined ? {} : { authoring: options.authoring })
-      })
+  const rulesProcessor =
+    options.rules === undefined
+      ? null
+      : createRulesProcessor({
+          sessionProjects,
+          projects: options.projects ?? (() => []),
+          ...options.rules
+        })
+  const tasks = createSessionTaskStore(storage)
+  await tasks.ensureTable()
+  const tasksContext = createTasksContext()
+  const plans = createSessionPlanStore(storage)
+  await plans.ensureTable()
+  const planRuntime = createPlanRuntime({
+    store: plans,
+    coordinator: {
+      assertThread: (threadId) => interactions.assertThread(threadId),
+      listSuspended: async (threadId) =>
+        (await interactions.listSuspended(threadId))
+          .filter((target) => target.toolName === 'submit_plan' && !target.requiresApproval)
+          .map((target): PlanSuspension => ({
+            ...target,
+            toolName: 'submit_plan',
+            suspendPayload: planRefSchema.parse(target.suspendPayload)
+          })),
+      claimSuspend: async (threadId, runId, toolCallId, toolName) => {
+        const lease = await interactions.claimSuspend(threadId, runId, toolCallId, toolName)
+        return {
+          ...lease,
+          target: {
+            ...lease.target,
+            toolName: 'submit_plan',
+            suspendPayload: planRefSchema.parse(lease.target.suspendPayload)
+          }
+        }
+      },
+      withThreadChange: (threadId, operation) => interactions.withThreadChange(threadId, operation),
+      withIdleThread: (threadId, operation) => interactions.withIdleThread(threadId, operation)
     },
+    resume: async (input) => {
+      const { toAISdkStream } = await import('@mastra/ai-sdk')
+      const request = tasksContext.prepareRequest(input.threadId, input.runId)
+      planRuntime.prepareRequest(input.threadId, input.runId, request.requestContext)
+      const guard = planRuntime.guardFor(request.requestContext)
+      const result = await agent.resumeStream(input.resumeData, {
+        ...chatOptions,
+        ...request,
+        hooks: guard.hooks,
+        inputProcessors: [...chatOptions.inputProcessors, guard.processor],
+        toolCallId: input.toolCallId,
+        memory: { thread: input.threadId, resource: 'local-user' }
+      })
+      return toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true })
+    }
+  })
+  const recordUsage = createUsageRecorder({ store: usage })
+  const chatOptions = {
+    maxSteps: KYCLAW_MAX_STEPS,
+    onFinish: async (event: Parameters<typeof recordUsage>[0]) => {
+      await recordUsage(event)
+      const threadId = event.response?.dbMessages?.find(
+        (message) => typeof message.threadId === 'string'
+      )?.threadId
+      if (typeof threadId !== 'string') return
+      await memory.settled()
+      const state = await plans.find(threadId)
+      if (
+        state?.mode === 'executing' &&
+        state.approval &&
+        event.runId === state.approval.runId &&
+        !(await interactions.listSuspended(threadId)).length
+      ) {
+        await plans.finish(threadId, planRefOf(state), state.approval.runId)
+      }
+    },
+    inputProcessors: [
+      createCompactionProcessor(compactionStore),
+      ...(rulesProcessor === null ? [] : [rulesProcessor]),
+      tasksContext.processor
+    ]
+  }
+  const agent = await createKyclawAgent(options.resolveModel, memory, {
+    tasks,
+    tasksContext,
+    planRuntime,
+    workspaces: options.workspaces,
+    defaultWorkspace: options.defaultWorkspace,
+    projects: options.projects,
+    projectOf: (threadId) => sessionProjects.get(threadId),
+    permissionRules: options.permissionRules,
+    mcpServers: options.mcpServers,
+    mcpTools: options.mcpTools,
+    // 模块 4：产出物的 PDF 钩子（缺省没有；有 electron 的那一侧才给得出真实现）
+    printPdf: options.printPdf,
+    // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
+    webSearch: options.webSearch,
+    searchDeps: options.searchDeps,
+    // round 73：fetch 出站边界的白名单（现读设置；撤掉就恢复拦截）
+    network: options.network,
+    // round 66：**这个会话**固定的 PPT 模板（create_ppt 的缺省模板；现读内存镜像，同步）
+    pptTemplate: (threadId) => sessionPptTemplates.get(threadId) ?? '',
+    // round 76：会话级 PPT 源结构（create_ppt 落盘时记、edit_ppt 读回来改；直连库，异步）
+    pptSources: sessionPptSources,
+    // 会话级 Word 源结构（create_docx 落盘时记、edit_docx 读回来改；同一路数）
+    docxSources: sessionDocxSources,
+    // round 64：技能来源（现读）——指令里的技能清单 + use_skill 读全文共用这一份
+    ...(options.skillSources === undefined ? {} : { skillSources: options.skillSources }),
+    // round 65：作者能力（现读）——create_skill / add_mcp_server 等落盘走这一份运行时
+    ...(options.authoring === undefined ? {} : { authoring: options.authoring })
+  })
+  const interactions = new AskUserRuntime(agent, memory, storage)
+  const prepareThread = async (threadId: string): Promise<void> => {
+    const existing = await memory.getThreadById({ threadId })
+    if (existing && existing.resourceId !== 'local-user') throw new Error('wrong-thread-resource')
+    if (!existing)
+      await memory.createThread({ threadId, resourceId: 'local-user', saveThread: true })
+    await plans.initialize(threadId)
+  }
+  const askUserRoutes = await createAskUserRoutes({
+    memory,
+    storage,
+    runtime: interactions,
+    prepareThread,
+    resume: async (input) => {
+      const { toAISdkStream } = await import('@mastra/ai-sdk')
+      const request = tasksContext.prepareRequest(input.threadId, input.runId)
+      planRuntime.prepareRequest(input.threadId, input.runId, request.requestContext)
+      const guard = planRuntime.guardFor(request.requestContext)
+      const result = await agent.resumeStream(input.answer, {
+        ...chatOptions,
+        ...request,
+        hooks: guard.hooks,
+        inputProcessors: [...chatOptions.inputProcessors, guard.processor],
+        toolCallId: input.toolCallId,
+        memory: { thread: input.threadId, resource: 'local-user' }
+      })
+      return toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true })
+    }
+  })
+  const mastra = new MastraClass({
+    agents: { [KYCLAW_AGENT_ID]: agent },
     storage,
     ...(observability === null ? {} : { observability }),
     server: {
       apiRoutes: [
-        chatRoute({
-          path: CHAT_ROUTE_PATH,
-          version: CHAT_PROTOCOL_VERSION,
-          // 思考过程随流下发（round29）：库默认 false —— reasoning 只进存储、不进直播流，
-          // 渲染端直播时先看到的是工具调用（观感首字延迟），刷新后才从存储回放出"思考过程"。
-          // wire 形状钉在 __tests__/reasoning-stream.spec.ts（reasoning 先于 tool-input 到达）
-          sendReasoning: true,
-          // 记账钩子：每个 run 收尾取 totalUsage/model，落 usage_runs（细节见 usage.ts 头注）；
-          // round 19：输入处理器把该会话的压缩摘要注入成系统前缀（不碰消息流/存储，见 compaction.ts）
-          defaultOptions: {
-            // round 33/36：单轮步数**兜底**（不是预算；初始流与审批恢复流共用这一处，
-            // 机理见 KYCLAW_MAX_STEPS 头注）
-            maxSteps: KYCLAW_MAX_STEPS,
-            onFinish: createUsageRecorder({ store: usage }),
-            inputProcessors: [createCompactionProcessor(compactionStore)]
-          }
-        })
+        ...askUserRoutes.routes,
+        ...(await createPlanRoutes(planRuntime)),
+        {
+          ...registerApiRoute(CHAT_ROUTE_PATH, {
+            method: 'POST',
+            handler: async (context) => {
+              const body =
+                askUserRoutes.preparedBody(context.req.raw) ??
+                ((await context.req.json()) as Record<string, unknown>)
+              const memoryScope = body.memory as { thread: string }
+              const resumedRunId = askUserRoutes.resumedRunId(context.req.raw)
+              const params = prepareTaskChatParams(
+                body,
+                tasksContext,
+                memoryScope.thread,
+                resumedRunId
+              )
+              const request = planRuntime.prepareRequest(
+                memoryScope.thread,
+                params.runId,
+                params.requestContext
+              )
+              const guard = planRuntime.guardFor(request.requestContext)
+              const stream = await handleChatStream({
+                mastra: context.get('mastra'),
+                agentId: KYCLAW_AGENT_ID,
+                version: CHAT_PROTOCOL_VERSION,
+                sendReasoning: true,
+                defaultOptions: {
+                  ...chatOptions,
+                  hooks: guard.hooks,
+                  inputProcessors: [...chatOptions.inputProcessors, guard.processor]
+                },
+                params: { ...params, ...request, abortSignal: context.req.raw.signal }
+              })
+              return createUIMessageStreamResponse({ stream })
+            }
+          }),
+          middleware: askUserRoutes.middleware
+        }
       ],
       // C-1：chatRoute 的 handler 在流开始前抛错（如模型解析失败）时会走到这里
       // （@mastra/server 的 buildCustomRouteHandler.onError）。提供自定义 onError 后库不再
@@ -441,6 +604,10 @@ export async function createKyclawMastra(options: {
   })
 
   return {
+    tasks,
+    tasksContext,
+    plans,
+    planRuntime,
     mastra,
     storage,
     memory,
@@ -448,8 +615,10 @@ export async function createKyclawMastra(options: {
     sessionProjects,
     sessionPptTemplates,
     sessionPptSources,
+    sessionDocxSources,
     compaction,
     telemetry: { langfuse: observability !== null },
+    rules: { processorRegistered: rulesProcessor !== null },
     recall
   }
 }

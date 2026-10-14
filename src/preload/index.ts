@@ -45,6 +45,12 @@ import {
 } from '../shared/ipc'
 import { pdfExtractResultSchema } from '../shared/attachments'
 import { translateResultSchema } from '../shared/translate'
+import {
+  RULES_IPC_CHANNELS,
+  rulesStatusSchema,
+  projectRulesViewSchema,
+  projectRulesSaveResponseSchema
+} from '../shared/rules-ipc'
 import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from '../shared/search'
 import { localModelsOverviewSchema, type LocalModelsOverview } from '../shared/local-models'
 import { appSettingsSchema, defaultSettings, type AppSettings } from '../shared/settings'
@@ -61,6 +67,7 @@ import {
   gitLogResultSchema,
   gitOverviewSchema,
   listDirResultSchema,
+  openResultSchema,
   revealResultSchema,
   terminalDataSchema,
   terminalExitSchema,
@@ -203,6 +210,18 @@ const projectsApi: KyclawProjectsApi = {
   // round 25：重命名 / 在文件资源管理器里打开（路径解析在主进程）
   rename: async (id, name) =>
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.projects.rename, { id, name })),
+  rulesStatus: async () =>
+    rulesStatusSchema.parse(await ipcRenderer.invoke(RULES_IPC_CHANNELS.status)),
+  readRules: async (projectId) => {
+    return projectRulesViewSchema.parse(
+      await ipcRenderer.invoke(RULES_IPC_CHANNELS.read, projectId)
+    )
+  },
+  saveRules: async (projectId, text) => {
+    return projectRulesSaveResponseSchema.parse(
+      await ipcRenderer.invoke(RULES_IPC_CHANNELS.save, { projectId, text })
+    )
+  },
   openInExplorer: async (id) => {
     const parsed = projectOpenInExplorerResultSchema.safeParse(
       await ipcRenderer.invoke(IPC_CHANNELS.projects.openInExplorer, id)
@@ -507,6 +526,14 @@ const workbenchApi: KyclawWorkbenchApi = {
       await ipcRenderer.invoke(IPC_CHANNELS.workbench.reveal, threadId, relative)
     )
     if (!parsed.success) throw new Error('[kyclaw] 打开路径响应结构不合法')
+    return parsed.data
+  },
+  // 用系统默认应用打开文件（结构不对就抛——路径是打开动作的凭据）
+  open: async (threadId, relative) => {
+    const parsed = openResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.open, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 打开文件响应结构不合法')
     return parsed.data
   },
   gitOverview: async (threadId) => {

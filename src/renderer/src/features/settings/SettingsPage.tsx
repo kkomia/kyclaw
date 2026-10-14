@@ -10,6 +10,7 @@ import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
+import { RulesSettings } from './RulesSettings'
 import { SettingsGroup } from './SettingsGroup'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
@@ -125,6 +126,7 @@ export function SettingsPage(): React.JSX.Element {
               </SettingsGroup>
             </>
           ) : null}
+          {meta.id === 'rules' ? <RulesSettings /> : null}
           {meta.id === 'workspaces' ? (
             <SettingsGroup title="工作区" testId="settings-group-workspaces">
               <WorkspaceSettings />

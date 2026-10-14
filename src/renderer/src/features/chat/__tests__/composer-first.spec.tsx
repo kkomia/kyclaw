@@ -11,6 +11,26 @@ import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { fetchThreads } from '@renderer/lib/threads-api'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { createMockTransport, type MockTransport } from './mock-transport'
+import { resetProjectsStore } from '@renderer/features/projects/projects-store'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { defaultSettings } from '@shared/settings'
+import { fetchSessionProjects } from '@renderer/lib/projects-api'
+
+vi.mock('@renderer/lib/projects-api', () => ({
+  fetchSessionProjects: vi.fn(async () => []),
+  putSessionProject: vi.fn(async () => undefined)
+}))
+
+/**
+ * 待答问题（ask-user）走 HTTP（`/ask-user/pending`）——本文件给一份**有效空响应**的桩（`[]`）：
+ * 这里的用例只关心"输入卡先出来 / 端点失败 → 错误卡 → 重试"，不该因为一条打不通的取数
+ * 在页脚多出一张错误卡来（那不是本用例要验证的错误）。与 ask-user-flow.spec 同一手法。
+ */
+const askUserApi = vi.hoisted(() => ({ pending: vi.fn(async () => []) }))
+vi.mock('@renderer/lib/ask-user-api', async (original) => ({
+  ...(await original<typeof import('@renderer/lib/ask-user-api')>()),
+  fetchPendingAskUser: askUserApi.pending
+}))
 
 /**
  * round 76 · **输入卡先出来**（冷启动的观感账）。
@@ -75,10 +95,48 @@ beforeEach(() => {
   resetThreadChats()
   resetSessionsStore()
   resetComposerCarryover()
+  resetProjectsStore()
+  vi.mocked(fetchSessionProjects).mockClear()
 })
 
 afterEach(() => {
   clearKyclawBridge()
+  useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+})
+
+it('只挂 ChatPage 也加载项目映射，权限入口随有效项目根恢复', async () => {
+  const mappings = deferred<Awaited<ReturnType<typeof fetchSessionProjects>>>()
+  const initial = {
+    ...defaultSettings(),
+    workspaces: [
+      { path: 'D:\\project', mode: 'ask' as const },
+      { path: 'E:\\other', mode: 'ask' as const }
+    ],
+    projects: [
+      { id: 'p1', name: '项目', path: 'D:\\project', createdAt: '2026-10-13T00:00:00.000Z' }
+    ]
+  }
+  installKyclawBridge(initial)
+  useSettingsStore.setState({ settings: initial, loaded: true })
+  vi.mocked(fetchThreads).mockResolvedValueOnce([
+    { id: THREAD_ID, title: '项目会话', updatedAt: '2026-10-13T00:00:00.000Z' }
+  ])
+  vi.mocked(fetchSessionProjects).mockImplementationOnce(() => mappings.promise)
+  render(
+    <MemoryRouter>
+      <ChatPage />
+    </MemoryRouter>
+  )
+  await waitFor(() => expect(fetchSessionProjects).toHaveBeenCalledOnce())
+  expect(screen.queryByTestId('composer-permission')).not.toBeInTheDocument()
+  expect(screen.getByTestId('composer-workspace-settings')).toHaveAttribute(
+    'href',
+    '#/settings/workspaces'
+  )
+  await act(async () => mappings.resolve([{ threadId: THREAD_ID, projectId: 'p1' }]))
+  await waitFor(() =>
+    expect(screen.getByTestId('composer-permission')).toHaveTextContent('每次询问')
+  )
 })
 
 describe('历史回灌之前：输入卡就在，发送挡着', () => {

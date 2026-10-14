@@ -297,8 +297,17 @@ describe('内置技能（仓库 resources/skills）：文件本身得合格', ()
     const entries = discoverSkills(sources)
     const expectations: Record<string, string[]> = {
       pptx: ['create_ppt', 'layout', '常见坑', '自检', '功能位', '设计原则'],
-      docx: ['create_docx', 'heading', '常见坑', '自检', 'GB/T 9704', '全角标点', '三线表'],
-      xlsx: ['create_excel', 'rows', '常见坑', '自检', '行类型', '假设与结果分开'],
+      docx: [
+        'create_docx',
+        'edit_docx',
+        'heading',
+        '常见坑',
+        '自检',
+        'GB/T 9704',
+        '全角标点',
+        '三线表'
+      ],
+      xlsx: ['create_excel', 'edit_excel', 'rows', '常见坑', '自检', '行类型', '假设与结果分开'],
       pdf: [
         'create_pdf',
         'create_report',

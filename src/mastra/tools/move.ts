@@ -1,7 +1,8 @@
 /**
  * move 工具：移动 / 重命名工作区内的文件与目录。
  *
- * 分级同样是 **dangerous**（永远弹审批，Full access 与"永久允许"不适用）。
+ * 分级同样是 **dangerous**，但审批按目标所在区域的权限档位处理：工作区 `full` 可免审，
+ * `ask` 下可通过本会话允许或永久允许规则放行；区外仍按区外权限档位处理。
  * 契约：
  *   - 源与目标都要过引擎（`path` / `to`，fail closed），目标父目录自动创建（与 write 同口径）；
  *   - **默认不覆盖**：目标已存在就报错并给出口（`overwrite: true`）；目标存在且是目录时一律拒绝
@@ -45,7 +46,9 @@ export async function createMoveTool(ctx: ToolContext): Promise<Tool<MoveInput, 
     id: 'move',
     description:
       'Move or rename a workspace file or directory; the destination parent directory is created. ' +
-      'An existing destination is not overwritten unless overwrite: true. Dangerous: approved every call.',
+      'An existing destination is not overwritten unless overwrite: true. Dangerous: approval follows the ' +
+      'target permission scope; workspace full may skip approval, ask can use session or permanent allow ' +
+      'rules, and outside-workspace targets follow the outside policy.',
     inputSchema: moveInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

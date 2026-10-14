@@ -6,6 +6,7 @@
  *   由调用方（store / 注册表）落到错误态，不把半截数据往 UI 里塞。
  */
 import type { z } from 'zod'
+import { tasksStore } from './tasks-store'
 import {
   compactThreadResponseSchema,
   okResponseSchema,
@@ -97,6 +98,7 @@ export async function truncateThread(threadId: string, messageId: string): Promi
     body: JSON.stringify({ messageId })
   })
   const { deleted } = await json(response, truncateThreadResponseSchema)
+  await tasksStore.getState().load(threadId)
   return deleted
 }
 

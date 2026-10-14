@@ -10,7 +10,7 @@
  * 这一条把"正确形状 + 真 Mastra 装配"钉在一起：假端点收到的**第二次**请求里必须真有 `image_url`
  * 与 PNG 的 base64 头。
  *
- * 依赖真渲染器（随包 LibreOffice 优先，其次 PowerPoint COM）：两条都没有就**跳过**（不是失败）
+ * 依赖真渲染器（Windows 本机 PowerPoint/WPS COM 优先，失败回退随包 kit；无 COM 时 kit）：两条都没有就**跳过**（不是失败）
  * ——退化路径由 `render-ppt.spec.ts` 钉。
  */
 import { createServer, type Server } from 'node:http'

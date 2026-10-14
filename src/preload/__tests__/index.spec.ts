@@ -344,9 +344,45 @@ describe('preload：window.kyclaw.projects', () => {
       'create',
       'openInExplorer',
       'pickFolder',
+      'readRules',
       'remove',
-      'rename'
+      'rename',
+      'rulesStatus',
+      'saveRules'
     ])
+  })
+
+  it('规则 status/read/save 参数精确且响应严格校验', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ processorRegistered: true })
+    await expect(kyclawApi.projects.rulesStatus()).resolves.toEqual({ processorRegistered: true })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('rules:status')
+    mocks.invoke.mockResolvedValueOnce({ processorRegistered: 'true' })
+    await expect(kyclawApi.projects.rulesStatus()).rejects.toThrow()
+    const view = {
+      projectId: 'p1',
+      source: '.kyclaw/rules.md',
+      text: '偏好',
+      diagnostics: [],
+      processorRegistered: true,
+      projectIncluded: true
+    }
+    mocks.invoke.mockResolvedValueOnce(view)
+    await expect(kyclawApi.projects.readRules('p1')).resolves.toEqual(view)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('rules:read-project', 'p1')
+    mocks.invoke.mockResolvedValueOnce({ ok: true, view })
+    await expect(kyclawApi.projects.saveRules('p1', '偏好')).resolves.toEqual({ ok: true, view })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('rules:save-project', {
+      projectId: 'p1',
+      text: '偏好'
+    })
+    mocks.invoke.mockResolvedValueOnce({ ...view, arbitraryPath: 'outside' })
+    await expect(kyclawApi.projects.readRules('p1')).rejects.toThrow()
+    mocks.invoke.mockResolvedValueOnce({
+      ok: false,
+      diagnostics: [{ scope: 'project', code: 'save-failed', message: '无法保存' }]
+    })
+    await expect(kyclawApi.projects.saveRules('p1', '')).resolves.toMatchObject({ ok: false })
   })
 
   it('base / pickFolder 的两块料按各自 schema 解析；结构不对就抛', async () => {
@@ -598,6 +634,7 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
       'gitOverview',
       'gitShow',
       'listDir',
+      'open',
       'readBytes',
       'readFile',
       'reveal',
@@ -640,6 +677,20 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
       path: 'D:\\项目\\a.txt'
     })
     expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:reveal', 't1', 'a.txt')
+  })
+
+  it('round 77：open 走 workbench:open（同一个 [threadId, 相对路径]），回包过 { path } schema', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({ path: 'D:\\项目\\方案.docx' })
+    await expect(kyclawApi.workbench.open('t1', '方案.docx')).resolves.toEqual({
+      path: 'D:\\项目\\方案.docx'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:open', 't1', '方案.docx')
+
+    // 结构不对就抛（路径是打开动作的凭据，不交半截对象）
+    mocks.invoke.mockResolvedValueOnce({ path: '' })
+    await expect(kyclawApi.workbench.open('t1', '方案.docx')).rejects.toThrow(/结构不合法/)
   })
 
   it('文件预览是按 kind 判别的联合：判别字段不对/多带字段都当结构不合法', async () => {

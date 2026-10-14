@@ -41,8 +41,13 @@ import type { ModelResolver } from '../agents/kyclaw'
 import { compactionErrorText } from '../compaction'
 import { ProviderConfigError } from '../model'
 import { generateThreadTitle } from '../title'
+import { askUserRuntimeFor } from '../ask-user-runtime'
+import type { SessionTaskStore } from '../session-tasks'
+import type { SessionPlanStore } from '../session-plan'
 
 export interface ThreadsRouterOptions {
+  tasks?: SessionTaskStore
+  plans?: SessionPlanStore
   memory: MastraMemory
   /** 标题生成用的模型解析器（生产 = 读设置与密钥那条；测试 = mock） */
   resolveModel: ModelResolver
@@ -138,7 +143,10 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
     if (!body.success) return context.json(badRequest('线程 id'), 400)
 
     const existing = await findThread(memory, body.data.threadId)
-    if (existing !== null) return context.json(toSummary(existing))
+    if (existing !== null) {
+      await options.plans?.initialize(existing.id)
+      return context.json(toSummary(existing))
+    }
 
     const created = await memory.createThread({
       threadId: body.data.threadId,
@@ -146,6 +154,7 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       ...(body.data.title === undefined ? {} : { title: body.data.title }),
       saveThread: true
     })
+    await options.plans?.initialize(created.id)
     return context.json(toSummary(created))
   })
 
@@ -179,15 +188,16 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       // 顺序要紧：先掐掉在跑的那一轮，等它把"半截回复"落完，再删线程。
       // 反过来（先删后掐）取消引发的落库会把线程行写回来——删掉的会话会复活。
       options.abortThreadRun?.(params.data.id)
-      try {
+      const remove = async (): Promise<void> => {
         await memory.settled()
-      } catch {
-        /* 后台活没等完也要删：这是尽力而为的排序，不是前置条件 */
+        await options.tasks?.clear(params.data.id)
+        await options.plans?.clear(params.data.id)
+        await memory.deleteThread(params.data.id)
+        options.onThreadDeleted?.(params.data.id)
       }
-      // deleteThread 连消息与线程级工作记忆一起收（@mastra/memory 的行为）
-      await memory.deleteThread(params.data.id)
-      // 真删掉了才叫钩子（T18 的映射清理）；不存在的线程走的是幂等路径，不动映射
-      options.onThreadDeleted?.(params.data.id)
+      const runtime = askUserRuntimeFor(memory)
+      if (runtime) await runtime.withThreadChange(params.data.id, remove)
+      else await remove()
     }
     // 不存在也回 ok：删除是幂等的，重试/双端点一次不该报错
     return context.json({ ok: true })
@@ -203,18 +213,30 @@ export function createThreadsRouter(options: ThreadsRouterOptions): Hono {
       return context.json({ deleted: 0 })
     }
 
-    // hideSignals: false —— 截断要连信号/提醒类消息一起删，否则它们会留在可见历史之外
-    const { messages } = await memory.recall({
-      threadId: params.data.id,
-      perPage: false,
-      hideSignals: false
-    })
-    const index = messages.findIndex((message) => message.id === body.data.messageId)
-    if (index === -1) return context.json({ deleted: 0 })
-
-    const doomed = messages.slice(index).map((message) => message.id)
-    await memory.deleteMessages(doomed)
-    return context.json({ deleted: doomed.length })
+    options.abortThreadRun?.(params.data.id)
+    const truncate = async (): Promise<number> => {
+      await memory.settled()
+      const { messages } = await memory.recall({
+        threadId: params.data.id,
+        perPage: false,
+        hideSignals: false
+      })
+      const index = messages.findIndex((message) => message.id === body.data.messageId)
+      if (index === -1) return 0
+      const doomed = messages.slice(index).map((message) => message.id)
+      await options.tasks?.truncate(params.data.id, doomed)
+      if (options.plans) {
+        await options.plans.initialize(params.data.id)
+        await options.plans.invalidate(params.data.id)
+      }
+      await memory.deleteMessages(doomed)
+      return doomed.length
+    }
+    const runtime = askUserRuntimeFor(memory)
+    const deleted = runtime
+      ? await runtime.withThreadChange(params.data.id, truncate)
+      : await truncate()
+    return context.json({ deleted })
   })
 
   router.post('/:id/title', async (context) => {

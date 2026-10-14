@@ -395,10 +395,14 @@ const ENGINE_TARGET_TOOLS = new Set([
   'create_report',
   'create_pdf',
   'create_excel',
+  // edit_excel 与 create_excel 同一把尺（同一个 path 就地覆盖，先解析再改）
+  'edit_excel',
   'create_ppt',
   // round 76：edit_ppt 的 path 与 create_ppt 同一把尺（artifactTarget 先解析再改），越界同样 fail closed
   'edit_ppt',
   'create_docx',
+  // edit_docx 与 create_docx 同一把尺（同一个 path 就地覆盖，先解析再改）
+  'edit_docx',
   'fetch',
   'git_add',
   'git_commit'

@@ -120,7 +120,15 @@ describe('move：边界与拒绝', () => {
   })
 })
 
-describe('move：审批 gate（round 75 起跟着档位走）', () => {
+describe('move：工具契约与审批 gate（round 75 起跟着档位走）', () => {
+  it('工具描述准确说明当前审批范围', async () => {
+    const tool = await createMoveTool(bed.ctx)
+    expect(tool.description).not.toContain('approved every call')
+    expect(tool.description).toContain('workspace full may skip approval')
+    expect(tool.description).toContain('session or permanent allow rules')
+    expect(tool.description).toContain('outside-workspace targets follow the outside policy')
+  })
+
   it('区内 full → 免审；区内 ask → 问，有"永久允许"规则则免审', async () => {
     const tool = await createMoveTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: { path: string; to: string }) => boolean

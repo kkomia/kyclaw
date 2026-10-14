@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Square, X } from 'lucide-react'
+import { ArrowUp, Shield, Square, X } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
@@ -9,7 +9,7 @@ import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { STARTUP_FINAL_MARK, startupMark } from '@renderer/lib/startup-timing'
 import { probedKeyOf, visionOf } from '@shared/models'
 import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from './ComposerControls'
-import type { ComposerNotice } from './ComposerControls'
+import type { ComposerModeMenu, ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
 import { resolveContextItem, subscribeContextItems, subscribeDrafts } from './composer-inbox'
@@ -37,7 +37,8 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
  * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 --composer-input-min-height（常态 56）/
  * 最大 170，超出内部滚动；round 64 起初始页再高一档，见 ComposerProps.hero）+ 底部工具条（48）：
- * 左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文）、权限 chip（两档 ask|full，当前会话工作区）；
+ * 左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文/**模式分组**——round 81 起「进入规划模式」
+ * 与「任务清单」也收在这里）、权限 chip（两档 ask|full，当前会话工作区）；
  * 右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
  * （T8 已配置 provider 的默认项；round 8 按用户实拍从左侧组移到右侧、发送钮之前）+ 发送/停止。
  * round 57：用量 ≥ 80% 时 ContextChip 会在环**左边**多渲染一枚「压缩上下文」胶囊（点即压缩）。
@@ -124,6 +125,12 @@ export interface ComposerProps {
    * （雷点 2：不用小字解释后端），但**挡发仍然生效**。
    */
   pending?: { label: string | null } | null
+  /**
+   * round 81：**模式分组**（「进入规划模式」+「任务清单」）—— 常驻在工具条上的两颗模式按钮
+   * 收进左下角这一个 ＋ 菜单里（用户口径：绝不另造第二个模式菜单）；权限 chip 仍在工具条上。
+   * 由上层按真实状态给：未就绪时给 null（那一挂没有可动的对象），正在运行时条目禁用。
+   */
+  mode?: ComposerModeMenu | null
 }
 
 let uidCounter = 0
@@ -167,7 +174,8 @@ export function Composer({
   externalNotice = null,
   usageVersion = 0,
   hero = false,
-  pending = null
+  pending = null,
+  mode = null
 }: ComposerProps): React.JSX.Element {
   /** 实例没就绪（round 76）：发送挡住 + 工具条那一行露状态（label 可能是 null，见 ComposerProps） */
   const blocked = pending !== null
@@ -598,7 +606,7 @@ export function Composer({
     <div
       data-testid="composer"
       className={cn(
-        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) shadow-(--shadow-input) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) shadow-(--shadow-input) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
         // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
         dragging && 'border-(--accent)'
       )}
@@ -811,8 +819,21 @@ export function Composer({
           plugins={enabledPlugins}
           skills={installedSkills}
           onOpenMenu={refreshSkills}
+          mode={mode}
         />
-        {rootWorkspace === null ? null : (
+        {rootWorkspace === null ? (
+          <a
+            data-testid="composer-workspace-settings"
+            href="#/settings/workspaces"
+            title={
+              settings.workspaces.length === 0 ? '尚未授权工作区' : '请选择默认工作区或会话所属项目'
+            }
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+          >
+            <Shield aria-hidden="true" className="size-3.5 shrink-0" />
+            设置工作区
+          </a>
+        ) : (
           <PermissionChip workspace={rootWorkspace} onNotice={setNotice} />
         )}
 

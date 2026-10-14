@@ -40,6 +40,16 @@ vi.mock('@xterm/addon-fit', () => {
 
 let bed: Bed
 
+/** 1280 窗的壳布局事实：内容区 1274 = 1280 − 右缘留缝 6；侧栏展开遮 240；中列最小可读宽 480 */
+function fitAt1280(panelWidth: number): {
+  contentWidth: number
+  safeLeft: number
+  panelWidth: number
+  minChatWidth: number
+} {
+  return { contentWidth: 1274, safeLeft: 240, panelWidth, minChatWidth: 480 }
+}
+
 beforeEach(() => {
   bed = setupWorkbench()
 })
@@ -428,6 +438,72 @@ describe('Workbench 标签页', () => {
     fireEvent.click(screen.getByTestId('workbench-close'))
     expect(useShellStore.getState().workPanelOpen).toBe(false)
     expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+  })
+
+  it('round 78：auto 且还能并排 → 槽位给「恢复并排布局」，点了收窄宽度、不动全屏偏好', () => {
+    // 1280 实况：1274 − 240 − 560 = 474 < 480 → 铺满；贴边上限 554 → 落点 546
+    useShellStore.setState({ workPanelWidth: 560, workPanelFit: fitAt1280(560) })
+    render(<Workbench />)
+
+    // 全屏切换这时没有意义（已经铺满了），不再摆一个按不动的禁用图标
+    expect(screen.queryByTestId('workbench-fullscreen')).not.toBeInTheDocument()
+    const restore = screen.getByTestId('workbench-restore-split')
+    expect(restore).toBeEnabled()
+    expect(restore).toHaveAccessibleName('恢复并排布局')
+
+    fireEvent.click(restore)
+
+    expect(useShellStore.getState().workPanelWidth).toBe(546)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+    expect(useShellStore.getState().workPanelOpen).toBe(true)
+  })
+
+  it('round 78：auto 且确实太窄（800）→ 槽位给「返回对话」，点了关面板（不是无意义的禁用图标）', () => {
+    const tooNarrow = { contentWidth: 794, safeLeft: 240, panelWidth: 400, minChatWidth: 480 }
+    useShellStore.setState({ workPanelFit: tooNarrow })
+    render(<Workbench />)
+
+    expect(screen.queryByTestId('workbench-fullscreen')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('workbench-restore-split')).not.toBeInTheDocument()
+    const back = screen.getByTestId('workbench-back-to-chat')
+    expect(back).toBeEnabled()
+    expect(back).toHaveAccessibleName('返回对话')
+
+    fireEvent.click(back)
+
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+  })
+
+  it('round 78：用户偏好就是全屏时不换动作 —— ⤢ 点了会顺手把宽度收回并排上限', () => {
+    useShellStore.setState({
+      workPanelFullscreen: true,
+      workPanelWidth: 560,
+      workPanelFit: fitAt1280(560)
+    })
+    render(<Workbench />)
+
+    const fullscreen = screen.getByTestId('workbench-fullscreen')
+    expect(fullscreen).toHaveAccessibleName('回到窗口化')
+    fireEvent.click(fullscreen)
+
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+    expect(useShellStore.getState().workPanelWidth).toBe(546)
+  })
+
+  it('round 77：宽窗（量不到布局事实）照旧只是 ⤢，不动别的', () => {
+    render(<Workbench />)
+
+    const fullscreen = screen.getByTestId('workbench-fullscreen')
+    expect(fullscreen).toBeEnabled()
+    expect(fullscreen).toHaveAccessibleName('面板全屏')
+    expect(screen.queryByTestId('workbench-restore-split')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('workbench-back-to-chat')).not.toBeInTheDocument()
+
+    fireEvent.click(fullscreen)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(true)
+    expect(screen.getByTestId('workbench-fullscreen')).toHaveAccessibleName('回到窗口化')
+    // 宽窗下"顺手收窄"不参与：宽度还是用户那条
+    expect(useShellStore.getState().workPanelWidth).toBe(400)
   })
 })
 

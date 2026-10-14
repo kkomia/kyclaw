@@ -3,7 +3,7 @@
  *
  * 工具集（T11 + round28 模块 1 + 模块 4 + round45 + round 50 + round 64 + round 76）：文件工具五件套（read/write/edit/glob/grep）+
  * bash / fetch / web_search / delete / move + git 五件套（git_status/git_diff/git_log/git_add/git_commit）
- * + 产出物六件（create_report / create_pdf / create_excel / create_ppt / edit_ppt / create_docx）+ 交付一件（deliver_file）
+ * + 产出物八件（create_report / create_pdf / create_excel / edit_excel / create_ppt / edit_ppt / create_docx / edit_docx）+ 交付一件（deliver_file）
  * + 技能一件（use_skill，读 SKILL.md 全文；清单本身在指令里，见 mastra/skills/）
  * + 作者四件（round 65：create_skill / delete_skill / add_mcp_server / remove_mcp_server ——
  * 用户贴一段安装说明，模型自己把技能与 MCP 落地并生效；运行时由主进程注入，见 shared/authoring.ts），
@@ -66,8 +66,10 @@ import { createBashTool, shellGuidance } from '../tools/bash'
 import { createDeleteTool } from '../tools/delete'
 import { createDeliverFileTool } from '../tools/deliver'
 import { createDocxTool } from '../tools/docx'
+import { createEditDocxTool } from '../tools/docx-edit'
 import { createEditTool } from '../tools/edit'
 import { createExcelTool } from '../tools/excel'
+import { createEditExcelTool } from '../tools/excel-edit'
 import { createFetchTool, type FetchReaderOptions } from '../tools/fetch'
 import { createGitTools } from '../tools/git'
 import { createGlobTool } from '../tools/glob'
@@ -79,6 +81,13 @@ import { createReadTool } from '../tools/read'
 import { createRenderPptTool } from '../tools/render-ppt'
 import { createPdfTool, createReportTool } from '../tools/report'
 import { createAddMcpServerTool, createRemoveMcpServerTool } from '../tools/mcp-admin'
+import { createAskUserTool } from '../tools/ask-user'
+import { createEnterPlanTool } from '../tools/enter-plan'
+import { createSubmitPlanTool } from '../tools/submit-plan'
+import type { PlanRuntime } from '../plan-runtime'
+import { createTodoTool } from '../tools/todo'
+import type { SessionTaskStore } from '../session-tasks'
+import type { TasksContext } from '../tasks-context'
 import { createCreateSkillTool, createDeleteSkillTool } from '../tools/skill-admin'
 import { createWebSearchTool } from '../tools/web-search'
 import { createWriteTool } from '../tools/write'
@@ -90,6 +99,7 @@ import type { WebSearchDeps } from '../search/backends'
 import { createMcpClassify, type McpToolGate } from '../mcp'
 import type { KyclawModel } from '../model'
 import type { SessionPptSourceStore } from '../session-ppt-sources'
+import type { SessionDocxSourceStore } from '../session-docx-sources'
 
 /** agent id：chat 路由 /chat/kyclaw-agent 与 IPC 契约里都用它 */
 export const KYCLAW_AGENT_ID = 'kyclaw-agent'
@@ -99,6 +109,9 @@ export type ModelResolver = () => Promise<KyclawModel>
 
 /** 工具集需要的运行时信息（工作区/MCP 都现读；T12 的 MCP 工具并进同一份装配） */
 export interface KyclawAgentTools {
+  tasks?: SessionTaskStore
+  tasksContext?: TasksContext
+  planRuntime?: PlanRuntime
   /** 授权工作区（缺省 = 没有工作区：文件工具会明确报"先去设置里添加"） */
   workspaces?: () => readonly Workspace[]
   /** T18：默认工作区（缺省 = 没指认：没项目的会话用整份授权列表；指认了就用它下面的会话子目录） */
@@ -153,6 +166,12 @@ export interface KyclawAgentTools {
    */
   pptSources?: SessionPptSourceStore
   /**
+   * 会话级 **Word 源结构**（create_docx 落盘时记、edit_docx 读回来改）—— 落 libsql 的
+   * `session_docx_sources` 表。缺省 = 没挂存储：create_docx 照常产出（回执里如实写"源结构未登记"），
+   * edit_docx 回人话引导用 create_docx，绝不假装改成功。
+   */
+  docxSources?: SessionDocxSourceStore
+  /**
    * round 64：技能来源（**现读**）——内置技能目录 + 已装插件复制进来的技能目录，由主进程算好。
    * 每轮现读：用户刚装的插件下一轮就能用，不必重启。缺省 = 没有技能（指令里不出现清单，
    * use_skill 回"暂无可用技能"）。
@@ -194,7 +213,7 @@ Always answer in the user's language, so a Chinese question gets a Chinese answe
 - Read a file before changing it (fs-observation-policy): edit rejects a file you have not read this session.
 - Use bash for tests, installs, builds and work outside the workspace; it starts in the session workspace and cwd may point elsewhere. A command holds the call until it finishes, so background a long-lived service.
 - Inspect git with git_status / git_diff / git_log and commit with git_add → git_commit. Commit only when the user asked for one, and stage the paths you changed by name, never \`.\` (it also stages \`.env\`, credentials and large binaries). Never push, and never run a destructive git command (\`push --force\`, \`reset --hard\`, \`checkout .\`, \`restore .\`, \`clean -f\`, \`branch -D\`) unless the user asks for that exact one.
-- Pick the artifact tool by deliverable: create_ppt slides, create_docx a formal document, create_excel tabular data, create_report explanatory long-form writing, create_pdf something to print or send; change a deck you made with edit_ppt, page by page. Read the matching skill manual with use_skill first for parameters and self-checks.
+- Pick the artifact tool by deliverable: create_ppt slides, create_docx a formal document, create_excel tabular data, create_report explanatory long-form writing, create_pdf something to print or send; change a deck you made with edit_ppt, page by page, a document with edit_docx, block by block, and a spreadsheet with edit_excel, cell by cell. Read the matching skill manual with use_skill first for parameters and self-checks.
 
 ## Failure attribution
 - A killed or interrupted process carries no signal marker, so the result shows only a bare \`[退出码 N]\` (on Windows an external kill lands on 1, a signal kill on a large number like 2304). Treat it as terminated, not as a command that failed.
@@ -246,7 +265,9 @@ Always answer in the user's language, so a Chinese question gets a Chinese answe
 - Write paths relative to the workspace with forward slashes (\`docs/a.md\`). Line numbers come from a grep result (\`path:line: text\`) — read does not number lines, so never cite a line number you did not get from grep. Never wrap a relative path in a markdown link, which cannot be opened; links are for http(s) only.
 
 ## Cost gates
-- To change a deck this conversation already made, edit_ppt takes only the pages you touch (replace / insert / delete / cover title and theme) and costs a fraction of a rebuild. Pass the whole \`slides\` array to create_ppt only for a first draft, or when most pages change. Collect the edits first and call it once.
+- To change a deck this conversation already made, edit_ppt takes only the pages you touch (replace / insert / delete / cover title and theme) and costs a fraction of a rebuild. Pass the whole \`slides\` array to create_ppt only for a first draft, or when most pages change.
+- To change a document this conversation already made, edit_docx takes only the blocks you touch (replace / insert / delete / title) and costs a fraction of a rebuild; it renders the whole file again locally. Pass the whole \`blocks\` array to create_docx only for a first draft, or when most blocks change. Collect the edits first and call it once.
+- To change a workbook this conversation already made, edit_excel takes only the cells you touch (set_cell / append_rows / clear_cell) and writes the same path back; never resend the whole \`sheets\` array to create_excel for one number. It refuses a file carrying macros, charts, pivot tables or comments instead of dropping them, so when it names one, do not retry — take the way out it gives.
 - use_skill loads a whole manual into this turn's context, so load it only when about to do that work. render_ppt renders every page, so pass pages to render only what you need and never re-render an unchanged file.
 
 ## Installing for the user
@@ -406,6 +427,8 @@ export async function createKyclawAgent(
   const pptTemplateFor = toolOptions?.pptTemplate ?? (() => '')
   // round 76：会话级 PPT 源结构（create_ppt 记 / edit_ppt 读改）。缺省 = 没挂存储
   const pptSources = toolOptions?.pptSources
+  // 会话级 Word 源结构（create_docx 记 / edit_docx 读改）。缺省 = 没挂存储
+  const docxSources = toolOptions?.docxSources
   // round 64：技能来源（现读）—— 指令里的技能清单与 use_skill 的全文读取共用这一份
   const skillSourcesFor = toolOptions?.skillSources ?? (() => [])
   // round 65：技能 / MCP 的落盘运行时（现读注入；缺省 = 没有，四个作者工具回人话不抛错）
@@ -439,6 +462,15 @@ export async function createKyclawAgent(
     permissionRules: toolOptions?.permissionRules
   })
   const tools = {
+    ...(toolOptions?.planRuntime === undefined
+      ? {}
+      : {
+          enter_plan: await createEnterPlanTool(toolOptions.planRuntime),
+          submit_plan: await createSubmitPlanTool(toolOptions.planRuntime)
+        }),
+    ...(toolOptions?.tasks === undefined
+      ? {}
+      : { todo: await createTodoTool(toolOptions.tasks, toolOptions.tasksContext) }),
     read: await createReadTool(ctx),
     write: await createWriteTool(ctx),
     edit: await createEditTool(ctx),
@@ -464,6 +496,8 @@ export async function createKyclawAgent(
     create_report: await createReportTool(ctx),
     create_pdf: await createPdfTool(ctx, toolOptions?.printPdf),
     create_excel: await createExcelTool(ctx),
+    // 增量编辑（v1）：改已有的 .xlsx 只发改动（它从文件里读回整本工作簿，不需要会话级源结构）
+    edit_excel: await createEditExcelTool(ctx),
     create_ppt: await createPptTool(ctx, {
       getDefaultTheme: pptTemplateFor,
       ...(pptSources === undefined ? {} : { sources: pptSources })
@@ -472,7 +506,13 @@ export async function createKyclawAgent(
     edit_ppt: await createEditPptTool(ctx, {
       ...(pptSources === undefined ? {} : { sources: pptSources })
     }),
-    create_docx: await createDocxTool(ctx),
+    create_docx: await createDocxTool(ctx, {
+      ...(docxSources === undefined ? {} : { sources: docxSources })
+    }),
+    // 增量改一份已有的 Word 文档（模型只发改动；源结构从会话级映射读）
+    edit_docx: await createEditDocxTool(ctx, {
+      ...(docxSources === undefined ? {} : { sources: docxSources })
+    }),
     // round 68：交付前自检（把 .pptx 逐页渲染成 PNG 并交给模型看）。写类、与产出物同档；
     // 渲染器"有就用、没有就退化成结构自检"（见 tools/render-ppt.ts 头注）
     render_ppt: await createRenderPptTool(ctx),
@@ -532,7 +572,11 @@ export async function createKyclawAgent(
     // round 70：组装走 orderedToolTable（内置字面顺序 → MCP 字典序）——顺序即缓存形状，见该函数头注
     tools: async () =>
       orderedToolTable(
-        { ...tools, bash: await createBashTool(ctx) },
+        {
+          ...tools,
+          ask_user: await createAskUserTool(),
+          bash: await createBashTool(ctx)
+        },
         (await mcpToolsFor?.(gate)) ?? {}
       ),
     ...(memory === undefined ? {} : { memory })

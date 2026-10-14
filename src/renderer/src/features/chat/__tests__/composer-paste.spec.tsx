@@ -182,7 +182,12 @@ describe('round 50 · 图片磁贴（Kimi 风：徽章 / hover 操作层 / 删�
     paste({ files: [png('solo.png')] })
 
     const tile = await screen.findByTestId('composer-attachment-solo.png')
-    expect(tile).toHaveClass('size-16', 'rounded-control', 'overflow-hidden', 'border-hairline')
+    expect(tile).toHaveClass(
+      'size-16',
+      'rounded-control',
+      'overflow-hidden',
+      'border-surface-border'
+    )
     expect(screen.getByTestId('composer-attachment-thumb-solo.png')).toHaveClass(
       'size-full',
       'object-cover'

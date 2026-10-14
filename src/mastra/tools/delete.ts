@@ -1,8 +1,8 @@
 /**
  * delete 工具：删除工作区内的文件 / 空目录 / 整棵目录树。
  *
- * 分级是 **dangerous**（permission/classify）：永远弹审批，Full access 与"永久允许"规则都
- * 不放行（spec §5.2；"永久允许"不落到删除上 —— 用户点过的"以后都别问"不该覆盖删除）。
+ * 分级是 **dangerous**（permission/classify），但审批仍按目标所在区域的权限档位处理：工作区
+ * `full` 可免审，`ask` 下可通过本会话允许或永久允许规则放行；区外仍按区外权限档位处理。
  * 执行路径照旧只认引擎给的 abs（fail closed）；删除与写入共用同文件队列（同一目标串行）。
  * 明确不做的事：不删工作区根目录本身（`path: "."` 一类的手滑直接拒掉，要删根请用 bash 自担）。
  * 目录非空且没传 recursive 时报错并给出下一步（而不是让 Node 的英文错误上卡）。
@@ -38,7 +38,8 @@ export async function createDeleteTool(ctx: ToolContext): Promise<Tool<DeleteInp
     id: 'delete',
     description:
       'Delete a workspace file or directory; recursive=true is required for a non-empty directory. ' +
-      'Dangerous: approved every call, with no remember-this-choice option.',
+      'Dangerous: approval follows the target permission scope; workspace full may skip approval, ' +
+      'ask can use session or permanent allow rules, and outside-workspace targets follow the outside policy.',
     inputSchema: deleteInputSchema,
     outputSchema: z.string(),
     requireApproval: (input, approval) =>

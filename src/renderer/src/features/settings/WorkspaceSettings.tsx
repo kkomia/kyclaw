@@ -122,12 +122,12 @@ export function WorkspaceSettings(): React.JSX.Element {
       {/* 默认工作区（T18）：一行「标签 + 说明 + 位置 + 更改位置」，与授权列表分开 —— 它是设置，不是一条授权 */}
       <section
         data-testid="default-workspace"
-        className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+        className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
       >
         <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
           <span className="text-b2 text-ink">默认工作区</span>
           <span className="text-c1 text-ink-secondary">
-            未指定项目的会话（新建会话）在这里读写文件，每个会话一个子目录。
+            未指定项目的会话（新建会话）在这里读写文件，每个会话一个子目录；更改位置不会自动移动已有文件。
           </span>
         </div>
         {defaultWorkspace === null ? (
@@ -160,7 +160,7 @@ export function WorkspaceSettings(): React.JSX.Element {
           "为什么这个删了没问、那个问了"：一条管文件夹里面，一条管文件夹以外。 */}
       <section
         data-testid="outside-mode"
-        className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+        className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
       >
         <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
           <span className="text-b2 text-ink">工作区之外</span>
@@ -193,7 +193,7 @@ export function WorkspaceSettings(): React.JSX.Element {
           <section
             key={workspace.path}
             data-testid={`workspace-${index}`}
-            className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+            className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
           >
             <Tooltip label={workspace.path} side="bottom" align="start">
               <span
@@ -266,7 +266,7 @@ export function WorkspaceSettings(): React.JSX.Element {
             <div
               key={`${rule.tool}\u0000${rule.workspace}\u0000${index}`}
               data-testid={`permission-rule-${index}`}
-              className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+              className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
             >
               <span
                 data-testid={`permission-rule-${index}-tool`}

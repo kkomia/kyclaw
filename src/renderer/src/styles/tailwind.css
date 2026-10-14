@@ -27,6 +27,7 @@
   --color-ink-secondary: var(--text-secondary);
   --color-ink-tertiary: var(--text-tertiary);
   --color-hairline: var(--border-hairline);
+  --color-surface-border: var(--border-surface);
   --color-hover: var(--fill-hover);
   --color-selected: var(--fill-selected);
   --color-active: var(--fill-active);

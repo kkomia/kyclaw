@@ -53,6 +53,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: FolderOpen
   },
   {
+    id: 'rules',
+    label: '我的规矩',
+    navTestId: 'settings-nav-rules',
+    groupTestId: 'settings-group-rules',
+    icon: FolderOpen
+  },
+  {
     id: 'memory',
     label: '记忆',
     navTestId: 'settings-nav-memory',

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
-import { useShellStore } from '@renderer/lib/shell-store'
+import { isWorkPanelSpaceConstrained, useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
 
 beforeEach(() => {
@@ -10,13 +10,61 @@ beforeEach(() => {
     sidebarCollapsed: false,
     workPanelOpen: false,
     workPanelWidth: 400,
-    workPanelFullscreen: false
+    workPanelFullscreen: false,
+    workPanelFit: null
   })
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+/** 壳当前是否处于"空间不足 → 铺满"（结论从布局事实派生，不再有单独的布尔字段） */
+function spaceConstrained(): boolean {
+  return isWorkPanelSpaceConstrained(useShellStore.getState().workPanelFit)
+}
+
+/**
+ * ResizeObserver 替身：jsdom 没有布局，宽度只能由测试喂。
+ * 只收集"谁在观察谁"，所以 `fire(元素, 宽)` 能精确驱动某一路观察者 —— 壳行那一路是 AppShell
+ * 判"空间够不够"用的，内容区那一路是 WorkPanel 收窄过宽宽度用的（两者混着喂会互相干扰）。
+ */
+function stubResizeObserver(): { fire: (target: Element, width: number) => void } {
+  const instances: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = []
+  class FakeResizeObserver {
+    readonly callback: ResizeObserverCallback
+    readonly targets = new Set<Element>()
+
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback
+      instances.push({ callback, targets: this.targets })
+    }
+    observe(target: Element): void {
+      this.targets.add(target)
+    }
+    unobserve(target: Element): void {
+      this.targets.delete(target)
+    }
+    disconnect(): void {
+      this.targets.clear()
+    }
+  }
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+
+  return {
+    fire(target, width) {
+      act(() => {
+        for (const observer of instances) {
+          if (!observer.targets.has(target)) continue
+          observer.callback(
+            [{ contentRect: { width } } as ResizeObserverEntry],
+            {} as ResizeObserver
+          )
+        }
+      })
+    }
+  }
+}
 
 /** 壳里有路由件（导航链接 / 主列的 Outlet），单测一律套 MemoryRouter 渲染。 */
 function renderShell(path = '/chat'): void {
@@ -222,47 +270,145 @@ describe('AppShell 三栏骨架', () => {
     }
   })
 
-  it('窄窗兜底（R2 D4）：窗口宽度低于阈值时自动收起工作台', () => {
-    const callbacks: ResizeObserverCallback[] = []
-    class FakeResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        callbacks.push(callback)
-      }
-      observe(): void {
-        /* 只收集回调，不需要真的观察 */
-      }
-      unobserve(): void {
-        /* noop */
-      }
-      disconnect(): void {
-        /* noop */
-      }
-    }
-    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
-
+  it('窄窗兜底（round 77）：空间不够时工作台临时铺满内容区 —— 不关面板、不挤压聊天、不动全屏偏好', () => {
+    const ro = stubResizeObserver()
     useShellStore.setState({ workPanelOpen: true })
     renderShell()
 
-    // 两个观察者：AppShell 的（壳宽 → 自动收面板）与 WorkPanel 的（内容区宽 → 收回过宽宽度）。
-    // 这里只驱动"壳宽"这一路；把回调全喂一遍即可（宽度那路收到 0 宽的内容区也不动）
-    expect(callbacks.length).toBeGreaterThan(0)
-    const fire = (width: number): void => {
-      act(() => {
-        for (const callback of callbacks) {
-          callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver)
-        }
-      })
-    }
+    const bench = screen.getByTestId('workbench')
+    ro.fire(screen.getByTestId('shell-row'), 800)
 
-    // 阈值 token 在 jsdom 里读不到 → 用兜底 1120：窄窗（< 1120）收、宽窗不动
-    fire(900)
-    expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
+    // 面板还在（不再自动收起），改成占满内容区
+    const panel = screen.getByTestId('work-panel')
+    expect(spaceConstrained()).toBe(true)
+    expect(panel).toHaveClass('is-open', 'flex-1', 'ml-(--content-safe-left)')
+    expect(panel).not.toHaveClass('w-(--work-panel-width)')
+    expect(panel).toHaveAttribute('data-fullscreen', 'true')
+    // "铺满"的来源要能分清：auto = 空间不足，不是用户按的 ⤢
+    expect(panel).toHaveAttribute('data-fullscreen-source', 'auto')
+    // 聊天让位但**不卸载**（状态要留）
+    const main = screen.getByTestId('main-column')
+    expect(main).toHaveClass('hidden')
+    expect(screen.getByTestId('content-region')).toContainElement(main)
+    // 工作台自己也没重挂（标签 / 终端 PTY 保活）
+    expect(screen.getByTestId('workbench')).toBe(bench)
+    // 用户偏好一个字节都没动
+    expect(useShellStore.getState().workPanelOpen).toBe(true)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
 
+    // 窗口拉宽 → 自动回到分栏
+    ro.fire(screen.getByTestId('shell-row'), 1400)
+    expect(spaceConstrained()).toBe(false)
+    expect(panel).toHaveClass('is-open', 'w-(--work-panel-width)')
+    expect(panel).not.toHaveClass('flex-1')
+    expect(panel).toHaveAttribute('data-fullscreen', 'false')
+    expect(panel).toHaveAttribute('data-fullscreen-source', 'none')
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('workbench')).toBe(bench)
+  })
+
+  it('窄窗判据是实测算出来的：收起侧栏 / 拖宽面板都会翻转结论', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    // 1000 宽：侧栏 240 + 面板 400 → 中列只剩 354 → 铺满
+    ro.fire(row, 1000)
+    expect(spaceConstrained()).toBe(true)
+
+    // 收起侧栏（safeLeft 0）→ 中列 594 → 分栏
+    // jsdom 量不出行宽，收起后再喂同一个宽度（真机上这次是 effect 重跑时读 clientWidth）
+    fireEvent.click(screen.getByTestId('sidebar-toggle'))
+    ro.fire(row, 1000)
+    expect(spaceConstrained()).toBe(false)
+
+    // 侧栏展开回来 + 面板拖到 760：1400 的宽窗也放不下（1394 − 240 − 760 = 394）
+    fireEvent.click(screen.getByTestId('sidebar-toggle'))
     act(() => {
-      useShellStore.setState({ workPanelOpen: true })
+      useShellStore.setState({ workPanelWidth: 760 })
     })
-    fire(1400)
-    expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
+    ro.fire(row, 1400)
+    expect(spaceConstrained()).toBe(true)
+
+    // 双击把手回默认 400 → 同一个窗口又够（1394 − 240 − 400 = 754）
+    act(() => {
+      useShellStore.setState({ workPanelWidth: 400 })
+    })
+    ro.fire(row, 1400)
+    expect(spaceConstrained()).toBe(false)
+  })
+
+  it('铺满后关面板（▯）回聊天：中列回来，这一位也收掉', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+
+    ro.fire(screen.getByTestId('shell-row'), 800)
+    expect(screen.getByTestId('main-column')).toHaveClass('hidden')
+
+    fireEvent.click(screen.getByTestId('workbench-close'))
+
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+    expect(spaceConstrained()).toBe(false)
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
+  })
+
+  it('量不到行宽（jsdom / 隐藏态）时不乱判：维持分栏，不藏中列', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+
+    ro.fire(screen.getByTestId('shell-row'), 0)
+
+    expect(spaceConstrained()).toBe(false)
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('work-panel')).toHaveClass('is-open', 'w-(--work-panel-width)')
+  })
+
+  it('实机陷阱（round 78）：拖到越界进 auto 后，「恢复并排布局」就地收回并排（不动全屏偏好）', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true, workPanelWidth: 560 })
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    // 1274 − 240 − 560 = 474 < 480 → 铺满：把手让位、⤢ 槽换成"恢复并排布局"
+    ro.fire(row, 1280)
+    expect(spaceConstrained()).toBe(true)
+    expect(screen.queryByTestId('work-panel-resizer')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('workbench-restore-split'))
+
+    // 落到 546 = 554（贴边上限） − 8（余量）；偏好与面板开关都没被动
+    expect(useShellStore.getState().workPanelWidth).toBe(546)
+    expect(useShellStore.getState().workPanelFullscreen).toBe(false)
+    expect(useShellStore.getState().workPanelOpen).toBe(true)
+
+    // 真机上这次重算是 effect 重跑读 clientWidth；jsdom 量不出行宽，再喂一次同一个宽度
+    ro.fire(row, 1280)
+    expect(spaceConstrained()).toBe(false)
+    expect(screen.getByTestId('work-panel')).toHaveClass('is-open', 'w-(--work-panel-width)')
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('work-panel-resizer')).toBeInTheDocument()
+  })
+
+  it('800 真窄窗（并排不可能）：槽位给「返回对话」，点了直接关面板回聊天', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+
+    // 794 − 240 − 480 = 74 < 面板下限 280 → 收窄也摆不开
+    ro.fire(screen.getByTestId('shell-row'), 800)
+    expect(spaceConstrained()).toBe(true)
+    expect(screen.queryByTestId('workbench-restore-split')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('workbench-back-to-chat'))
+
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+    expect(spaceConstrained()).toBe(false)
+    expect(screen.getByTestId('main-column')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
   })
 
   it('data-sidebar 跟随折叠状态（内容列的安全边靠它算）', () => {
@@ -322,7 +468,7 @@ describe('AppShell · round 39（全屏 / 浮动钮让位）', () => {
     expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
   })
 
-  it('面板开着时才有拖拽把手；窄窗自动收面板也走 store（全屏一并复位）', () => {
+  it('面板开着时才有拖拽把手；关面板也走 store（全屏一并复位）', () => {
     useShellStore.setState({ workPanelOpen: true, workPanelFullscreen: true })
     renderShell()
 

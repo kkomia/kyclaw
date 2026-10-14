@@ -192,7 +192,7 @@ describe('DeliverableCard：▾ 菜单的两项', () => {
     )
   })
 
-  it('会话根判不出（多工作区并列）：复制退回相对路径，「定位」置灰', () => {
+  it('会话根判不出（多工作区并列）：复制退回相对路径，「定位」与「用本地应用打开」置灰', () => {
     const bed = setup({
       workspaces: [
         { path: 'D:\\工作区', mode: 'ask' },
@@ -203,6 +203,7 @@ describe('DeliverableCard：▾ 菜单的两项', () => {
 
     openMenu()
     expect(screen.getByTestId('deliverable-reveal')).toHaveAttribute('data-disabled')
+    expect(screen.getByTestId('deliverable-open')).toHaveAttribute('data-disabled')
 
     fireEvent.click(screen.getByTestId('deliverable-copy-path'))
     expect(bed.writeText).toHaveBeenCalledWith(FILE_PATH)
@@ -217,6 +218,74 @@ describe('DeliverableCard：▾ 菜单的两项', () => {
 
     await waitFor(() =>
       expect(bed.bridge.workbench.reveal).toHaveBeenCalledWith(THREAD_ID, FILE_PATH)
+    )
+  })
+
+  it('定位失败也不再静默：把主进程的人话露在卡下面（原先只写 console）', async () => {
+    const bed = setup()
+    bed.bridge.workbench.reveal.mockRejectedValue(new Error('打不开这个文件夹：拒绝访问'))
+    render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-reveal'))
+
+    expect(await screen.findByTestId('deliverable-action-error')).toHaveTextContent(
+      '打不开这个文件夹：拒绝访问'
+    )
+  })
+})
+
+/* round 77：交付物交回用户本机装的那件应用（Word / WPS / Excel）—— workbench:open */
+describe('DeliverableCard：「用本地应用打开」', () => {
+  it('菜单里有这一项，点了走 workbench:open（threadId + 相对路径，绝对路径只在主进程）', async () => {
+    const bed = setup()
+    render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
+
+    openMenu()
+    const item = screen.getByTestId('deliverable-open')
+    expect(item).toHaveTextContent('用本地应用打开')
+
+    fireEvent.click(item)
+
+    await waitFor(() =>
+      expect(bed.bridge.workbench.open).toHaveBeenCalledWith(THREAD_ID, FILE_PATH)
+    )
+    // 失败才露错误行；成功时一个字都不多说
+    expect(screen.queryByTestId('deliverable-action-error')).not.toBeInTheDocument()
+  })
+
+  it('打不开（没装能开这种文件的应用 / 文件被删）：把主进程的人话露在卡下面，不假装打开', async () => {
+    const bed = setup()
+    bed.bridge.workbench.open.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'workbench:open': Error: 打不开这个文件（系统没能用默认应用打开它）：没有与此文件关联的应用"
+      )
+    )
+    render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open'))
+
+    const alert = await screen.findByTestId('deliverable-action-error')
+    expect(alert).toHaveAttribute('role', 'alert')
+    // 剥掉 Electron 的包装层，用户看到的是主进程那句人话
+    expect(alert).toHaveTextContent('打不开这个文件（系统没能用默认应用打开它）')
+    expect(alert).not.toHaveTextContent('Error invoking remote method')
+  })
+
+  it('失败之后再点一次成功：错误行收回去（不留一条早就不成立的报错）', async () => {
+    const bed = setup()
+    bed.bridge.workbench.open.mockRejectedValueOnce(new Error('打不开这个文件'))
+    render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open'))
+    await screen.findByTestId('deliverable-action-error')
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('deliverable-action-error')).not.toBeInTheDocument()
     )
   })
 })

@@ -53,6 +53,7 @@
 import type { CompactionLevel, StoredMessage, ThreadCompaction } from '@shared/threads'
 import type { TrajectoryUsageRun } from '@shared/trajectory'
 import { resolveMcpToolCallInput, resolveMcpToolCallName } from '@shared/mcp'
+import { projectTodoOutput } from '../chat/task-history'
 
 /** 行的类型（取值口径对齐 dsh 的 kind 词汇；`system` 见头注的"不编造"） */
 export type TrajectoryKind = 'system' | 'user' | 'context' | 'compacted' | 'message' | 'tool'
@@ -140,6 +141,8 @@ export interface TrajectoryRow {
   isError: boolean
   /** 这一步还没收尾（等审批 / 半截）——界面显示"进行中"且**不给时长** */
   pending: boolean
+  interactionStatus?: 'waiting' | 'answered' | 'cancelled'
+  taskRevision?: number
   /** 模型 id（助手行 / 工具行所属的步）；没有 = null */
   modelId: string | null
   /** 记录到的开始 / 结束时刻（epoch ms）；拿不到 = null */
@@ -666,13 +669,31 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
         const durationMs = call.pending ? null : spanOf(entry.startedAt, endedAt)
         const resultText = rawOf(call.result)
         const inputText = jsonOf(call.input)
+        const taskHistory = call.toolName === 'todo' ? projectTodoOutput(call.result) : null
+        const interactionStatus =
+          call.toolName !== 'ask_user'
+            ? undefined
+            : call.pending
+              ? ('waiting' as const)
+              : isRecord(call.result) && call.result.status === 'cancelled'
+                ? ('cancelled' as const)
+                : isRecord(call.result) && call.result.status === 'answered'
+                  ? ('answered' as const)
+                  : undefined
         push({
+          ...(interactionStatus === undefined ? {} : { interactionStatus }),
+          ...(taskHistory === null || taskHistory.conflict
+            ? {}
+            : { taskRevision: taskHistory.revision }),
           kind: 'tool',
           turn: currentTurn,
           step: step.index,
-          text: `${call.toolName} ${summarize(inputText ?? '（未捕获参数）', 80)}${
-            resultText === null ? '' : ` → ${summarize(resultText, 100)}`
-          }`,
+          text:
+            taskHistory !== null
+              ? `todo · 历史版本 ${taskHistory.revision} · ${taskHistory.summary}${taskHistory.conflict ? ' · 修改冲突（未保存）' : ''}`
+              : `${call.toolName}${call.toolName === 'ask_user' ? ` · ${call.pending ? '等待回答' : isRecord(call.result) && call.result.status === 'cancelled' ? '已取消' : isRecord(call.result) && call.result.status === 'answered' ? '已回答' : '未完成'}` : ''} ${summarize(inputText ?? '（未捕获参数）', 80)}${
+                  resultText === null ? '' : ` → ${summarize(resultText, 100)}`
+                }`,
           body: null,
           thinking: null,
           toolName: call.toolName,

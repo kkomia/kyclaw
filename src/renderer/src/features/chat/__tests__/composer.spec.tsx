@@ -76,7 +76,8 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
 
     expect(screen.getByTestId('composer')).toHaveClass(
       'max-w-(--chat-input-max-width)',
-      'rounded-input'
+      'rounded-input',
+      'border-surface-border'
     )
     expect(screen.getByTestId('composer-input')).toHaveClass(
       'field-sizing-content',
@@ -419,6 +420,65 @@ describe('round 7 · ＋菜单与引用', () => {
     fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
 
     expect(screen.getByTestId('composer-ref-context')).toHaveAttribute('data-disabled')
+  })
+
+  it('round 81 · 模式分组在同一个 ＋ 菜单里：进入规划模式只在可进入时给，运行中禁用', () => {
+    const onEnterPlan = vi.fn()
+    const onToggleTasks = vi.fn()
+    const initial = {
+      ...defaultSettings(),
+      workspaces: [{ path: 'D:\\ws', mode: 'ask' as const }]
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    setup({
+      threadId: 't1',
+      mode: { plan: { onSelect: onEnterPlan }, tasks: { expanded: false, onSelect: onToggleTasks } }
+    })
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+
+    // 权限 chip 仍在工具条上（模式搬迁不动权限档位）
+    expect(screen.getByTestId('composer-permission')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-mode-plan')).toHaveTextContent('进入规划模式')
+    // 任务清单那一条跟着当前展开状态给文案
+    expect(screen.getByTestId('composer-mode-tasks')).toHaveTextContent('任务清单')
+    fireEvent.click(screen.getByTestId('composer-mode-plan'))
+    expect(onEnterPlan).toHaveBeenCalledTimes(1)
+    expect(onToggleTasks).not.toHaveBeenCalled()
+  })
+
+  it('round 81 · 任务清单已展开时那条变成「收起任务清单」，点了回调出去', () => {
+    const onToggleTasks = vi.fn()
+    setup({
+      threadId: 't1',
+      mode: { plan: null, tasks: { expanded: true, onSelect: onToggleTasks } }
+    })
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+
+    expect(screen.queryByTestId('composer-mode-plan')).not.toBeInTheDocument()
+    const tasks = screen.getByTestId('composer-mode-tasks')
+    expect(tasks).toHaveTextContent('收起任务清单')
+    fireEvent.click(tasks)
+    expect(onToggleTasks).toHaveBeenCalledTimes(1)
+  })
+
+  it('round 81 · 未就绪 / 正在运行：没有模式分组时不铺假入口，有的也只是禁用', () => {
+    const { unmount } = render(<Composer onSend={vi.fn()} onStop={vi.fn()} />)
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+    expect(screen.queryByTestId('composer-mode-plan')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-mode-tasks')).not.toBeInTheDocument()
+    unmount()
+    cleanup()
+
+    setup({
+      threadId: 't1',
+      mode: {
+        plan: { disabled: true, onSelect: vi.fn() },
+        tasks: { expanded: false, onSelect: vi.fn() }
+      }
+    })
+    fireEvent.keyDown(screen.getByTestId('composer-plus'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-mode-plan')).toHaveAttribute('data-disabled')
   })
 })
 

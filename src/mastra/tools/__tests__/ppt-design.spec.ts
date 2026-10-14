@@ -208,8 +208,8 @@ describe('schema：新字段的上限都被拒，提示告诉模型怎么改', (
     ],
     [
       '表格行数',
-      { slides: [{ table: { rows: Array.from({ length: 21 }, () => ['a']) } }] },
-      '表格最多 20 行'
+      { slides: [{ table: { rows: Array.from({ length: 7 }, () => ['a']) } }] },
+      '表格最多 6 行数据'
     ],
     [
       '表格列数',

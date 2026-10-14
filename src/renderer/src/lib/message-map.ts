@@ -190,6 +190,8 @@ function mapPart(part: unknown, approvals: Map<string, PendingApprovalRef>): Par
       return mapFilePart(part)
     case 'step-start':
       return { type: 'step-start' }
+    case 'data-tool-call-suspended':
+      return isRecord(part.data) ? { type: 'data-tool-call-suspended', data: part.data } : null
     default:
       return null
   }

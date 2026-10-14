@@ -419,5 +419,100 @@ describe('审批续跑：真客户端 Chat + 真 server', () => {
     )
     const tool = bashPart(chat.messages) as unknown as { output?: unknown }
     expect(String(tool.output)).toContain('after-restart-ok')
+    await waitUntil(() => chat.status === 'ready', 30_000, '恢复流真正收尾后再关闭测试服务')
+  }, 60_000)
+
+  it('并行审批：同一步两条需审批的 bash，回应打包成一条续跑请求也要能续跑', async () => {
+    scripts.length = 0
+    scripts.push(() =>
+      multiToolCallScript([
+        { id: 'call-bash-1', name: 'bash', input: { command: 'echo parallel-one' } },
+        { id: 'call-bash-2', name: 'bash', input: { command: 'echo parallel-two' } }
+      ])
+    )
+    scripts.push(() => textScript('两条都跑完了。'))
+
+    const sentBodies: string[] = []
+    const chat = new Chat<UIMessage>({
+      transport: new DefaultChatTransport({
+        api: `${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`,
+        headers: { authorization: `Bearer ${server.token}` },
+        fetch: async (input, init) => {
+          if (typeof init?.body === 'string') sentBodies.push(init.body)
+          return fetch(input, init)
+        }
+      }),
+      sendAutomaticallyWhen: ({ messages }) => canResumeAfterApproval(messages)
+    })
+
+    const options = { body: threadMemoryBody('thread-resume-parallel') }
+    await chat.sendMessage({ text: '并行跑两条 echo' }, options)
+
+    const approvalParts = (): ApprovalPart[] =>
+      chat.messages
+        .flatMap((message) => message.parts as unknown as ApprovalPart[])
+        .filter((part) => part.toolCallId === 'call-bash-1' || part.toolCallId === 'call-bash-2')
+
+    // 与生产 UI 同序：每张卡出现就点一次「允许一次」（同一张卡只回一次；现场排除了重复点击）
+    const answered = new Set<string>()
+    for (let round = 0; round < 6; round++) {
+      await waitUntil(
+        () =>
+          (chat.status === 'ready' &&
+            (approvalParts().some(
+              (part) =>
+                part.state === 'approval-requested' && !answered.has(String(part.toolCallId))
+            ) ||
+              (approvalParts().length > 0 &&
+                approvalParts().every((part) => part.state === 'output-available')))) ||
+          Boolean(chat.error),
+        20_000,
+        `第 ${round} 轮：等新审批卡或收尾（error: ${String(chat.error?.message)}；${partSummary(chat.messages)}）`
+      )
+      if (chat.error) break
+      const next = approvalParts().find(
+        (part) => part.state === 'approval-requested' && !answered.has(String(part.toolCallId))
+      )
+      if (!next) break
+      answered.add(String(next.toolCallId))
+      await chat.addToolApprovalResponse({
+        id: String(next.approval?.id),
+        approved: true,
+        options
+      })
+    }
+
+    try {
+      await waitUntil(
+        () =>
+          approvalParts().every((part) => part.state === 'output-available') &&
+          chat.messages.some((message) =>
+            message.parts.some(
+              (part) => part.type === 'text' && 'text' in part && part.text === '两条都跑完了。'
+            )
+          ),
+        30_000,
+        `并行审批续跑完成（error: ${String(chat.error?.message)}）`
+      )
+    } catch (error) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}；服务端错误=${String(
+          chat.error?.message
+        )}；${partSummary(chat.messages)}`
+      )
+    }
+
+    const outputs = approvalParts().map((part) => String((part as { output?: unknown }).output))
+    expect(outputs.some((output) => output.includes('parallel-one'))).toBe(true)
+    expect(outputs.some((output) => output.includes('parallel-two'))).toBe(true)
+    expect(scripts.length).toBe(0)
+    // 这条用例的关键形状：确实有一条续跑请求**同时**带着两条审批（现场 409 的那条请求）
+    const packed = sentBodies.filter(
+      (body) =>
+        body.includes('call-bash-1') &&
+        body.includes('call-bash-2') &&
+        (body.match(/approval-responded/g) ?? []).length >= 2
+    )
+    expect(packed.length).toBeGreaterThan(0)
   }, 60_000)
 })

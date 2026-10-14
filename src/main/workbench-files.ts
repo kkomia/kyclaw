@@ -378,6 +378,51 @@ const EXTENSION_FORMATS: Readonly<Record<string, ReadFormat>> = {
 /** 走"抽结构"这条路的格式（不回原始字节） */
 const OFFICE_FORMATS: ReadonlySet<ReadFormat> = new Set(['docx', 'xlsx', 'pptx', 'table'])
 
+/**
+ * `workbench:open`（用系统默认应用打开）认的扩展名 —— 交给 ShellExecute 之前的那道闸门。
+ *
+ * **为什么要有这张表**：工作区里的文件**模型也能写**，而 `shell.openPath` 在 Windows 上走
+ * ShellExecute —— `.exe` / `.bat` / `.cmd` / `.ps1` / `.js` / `.vbs` / `.msi` / `.lnk` / `.url` 交
+ * 过去就是**执行**或拉起一个动作，等于给模型的产物配了一条"让用户点一下就跑"的路。所以这里只放
+ * **人读的文档与媒体**，其余一律拒（人话里指路：要开别的类型先用「在文件资源管理器中定位」）。
+ *
+ * 开头那一批与预览的 `EXTENSION_FORMATS` **同源**（同一张表展开来的，避免两处各写一份悄悄分叉）；
+ * 旧版 Office 刻意也在表内：预览明确不支持它们、技能里一直劝"用 Word/Excel/PowerPoint 另存为"，
+ * 而"用本机应用打开"正是那件事该走的路。文本一族只收**没有危险默认关联**的那几种
+ * （脚本类扩展名一个都不在其中）。
+ */
+export const OPENABLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ...Object.keys(EXTENSION_FORMATS),
+  '.doc',
+  '.xls',
+  '.ppt',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.log',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.ini',
+  '.xml',
+  '.rtf'
+])
+
+/**
+ * 扩展名闸门：不在 `OPENABLE_EXTENSIONS` 里就不放它去见 ShellExecute。
+ * 目录另判（打开文件夹是 reveal 的事），containment 与存在性由调用方经 `revealTarget` 过一遍。
+ */
+export function assertOpenable(relative: string): void {
+  const extension = extensionOf(relative)
+  if (OPENABLE_EXTENSIONS.has(extension)) return
+  throw new Error(
+    `不用系统应用打开这类文件（${extension === '' ? '没有扩展名' : extension}）：` +
+      '只把文档与媒体（Office 三件 / PDF / 图片 / 表格 / 纯文本）交给本机应用，' +
+      '可执行文件、脚本与快捷方式不交给系统。要打开它，请用「在文件资源管理器中定位」自己开。'
+  )
+}
+
 /** 取小写扩展名（正反斜杠都认；没有扩展名给空串） */
 function extensionOf(relative: string): string {
   const base = relative.slice(Math.max(relative.lastIndexOf('/'), relative.lastIndexOf('\\')) + 1)

@@ -4,27 +4,48 @@ import type { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
 import { cn } from '@renderer/components/ui/cn'
+import { Button } from '@renderer/components/ui/button'
 import { resolveAgentEndpoint, threadRequestOptions, transportFor } from '@renderer/lib/agent'
-import { compactThread, fetchThreadCompaction, truncateThread } from '@renderer/lib/threads-api'
+import {
+  compactThread,
+  fetchThreadCompaction,
+  truncateThread,
+  fetchThreadMessages
+} from '@renderer/lib/threads-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
+import { taskSession, tasksStore } from '@renderer/lib/tasks-store'
 import { shouldCompact, thresholdTokensOf } from '@renderer/lib/compact'
 import { startupMark } from '@renderer/lib/startup-timing'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
+import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { OutgoingMessage } from './composer-attachments'
 import {
   allowForSession,
+  canResumeAfterApproval,
   isAllowedForSessionNow,
   pendingApprovals,
   resolveApprovalWorkspace
 } from './approval'
 import type { ApprovalRequest } from './approval'
 import type { ApprovalDecision } from './ApprovalCard'
-import type { ComposerNotice } from './ComposerControls'
+import type { ComposerModeMenu, ComposerNotice } from './ComposerControls'
 import { createThreadChatRuntime, threadChat, dropThreadChat, pendingChat } from './thread-chats'
 import type { ThreadChatRuntime, TurnOutcome } from './thread-chats'
 import { publishDraft } from './composer-inbox'
 import { ApprovalDock } from './ApprovalDock'
+import { AskUserDock } from './AskUserDock'
+import { TaskDockSlot } from './TaskDockSlot'
+import { useStore } from 'zustand'
+import { PlanModeChip } from './PlanModeChip'
+import { PlanApprovalDock } from './PlanApprovalDock'
+import { planSession } from '@renderer/lib/plans-store'
+import { rendererPlansStore, settledPlan } from './plan-runtime'
+import { EMPTY_ASK_USER_THREAD, useAskUserStore } from './ask-user-store'
+import { askUserCallKey } from './ask-user-ui'
+import { hasPendingAskUser, chatStreamActive } from './ask-user'
+import { askUserResumeBody } from '@renderer/lib/ask-user-api'
+import { mapStoredMessages } from '@renderer/lib/message-map'
 import { CapabilityRow } from './CapabilityRow'
 import { ChatHeader } from './ChatHeader'
 import type { ChatView } from './ChatHeader'
@@ -81,7 +102,8 @@ function toError(value: unknown): Error {
  * 其余收尾原因（stop / abort / error / 无值）不提示：那是正常的结束或另有错误卡在管。
  */
 function turnNoticeOf(outcome: TurnOutcome): string | null {
-  if (outcome.isError || outcome.isAbort || outcome.awaitingApproval) return null
+  if (outcome.isError || outcome.isAbort || outcome.awaitingApproval || outcome.waitingInteraction)
+    return null
   if (outcome.finishReason === 'tool-calls') return '已达单轮步数上限，回复「继续」可接着做'
   if (outcome.finishReason === 'length') return '输出达到长度上限，内容被截断'
   return null
@@ -163,10 +185,16 @@ export function ChatPage(): React.JSX.Element {
   const [reloadToken, setReloadToken] = useState(0)
   const activeId = useSessionsStore((state) => state.activeId)
   const ensureLoaded = useSessionsStore((state) => state.ensureLoaded)
+  const ensureProjectsLoaded = useProjectsStore((state) => state.ensureLoaded)
 
   useEffect(() => {
     void ensureLoaded()
   }, [ensureLoaded])
+
+  useEffect(() => {
+    // 权限入口与工作台根都依赖会话项目映射；页面本身也要触发首轮加载。
+    void ensureProjectsLoaded()
+  }, [ensureProjectsLoaded])
 
   useEffect(() => {
     let alive = true
@@ -261,6 +289,7 @@ export function ChatSession({
   const trajectoryRevision = useSessionsStore(
     (state) => state.threads.find((thread) => thread.id === sessionThreadId)?.updatedAt ?? ''
   )
+  const interactionRevision = useAskUserStore((state) => state.threads.get(sessionThreadId))
   /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
   const [turnNotice, setTurnNotice] = useState<string | null>(null)
   /**
@@ -281,7 +310,13 @@ export function ChatSession({
         : createThreadChatRuntime(transport, (finishedThreadId, outcome) => {
             // 出错/用户主动停止不算"完成"，不通知也不生成标题；
             // "还停在等审批"的挂起轮同样不算 —— 审批卡还等着用户，标题与完成通知都该等 resume 之后那轮
-            if (outcome.isError || outcome.isAbort || outcome.awaitingApproval) return
+            if (
+              outcome.isError ||
+              outcome.isAbort ||
+              outcome.awaitingApproval ||
+              outcome.waitingInteraction
+            )
+              return
             void useSessionsStore.getState().handleTurnEnd(finishedThreadId)
           }),
     [transport]
@@ -398,7 +433,7 @@ export function ChatSession({
             <TrajectoryView
               threadId={sessionThreadId}
               active={view === 'trajectory'}
-              revision={trajectoryRevision}
+              revision={`${trajectoryRevision}:${JSON.stringify([interactionRevision?.pending, interactionRevision?.submitting, interactionRevision?.stopping])}`}
             />
           </div>
         ) : undefined
@@ -416,6 +451,7 @@ export function ChatSession({
         <ActiveChat
           chat={chat}
           threadId={sessionThreadId}
+          interactionsEnabled={runtime === undefined || runtime.refreshInteractions === true}
           pending={pending}
           turnNotice={turnNotice}
           onClearTurnNotice={clearTurnNotice}
@@ -439,6 +475,7 @@ export type ActiveChatPending =
 interface ActiveChatProps {
   chat: Chat<UIMessage>
   threadId: string
+  interactionsEnabled: boolean
   /** 实例就绪之前的那一档；null = 就绪（正常发消息） */
   pending: ActiveChatPending | null
   /** round 33：轮末提示（被步数预算截停 / 输出被截断）；null = 不显示 */
@@ -484,6 +521,7 @@ interface PendingSync {
 function ActiveChat({
   chat,
   threadId,
+  interactionsEnabled,
   pending,
   turnNotice,
   onClearTurnNotice
@@ -550,15 +588,157 @@ function ActiveChat({
   } = useChat({
     chat
   })
+  const observedTodoResults = useRef(new Map<string, unknown>())
+  useEffect(() => {
+    if (!ready) return
+    let changed = false
+    for (const message of messages) {
+      for (const part of message.parts) {
+        if (
+          (part.type !== 'tool-todo' &&
+            !(part.type === 'dynamic-tool' && part.toolName === 'todo')) ||
+          part.state !== 'output-available'
+        )
+          continue
+        const key = JSON.stringify([message.id, part.toolCallId])
+        if (observedTodoResults.current.get(key) === part.output) continue
+        observedTodoResults.current.set(key, part.output)
+        changed = true
+      }
+    }
+    if (changed) void tasksStore.getState().load(threadId)
+  }, [messages, ready, threadId])
   const busy = status === 'submitted' || status === 'streaming'
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
+  const askState = useAskUserStore((state) => state.threads.get(threadId) ?? EMPTY_ASK_USER_THREAD)
+  const askDrafts = useAskUserStore((state) => state.drafts)
+  const plan = useStore(rendererPlansStore, (state) => planSession(state, threadId))
+  const realThread = useSessionsStore((state) =>
+    state.threads.some((thread) => thread.id === threadId)
+  )
+  const refreshPlan = useCallback(() => {
+    void rendererPlansStore
+      .getState()
+      .load(threadId)
+      .catch(() => {})
+  }, [threadId])
+  useEffect(() => {
+    if (!ready || !realThread || !interactionsEnabled) return
+    refreshPlan()
+    window.addEventListener('focus', refreshPlan)
+    return () => window.removeEventListener('focus', refreshPlan)
+  }, [ready, realThread, interactionsEnabled, refreshPlan])
+  const waitingPlan =
+    interactionsEnabled &&
+    realThread &&
+    (plan.busy ||
+      (plan.error !== null && plan.state !== null && plan.state.mode !== 'normal') ||
+      plan.state?.mode === 'awaiting_approval' ||
+      plan.state?.pendingRevision !== undefined)
+  const [planActionError, setPlanActionError] = useState<string | null>(null)
+  const [enteringPlan, setEnteringPlan] = useState(false)
+  const enterPlanLock = useRef(false)
+  const cancelPlan = useCallback(async (): Promise<void> => {
+    await stop()
+    await settledPlan(threadId)
+    await rendererPlansStore.getState().load(threadId)
+    const current = planSession(rendererPlansStore.getState(), threadId).state
+    if (current && current.mode !== 'normal' && current.mode !== 'cancelled') {
+      await rendererPlansStore.getState().cancel(threadId, current.version)
+    }
+    const history = mapStoredMessages(await fetchThreadMessages(threadId))
+    setMessages(history)
+  }, [stop, threadId, setMessages])
+  const decidePlan = useCallback(
+    async (decision: 'approve' | 'revise'): Promise<void> => {
+      const current = planSession(rendererPlansStore.getState(), threadId)
+      if (!current.ref) throw new Error('计划版本未就绪')
+      if (busy || askState.pending.length > 0 || waitingApproval)
+        throw new Error('请先处理其它挂起交互')
+      if (decision === 'approve') await rendererPlansStore.getState().approve(threadId, current.ref)
+      else await rendererPlansStore.getState().revise(threadId, current.ref, current.feedback)
+      const next = planSession(rendererPlansStore.getState(), threadId).ref
+      if (!next) throw new Error('服务器未返回计划恢复版本')
+      await rendererPlansStore.getState().resume(threadId, next)
+    },
+    [threadId, busy, askState.pending.length, waitingApproval]
+  )
+  const refreshQuestions = useCallback(() => {
+    void useAskUserStore
+      .getState()
+      .refresh(threadId)
+      .then(async (ok) => {
+        if (!ok || chatStreamActive(chat)) return
+        if (useAskUserStore.getState().threads.get(threadId)?.pending.length) return
+        if (!hasPendingAskUser(chat.messages[chat.messages.length - 1])) return
+        try {
+          const history = mapStoredMessages(await fetchThreadMessages(threadId))
+          if (chatStreamActive(chat)) return
+          setMessages(history)
+        } catch {
+          useAskUserStore.setState((state) => ({
+            threads: new Map(state.threads).set(threadId, {
+              ...(state.threads.get(threadId) ?? EMPTY_ASK_USER_THREAD),
+              error: '历史刷新失败，请重试刷新待答问题'
+            })
+          }))
+        }
+      })
+  }, [threadId, chat, setMessages])
+  useEffect(() => {
+    if (!ready || !interactionsEnabled) return
+    refreshQuestions()
+    const onFocus = (): void => refreshQuestions()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [ready, refreshQuestions, interactionsEnabled])
+  const waitingInteraction =
+    waitingApproval ||
+    waitingPlan ||
+    (planActionError !== null && plan.state !== null && plan.state.mode !== 'normal') ||
+    ((!interactionsEnabled || !askState.loaded || askState.error !== null) &&
+      hasPendingAskUser(messages[messages.length - 1])) ||
+    (interactionsEnabled &&
+      (!askState.loaded ||
+        askState.refreshing ||
+        askState.submitting ||
+        askState.stopping ||
+        askState.error !== null ||
+        askState.pending.length > 0))
+  const stopInteraction = useCallback(() => {
+    if (!interactionsEnabled) {
+      void stop()
+      return
+    }
+    setPlanActionError(null)
+    void useAskUserStore.getState().cancel(
+      threadId,
+      async () => {
+        await stop()
+        await settledPlan(threadId)
+        if (realThread) await rendererPlansStore.getState().load(threadId)
+        const current = planSession(rendererPlansStore.getState(), threadId).state
+        if (current && current.mode !== 'normal' && current.mode !== 'cancelled') {
+          await rendererPlansStore.getState().cancel(threadId, current.version)
+        }
+      },
+      async () => {
+        try {
+          const history = mapStoredMessages(await fetchThreadMessages(threadId))
+          setMessages(history)
+        } catch {
+          throw new Error('停止已确认，但历史刷新失败，请刷新待答问题')
+        }
+      }
+    )
+  }, [threadId, stop, setMessages, interactionsEnabled, realThread])
   /**
    * round 62：动作闸门只算一次。三档"状态忙"：流式中 / 挂起等审批 / 压缩中 —— 原来这一串在
    * 六处各写了一遍，加一条规则就得满文件找。**动作行的显隐看它**（渲染期的 state 就是它的全部）。
    */
-  const locked = busy || waitingApproval || compacting
+  const locked = busy || waitingInteraction || compacting || enteringPlan
   /**
    * round 62：**执行时**的最后一道闸 = `locked` + `sending.current`。
    *
@@ -569,6 +749,62 @@ function ActiveChat({
    * 回调里现读 —— 拦的是"已经点下去的那一下"。
    */
   const isLocked = useCallback((): boolean => locked || sending.current, [locked])
+  /**
+   * round 81：「进入规划模式」的**唯一实现**（入口收在左下角 ＋ 菜单里，见 Composer 的 mode props）。
+   *
+   * 草稿会话（还没物化）与已有会话走同一个动作：先物化（草稿在服务端还不存在，规划状态没处读写），
+   * 再读最新计划状态、按服务端 CAS 版本进入 —— 与旧的工具条按钮逐字同一套顺序，只是入口换了地方。
+   * 闸门用 `isLocked()`（现读 ref）：正在跑 / 等审批 / 压缩中都不放行；失败不静默，落到
+   * `planActionError`（页脚那张错误卡 + 重试说清是这一步卡住了）。
+   */
+  const enterPlan = useCallback(async (): Promise<void> => {
+    if (isLocked() || enterPlanLock.current) return
+    enterPlanLock.current = true
+    setEnteringPlan(true)
+    setPlanActionError(null)
+    try {
+      if (!realThread) await useSessionsStore.getState().materialize(threadId)
+      await rendererPlansStore.getState().load(threadId)
+      const current = planSession(rendererPlansStore.getState(), threadId).state
+      if (!current || current.mode !== 'normal') throw new Error('计划状态未就绪，请刷新')
+      await rendererPlansStore.getState().enter(threadId, current.version)
+    } catch (failure) {
+      setPlanActionError(toError(failure).message)
+    } finally {
+      enterPlanLock.current = false
+      setEnteringPlan(false)
+    }
+  }, [isLocked, realThread, threadId])
+  /** 会话任务清单的收起状态（round 81：唯一来源是 tasks-store 的 collapsed；＋菜单那条也翻它） */
+  const taskCollapsed = useStore(tasksStore, (state) => taskSession(state, threadId).collapsed)
+  const toggleTasks = useCallback((): void => {
+    const state = tasksStore.getState()
+    state.setCollapsed(threadId, !taskSession(state, threadId).collapsed)
+  }, [threadId])
+  /**
+   * ＋ 菜单里的**模式分组**（round 81）：原先工具条上那两颗常驻按钮（「进入规划模式」「任务清单」）
+   * 都收进这一个 ＋（用户口径：绝不另造第二个模式菜单）。两边都是真状态、真回调：
+   *   - 规划：只在普通模式时给这条（已在规划里就没有"再进入"这件事）；运行 / 等审批 / 压缩中禁用；
+   *   - 任务清单：读 tasks-store 的 collapsed（不是平行状态），点一下翻它，文案跟着走。
+   * 实例没就绪（`ready` 假）或通道缺失时整组不给 —— 那时没有可动的对象，也不该摆一个点不动的门。
+   */
+  const modeMenu = useMemo<ComposerModeMenu | null>(() => {
+    if (!ready || !interactionsEnabled) return null
+    const canEnterPlan = !realThread || plan.state?.mode === 'normal'
+    return {
+      plan: canEnterPlan ? { disabled: locked, onSelect: () => void enterPlan() } : null,
+      tasks: { expanded: !taskCollapsed, onSelect: toggleTasks }
+    }
+  }, [
+    ready,
+    interactionsEnabled,
+    realThread,
+    plan.state?.mode,
+    locked,
+    enterPlan,
+    taskCollapsed,
+    toggleTasks
+  ])
   /**
    * 输入框上方审批条的数据（round 29）：当前挂起的审批，刨掉"本会话允许"命中的那些 ——
    * 命中的会由下面的 effect 立刻回灌放行，先把它们画出来只会闪一下。
@@ -821,18 +1057,43 @@ function ActiveChat({
    * 回调（外部系统的事件回调，规则认可的形状）——但那会绕开这里的发送预检与发送锁，本轮不动。
    */
   const previousStatus = useRef<string | null>(null)
+  const approvalBlockedByAsk = useRef(false)
   useEffect(() => {
     if (!ready) return
     // 挂载时 previousStatus.current 还是 null：等价于"刚才很忙"（重挂时看不到轮末那一下）
     const firstRun = previousStatus.current === null
     const wasBusy =
       firstRun || previousStatus.current === 'submitted' || previousStatus.current === 'streaming'
+    if (status === 'ready' && waitingInteraction) {
+      if (
+        canResumeAfterApproval(messages) &&
+        (askState.pending.length > 0 || askState.submitting)
+      ) {
+        approvalBlockedByAsk.current = true
+      }
+      return
+    }
+    if (status === 'ready' && approvalBlockedByAsk.current && canResumeAfterApproval(messages)) {
+      approvalBlockedByAsk.current = false
+      void sendMessage(undefined, threadRequestOptions(threadId))
+      return
+    }
+    if (status === 'ready' && canResumeAfterApproval(messages)) return
     previousStatus.current = status
     if (!wasBusy || status !== 'ready') return
     if (!firstRun) setUsageVersion((version) => version + 1)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 理由见上面这条注释
-    if (!waitingApproval) flushNext()
-  }, [ready, status, flushNext, waitingApproval])
+    flushNext()
+  }, [
+    ready,
+    status,
+    flushNext,
+    waitingInteraction,
+    messages,
+    sendMessage,
+    threadId,
+    askState.pending.length,
+    askState.submitting
+  ])
 
   /**
    * 发送：等审批期间与"流式中"同一口径 —— **不发**，进队列。
@@ -1010,7 +1271,7 @@ function ActiveChat({
    *      标题与两行跟着它一起进场、占位撑开把输入框送到竖直中位。就绪之前是"还没开始"的
    *      常规底部布局（输入区常态档），不是硬切：档位与占位都带主档过渡。
    */
-  const hero = ready && messages.length === 0 && !error && !waitingApproval && !compacting
+  const hero = ready && messages.length === 0 && !error && !waitingInteraction && !compacting
 
   /**
    * round 76：交给输入卡的挂起态（`null` = 就绪）。出错那一档**不带状态行** —— 错误卡就在消息区里
@@ -1106,12 +1367,131 @@ function ActiveChat({
           </p>
         )}
         <div className="shrink-0 px-4 pt-4 pb-6">
-          {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
-          <ApprovalDock
-            requests={dockApprovals}
-            workspaces={workspaces}
-            onDecide={decideApproval}
-          />
+          {/* 停靠区（输入卡正上方那一格）的夹高从这里给。round 82（用户口径）：
+              **有提问时不再用固定的 45vh 夹它** —— 45vh 会在正常窗口里就把提问卡裁成"卡里滚一层"，
+              当前题（含选项 / 其它输入框 + 主操作）因此要滚才点得到。现在有提问时这一格只受
+              **视口高度**约束（`100dvh − 17rem`：给聊天头部、输入卡与页脚内边距留的量），
+              当前题自然撑开；真的放不下（极小窗口 / 超长题）就由这一格自己滚 —— 这是"外层正常滚动"，
+              不是 `overflow-hidden` 裁切，也没有隐藏滚动条糊过去。没有提问时维持原夹高：
+              任务清单 / 计划 / 审批自己的布局一个字不动。 */}
+          <div
+            data-testid="chat-dock-area"
+            className={cn(
+              'min-w-0 overflow-y-auto overscroll-contain',
+              askState.pending.length > 0 ? 'max-h-[calc(100dvh-17rem)]' : 'max-h-[min(45vh,28rem)]'
+            )}
+          >
+            {/* round 81：工具条那一行常驻模式按钮没了 —— 「进入规划模式」「任务清单」都在输入卡的
+                ＋ 菜单里（见 Composer 的 mode props / ComposerControls 的 PlusMenu）。这一格就只剩
+                任务清单本体：有任务给紧凑摘要、点摘要展开；没有任务且收起时整块不渲染。 */}
+            <TaskDockSlot
+              key={threadId}
+              threadId={ready ? threadId : null}
+              materialized={realThread}
+            />
+            {/* 草稿会话进入规划失败（还没物化那一档）：原先是工具条里的一行，现在挂在清单上方同一列宽 */}
+            {planActionError && !realThread ? (
+              <p
+                data-testid="plan-action-error"
+                role="alert"
+                className="mx-auto mb-2 w-full max-w-(--chat-input-max-width) text-c1 text-warning"
+              >
+                {planActionError}
+              </p>
+            ) : null}
+            {ready && realThread && interactionsEnabled ? (
+              <div className="mx-auto mb-2 w-full max-w-(--chat-input-max-width)">
+                {/* 模式状态摘要（round 81）：只在真在规划里时露一行（普通模式不铺常驻件）；
+                    计划内容与批准/修订动作在下面的 PlanApprovalDock 里（默认收起、点开看全文） */}
+                <PlanModeChip state={plan.state} />
+                {plan.error ? (
+                  <ErrorCard error={new Error(plan.error)} onRetry={refreshPlan} />
+                ) : null}
+                {(plan.state?.mode === 'awaiting_approval' && plan.state.approval) ||
+                plan.state?.pendingRevision ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || plan.busy || waitingApproval || askState.pending.length > 0}
+                    onClick={() => {
+                      if (!plan.ref || waitingApproval || askState.pending.length > 0) return
+                      void rendererPlansStore
+                        .getState()
+                        .resume(threadId, plan.ref)
+                        .catch(() => {})
+                    }}
+                  >
+                    继续已确认的计划决定
+                  </Button>
+                ) : null}
+                {planActionError ? (
+                  <ErrorCard
+                    error={new Error(planActionError)}
+                    onRetry={() => {
+                      void cancelPlan().then(
+                        () => setPlanActionError(null),
+                        (failure) => setPlanActionError(toError(failure).message)
+                      )
+                    }}
+                  />
+                ) : null}
+                <PlanApprovalDock
+                  state={plan.state}
+                  planRef={plan.ref}
+                  busy={busy || plan.busy}
+                  error={plan.error ?? planActionError}
+                  feedback={plan.feedback}
+                  onFeedbackChange={(feedback) =>
+                    rendererPlansStore.getState().setFeedback(threadId, feedback)
+                  }
+                  onApprove={async () => decidePlan('approve')}
+                  onRevise={async () => decidePlan('revise')}
+                  onCancel={async () => {
+                    setPlanActionError(null)
+                    try {
+                      await cancelPlan()
+                    } catch (failure) {
+                      setPlanActionError(toError(failure).message)
+                      throw failure
+                    }
+                  }}
+                />
+              </div>
+            ) : null}
+            {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
+            {askState.error ? (
+              <ErrorCard error={new Error(askState.error)} onRetry={refreshQuestions} />
+            ) : null}
+            <AskUserDock
+              requests={askState.pending.map((request) => {
+                const key = askUserCallKey({ threadId, ...request })
+                return {
+                  ...request,
+                  threadId,
+                  draft: askDrafts.get(key) ?? {},
+                  submitting: busy || askState.submitting || askState.refreshing,
+                  stopping: askState.stopping,
+                  error: askState.error,
+                  onDraftChange: (draft) => useAskUserStore.getState().changeDraft(key, draft),
+                  onSubmit: (answer) => {
+                    if (busy) return
+                    void useAskUserStore.getState().submit(threadId, request, answer, async () => {
+                      await sendMessage(undefined, {
+                        body: { askUserResume: askUserResumeBody(threadId, request, answer) }
+                      })
+                      if (chat.error) throw chat.error
+                    })
+                  },
+                  onStop: stopInteraction
+                }
+              })}
+            />
+            <ApprovalDock
+              requests={dockApprovals}
+              workspaces={workspaces}
+              onDecide={decideApproval}
+            />
+          </div>
           {/* round 66：「选择项目」在输入卡**上方**单独一行（用户口径："放到对话框上面，
               不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片下方那行同一口径），
               不描边、不铺底，只 hover 铺一层浅灰（它是卡片外的独立控件，不是卡内嵌件）。
@@ -1136,10 +1516,10 @@ function ActiveChat({
             hero={hero}
             // round 76：实例就绪之前发送一律挡住 + 工具条那一行露一句状态（见 Composer 的 `pending`）
             pending={composerPending}
+            // round 81：模式分组（进入规划模式 / 任务清单）收在输入卡的 ＋ 菜单里
+            mode={modeMenu}
             onSend={submit}
-            onStop={() => {
-              void stop()
-            }}
+            onStop={stopInteraction}
             onCompact={compactManually}
             compactBusy={compacting}
             // round 76：没就绪时「压缩上下文」也点不得（那一条同样要真会话 id）

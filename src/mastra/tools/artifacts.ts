@@ -138,6 +138,10 @@ export interface SaveArtifactOptions {
 /**
  * 落盘 + 回执。与 write 同一套边界：目标是目录就拒、父目录自动建、同文件串行（并发产出互不覆盖）。
  * 二进制（PDF/xlsx/pptx/docx）走 Uint8Array 分支，文本（HTML）走 string 分支。
+ *
+ * 只做"排队 + 落盘"这一件事：真干活的是 `writeArtifactLocked`（**调用方必须已经持有**这个目标的
+ * 串行队列）。要在一个锁里连着做别的事（edit 那种"读 → 比指纹 → 改 → 落盘 → 记源"）时用后者 ——
+ * 锁里再调一次 saveArtifact 会在同一目标上排第二次队，那条队列永远等不到自己（死锁）。
  */
 export async function saveArtifact(
   ctx: ToolContext,
@@ -146,22 +150,37 @@ export async function saveArtifact(
   kind: string,
   options: SaveArtifactOptions = {}
 ): Promise<string> {
-  return await ctx.state.runExclusive(abs, async () => {
-    const existing = await statOrNull(ctx, abs)
-    if (existing?.isDirectory() === true) {
-      throw new Error(`产出物没能落盘：${abs} 是一个目录，不能当文件写`)
-    }
+  return await ctx.state.runExclusive(abs, async () =>
+    writeArtifactLocked(ctx, abs, bytes, kind, options)
+  )
+}
 
-    await ctx.fs.mkdir(dirname(abs))
-    await ctx.fs.writeFile(abs, bytes)
-    if (options.markRead === true) {
-      ctx.state.markRead(options.session ?? DEFAULT_SESSION, abs)
-    }
+/**
+ * **锁内**的落盘步骤：目录拒 → mkdir → write → 回执（与 saveArtifact 的产物逐字节同形）。
+ * 它自己**不排队**（见 saveArtifact 头注）：给"已经持有队列"的调用方（tools/docx-edit.ts 的
+ * 整段编辑事务）用，别在锁里再套一层。
+ */
+export async function writeArtifactLocked(
+  ctx: ToolContext,
+  abs: string,
+  bytes: string | Uint8Array,
+  kind: string,
+  options: SaveArtifactOptions = {}
+): Promise<string> {
+  const existing = await statOrNull(ctx, abs)
+  if (existing?.isDirectory() === true) {
+    throw new Error(`产出物没能落盘：${abs} 是一个目录，不能当文件写`)
+  }
 
-    const action = existing === null ? '已创建' : '已覆盖'
-    const check = options.check === undefined ? '' : `；${options.check}`
-    return `${action} ${abs}（${byteLengthOf(bytes)} 字节，${kind}）${check}`
-  })
+  await ctx.fs.mkdir(dirname(abs))
+  await ctx.fs.writeFile(abs, bytes)
+  if (options.markRead === true) {
+    ctx.state.markRead(options.session ?? DEFAULT_SESSION, abs)
+  }
+
+  const action = existing === null ? '已创建' : '已覆盖'
+  const check = options.check === undefined ? '' : `；${options.check}`
+  return `${action} ${abs}（${byteLengthOf(bytes)} 字节，${kind}）${check}`
 }
 
 function byteLengthOf(bytes: string | Uint8Array): number {

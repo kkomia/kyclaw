@@ -98,11 +98,13 @@ describe.skipIf(!canRun)('随包 LibreOffice 渲染器（真链路探针）', ()
       const slides = await buildDeck(join(bed.root, '探针.pptx'))
 
       resetRendererCache()
-      const detected = detectRenderer()
-      console.log('[probe] detectRenderer() =', detected)
+      // round 77 起 Windows 上本机 COM 是第一优先级：这条探针要证的**是 kit 那条路**，
+      // 所以显式声明"本机没有 Office/WPS"（不给这个注入，装了 WPS 的机器上就会判成 powerpoint）。
+      const detected = detectRenderer({ localOffice: () => false })
+      console.log('[probe] detectRenderer(localOffice=false) =', detected)
       expect(detected).toBe('libreoffice')
 
-      const tool = await createRenderPptTool(bed.ctx)
+      const tool = await createRenderPptTool(bed.ctx, { localOffice: () => false })
       const result = (await callTool(tool, { path: '探针.pptx' })) as {
         renderer: string
         dir: string

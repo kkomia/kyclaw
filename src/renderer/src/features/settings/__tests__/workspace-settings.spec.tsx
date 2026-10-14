@@ -198,6 +198,9 @@ describe('工作区组 · 默认工作区（T18）', () => {
     await mount(defaultSettings())
 
     expect(screen.getByTestId('default-workspace')).toHaveTextContent('默认工作区')
+    expect(screen.getByTestId('default-workspace')).toHaveTextContent(
+      '更改位置不会自动移动已有文件'
+    )
     expect(screen.getByTestId('default-workspace-path')).toHaveTextContent('未指定')
     expect(screen.getByTestId('default-workspace-change')).toHaveTextContent('更改位置')
   })

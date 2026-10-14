@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AtSign,
+  Compass,
+  ListChecks,
   Paperclip,
   Plug,
   Plus,
@@ -40,9 +42,11 @@ import type { ReferenceKind } from './reference-markers'
 
 /**
  * Composer 的控件族（round 7，用户实拍 #10 图4/图5/图7/图8/图10）：
- *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文）——「引用技能」列
+ *   - `PlusMenu`：＋菜单（添加文件 / 引用技能▸ / 引用插件▸ / 引用上下文 / 模式分组）——「引用技能」列
  *     `plugins:overview` 的技能清单（round 64 起内置技能也在这一份里）；子菜单只给名字、不写归属，
  *     归属与分组在插件页的「技能」面板里（免得把内置技能说成「来自插件」）；
+ *     round 81：**「进入规划模式」与「任务清单」也收进这一个 ＋**（原先是工具条上两颗常驻按钮）——
+ *     不另造第二个模式菜单，权限 chip 照旧留在工具条上；
  *   - `PermissionChip`：权限两档（每次询问 / 完全访问）——**只走引擎既有两档**，
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
@@ -80,8 +84,22 @@ export interface PlusMenuProps {
    * 「技能」面板里给，这里不写，内置技能就不会被说成「来自插件」。
    */
   skills: ReadonlyArray<{ dir: string; name: string }>
-  /** 打开菜单时拉一次数据（技能的可用状态可能在别处刚变过；挂载时另有一次，见 Composer） */
+  /**
+   * 打开菜单时拉一次数据（技能的可用状态可能在别处刚变过；挂载时另有一次，见 Composer）
+   */
   onOpenMenu?: () => void
+  /**
+   * 模式分组的条目（round 81：常驻的模式按钮收进这一个 ＋ 菜单，不另造第二个模式菜单）。
+   * 缺省 / null = 这一挂没有模式入口（会话实例未就绪、权限通道缺失等），菜单里连分组都不出现。
+   */
+  mode?: ComposerModeMenu | null
+}
+
+export interface ComposerModeMenu {
+  /** 「进入规划模式」：null = 不给这条（未就绪 / 已在规划模式中）；`disabled` = 正在运行、按不动 */
+  plan: { disabled?: boolean; onSelect: () => void } | null
+  /** 「任务清单」开合：`expanded` 决定文案是「任务清单」还是「收起任务清单」 */
+  tasks: { expanded: boolean; onSelect: () => void } | null
 }
 
 export function PlusMenu({
@@ -90,7 +108,8 @@ export function PlusMenu({
   contextLabel,
   plugins,
   skills,
-  onOpenMenu
+  onOpenMenu,
+  mode = null
 }: PlusMenuProps): React.JSX.Element {
   const items: MenuEntry[] = [
     {
@@ -144,6 +163,31 @@ export function PlusMenu({
       }
     }
   ]
+
+  // round 81：模式分组收尾（独立分组，与附件/引用分开）——只有真有条目时才铺分隔线，
+  // 免得未就绪的那一挂里菜单末尾挂一条孤零零的分隔线。
+  if (mode !== null && (mode.plan !== null || mode.tasks !== null)) {
+    items.push({ id: 'sep-mode', type: 'separator' })
+    if (mode.plan !== null) {
+      items.push({
+        id: 'plan',
+        label: '进入规划模式',
+        icon: <Compass />,
+        testId: 'composer-mode-plan',
+        disabled: mode.plan.disabled,
+        onSelect: () => mode.plan?.onSelect()
+      })
+    }
+    if (mode.tasks !== null) {
+      items.push({
+        id: 'tasks',
+        label: mode.tasks.expanded ? '收起任务清单' : '任务清单',
+        icon: <ListChecks />,
+        testId: 'composer-mode-tasks',
+        onSelect: () => mode.tasks?.onSelect()
+      })
+    }
+  }
 
   return (
     <Menu
@@ -834,7 +878,7 @@ function QuoteCard({
     <div
       data-testid={`composer-attachment-${attachment.name}`}
       data-quote="true"
-      className="flex min-w-0 max-w-96 flex-col gap-0.5 rounded-button-lg border-(length:--hairline-width) border-hairline bg-secondary px-2.5 py-1.5 text-c1"
+      className="flex min-w-0 max-w-96 flex-col gap-0.5 rounded-button-lg border-(length:--hairline-width) border-surface-border bg-secondary px-2.5 py-1.5 text-c1"
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0 rounded-badge bg-(--fill-active) px-1 py-0.5 text-ink-secondary">

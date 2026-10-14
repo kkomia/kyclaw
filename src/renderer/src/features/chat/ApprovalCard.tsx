@@ -9,6 +9,7 @@ import {
   approvalDetailOf,
   approvalRiskOf,
   approvalScopeNote,
+  isDangerousTool,
   resolveApprovalWorkspace,
   type ApprovalRequest
 } from './approval'
@@ -58,10 +59,14 @@ const TOOL_LABELS: Record<string, string> = {
   create_report: '生成报告',
   create_pdf: '导出 PDF',
   create_excel: '生成 Excel',
+  // 增量改已有的一份表格（与 create_excel 同一族，命名照上面的动词口径）
+  edit_excel: '修改 Excel',
   create_ppt: '生成 PPT',
   // round 76：改已有的一份演示文稿（与 create_ppt 同一族，命名照上面的动词口径）
   edit_ppt: '修改 PPT',
-  create_docx: '生成 Word'
+  create_docx: '生成 Word',
+  // 增量改已有的一份 Word 文档（与 create_docx 同一族，命名照上面的动词口径）
+  edit_docx: '修改 Word'
 }
 
 const LINE_CLASS: Record<DiffLine['kind'], string> = {
@@ -90,6 +95,7 @@ export function ApprovalCard({
   // 记忆入口的两个条件（round 76 起对所有工具一视同仁，含 delete/move）：
   // 工作区判得出 + 没踩区外（区外的目标绑不上某个工作区，规则也就无从写下）
   const rememberable = workspace !== null && risk === null
+  const destructive = isDangerousTool(request.toolName)
   const diff = approvalDiff(request.toolName, request.input)
   // 与 ToolCard 一致（round 14）：MCP 工具显示「服务名 · 工具名」，认不出回落原样
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
@@ -105,7 +111,7 @@ export function ApprovalCard({
       data-workspace={workspace ?? ''}
       role="group"
       aria-label={`${title}：等待审批`}
-      className="animate-message-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-hairline bg-secondary px-3 py-2.5"
+      className="animate-message-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-surface-border bg-secondary px-3 py-2.5"
     >
       <div className="flex items-center gap-2">
         <Wrench aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
@@ -137,13 +143,19 @@ export function ApprovalCard({
         </pre>
       )}
 
-      {scope === null ? null : (
+      {scope === null && !(destructive && rememberable) ? null : (
         <p
           data-testid="approval-scope"
           data-kind={risk?.code ?? 'workspace-ask'}
           className="rounded-control bg-(--fill-selected) px-2 py-1 text-c1 text-warning"
         >
           {scope}
+          {destructive && rememberable ? (
+            <>
+              {scope === null ? null : ' '}
+              点击永久允许后，此工具在当前工作区内的后续操作不再逐次询问；仅放行此工具，工作区之外仍按区外权限处理。
+            </>
+          ) : null}
         </p>
       )}
 

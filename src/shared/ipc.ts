@@ -124,6 +124,14 @@ export const IPC_CHANNELS = {
      * 目录直接打开，文件用 showItemInFolder 选中。绝对路径只活在主进程。
      */
     reveal: 'workbench:reveal',
+    /**
+     * 用**系统默认应用**打开会话根下的一个文件（入参 [threadId, relative]；返回 { path }）——
+     * 用户本机通常装了 Word / WPS / Excel 之一，这一条就是把产出交回他熟悉的那个应用。
+     * 三道闸门与 reveal 同源或更严：containment / 存在性走 `revealTarget`、**目录一律拒**、
+     * 扩展名过 `assertOpenable` 那张表（`shell.openPath` 就是 ShellExecute，不能让工作区里
+     * 模型写的 .exe/.bat/.ps1/.lnk 从这里溜出去执行）。绝对路径只活在主进程。
+     */
+    open: 'workbench:open',
     /** git 总览（入参 [threadId]；返回分支 + 未提交变更；不是仓库/空仓库由 empty/isRepo 表达） */
     gitOverview: 'workbench:git-overview',
     /** 提交历史树（入参 [threadId, limit]；`git log --graph` 解析成结构化行） */
@@ -730,6 +738,12 @@ export interface KyclawProjectsApi {
   rename(id: string, name: string): Promise<AppSettings>
   /** round 25：在文件资源管理器里打开项目目录（路径按 id 在主进程解析） */
   openInExplorer(id: string): Promise<{ path: string }>
+  rulesStatus(): Promise<import('./rules-ipc').RulesStatus>
+  readRules(projectId: string): Promise<import('./rules-ipc').ProjectRulesView>
+  saveRules(
+    projectId: string,
+    text: string
+  ): Promise<import('./rules-ipc').ProjectRulesSaveResponse>
 }
 
 /**
@@ -756,6 +770,13 @@ export interface KyclawWorkbenchApi {
   search(threadId: string, query: string, mode: WorkbenchSearchMode): Promise<WorkbenchSearchResult>
   /** 在系统文件资源管理器里打开（目录）或定位（文件）；返回真正给的绝对路径 */
   reveal(threadId: string, relative: string): Promise<{ path: string }>
+  /**
+   * 用系统默认应用打开这个文件（本机装了 Word / WPS / Excel 时就是它们）。
+   * 只放行**文档与媒体**（Office 三件 / PDF / 图片 / 表格 / 纯文本，见主进程那张扩展名表）：
+   * 目录一律拒（打开文件夹请走 reveal），可执行/脚本/快捷方式一律拒，打不开时抛人话错误 ——
+   * 不假装打开。
+   */
+  open(threadId: string, relative: string): Promise<{ path: string }>
   /** 仓库总览：分支 + 未提交变更；不是仓库/空仓库由 isRepo / empty 表达（不抛） */
   gitOverview(threadId: string): Promise<GitOverview>
   /** 提交历史（`--graph` 解析后的结构化行，上限 200） */

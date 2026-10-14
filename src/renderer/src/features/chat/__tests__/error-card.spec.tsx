@@ -29,6 +29,18 @@ vi.mock('@renderer/lib/threads-api', () => ({
   compactThread: vi.fn(async () => ({ compacted: false, compaction: null }))
 }))
 
+/**
+ * 待答问题（ask-user）走 HTTP（`/ask-user/pending`），不是 IPC 面 —— 本文件里给一份
+ * **有效空响应**的桩（`[]`，与真服务端"没有挂起问题"同形）：这些用例只关心错误卡与端点重试，
+ * 不该因为一条打不通的取数在页脚多出一张错误卡来（那不是本用例要验证的错误）。
+ * 与 ask-user-flow.spec 同一手法：保留模块其余导出（cancel / resume body 的形状不动）。
+ */
+const askUserApi = vi.hoisted(() => ({ pending: vi.fn(async () => []) }))
+vi.mock('@renderer/lib/ask-user-api', async (original) => ({
+  ...(await original<typeof import('@renderer/lib/ask-user-api')>()),
+  fetchPendingAskUser: askUserApi.pending
+}))
+
 afterEach(() => {
   clearKyclawBridge()
 })
@@ -192,10 +204,17 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
 describe('端点取不到（服务没起来）', () => {
   it('对话页给错误卡；重试重新取端点，拿到后进会话界面', async () => {
     installKyclawBridge()
-    const endpoint = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('agent 服务未启动'))
-      .mockResolvedValue({ baseUrl: 'http://127.0.0.1:9', token: 'tok' })
+    /**
+     * 端点这一档**一直失败**，不是"只失败一次"：页面进不进错误态只取决于"端点取不到"这一个事实。
+     * 同一时刻还有别的人在问同一个端点（项目映射、待答问题……），"第一次调用归谁"是谁先调度的事 ——
+     * 拿 `mockRejectedValueOnce` 写这条用例，判据就挂在跨功能调用次序上了（改一处预取顺序就红）。
+     * 重试前把这一档整体翻成"通"（不是"下一次通"），两段都不依赖调用次序。
+     */
+    let endpointDown = true
+    const endpoint = vi.fn(async (): Promise<{ baseUrl: string; token: string }> => {
+      if (endpointDown) throw new Error('agent 服务未启动')
+      return { baseUrl: 'http://127.0.0.1:9', token: 'tok' }
+    })
     window.kyclaw.agent.endpoint = endpoint
     // 端点背后的"服务"：列表与历史都给空（这个用例只验证端点重试这条路）
     vi.stubGlobal(
@@ -218,15 +237,22 @@ describe('端点取不到（服务没起来）', () => {
 
     expect(await screen.findByTestId('error-card')).toHaveTextContent('agent 服务未启动')
 
+    // 重试：这一档整体翻成"通"
+    const before = endpoint.mock.calls.length
+    endpointDown = false
     await act(async () => {
       fireEvent.click(screen.getByTestId('error-retry'))
     })
 
+    // 重试 = 重新取了一次端点（只看"有没有再取"，不把次数钉成某个绝对数：
+    // 还有别的功能也在问这个端点，绝对数同样是跨功能次序的断言）
     await waitFor(() => {
-      expect(endpoint).toHaveBeenCalledTimes(2)
+      expect(endpoint.mock.calls.length).toBeGreaterThan(before)
     })
-    expect(await screen.findByTestId('composer-input')).toBeInTheDocument()
-    expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('composer-input')).toBeInTheDocument()
     vi.unstubAllGlobals()
   })
 })

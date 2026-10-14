@@ -76,7 +76,11 @@ function DataRow({
       >
         {row.text}
       </span>
-      {row.pending ? <span className="shrink-0 text-c2 text-ink-tertiary">进行中</span> : null}
+      {row.pending ? (
+        <span className="shrink-0 text-c2 text-ink-tertiary">
+          {row.interactionStatus === 'waiting' ? '等待回答' : '进行中'}
+        </span>
+      ) : null}
       <span className="shrink-0 font-mono text-c2 tabular-nums text-ink-tertiary">
         {duration ?? ''}
       </span>

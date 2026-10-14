@@ -52,6 +52,14 @@ function spanTooltip(
   return lines.join('\n')
 }
 
+/**
+ * 泳道行高：标签列与三条泳道共用同一把尺 —— 取 C2 的行高（--ui-C2-line-height），
+ * 不是 h-2 的 8px。C2 档 10px 字号配 14px 行高，塞进 8px 的高度会上下各漫出 3px，
+ * 两列间隙只有 4px，漫出来的部分盖住邻行就叠成一团。两列同高 + 同 gap 即逐行对齐，
+ * 字号档换档时两者一起变，组件里仍然没有 px 魔法数。
+ */
+const LANE_ROW_HEIGHT = 'h-(--ui-C2-line-height)'
+
 export function TrajectoryTimeline({
   model,
   rowOf,
@@ -74,7 +82,10 @@ export function TrajectoryTimeline({
         {/* 泳道标签：与右侧三条泳道同行高、同间隙（靠同一个 flex 列 + gap 对齐） */}
         <div aria-hidden="true" className="flex shrink-0 flex-col gap-1">
           {LANE_LABELS.map((label) => (
-            <span key={label} className="flex h-2 items-center text-c2 text-ink-tertiary">
+            <span
+              key={label}
+              className={cn('flex items-center text-c2 text-ink-tertiary', LANE_ROW_HEIGHT)}
+            >
               {label}
             </span>
           ))}
@@ -97,7 +108,7 @@ export function TrajectoryTimeline({
 
           <div className="flex flex-col gap-1">
             {lanes.map((lane) => (
-              <div key={lane} className="relative h-2 rounded-pill bg-hover">
+              <div key={lane} className={cn('relative rounded-pill bg-hover', LANE_ROW_HEIGHT)}>
                 {model.spans
                   .filter((span) => span.lane === lane)
                   .map((span) => {

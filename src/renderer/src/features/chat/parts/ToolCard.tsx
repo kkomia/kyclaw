@@ -18,6 +18,7 @@ import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { formatToolName } from '@shared/mcp'
 import { TraceFold } from './TraceFold'
+import { askUserResultLabel } from '../ask-user'
 import {
   STATE_LABELS,
   STATE_TONES,
@@ -43,8 +44,7 @@ import type { ToolCardPart } from './tool-part'
  * 结果预览：**恒定 600 字截断、不给出口**（文档 §1.6，没有「加载全部」按钮）；
  * 入参不截断（服务端已裁 2000 字），px 限高 + 纵向滚动。
  *
- * 审批交互不在这里：`approval-requested` 且接了决策回调的 part 由 TraceBlock 交给审批卡接管，
- * 本卡只负责"已回应/执行完成"之后的静态收束（含被拒绝）。
+ * 审批与 AskUser 交互在输入框上方停靠；本卡只展示调用状态与结果（含等待回答、已回答和已取消）。
  */
 export type { ToolCardPart }
 
@@ -137,9 +137,12 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
   const detail = toolDetailOf(part.input) ?? extraDetailOf(part.toolName, part.input)
   const live = running && toolStateRunning(part.state)
   const stateLabel =
-    part.state === 'input-available' && !running
-      ? '已调用'
-      : (STATE_LABELS[part.state] ?? part.state)
+    part.toolName === 'ask_user'
+      ? (askUserResultLabel(part.output) ??
+        (part.state === 'input-available' ? '等待回答' : (STATE_LABELS[part.state] ?? part.state)))
+      : part.state === 'input-available' && !running
+        ? '已调用'
+        : (STATE_LABELS[part.state] ?? part.state)
 
   const row = (
     <>

@@ -666,6 +666,41 @@ describe('FilesTool：自绘右键菜单', () => {
     await waitFor(() => expect(bed.bridge.workbench.reveal).toHaveBeenCalledWith('thread-1', 'src'))
   })
 
+  /* round 77：把文件交给本机默认应用 */
+  it('「用本地应用打开」走 workbench:open；目录没有这一项（打开文件夹是 reveal 的事）', async () => {
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('README.md'))
+    fireEvent.click(screen.getByText('用本地应用打开'))
+
+    await waitFor(() =>
+      expect(bed.bridge.workbench.open).toHaveBeenCalledWith('thread-1', 'README.md')
+    )
+    // 与 reveal 是两条通道：打开文件不该顺手去定位
+    expect(bed.bridge.workbench.reveal).not.toHaveBeenCalled()
+
+    fireEvent.contextMenu(screen.getByText('src'))
+    expect(screen.queryByText('用本地应用打开')).not.toBeInTheDocument()
+  })
+
+  it('打开失败：把主进程的人话露在预览层里（与读不了同一档，不假装打开）', async () => {
+    bed.bridge.workbench.open.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'workbench:open': Error: 打不开这个文件（系统没能用默认应用打开它）：没有与此文件关联的应用"
+      )
+    )
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('README.md'))
+    fireEvent.click(screen.getByText('用本地应用打开'))
+
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
+      '打不开这个文件（系统没能用默认应用打开它）'
+    )
+  })
+
   it('Esc 关掉菜单；滚轮与外面点击也关；程序化的 scroll（不是用户手势）不关', async () => {
     render(<FilesTool root={rootOf()} />)
     await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
@@ -710,6 +745,8 @@ describe('round 42 · 右键「添加到上下文」', () => {
       '添加到上下文',
       // round 50：文件的菜单里多一项「在新标签页中查看」（目录没有，见下）
       '在新标签页中查看',
+      // round 77：用本机装的 Word / WPS / Excel 打开（目录没有这一项）
+      '用本地应用打开',
       '在文件资源管理器中定位',
       '复制路径'
     ])
@@ -717,6 +754,7 @@ describe('round 42 · 右键「添加到上下文」', () => {
     const dirMenu = menuOf('src')
     expect(within(dirMenu).queryByText('添加到上下文')).not.toBeInTheDocument()
     expect(within(dirMenu).queryByText('在新标签页中查看')).not.toBeInTheDocument()
+    expect(within(dirMenu).queryByText('用本地应用打开')).not.toBeInTheDocument()
     expect(within(dirMenu).getAllByRole('menuitem')).toHaveLength(2)
   })
 

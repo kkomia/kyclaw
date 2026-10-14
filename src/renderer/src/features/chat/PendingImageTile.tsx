@@ -45,7 +45,7 @@ export function PendingImageTile({
       <div
         data-testid={`composer-attachment-${attachment.name}`}
         data-image-tile="true"
-        className="group relative size-16 shrink-0 overflow-hidden rounded-control border-(length:--hairline-width) border-hairline"
+        className="group relative size-16 shrink-0 overflow-hidden rounded-control border-(length:--hairline-width) border-surface-border"
       >
         {/* 整块磁贴 = 预览钮（"点空白处"落在它身上；操作钮是它的兄弟层，不会误触到预览） */}
         <button

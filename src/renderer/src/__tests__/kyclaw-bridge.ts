@@ -65,6 +65,14 @@ export interface WorkspaceApiStub {
 }
 
 export interface ProjectsApiStub {
+  rulesStatus: Mock<() => Promise<import('@shared/rules-ipc').RulesStatus>>
+  readRules: Mock<(projectId: string) => Promise<import('@shared/rules-ipc').ProjectRulesView>>
+  saveRules: Mock<
+    (
+      projectId: string,
+      text: string
+    ) => Promise<import('@shared/rules-ipc').ProjectRulesSaveResponse>
+  >
   base: Mock<() => Promise<{ base: string }>>
   pickFolder: Mock<() => Promise<{ path: string | null }>>
   create: Mock<(name: string, path: string) => Promise<AppSettings>>
@@ -252,6 +260,26 @@ function projectsApi(state: BridgeState): ProjectsApiStub {
       }
       return state.current
     }),
+    rulesStatus: vi.fn(async () => ({ processorRegistered: false })),
+    readRules: vi.fn(async (projectId: string) => ({
+      projectId,
+      source: '.kyclaw/rules.md',
+      text: '',
+      diagnostics: [],
+      processorRegistered: false,
+      projectIncluded: true
+    })),
+    saveRules: vi.fn(async (projectId: string, text: string) => ({
+      ok: true as const,
+      view: {
+        projectId,
+        source: '.kyclaw/rules.md',
+        text,
+        diagnostics: [],
+        processorRegistered: false,
+        projectIncluded: true
+      }
+    })),
     // round 25：在文件资源管理器里打开（默认回一个固定路径；用例自己 mockRejectedValue 造失败）
     openInExplorer: vi.fn(async () => ({ path: PICKED_WORKSPACE }))
   }
@@ -352,6 +380,8 @@ export interface WorkbenchApiStub {
     (threadId: string, query: string, mode: WorkbenchSearchMode) => Promise<WorkbenchSearchResult>
   >
   reveal: Mock<(threadId: string, relative: string) => Promise<{ path: string }>>
+  /** 用系统默认应用打开文件（默认回固定路径；用例自己 mockRejectedValue 造失败） */
+  open: Mock<(threadId: string, relative: string) => Promise<{ path: string }>>
   gitOverview: Mock<(threadId: string) => Promise<GitOverview>>
   gitLog: Mock<(threadId: string, limit: number) => Promise<{ commits: GitCommit[] }>>
   gitShow: Mock<(threadId: string, sha: string) => Promise<GitCommitDetail>>
@@ -364,6 +394,7 @@ export function workbenchApiStub(): WorkbenchApiStub {
     readBytes: vi.fn(async () => ({ kind: 'unsupported' as const, size: 0 })),
     search: vi.fn(async () => ({ results: [], truncated: false, scanned: 0 })),
     reveal: vi.fn(async () => ({ path: '' })),
+    open: vi.fn(async () => ({ path: '' })),
     gitOverview: vi.fn(async () => ({ isRepo: false, empty: false, branch: null, changes: [] })),
     gitLog: vi.fn(async () => ({ commits: [] })),
     gitShow: vi.fn(async (_threadId: string, sha: string) => ({

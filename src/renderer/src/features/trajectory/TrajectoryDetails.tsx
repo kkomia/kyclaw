@@ -22,6 +22,9 @@ import { formatClock, formatDuration, formatTokens, KIND_LABEL, type TrajectoryR
 
 /** 状态词：失败 / 进行中 / 已完成 */
 function statusOf(row: TrajectoryRow): string {
+  if (row.interactionStatus === 'waiting') return '等待回答'
+  if (row.interactionStatus === 'answered') return '已回答'
+  if (row.interactionStatus === 'cancelled') return '已取消'
   if (row.isError) return '失败'
   if (row.pending) return '进行中'
   return '已完成'

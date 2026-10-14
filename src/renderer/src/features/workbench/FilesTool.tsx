@@ -27,6 +27,10 @@
  * round 56：**文件行**与**搜索结果行**的图标按文件类型给（彩色 iconfont 图标，唯一出处
  * `preview/file-icon.ts`，与预览标签 / 预览头部 / 交付卡同一张表）；目录行仍是展开箭头 +
  * lucide 文件夹。
+ *
+ * round 77：文件的右键菜单多一项「用本地应用打开」（`workbench:open`）—— 个人 PC 上通常装了
+ * Word / WPS / Excel 之一，把产出交回用户熟悉的那件应用；目录不给这一项（打开文件夹是 reveal 的事），
+ * 失败的话露在预览层的错误态里（与 reveal 同一个收口）。
  */
 import {
   ChevronRight,
@@ -37,6 +41,7 @@ import {
   FolderSearch,
   MessageSquarePlus,
   Search,
+  SquareArrowOutUpRight,
   X
 } from 'lucide-react'
 import { Fragment, createElement, useCallback, useEffect, useRef, useState } from 'react'
@@ -250,6 +255,29 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     [threadId, workbench]
   )
 
+  /**
+   * 用本机的默认应用打开（用户个人 PC 上通常就是 Word / WPS / Excel 这件）。
+   * 失败与"读不了这个文件"共用一个收口：把话露在预览层里（不静默、不假装打开）。
+   */
+  const openWithApp = useCallback(
+    (relative: string): void => {
+      if (workbench === null || threadId === null) return
+      void workbench.open(threadId, relative).then(
+        () => undefined,
+        (error: unknown) => {
+          setPreview({
+            threadId,
+            relative,
+            mode: previewModeOf(relative),
+            status: 'error',
+            error: unwrapIpcError(error)
+          })
+        }
+      )
+    },
+    [threadId, workbench]
+  )
+
   const copyPath = useCallback(
     (relative: string): void => {
       if (rootPath === null) return
@@ -383,6 +411,13 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
                           label: '在新标签页中查看',
                           icon: <FileText />,
                           onSelect: () => openInTab(relative)
+                        },
+                        // 用本机装了的那件应用打开（目录不进——"打开文件夹"是下面 reveal 的事）
+                        {
+                          id: 'open',
+                          label: '用本地应用打开',
+                          icon: <SquareArrowOutUpRight />,
+                          onSelect: () => openWithApp(relative)
                         }
                       ]),
                   {

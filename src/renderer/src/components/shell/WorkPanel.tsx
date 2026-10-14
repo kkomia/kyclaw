@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -9,6 +10,16 @@ import {
 } from 'react'
 import { clampWorkPanelWidth, WORK_PANEL_DEFAULT_WIDTH } from '@renderer/lib/shell-store'
 import { cn } from '../ui/cn'
+
+/** 尽力释放指针捕获；元素已卸载 / 指针已失效时 hasPointerCapture 会说不（捕获随卸载由浏览器隐式释放） */
+function releasePointerCapture(element: HTMLElement | null, pointerId: number): void {
+  if (pointerId === -1 || element === null) return
+  try {
+    if (element.hasPointerCapture?.(pointerId) === true) element.releasePointerCapture(pointerId)
+  } catch {
+    // 指针已经不在 / 节点已卸载：捕获由浏览器隐式释放，这里只是尽力收尾
+  }
+}
 
 /**
  * 右栏：工作台面板（spec §6.5 刻意偏离：Kimi 没有，kyclaw 加 ~400px；R2 D4 起并入对话区）。
@@ -29,12 +40,25 @@ import { cn } from '../ui/cn'
  *     非全屏 docked 模式不动：它在右缘，跟左缘那条变量无关。
  * 宽度走内联的 `--work-panel-width` 覆盖：token 仍是唯一出口，内层/外层因此永远同值。
  *
+ * round 77：`fullscreen` 这一层只管"摆法"，来源有两处 —— 用户偏好（⤢）与**空间不足**的临时形态
+ * （AppShell 量出来之后把结论当 fullscreen 传进来）。后者由 `spaceConstrained` 标出来，落成
+ * `data-fullscreen-source="auto"`（用户偏好 = "user"，没全屏 = "none"；两者都成立时标 auto ——
+ * 铺满的直接原因是空间）：探针/E2E 一眼能分清"是用户开的全屏"还是"窄窗被逼铺满"，
+ * 也提醒调用方全屏偏好本身没被改过。
+ *
+ * round 79（实机边界）：越界转 auto / 切全屏 / 收面板都会**把把手从 DOM 里拿掉**。拖动中途被拿掉时，
+ * pointerup 落不到已卸载的节点上 → 残留的 dragging 会让 `transition-none` 与强调蓝线永远挂着。
+ * 所以：拖动期间的 move/up/cancel/lostpointercapture 挂在 **window** 上（手柄卸了也收得到），
+ * 且"不再 resizable"与卸载时都显式收尾（清拖动标记 + 释放捕获）；正常拖宽行为不变。
+ *
  * 内容层是 flex 列、**自己不滚动**（工作台四工具各自管自己的滚动区）：
  * 终端与内嵌浏览器都要一块能真正撑满的容器，外层给它 overflow-y-auto 会把高度算崩。
  */
 export interface WorkPanelProps {
   open: boolean
   fullscreen?: boolean
+  /** fullscreen 是空间不足导致的（不是用户偏好）—— 只影响标出来的 data 属性 */
+  spaceConstrained?: boolean
   /** 面板宽度（px）；不传就用 token 的默认档 */
   width?: number
   /** 拖动 / 双击复位的落点（已经在容器 70% 上限内夹过） */
@@ -45,11 +69,13 @@ export interface WorkPanelProps {
 export function WorkPanel({
   open,
   fullscreen = false,
+  spaceConstrained = false,
   width,
   onWidthChange,
   children
 }: WorkPanelProps): React.JSX.Element {
   const asideRef = useRef<HTMLElement | null>(null)
+  const resizerRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef({ pointerId: -1, startX: 0, startWidth: WORK_PANEL_DEFAULT_WIDTH })
   const [dragging, setDragging] = useState(false)
 
@@ -65,6 +91,60 @@ export function WorkPanel({
     },
     [containerWidth, onWidthChange]
   )
+
+  const resizable = open && !fullscreen && onWidthChange !== undefined
+
+  /** 拖动收尾（幂等）：清标记 + 释放捕获。传了 pointerId 就只认那一个指针，多指同按下不误伤 */
+  const endDrag = useCallback((pointerId?: number): void => {
+    const drag = dragRef.current
+    if (drag.pointerId === -1) return
+    if (pointerId !== undefined && pointerId !== drag.pointerId) return
+    releasePointerCapture(resizerRef.current, drag.pointerId)
+    dragRef.current.pointerId = -1
+    setDragging(false)
+  }, [])
+
+  // 落点走 ref：拖动期间父组件若给了新的 onWidthChange 标识（内联箭头那种），监听器也不重挂
+  // —— 重挂会把 cleanup 跑一遍，反而把正在进行的拖动掐掉
+  const commitRef = useRef(commitWidth)
+  useEffect(() => {
+    commitRef.current = commitWidth
+  }, [commitWidth])
+
+  /**
+   * 拖动期间把 move/up 挂在 **window** 上，不是手柄自己身上：手柄会在拖动中途被卸载
+   * （越界转 auto / 切全屏 / 收面板），那时落不到它的 pointerup 就永远不来 → dragging 残留。
+   * 卸载时顺手释放捕获，别把捕获留在已卸载的节点上。
+   */
+  useLayoutEffect(() => {
+    if (!dragging) return
+    // 捕获进局部：cleanup 跑的时候 resizerRef 可能已经指向 null（节点被摘了）
+    const resizer = resizerRef.current
+    const onMove = (event: globalThis.PointerEvent): void => {
+      const drag = dragRef.current
+      if (drag.pointerId === -1 || event.pointerId !== drag.pointerId) return
+      // 往左拖 = 变宽
+      commitRef.current(drag.startWidth + (drag.startX - event.clientX))
+    }
+    const onEnd = (event: globalThis.PointerEvent): void => endDrag(event.pointerId)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onEnd)
+    window.addEventListener('pointercancel', onEnd)
+    window.addEventListener('lostpointercapture', onEnd)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onEnd)
+      window.removeEventListener('pointercancel', onEnd)
+      window.removeEventListener('lostpointercapture', onEnd)
+      releasePointerCapture(resizer, dragRef.current.pointerId)
+      dragRef.current.pointerId = -1
+    }
+  }, [dragging, endDrag])
+
+  // 手柄没了（不再可拖）就把拖动收干净：不靠"指针迟早会松开"这种运气
+  useLayoutEffect(() => {
+    if (!resizable) endDrag()
+  }, [resizable, endDrag])
 
   // 窗口变窄后把过宽的宽度收回 70% 以内（拖动上限只在拖的那一刻算过一次；不回收的话
   // 拉宽过再缩窗会把内容列挤没）。拖动中不动它 —— 那会跟手打架。
@@ -101,27 +181,12 @@ export function WorkPanel({
     setDragging(true)
   }
 
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    const drag = dragRef.current
-    if (!dragging || event.pointerId !== drag.pointerId) return
-    // 往左拖 = 变宽
-    commitWidth(drag.startWidth + (drag.startX - event.clientX))
-  }
-
-  const endDrag = (event: PointerEvent<HTMLDivElement>): void => {
-    if (!dragging) return
-    event.currentTarget.releasePointerCapture?.(event.pointerId)
-    dragRef.current.pointerId = -1
-    setDragging(false)
-  }
-
-  const resizable = open && !fullscreen && onWidthChange !== undefined
-
   return (
     <aside
       ref={asideRef}
       data-testid="work-panel"
       data-fullscreen={fullscreen ? 'true' : 'false'}
+      data-fullscreen-source={fullscreen ? (spaceConstrained ? 'auto' : 'user') : 'none'}
       style={
         width === undefined ? undefined : ({ '--work-panel-width': `${width}px` } as CSSProperties)
       }
@@ -134,14 +199,12 @@ export function WorkPanel({
     >
       {resizable ? (
         <div
+          ref={resizerRef}
           data-testid="work-panel-resizer"
           role="separator"
           aria-orientation="vertical"
           aria-label="调整工作台宽度"
           onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
           onDoubleClick={() => commitWidth(WORK_PANEL_DEFAULT_WIDTH)}
           className="group absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize"
         >

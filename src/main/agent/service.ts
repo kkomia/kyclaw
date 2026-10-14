@@ -18,6 +18,7 @@ import { createMemoryRouter } from '../../mastra/routes/memory'
 import { createProjectsRouter } from '../../mastra/routes/projects'
 import { createSessionPptTemplatesRouter } from '../../mastra/routes/session-ppt-templates'
 import { createThreadsRouter } from '../../mastra/routes/threads'
+import { createTasksRouter } from '../../mastra/routes/tasks'
 import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, selectProviderConfig, type KyclawModel } from '../../mastra/model'
@@ -27,6 +28,8 @@ import { probedKeyOf, visionOf } from '../../shared/models'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
 import type { LangfuseExportConfig } from '../../mastra/telemetry'
 import { readSettings, settingsPath, updateSettings } from '../settings'
+import { readProjectRules } from '../project-rules'
+import type { RulesProcessorDependencies } from '../../mastra/rules'
 import { McpLifecycle } from '../mcp/lifecycle'
 import { pluginsDirs } from '../plugins/store'
 import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
@@ -105,6 +108,7 @@ export interface AgentServerOptions {
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */
   projects?: () => readonly Project[]
+  rules?: Pick<RulesProcessorDependencies, 'readGlobalRules' | 'readProjectRules' | 'onDiagnostics'>
   /**
    * "永久允许"规则（T13）：同样是**现读**的取值函数（审批卡里点"永久允许"落进 settings.json，
    * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
@@ -176,6 +180,7 @@ export interface AgentServerHandle extends AgentEndpoint {
   port: number
   /** T17：本次装配的追踪状态（设置页「追踪」栏用它说"已开启 / 重启后开启"） */
   telemetry: { langfuse: boolean }
+  rules: { processorRegistered: boolean }
   /**
    * round 28：本次装配的语义召回状态（设置页/记忆页用它说"已开启 / 重启后开启 / 准备中"）。
    * 现读（本地模型的后台准备会改它）；`settled()` 等后台活干完（测试与收尾用，不抛）。
@@ -443,15 +448,23 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     sessionProjects,
     sessionPptTemplates,
     sessionPptSources,
+    sessionDocxSources,
     compaction,
     telemetry,
-    recall
+    recall,
+    rules,
+    tasks,
+    plans
   } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
     workspaces: workspacesFor,
     defaultWorkspace: defaultWorkspaceFor,
     projects: projectsFor,
+    rules: options.rules ?? {
+      readGlobalRules: () => ({ text: settingsFor().globalRules, diagnostics: [] }),
+      readProjectRules
+    },
     permissionRules: permissionRulesFor,
     mcpServers: mcpServersFor,
     mcpTools: (gate) => mcpLifecycle.tools(gate),
@@ -512,11 +525,15 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const mastraServer = new MastraServer({ app, mastra })
   await mastraServer.init()
 
+  app.route('/api/tasks', createTasksRouter({ memory, store: tasks }))
+
   // 线程 API 挂同一份服务、走同一道 token 闸门（在闸门之后注册，所以它同样被挡在里面）
   app.route(
     THREADS_ROUTE_PREFIX,
     createThreadsRouter({
       memory,
+      tasks,
+      plans,
       resolveModel: resolveModelFor,
       // 删线程前先掐掉在跑的那一轮（agent 的线程级取消），否则"取消 → 半截回复落库"
       // 会把刚删掉的线程写回来（T9 实测到的复活）
@@ -537,6 +554,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
         // round 76：PPT 源结构同理（create_ppt 记的那些行跟会话一起走）
         void sessionPptSources.clear(threadId).catch((error: unknown) => {
           console.warn('[kyclaw] 删除会话后清理 PPT 源结构失败（不影响删除本身）', error)
+        })
+        // Word 源结构同理（create_docx 记的那些行跟会话一起走）
+        void sessionDocxSources.clear(threadId).catch((error: unknown) => {
+          console.warn('[kyclaw] 删除会话后清理 Word 源结构失败（不影响删除本身）', error)
         })
         // round 19：压缩记录同理（它的 thread_id 指向已不存在的会话）
         void compaction.clear(threadId).catch((error: unknown) => {
@@ -619,6 +640,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     port,
     telemetry,
     recall,
+    rules,
     projectIdOf: (threadId) => sessionProjects.get(threadId),
     stop: async () => {
       if (stopped) return

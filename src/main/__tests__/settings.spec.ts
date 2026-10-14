@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +7,13 @@ import {
   DEFAULT_SETTINGS,
   LANGFUSE_PRESET
 } from '../../shared/settings'
-import { readSettings, settingsPath, updateSettings, writeSettings } from '../settings'
+import {
+  initializeDefaultWorkspace,
+  readSettings,
+  settingsPath,
+  updateSettings,
+  writeSettings
+} from '../settings'
 
 let dir: string
 
@@ -25,10 +31,12 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const settings = {
       theme: 'dark' as const,
       fontTier: 'large' as const,
+      globalRules: '',
       providers: [],
       workspaces: [],
       outsideWorkspaceMode: 'full' as const,
       defaultWorkspace: null,
+      defaultWorkspaceInitialized: false,
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -125,11 +133,13 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(readSettings(file)).toEqual({
       theme: 'dark',
       fontTier: 'large',
+      globalRules: '',
       providers: [],
       workspaces: [],
       // round 75：旧文件没有「工作区之外」那一档 → 补保守档 ask（缺了会整份设置当坏文件）
       outsideWorkspaceMode: 'ask',
       defaultWorkspace: null,
+      defaultWorkspaceInitialized: false,
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -372,6 +382,112 @@ describe('设置存储（userData 下的 settings.json）', () => {
     writeFileSync(blocked, 'x', 'utf8')
 
     expect(() => writeSettings(settingsPath(blocked), DEFAULT_SETTINGS)).toThrow()
+  })
+})
+
+describe('首次默认工作区初始化', () => {
+  it('没有 settings.json：创建推荐目录，加入 ask 工作区并设为默认', () => {
+    const home = join(dir, 'home')
+
+    initializeDefaultWorkspace(join(dir, 'user-data'), home)
+
+    const settings = readSettings(settingsPath(join(dir, 'user-data')))
+    const expected = realpathSync.native(join(home, 'kyclaw', '工作区'))
+    expect(settings.defaultWorkspace).toBe(expected)
+    expect(settings.workspaces).toEqual([{ path: expected, mode: 'ask' }])
+    expect(settings.defaultWorkspaceInitialized).toBe(true)
+  })
+
+  it('已有默认工作区只补完成标记；已完成初始化的明确 null 不恢复', () => {
+    const file = settingsPath(dir)
+    const chosen = join(dir, 'chosen')
+    writeSettings(file, { ...DEFAULT_SETTINGS, defaultWorkspace: chosen })
+    initializeDefaultWorkspace(dir, join(dir, 'home'))
+    expect(readSettings(file).defaultWorkspace).toBe(chosen)
+    expect(readSettings(file).defaultWorkspaceInitialized).toBe(true)
+
+    updateSettings(file, { workspaces: [], defaultWorkspace: null })
+    initializeDefaultWorkspace(dir, join(dir, 'other-home'))
+    expect(readSettings(file).defaultWorkspace).toBeNull()
+    expect(readSettings(file).workspaces).toEqual([])
+    expect(readSettings(file).defaultWorkspaceInitialized).toBe(true)
+  })
+
+  it('真实旧空 profile：没有完成标记且 workspaces 为空/defaultWorkspace 为 null 时初始化', () => {
+    const file = settingsPath(dir)
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'dark',
+        fontTier: 'large',
+        providers: [],
+        workspaces: [],
+        defaultWorkspace: null
+      }),
+      'utf8'
+    )
+
+    initializeDefaultWorkspace(dir, join(dir, 'home'))
+    const settings = readSettings(file)
+    expect(settings.defaultWorkspaceInitialized).toBe(true)
+    expect(settings.defaultWorkspace).toBe(
+      realpathSync.native(join(dir, 'home', 'kyclaw', '工作区'))
+    )
+    expect(settings.workspaces).toEqual([{ path: settings.defaultWorkspace, mode: 'ask' }])
+    expect(settings.theme).toBe('dark')
+    expect(settings.fontTier).toBe('large')
+
+    updateSettings(file, { workspaces: [], defaultWorkspace: null })
+    initializeDefaultWorkspace(dir, join(dir, 'other-home'))
+    expect(readSettings(file).defaultWorkspace).toBeNull()
+    expect(readSettings(file).workspaces).toEqual([])
+    expect(readSettings(file).defaultWorkspaceInitialized).toBe(true)
+  })
+
+  it('旧配置已有 workspace 但 defaultWorkspace 为 null：保留选择，只补完成标记', () => {
+    const file = settingsPath(dir)
+    const workspace = { path: join(dir, 'chosen'), mode: 'full' as const }
+    writeFileSync(
+      file,
+      JSON.stringify({
+        theme: 'dark',
+        fontTier: 'large',
+        providers: [],
+        workspaces: [workspace],
+        defaultWorkspace: null
+      }),
+      'utf8'
+    )
+
+    initializeDefaultWorkspace(dir, join(dir, 'home'))
+    expect(readSettings(file).defaultWorkspace).toBeNull()
+    expect(readSettings(file).workspaces).toEqual([workspace])
+    expect(readSettings(file).defaultWorkspaceInitialized).toBe(true)
+  })
+
+  it('旧合法设置缺少 defaultWorkspace 只补一次', () => {
+    const file = settingsPath(dir)
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      'utf8'
+    )
+
+    initializeDefaultWorkspace(dir, join(dir, 'first-home'))
+    const first = readSettings(file)
+    initializeDefaultWorkspace(dir, join(dir, 'second-home'))
+
+    expect(readSettings(file).defaultWorkspace).toBe(first.defaultWorkspace)
+    expect(first.workspaces[0]?.mode).toBe('ask')
+  })
+
+  it('坏 JSON 或非法配置不覆盖原文件', () => {
+    const file = settingsPath(dir)
+    for (const contents of ['{不是 json', JSON.stringify({ ...DEFAULT_SETTINGS, theme: 'bad' })]) {
+      writeFileSync(file, contents, 'utf8')
+      initializeDefaultWorkspace(dir, join(dir, 'home'))
+      expect(readFileSync(file, 'utf8')).toBe(contents)
+    }
   })
 })
 

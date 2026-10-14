@@ -6,8 +6,8 @@
  *
  * 顶部一条（round 52 重做，对齐"别再是一行光文件名"那条用户要求）：**文件类型图标块 + 文件名 +
  * 相对路径**——图标按后缀走 `preview/file-icon.ts`（与预览标签的 tab 图标同一张表，唯一出处）；
- * 文件名点一下复制**绝对路径**；右侧「在文件资源管理器中定位」（既有 `workbench:reveal` 通道）与
- * 「重新读取」（内容变了不用关标签重开）。
+ * 文件名点一下复制**绝对路径**；右侧「用本地应用打开」（`workbench:open`，round 77）、
+ * 「在文件资源管理器中定位」（既有 `workbench:reveal` 通道）与「重新读取」（内容变了不用关标签重开）。
  *
  * round 55：**根目录文件不画那行相对路径**。此时 relative === 文件名（`baseNameOf` 就是它自己），
  * 两行逐字同名，加上标签页标题就是三处重复（用户实拍）。深层文件照旧显示整条相对路径（那才有
@@ -26,7 +26,7 @@
  * （`preview/SelectionContextMenu`）：整块预览区（头部 + 正文）的原生右键都拦下，
  * 「添加到上下文（摘选）」发布的路径就是本标签的 `relative`。
  */
-import { FileText, FolderSearch, RotateCw } from 'lucide-react'
+import { FileText, FolderSearch, RotateCw, SquareArrowOutUpRight } from 'lucide-react'
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
@@ -95,6 +95,19 @@ export function PreviewTool({
     )
   }, [threadId, relative, workbench])
 
+  /**
+   * 用本机的默认应用打开这份文件（`workbench:open`）—— 用户个人 PC 上通常装了 Word / WPS / Excel 之一，
+   * 想看/想改就直接交给它们。失败与上面两条共用一个收口（把话露在预览区里，不假装打开）。
+   */
+  const openWithApp = useCallback((): void => {
+    if (workbench === null || threadId === null) return
+    void workbench.open(threadId, relative).then(
+      () => undefined,
+      (error: unknown) =>
+        setState({ mode: previewModeOf(relative), status: 'error', error: unwrapIpcError(error) })
+    )
+  }, [threadId, relative, workbench])
+
   if (!ready) {
     return <ToolEmpty testId="preview-notice" icon={FileText} title={notice ?? '预览不可用'} />
   }
@@ -151,6 +164,13 @@ export function PreviewTool({
               </p>
             ) : null}
           </div>
+          <IconButton
+            data-testid="preview-open"
+            label="用本地应用打开"
+            icon={<SquareArrowOutUpRight />}
+            onClick={openWithApp}
+            className="border-transparent hover:bg-hover"
+          />
           <IconButton
             data-testid="preview-reveal"
             label="在文件资源管理器中定位"

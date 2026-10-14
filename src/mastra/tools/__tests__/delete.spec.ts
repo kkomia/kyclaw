@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * delete 工具（round28 模块 1）：删文件 / 空目录 / 递归目录、工作区边界 fail closed、
- * 工作区根不删、目录非空的人话提示、危险档审批（full 与规则都不放行）。
+ * 工作区根不删、目录非空的人话提示、按权限档位审批（区内 full 与允许规则可放行）。
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -87,7 +87,16 @@ describe('delete：边界', () => {
   })
 })
 
-describe('delete：审批 gate（round 75 起跟着档位走）', () => {
+describe('delete：工具契约与审批 gate（round 75 起跟着档位走）', () => {
+  it('工具描述准确说明当前审批范围', async () => {
+    const tool = await createDeleteTool(bed.ctx)
+    expect(tool.description).not.toContain('approved every call')
+    expect(tool.description).not.toContain('no remember-this-choice option')
+    expect(tool.description).toContain('workspace full may skip approval')
+    expect(tool.description).toContain('session or permanent allow rules')
+    expect(tool.description).toContain('outside-workspace targets follow the outside policy')
+  })
+
   it('区内 full → 免审；区内 ask → 问，有"永久允许"规则则免审', async () => {
     const tool = await createDeleteTool(bed.ctx)
     const gate = tool.requireApproval as unknown as (input: { path: string }) => boolean

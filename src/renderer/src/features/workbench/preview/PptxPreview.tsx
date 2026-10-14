@@ -30,7 +30,7 @@ export function PptxPreview({
             key={slide.index}
             data-testid="pptx-slide"
             data-index={slide.index}
-            className="flex flex-col gap-1 rounded-panel border border-hairline bg-secondary px-3 py-2"
+            className="flex flex-col gap-1 rounded-panel border border-surface-border bg-secondary px-3 py-2"
           >
             <p className="text-c1 text-ink-tertiary">第 {slide.index} 页</p>
             {slide.title === undefined ? null : (

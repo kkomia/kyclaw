@@ -76,4 +76,18 @@ describe('工具表顺序：MCP 的返回顺序不许影响最终形状', () => 
     expect(names).toContain('bash')
     expect(names.filter((name) => !name.startsWith('mcp__'))).toContain('bash')
   })
+
+  it('增量编辑紧跟它对应的 create（顺序即缓存形状，新增工具不许插枝）', async () => {
+    const names = await toolNamesWith({})
+
+    for (const [created, edited] of [
+      ['create_excel', 'edit_excel'],
+      ['create_ppt', 'edit_ppt'],
+      ['create_docx', 'edit_docx']
+    ]) {
+      const at = names.indexOf(created)
+      expect(at, created).toBeGreaterThan(-1)
+      expect(names[at + 1], `${created} → ${edited}`).toBe(edited)
+    }
+  })
 })

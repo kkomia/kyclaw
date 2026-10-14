@@ -211,8 +211,13 @@ describe('轨迹页 · 时间轴泳道', () => {
     const timeline = await screen.findByTestId('trajectory-timeline')
 
     for (const lane of ['输入', '模型', '工具']) {
-      expect(within(timeline).getByText(lane)).toBeInTheDocument()
+      const label = within(timeline).getByText(lane)
+      expect(label).toBeInTheDocument()
+      // 标签行高跟着泳道行高一起换（C2 行高），不再是把 10px 的字压进 h-2 的 8px 盒子
+      expect(label.className).toContain('h-(--ui-C2-line-height)')
     }
+    const laneRow = screen.getByTestId('trajectory-span-2').parentElement
+    expect(laneRow?.className).toContain('h-(--ui-C2-line-height)')
     // 域 = [1000, 3000]（投影后坐标：u2 与最后一条之间的 500ms 空白被压掉）
     const span = screen.getByTestId('trajectory-span-2')
     expect(span).toHaveStyle({ left: `${((1200 - 1000) / 2000) * 100}%` })

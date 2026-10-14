@@ -204,7 +204,10 @@ describe('renderPptx：真解包', () => {
     expect(zipText(entries, 'ppt/presentation.xml')).toContain('sldSz')
   })
 
-  it('防溢出：每个文本框都带 <a:normAutofit（PowerPoint 侧"溢出自动缩小"）', async () => {
+  // round 77 改口径：`<a:normAutofit/>`（不带 fontScale）在"生成 → 导出"这条路上**不生效**
+  // （pptxgenjs 的注释自己就写着"Shrink does not work automatically"），所以它**不是**防溢出机制——
+  // 真正的防溢出是 ppt-fit.ts 的排版预算。这条用例只钉"文本框仍然带着它"这个结构事实。
+  it('每个文本框仍带 <a:normAutofit（**不是**防溢出，真正的兜底见 ppt-fit.ts）', async () => {
     const { data } = await renderPptx({
       title: '季度汇报',
       slides: [{ title: '结论', bullets: ['营收增长 12%'] }]

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -64,10 +72,9 @@ beforeEach(() => {
   mocks.openPath.mockReset()
   mocks.openPath.mockResolvedValue('')
   mocks.window = null
-  dir = mkdtempSync(join(tmpdir(), 'kyclaw-workspace-ipc-'))
+  dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'kyclaw-workspace-ipc-')))
   project = join(dir, '工作区')
   mkdirSync(join(project, '子目录'), { recursive: true })
-  // 归一后的期待值：mkdtemp 在 Windows 上给的是真实大小写的临时目录，直接拿它拼
   realProject = project
   registerWorkspaceIpc(dir)
 })

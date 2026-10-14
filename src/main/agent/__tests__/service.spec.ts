@@ -88,6 +88,7 @@ describe('startAgentServer', () => {
 
     expect(server.baseUrl).toBe(`http://127.0.0.1:${server.port}`)
     expect(server.port).toBeGreaterThan(0)
+    expect(server.rules).toEqual({ processorRegistered: true })
     expect(server.token.length).toBeGreaterThanOrEqual(32)
 
     const anonymous = await chat(server.baseUrl)
@@ -117,6 +118,82 @@ describe('startAgentServer', () => {
       .join('')
     expect(deltas).toBe(MOCK_REPLY_CHUNKS.join(''))
     expect(body).toContain('data: [DONE]')
+  }, 60_000)
+
+  it('tasks 经过 Bearer 闸门；本机线程 GET/PUT 可用，外部资源与不存在线程拒绝', async () => {
+    const server = await start()
+    const threadId = 'service-tasks-owned'
+    const url = `${server.baseUrl}/api/tasks/${threadId}`
+    const headers = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }
+    const write = {
+      action: 'replace',
+      expectedRevision: 0,
+      items: [{ title: '服务任务', status: 'pending' }]
+    }
+    expect((await fetch(url)).status).toBe(401)
+    expect(
+      (
+        await fetch(url, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(write)
+        })
+      ).status
+    ).toBe(401)
+    expect((await fetch(url, { headers: { authorization: 'Bearer wrong-token' } })).status).toBe(
+      401
+    )
+    expect((await fetch(url, { headers })).status).toBe(404)
+    const created = await fetch(`${server.baseUrl}/api/threads`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ threadId })
+    })
+    expect(created.status).toBe(200)
+    const initial = await fetch(url, { headers })
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toMatchObject({ revision: 0, items: [] })
+    const saved = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(write) })
+    expect(saved.status).toBe(200)
+    expect(await saved.json()).toMatchObject({
+      revision: 1,
+      items: [{ title: '服务任务', status: 'pending' }]
+    })
+    expect(await (await fetch(url, { headers })).json()).toMatchObject({ revision: 1 })
+
+    const { LibSQLStore } = await import('@mastra/libsql')
+    const storage = new LibSQLStore({
+      id: 'tasks-ownership-probe',
+      url: `file:${join(dir, 'kyclaw.db').replace(/\\/g, '/')}`
+    })
+    try {
+      const memory = await storage.getStore('memory')
+      if (memory === undefined) throw new Error('memory store unavailable')
+      const now = new Date()
+      await memory.saveThread({
+        thread: {
+          id: 'service-tasks-foreign',
+          resourceId: 'other-user',
+          title: '外部资源',
+          createdAt: now,
+          updatedAt: now
+        }
+      })
+      for (const id of ['service-tasks-foreign', 'service-tasks-missing']) {
+        expect((await fetch(`${server.baseUrl}/api/tasks/${id}`, { headers })).status).toBe(404)
+        expect(
+          (
+            await fetch(`${server.baseUrl}/api/tasks/${id}`, {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify(write)
+            })
+          ).status
+        ).toBe(404)
+      }
+    } finally {
+      await storage.close()
+    }
   }, 60_000)
 
   it('端口被占用 → 自动换端口（≤5 次尝试），占用者不受影响', async () => {

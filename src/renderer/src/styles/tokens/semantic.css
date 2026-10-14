@@ -33,8 +33,10 @@
   --text-quaternary: #00000070;
   --text-disabled: var(--Labels-Quaternary);
 
-  /* 分隔与填充 */
+  /* 分隔、自然表面边缘与填充 */
   --border-hairline: var(--Separators-S1);
+  /* 圆角面板/卡片的自然边缘：比分隔线略强，避免在背景上消失；不用于输入框、分隔线或焦点环。 */
+  --border-surface: var(--Separators-S1-active);
   --border-field: var(--Fills-F1);
   --hairline-width: var(--border-width-hairline);
   --fill-hover: var(--Fills-F1);
@@ -84,10 +86,13 @@
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 
-  /* 窄窗自动收工作台的阈值（R2 D4 的兜底）：侧栏 240 + 内容列最小可读宽 480 + 工作台 400 = 1120。
-     低于它就把工作台自动收起 —— 720 极窄窗 + 全开的退化态（内容列只剩 ~79px）不再出现。
-     AppShell 的 ResizeObserver 读这条 token（jsdom 读不到时退回同值的兜底常量）。 */
-  --work-panel-collapse-width: 1120px;
+  /* 中列（聊天）的最小可读宽（round 77）：工作台以 docked 宽度摆开后，中列只剩这么点宽就
+     判定"放不下"——面板改铺满内容区（中列 hidden 但不卸载），而不是把聊天挤成逐字一行。
+     判据是**实测**的：内容区宽 − 侧栏遮挡 − 工作台实际宽（拖过的也算）< 这一格 ⇒ 铺满。
+     AppShell 读这条 token（jsdom 读不到时退回同值的兜底常量）。
+     旧口径（R2 D4 的 --work-panel-collapse-width = 1120 = 240+480+400）在这里退休：它把
+     "工作台 400"和"侧栏必开"写死了，拖宽面板 / 收起侧栏 / 更宽的窗口都判不准。 */
+  --chat-min-readable-width: 480px;
 
   /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
      几何在明暗两套下一致，所以只在这里声明、不进深色块。 */

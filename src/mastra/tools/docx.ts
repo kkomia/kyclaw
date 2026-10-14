@@ -9,10 +9,16 @@
  *   - **断言**（`expect`）：用户说"文档里必须有这句话"时写进来；只在正文部件（word/document.xml）
  *     里核，页眉页脚与批注不算；没过不拦落盘、但回执会点名差在哪。
  *   - 内容与落盘分离：`renderDocx` 是纯入口（块数据 → 字节，无 IO）。
+ *   - **源结构**（增量编辑的地基）：落盘成功后把这份文档的源结构 + 文件指纹记进会话级映射
+ *     （`session_docx_sources`，装配时经 `options.sources` 注入）——`edit_docx` 只发改动，
+ *     其余块从这份源里读（见 tools/docx-edit.ts）。记不上不影响这次产出，但回执会明确写
+ *     "源结构未登记，edit_docx 不可用"。
  *   - 依赖：docx（纯 JS，无原生依赖；Node 侧 `Packer.toBuffer` 直接回 Buffer）。
  */
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
+import { MAX_DOCX_SOURCE_BYTES } from '../../shared/session-docx-sources'
+import { sha256Of, type SessionDocxSourceStore } from '../session-docx-sources'
 import { assertPackage, checkPackage } from './artifact-check'
 import {
   artifactNeedsApproval,
@@ -23,7 +29,7 @@ import {
 import { approvalSessionOf, sessionKey, type ToolContext } from './guard'
 
 /** 输入上限（依据：模块 4 报告 §六.6 登记的"输入规模无上限"）：超限让模型知道怎么改 */
-const MAX_BLOCKS = 1000
+export const MAX_BLOCKS = 1000
 const MAX_TABLE_ROWS = 2000
 const MAX_PARAGRAPH_CHARS = 20000
 const MAX_BULLET_ITEMS = 200
@@ -108,6 +114,24 @@ export const docxInputSchema = z.object({
 })
 
 export type DocxInput = z.infer<typeof docxInputSchema>
+
+/**
+ * **落库的源结构**：渲染这份 .docx 用的那份输入 —— create_docx 落盘时记、edit_docx 读回来改。
+ *
+ * 字段就是输入里除 `expect` / `path` 之外的那两个（那两个是"这一次调用"的要求，不是文档本身：
+ * `path` 是文件落在哪，`expect` 是这一轮要核的断言）。形状与 `docxInputSchema` 同源，所以库里的
+ * JSON 一定读得回来（`docxSourceSchema.parse`）。
+ *
+ * 与入参的**唯一**差别：`blocks` 允许为空。删光所有内容块是编辑里的合法终点
+ * （`delete` 每块都行，渲染器对空 blocks 有占位语义，见 renderDocx），create 的入参则要求至少一块。
+ */
+export const docxSourceSchema = docxInputSchema.pick({ title: true }).extend({
+  blocks: z.array(docxBlockSchema).max(MAX_BLOCKS, `文档最多 ${MAX_BLOCKS} 个内容块，请拆分或精简`)
+})
+
+export type DocxSource = z.infer<typeof docxSourceSchema>
+
+export type DocxBlock = z.infer<typeof docxBlockSchema>
 
 export type DocxBlockInput =
   | { type: 'heading'; text: string; level?: number }
@@ -220,7 +244,21 @@ export async function renderDocx(input: {
   return await Packer.toBuffer(new Document({ sections: [{ children }] }))
 }
 
-export async function createDocxTool(ctx: ToolContext): Promise<Tool<DocxInput, string>> {
+/**
+ * create_docx 的装配选项。
+ *
+ * `sources` 缺省 = 不记源结构（单测、或某个部署没挂存储）：产出照常，只是之后 `edit_docx`
+ * 会照实说"这个会话里没有它的源结构"，绝不假装改得动。
+ */
+export interface CreateDocxToolOptions {
+  /** 这份文档的**源结构**记到哪（`edit_docx` 之后就在它的基础上发增量） */
+  sources?: Pick<SessionDocxSourceStore, 'record'>
+}
+
+export async function createDocxTool(
+  ctx: ToolContext,
+  options: CreateDocxToolOptions = {}
+): Promise<Tool<DocxInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
 
   const planInput = (input: DocxInput): ArtifactInput => ({ title: input.title, path: input.path })
@@ -230,6 +268,7 @@ export async function createDocxTool(ctx: ToolContext): Promise<Tool<DocxInput, 
     description:
       'Build a Word document (.docx) from ordered blocks: heading, paragraph, bullets and table, the table optionally with a header row. ' +
       'Saved to the session workspace, returns path and bytes. ' +
+      'A document made earlier in this conversation is changed block by block with edit_docx, which takes only the edits. ' +
       'Not for something to read on screen or print (create_report / create_pdf), a deck (create_ppt) or a data table (create_excel).',
     inputSchema: docxInputSchema,
     outputSchema: z.string(),
@@ -250,21 +289,97 @@ export async function createDocxTool(ctx: ToolContext): Promise<Tool<DocxInput, 
       // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明（断言没过也照写）
       const check = checkPackage(bytes, {
         kind: 'docx',
-        texts: sampleText(input),
+        texts: docxSampleText(input),
         assert: { contains: input.expect?.contains }
       })
       assertPackage(check)
 
-      return await saveArtifact(ctx, abs, bytes, `${input.blocks.length} 个内容块`, {
+      const receipt = await saveArtifact(ctx, abs, bytes, `${input.blocks.length} 个内容块`, {
         session,
         check: check.note
       })
+
+      // 把这份文档的**源结构**记进会话级映射，edit_docx 之后就在它的基础上改。记不上**不影响**
+      // 这次的产出（文件已经写好了）：回执如实说"源结构未登记，edit_docx 不可用"，
+      // 绝不假装还能增量改（见 recordDocxSource）。
+      const source = docxSourceOf(input)
+      const miss = await recordDocxSource(options.sources, {
+        threadId: session,
+        path: abs,
+        source,
+        bytes
+      })
+      return miss === null ? receipt : `${receipt}；${unrecordedNote(miss)}`
     }
   })
 }
 
-/** 自检的样本文本：标题优先，否则第一个非空块文本（取不到就给空数组，该检查项不出现） */
-function sampleText(input: DocxInput): string[] {
+/** 入参 → 落库的源结构（除 `expect` / `path` 之外的全部；过一遍 schema，保证落库的 JSON 读得回来） */
+export function docxSourceOf(input: {
+  title?: string
+  blocks: readonly DocxBlockInput[]
+}): DocxSource {
+  return docxSourceSchema.parse({
+    ...(input.title === undefined ? {} : { title: input.title }),
+    blocks: [...input.blocks]
+  })
+}
+
+/** 源结构没记上的两种缘由（回执里的定性） */
+export type DocxSourceMiss = 'too-large' | 'store-error'
+
+/**
+ * 记源结构。返回 `null` = 记上了；`'too-large'` / `'store-error'` = **没记上**
+ * （调用方如实回执，绝不宣称 edit_docx 还能用）。
+ *
+ * 两个**不抛**的理由：
+ *   ① 落盘已经完成 —— 因为记源失败就"撤销"那份文件是更坏的选择（用户拿到的东西没了）；
+ *   ② 源结构超 2MB 是合法输入（一份长文档而已），只是**记不起**它，不能因此整次调用失败。
+ * 没挂 store（`sources === undefined`，单测/未接线）同样回 null：那一路本来就不记，
+ * 不是"失败了"。
+ */
+export async function recordDocxSource(
+  sources: Pick<SessionDocxSourceStore, 'record'> | undefined,
+  entry: { threadId: string; path: string; source: DocxSource; bytes: Uint8Array }
+): Promise<DocxSourceMiss | null> {
+  if (sources === undefined) return null
+
+  const sourceJson = JSON.stringify(entry.source)
+  if (Buffer.byteLength(sourceJson, 'utf8') > MAX_DOCX_SOURCE_BYTES) return 'too-large'
+
+  try {
+    await sources.record({
+      threadId: entry.threadId,
+      path: entry.path,
+      sourceJson,
+      blocks: entry.source.blocks.length,
+      sha256: sha256Of(entry.bytes),
+      size: entry.bytes.byteLength
+    })
+    return null
+  } catch (error: unknown) {
+    console.warn('[kyclaw] docx 的源结构没能落库（edit_docx 之后会照实说没有源）', error)
+    return 'store-error'
+  }
+}
+
+/** create_docx 回执里"源结构没记上"的说法（用户口径的原话：明确说 edit_docx 不可用） */
+export function unrecordedNote(miss: DocxSourceMiss): string {
+  return `源结构未登记${miss === 'too-large' ? `（超过 ${maxSourceMb()}MB 记不下）` : '（本地库写入失败）'}，edit_docx 不可用（要改只能整份重发 create_docx）`
+}
+
+function maxSourceMb(): number {
+  return Math.round(MAX_DOCX_SOURCE_BYTES / (1024 * 1024))
+}
+
+/**
+ * 自检的样本文本：标题优先，否则第一个非空块文本（取不到就给空数组，该检查项不出现）。
+ * edit_docx 改完也走这一份（同一个"这份包该有什么文字"的口径）。
+ */
+export function docxSampleText(input: {
+  title?: string
+  blocks: readonly DocxBlockInput[]
+}): string[] {
   const title = input.title?.trim() ?? ''
   if (title !== '') return [title]
 

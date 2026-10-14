@@ -33,7 +33,8 @@ import type { PptRenderer } from '../tools/render-ppt'
 export interface SkillRuntimeFacts {
   /**
    * `render_ppt` 能不能真把 .pptx 逐页导成 PNG：
-   * `'libreoffice'`（**随包**的渲染器，不依赖 Office）/ `'powerpoint'`（本机装的 Office）可用 /
+   * `'powerpoint'`（**本机装的 PowerPoint / WPS**，Windows 上优先用的就是它）/
+   * `'libreoffice'`（**随包**的渲染器，不依赖 Office）可用 /
    * `'none'` 不可用（只会回逐页文字结构）/ `null` 没探到结论。
    * 字面量与 `render-ppt.ts` 的 `PptRenderer` 是**同一个类型**（那边是唯一的真来源，
    * 免得两处各写一份枚举、悄悄分叉）。
@@ -56,8 +57,11 @@ const RENDER_TEXT: Record<PptRenderer | 'unknown', string> = {
   libreoffice:
     '可用 —— 本机**随包**了 LibreOffice 渲染器（**不需要你装 Office**、也不需要联网），' +
     '`render_ppt` 能把 .pptx 逐页导成 PNG 并附给你看',
-  powerpoint: '可用 —— 本机有 PowerPoint，`render_ppt` 能把 .pptx 逐页导成 PNG 并附给你看',
-  none: '不可用 —— 本机**既没有随包渲染器、也没有 PowerPoint**，`render_ppt` 只会回**逐页文字结构**，看不到图',
+  powerpoint:
+    '可用 —— 本机装了 PowerPoint / WPS，用它渲染（页图与你自己打开这份 pptx 看到的一致），' +
+    '`render_ppt` 能把 .pptx 逐页导成 PNG 并附给你看' +
+    '（它真导出失败时**会自动退回随包的渲染器**，回执里会写清这一程是谁渲的）',
+  none: '不可用 —— 本机**既没有 PowerPoint / WPS、也没有随包渲染器**，`render_ppt` 只会回**逐页文字结构**，看不到图',
   unknown: '未知 —— 本机这次没探到渲染器结论'
 }
 
@@ -77,7 +81,7 @@ const VISION_TEXT: Record<'yes' | 'no' | 'unknown', string> = {
 function directives(facts: SkillRuntimeFacts): string {
   if (facts.pptRenderer === 'none') {
     return (
-      '自检怎么收尾：**视觉检查这一档在本机做不了** —— 随包的渲染器没装上、本机也没有 PowerPoint，' +
+      '自检怎么收尾：**视觉检查这一档在本机做不了** —— 本机没有 PowerPoint / WPS，随包的渲染器也没装上，' +
       '`render_ppt` 只回逐页文字结构，就按它把措辞、占位值、来源、页数逐页核一遍，' +
       '并在交付时写明「只做了结构与内容校验，未做视觉检查」。' +
       '**不要**去找系统的 LibreOffice / `soffice`、不要 `npx`、不要装渲染器、不要为此换模型 —— ' +

@@ -110,7 +110,7 @@ export function LocalModelSettings(): React.JSX.Element {
 
   return (
     <div data-testid="local-model-settings" className="flex flex-col gap-4">
-      <section className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3">
+      <section className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3">
         <span className="text-b2 text-ink">本机引擎</span>
         <span
           data-testid="local-engine-model"
@@ -138,7 +138,7 @@ export function LocalModelSettings(): React.JSX.Element {
           <section
             key={item.id}
             data-testid={`local-model-${item.id}`}
-            className="flex flex-col gap-2 rounded-panel border border-hairline p-3"
+            className="flex flex-col gap-2 rounded-panel border border-surface-border p-3"
           >
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-b2 text-ink">{item.name}</span>

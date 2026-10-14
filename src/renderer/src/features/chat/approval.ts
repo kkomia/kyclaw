@@ -111,8 +111,8 @@ export function capabilityToolOf(toolName: string): ApprovalCapability | null {
  * 危险档（delete/move；`mcp__x__delete` 这类末段命中的也算 —— 与 main/permission/classify
  * 同一口径）。**round 76 起没有人再用它当闸**：用户口径"允许就是永久允许" —— 审批卡上
  * delete / move 与其它写类同一套入口，"本会话允许 / 永久允许"照给（规则粒度同样是
- * (工具 × 工作区)，服务端 gate 一直吃它）。保留这个分类镜像，是因为"这两样是破坏性的"仍是
- * 一个有意义的事实（将来要给破坏性操作加提示/二次确认，尺子已经在这）；生产代码里不再引用。
+ * (工具 × 工作区)，服务端 gate 一直吃它）。审批卡复用这个分类展示破坏性操作的永久允许
+ * 后果与工作区范围提示，不改变记忆入口或权限判定。
  */
 const DANGEROUS_BASENAMES = new Set(['delete', 'move'])
 

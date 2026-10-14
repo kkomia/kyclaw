@@ -6,7 +6,7 @@
  * 对自有实例不做卸载清理）：实例挂在模块级注册表里，切换会话只是换视图，
  * 生成继续跑完、消息留在实例里，切回去就是完整结果。
  *
- * "停止"仍然有效：Composer 的停止钮走 chat.stop()（用户显式要停），不受这层影响。
+ * "停止"仍然有效：Composer 同时停止 Chat 流并取消服务端挂起轮，切会话不影响这条显式停止路径。
  *
  * 生命周期：
  *   - 首次进入某会话：拉服务端历史（message-map 回灌）→ 建 Chat（初值即历史）；
@@ -26,7 +26,16 @@ import { Chat } from '@ai-sdk/react'
 import type { ChatTransport, FinishReason, UIMessage } from 'ai'
 import { mapStoredMessages } from '../../lib/message-map'
 import { fetchThreadMessages } from '../../lib/threads-api'
+import { tasksStore } from '../../lib/tasks-store'
 import { canResumeAfterApproval, hasPendingApproval } from './approval'
+import { askUserPending, askUserWaiting, useAskUserStore } from './ask-user-store'
+import {
+  registerPlanChat,
+  forgetPlanChat,
+  planWaiting,
+  rendererPlansStore,
+  settledPlan
+} from './plan-runtime'
 
 export interface TurnOutcome {
   isError: boolean
@@ -36,6 +45,7 @@ export interface TurnOutcome {
    * 但语义上**不是完成轮** —— 标题生成/完成通知都得等用户做完决策、resume 那一轮跑完再走。
    */
   awaitingApproval: boolean
+  waitingInteraction?: boolean
   /**
    * 这一轮的收尾原因（ai@7 Chat 的 onFinish 给的原生值）。渲染端用它给"被截停/被截断"的轮次
    * 加一行可见提示（round 33）：`tool-calls` 收尾 = 还欠一次模型调用就停了（单轮步数预算用尽），
@@ -48,6 +58,7 @@ export interface ThreadChatRuntime {
   transport: ChatTransport<UIMessage>
   /** 历史回灌（默认走服务端；测试注入空实现，不碰网络） */
   loadHistory: (threadId: string) => Promise<UIMessage[]>
+  refreshInteractions?: boolean
   /** 一轮结束的回调（默认 = sessions-store 的 handleTurnEnd / 完成通知） */
   onTurnEnd: (threadId: string, outcome: TurnOutcome) => void
 }
@@ -66,24 +77,62 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
 
   const created = (async (): Promise<Chat<UIMessage>> => {
     const messages = await runtime.loadHistory(threadId)
-    return new Chat<UIMessage>({
+    const chat = new Chat<UIMessage>({
       transport: runtime.transport,
       messages,
-      onFinish: ({ message, isError, isAbort, finishReason }) =>
+      onFinish: async ({ message, isError, isAbort, finishReason }) => {
+        if (
+          chats.has(threadId) &&
+          message.parts.some(
+            (part) =>
+              (part.type === 'tool-todo' ||
+                (part.type === 'dynamic-tool' && part.toolName === 'todo')) &&
+              part.state === 'output-available'
+          )
+        )
+          void tasksStore.getState().load(threadId)
+        if (
+          runtime.refreshInteractions &&
+          (askUserPending(threadId, message) || useAskUserStore.getState().threads.has(threadId)) &&
+          !useAskUserStore.getState().threads.get(threadId)?.stopping
+        ) {
+          await useAskUserStore.getState().refresh(threadId)
+        }
+        if (runtime.refreshInteractions && rendererPlansStore.getState().sessions[threadId]) {
+          await settledPlan(threadId)
+          await rendererPlansStore
+            .getState()
+            .load(threadId)
+            .catch(() => {})
+        }
+        const interaction = useAskUserStore.getState().threads.get(threadId)
         runtime.onTurnEnd(threadId, {
           isError,
           isAbort,
           awaitingApproval: hasPendingApproval(message),
+          ...(planWaiting(threadId) ||
+          askUserPending(threadId, message) ||
+          (interaction !== undefined &&
+            (interaction.pending.length > 0 || interaction.error !== null || interaction.stopping))
+            ? { waitingInteraction: true }
+            : {}),
           finishReason
-        }),
+        })
+      },
       /**
        * 审批回灌（T13）：`addToolApprovalResponse` 只把 part 改成 approval-responded，
        * **不会自己再发请求** —— 什么时候续跑由这个判定决定：最后一条助手消息的最后一步里所有
        * 审批都有了回应、且没有别的待办时，自动把消息发回服务端执行工具（判定细节见
        * approval.ts 的 canResumeAfterApproval，滤掉了记忆工具/提供方执行这两类 part）。
        */
-      sendAutomaticallyWhen: ({ messages }) => canResumeAfterApproval(messages)
+      sendAutomaticallyWhen: ({ messages }) =>
+        !askUserPending(threadId, messages[messages.length - 1]) &&
+        !askUserWaiting(threadId) &&
+        !planWaiting(threadId) &&
+        canResumeAfterApproval(messages)
     })
+    registerPlanChat(threadId, chat)
+    return chat
   })()
 
   // 失败不入缓存（下次挂载会重试）；成功保持同一 Promise，重挂载直接复用
@@ -98,6 +147,8 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
 export function dropThreadChat(threadId: string, options: { stop?: boolean } = {}): void {
   const entry = chats.get(threadId)
   chats.delete(threadId)
+  forgetPlanChat(threadId, options.stop === true)
+  if (options.stop === true) tasksStore.getState().forget(threadId)
   if (options.stop === true && entry !== undefined) {
     // 取出实例再停：promise 还没解析（历史还在拉）时停不了，交给那句 catch 消化
     entry.then(
@@ -112,11 +163,12 @@ export function createThreadChatRuntime(
   transport: ChatTransport<UIMessage>,
   onTurnEnd: ThreadChatRuntime['onTurnEnd']
 ): ThreadChatRuntime {
-  return { transport, loadHistory: loadHistoryFromServer, onTurnEnd }
+  return { transport, loadHistory: loadHistoryFromServer, onTurnEnd, refreshInteractions: true }
 }
 
 /** 测试用：清空注册表（模块级状态不随 render 重置） */
 export function resetThreadChats(): void {
+  for (const threadId of chats.keys()) forgetPlanChat(threadId, true)
   chats.clear()
 }
 

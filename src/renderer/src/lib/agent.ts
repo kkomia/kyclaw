@@ -44,7 +44,18 @@ export async function resolveAgentEndpoint(): Promise<AgentEndpoint> {
 export function transportFor(endpoint: AgentEndpoint): ChatTransport<UIMessage> {
   return new DefaultChatTransport({
     api: agentChatUrl(endpoint.baseUrl),
-    headers: { Authorization: `Bearer ${endpoint.token}` }
+    headers: { Authorization: `Bearer ${endpoint.token}` },
+    prepareSendMessagesRequest: ({ body, id, messages, trigger, messageId }) => {
+      const resume = body?.askUserResume
+      if (typeof resume === 'object' && resume !== null) {
+        return { api: `${endpoint.baseUrl}/ask-user/resume`, body: resume }
+      }
+      const plan = body?.planResume
+      if (typeof plan === 'object' && plan !== null) {
+        return { api: `${endpoint.baseUrl}/plans/resume`, body: plan }
+      }
+      return { body: { ...body, id, messages, trigger, messageId } }
+    }
   })
 }
 

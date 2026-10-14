@@ -277,6 +277,10 @@ describe('ApprovalCard · 破坏性工具的决策入口（round 76：允许就�
       expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
       expect(screen.getByTestId('approval-allow-session')).toBeInTheDocument()
       expect(screen.getByTestId('approval-allow-forever')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-scope')).toHaveTextContent(
+        '点击永久允许后，此工具在当前工作区内的后续操作不再逐次询问；仅放行此工具'
+      )
+      expect(screen.getByTestId('approval-scope')).toHaveTextContent('工作区之外仍按区外权限处理')
       expect(screen.getByTestId('approval-deny')).toBeInTheDocument()
       view.unmount()
     }
@@ -308,6 +312,7 @@ describe('ApprovalCard · 破坏性工具的决策入口（round 76：允许就�
   it('对照组：判不出工作区时照旧只有允许一次 / 拒绝（入口条件里那条没动）', () => {
     decideWith({ toolName: 'delete', input: { anything: 1 }, path: null })
 
+    expect(screen.queryByTestId('approval-scope')).not.toBeInTheDocument()
     expect(screen.getByTestId('approval-allow-once')).toBeInTheDocument()
     expect(screen.getByTestId('approval-deny')).toBeInTheDocument()
     expect(screen.queryByTestId('approval-allow-session')).not.toBeInTheDocument()

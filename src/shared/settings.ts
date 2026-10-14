@@ -18,6 +18,12 @@
 import { z } from './zod'
 import { providerConfigSchema } from './providers'
 import { projectSchema } from './projects'
+import { rulesTextProblem } from './rules'
+
+export const globalRulesSchema = z.string().superRefine((text, context) => {
+  const problem = rulesTextProblem(text, 'global')
+  if (problem !== null) context.addIssue({ code: 'custom', message: problem.message })
+})
 import { DEFAULT_WEB_SEARCH, webSearchSettingsSchema } from './search'
 
 /** 落盘文件名（userData 下） */
@@ -340,6 +346,7 @@ export type ArchivedThread = z.infer<typeof archivedThreadSchema>
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
+  globalRules: globalRulesSchema,
   /** T8 的 provider 列表（模型与密钥页；密钥不在里面，见 main/secrets.ts） */
   providers: z.array(providerConfigSchema),
   /** T10 的授权工作区列表（添加/移除/切模式走 workspace:* 通道） */
@@ -365,6 +372,8 @@ export const appSettingsSchema = z.strictObject({
    * 整份授权列表（T10 既有口径）。写入只有 workspace:pick-default 一条路（原生选择器）。
    */
   defaultWorkspace: z.string().min(1).nullable(),
+  /** 默认工作区首次初始化是否已完成；内部持久字段，不由渲染端设置。 */
+  defaultWorkspaceInitialized: z.boolean(),
   /** T18 的项目列表（增删走 projects:* 通道：路径要先过 checkWorkspacePath） */
   projects: z.array(projectSchema),
   /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
@@ -428,6 +437,7 @@ export const appSettingsSchema = z.strictObject({
 export const appSettingsPatchSchema = appSettingsSchema.partial().omit({
   workspaces: true,
   defaultWorkspace: true,
+  defaultWorkspaceInitialized: true,
   projects: true,
   mcpServers: true,
   pluginMarketplaces: true,
@@ -526,11 +536,13 @@ export function effectiveReasoningTranslate(settings: ReasoningTranslateSettings
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   fontTier: 'default',
+  globalRules: '',
   providers: [],
   workspaces: [],
   /** round 75：工作区之外默认「每次询问」（保守缺省：区外的操作要先过用户） */
   outsideWorkspaceMode: 'ask',
   defaultWorkspace: null,
+  defaultWorkspaceInitialized: false,
   projects: [],
   permissions: { rules: [] },
   mcpServers: [],

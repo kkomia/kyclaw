@@ -5,6 +5,7 @@ import type { UIMessage } from 'ai'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { resetSessionApprovals } from '@renderer/features/chat/approval'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { resetAskUserStore } from '../ask-user-store'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import {
   clearKyclawBridge,
@@ -29,6 +30,11 @@ import { createMockTransport, type MockTransport } from './mock-transport'
  * 的 v7 协议一致；threads-api 整体 mock 掉（这些用例不碰网络，服务端的真往返由 mastra 侧
  * 的集成用例跑，见 src/mastra/tools/__tests__/approval.spec.ts）。
  */
+vi.mock('@renderer/lib/ask-user-api', async (original) => ({
+  ...(await original<typeof import('@renderer/lib/ask-user-api')>()),
+  fetchPendingAskUser: vi.fn(async () => [])
+}))
+
 vi.mock('@renderer/lib/threads-api', () => ({
   fetchThreads: vi.fn(async () => []),
   fetchThreadMessages: vi.fn(async () => []),
@@ -139,6 +145,7 @@ let bridge: KyclawBridgeStubs
 
 beforeEach(() => {
   resetThreadChats()
+  resetAskUserStore()
   resetSessionApprovals()
   vi.mocked(truncateThread).mockClear()
   useSessionsStore.setState({
@@ -781,7 +788,9 @@ describe('审批条停靠（round 29：输入框上方，不在消息流里）',
 
     // 只有思考：独立思考块直接出、「思考中…」行在
     expect(await screen.findByTestId('reasoning-toggle')).toHaveTextContent('思考中…')
-    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
+    await waitFor(() =>
+      expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
+    )
 
     // 工具行到达（这一轮还在流）：思考段保持展开 —— 不是"工具挨工具"裸奔
     act(() => {

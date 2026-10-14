@@ -22,6 +22,8 @@ import { TrajectoryLedger } from './TrajectoryLedger'
 import { TrajectoryTimeline } from './TrajectoryTimeline'
 import { TrajectoryToolbar } from './TrajectoryToolbar'
 import { useTrajectoryData } from './use-trajectory-data'
+import { TaskSnapshotSummary } from './TaskSnapshotSummary'
+import { TaskHistory } from './TaskHistory'
 
 export interface TrajectoryViewProps {
   threadId: string
@@ -136,6 +138,17 @@ export function TrajectoryView({
 
   return (
     <section data-testid="trajectory-view" className="flex min-h-0 flex-1 flex-col">
+      <TaskSnapshotSummary threadId={threadId} />
+      <TaskHistory
+        threadId={threadId}
+        active={active}
+        revision={revision}
+        representedRevisions={
+          new Set(
+            doc.rows.flatMap((row) => (row.taskRevision === undefined ? [] : [row.taskRevision]))
+          )
+        }
+      />
       <TrajectoryToolbar
         mode={mode}
         onModeChange={setMode}

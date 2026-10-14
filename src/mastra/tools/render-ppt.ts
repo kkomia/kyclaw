@@ -8,9 +8,15 @@
  * 三条硬口径：
  *   1. **渲染不出来不抛异常、不假装成功**：回一段人话 + 结构自检（逐页文字），让模型退化成
  *      "只核文字"，并在回执里说清为什么退化、缺什么。
- *   2. **渲染器是"有就用、没有就退化"，优先级写死**：① 随包的 LibreOffice（round 68，
- *      `resources/libreoffice-kit`，跨平台、**不依赖用户装没装 Office**）→ ② Windows 上的
- *      PowerPoint COM（`PowerPoint.Application`，实测可用）→ ③ 都没有就只回逐页文字结构。
+ *   2. **渲染器是"有就用、没有就退化"，优先级写死**（round 78 后的准确口径）：
+ *      **自动**：① Windows 上的**本机 PowerPoint / WPS COM**（`PowerPoint.Application`，实测可用 ——
+ *      个人 PC 上通常就装了 Office / WPS 之一，用它渲染出来的字体与版式就是用户自己打开看到的那一套）
+ *      → **它真渲染失败时回退到 ② 随包的 LibreOffice**（round 68，`resources/libreoffice-kit`，
+ *      跨平台、不依赖用户装没装 Office）——"本地优先、失败有兜底"；
+ *      **没有 COM 可用时**（非 Windows / 没装 Office / WPS）直接走 ②；
+ *      **两条都没有** → ③ 只回逐页文字结构；
+ *      **显式强制**（`KYCLAW_PPT_RENDERER`）可禁用自动换路或直接点名一条：点了名就只有那一条，
+ *      失败就如实失败，**不悄悄换一条再冒它的名字**。
  *      **不把 Office 列成依赖**，也不去 PATH 上找系统的 `soffice`。
  *   3. **页图写进会话工作区**（`<deck 名>_页图/`）：用户能在工作台里自己翻，模型也能再引用；
  *      只动这个由我们派生的目录，不碰用户的文件。**这条正是它免审的前提**（权限分级把它按
@@ -20,6 +26,30 @@
  * round 73 补一条：**用户点停止 = 这次渲染停**。`context.abortSignal` 一路传进
  * `runProcess`（渲染子进程按 exec 那套杀法收掉）；信号在开始前就响的话**一个文件都不动**
  * （不清、不建页图目录），回执走 abortedMessage —— "已被用户中止"不是"渲染器失败"。
+ *
+ * round 77 把优先级翻过来（用户口径：**个人 PC 通常装 Word / WPS / Excel 之一，产品不该只用随包引擎**）：
+ * Windows 上**先**用本机 PowerPoint / WPS 的 COM，没有再退到随包的 kit。为什么：
+ *   - 页图要拿来判断"用户拿到手会看到什么"，而用户是自己双击这份 pptx 打开的 —— 本机那件引擎
+ *     渲染出来的字体与版式才和他看到的一致（kit 用的是随包字体，缺字会替换、版式会走样）；
+ *   - 用户机器上装着的就是他要继续编辑的那件应用，渲染口径与"改一改"的动作同一个。
+ * 安全性没有放松：COM 那条路的两道闸门一个字都没动 —— ① `Get-Process -Name POWERPNT, wpp` 的
+ * `$before` 计数、② `$before -eq 0` 才 `Quit()`（详见 renderScript / probeScript 的注释）。
+ * 也就是：**只关产品本次自己拉起来的那一个实例**，用户正开着的 PowerPoint / WPS 绝不被顺手关掉。
+ * 非 Windows、或 Windows 上本机没有 Office/WPS，仍按原路走 kit（kit 还在，兜底没变）。
+ *
+ * round 78 补上"本地优先"的另一半（用户口径：**本地优先、失败有兜底**）：round 77 把 COM 提到第一位之后，
+ * 本机 COM 一旦真导出失败（deck 被占用、幻灯片里有点像元没装、COM 半死……）就**直接退到逐页文字**，
+ * 随包 kit 明明在磁盘上却不试一次 —— 那是把 round 68 的兜底白白浪费了。现在：
+ *   - **自动命中的** COM 渲染失败、且随包 kit 可用 → 清掉这次派生的 outDir 再用 kit 重来一次，
+ *     成功时回执**报实际的渲染器**（libreoffice）并明说"本机 PowerPoint/WPS 渲染失败，已退回随包渲染器"
+ *     （**不静默**：页图来路不同，缺字/版式结论也不同）；
+ *   - 两条都失败 → 回执**同时保留两条的真实原因**（不是只报后一条）；
+ *   - kit 不可用 → 保持原来的退化口径（直接文字结构自检）；
+ *   - **强制**（`KYCLAW_PPT_RENDERER=powerpoint`）或注入了探测/渲染的测试语义 → **不自动换路**
+ *     （用户点名的那条路就是那条路）；见 `shouldFallbackToKit`。
+ * 这条兜底**没有**放松任何安全闸门：换路仍在同一把 `runExclusive(outDir)` 锁内、只清我方派生的
+ * outDir（不碰用户原 deck）、kit 仍写自己的 staging 再 rename 进页图目录，COM 那两道进程闸门
+ * （`$before` 计数 / `$before -eq 0` 才 `Quit()`）一个字未动。
  *
  * 为什么随包 LibreOffice（round 68 实测口径，见 `.superpowers/sdd/.../_r68-*`）：
  *   - 它是 DeepSeek Harness 开源的 `@deepseek-ai/libreoffice-kit`（MPL-2.0）：预编译引擎 + 一层
@@ -86,16 +116,22 @@ export const RENDER_TIMEOUT_MS = 180_000
 /** 页图目录的后缀（派生目录，只由我们重建） */
 const PAGES_DIR_SUFFIX = '_页图'
 
+/**
+ * 渲染器报了成功、却没落下任何页图时的原因（自动回退想换路看的就是"真的拿到图没有"）。
+ * PowerPoint 与 kit 两条路共用这一句，回执口径才一致。
+ */
+const NO_PAGES_DETAIL = '导出命令跑完了，但没有拿到任何页图'
+
 /** 随包 kit 渲染时的暂存目录后缀（kit 要求 `--output-dir` 是不存在的新目录，见 renderWithLibreOffice） */
 const KIT_STAGING_SUFFIX = '.libreoffice-tmp'
 
 /**
  * 渲染器：**探测顺序就是优先级**（详见文件头注）。
- *   - `'libreoffice'`：随包的 kit（跨平台，不依赖用户装没装 Office）；
- *   - `'powerpoint'`：Windows 上的 PowerPoint COM；
+ *   - `'powerpoint'`：Windows 上本机装的 PowerPoint / WPS（COM）；
+ *   - `'libreoffice'`：随包的 kit（跨平台兜底，不依赖用户装没装 Office）；
  *   - `'none'`：两条都没有 —— 只会回逐页文字结构。
  */
-export type PptRenderer = 'libreoffice' | 'powerpoint' | 'none'
+export type PptRenderer = 'powerpoint' | 'libreoffice' | 'none'
 
 /** 强制指定渲染器（测试与排障用）：'libreoffice' | 'powerpoint' | 'none' */
 const RENDERER_ENV = 'KYCLAW_PPT_RENDERER'
@@ -122,15 +158,27 @@ const POWERPOINT_RELATIVE_PATHS = [
   'Microsoft Office/Office14/POWERPNT.EXE'
 ]
 
+/**
+ * 一条渲染通路：把 `deck` 逐页导成 PNG 写进 `outDir`（目录由调用方先清空再建）。
+ * 真实现是 `renderWithPowerPoint` / `renderWithLibreOffice`；测试与排障按需注入。
+ * 第三个参数是用户中止信号（round 73）：真实现把它传给 `runProcess`（子进程会被收掉）；
+ * 注入件可以忽略它（老注入点一个都不用改）。
+ */
+export type RenderTarget = (
+  deck: string,
+  outDir: string,
+  signal?: AbortSignal
+) => Promise<RenderOutcome>
+
 export interface RendererDeps {
   /** 探测渲染器（缺省 = 真探测；测试注入） */
   detect?: () => PptRenderer
   /**
    * 跑一次渲染（缺省 = 按探测结果跑真实现；测试注入）。
-   * 第三个参数是用户中止信号（round 73）：真实现把它传给 `runProcess`（子进程会被收掉）；
-   * 注入件可以忽略它（老注入点一个都不用改）。
+   * **注入它就等于接管了"跑哪条路"**：注入什么就跑什么，本轮新加的"COM 失败自动退回 kit"
+   * 在这条路上**不生效**（见 `shouldFallbackToKit` 的 `injectedRender`）。
    */
-  render?: (deck: string, outDir: string, signal?: AbortSignal) => Promise<RenderOutcome>
+  render?: RenderTarget
   /** 平台（缺省 = process.platform） */
   platform?: NodeJS.Platform
   /**
@@ -138,6 +186,22 @@ export interface RendererDeps {
    * **测试注入 `null`** 表示"这台机器没有随包渲染器"，免得探测结果随开发机变。
    */
   kitCli?: string | null
+  /**
+   * 本机 PowerPoint / WPS 在不在（缺省 = 真探测，见 `localOfficeAvailable`）。
+   * **测试注入**：单测既不该真去拉 COM（本机装了 WPS 就会起一个 `wpp.exe`），
+   * 也不该让结论随开发机有没有装 Office 而变 —— 给假件即可（`() => true` / `() => false`）。
+   */
+  localOffice?: () => boolean
+  /**
+   * 本机 COM 那条路的真实现（缺省 = `renderWithPowerPoint`）。**只在没注入 `render` 时**才被看到。
+   * 单测注入它 + `kitRender`，就能验"COM 失败 → 退回 kit"而不碰真 Office/WPS。
+   */
+  comRender?: RenderTarget
+  /**
+   * 随包 kit 那条路的真实现（缺省 = `renderWithLibreOffice` + 探测到的 CLI；找不到 CLI 且没注入
+   * 这里时，这条路不可用）。注入了它就当"这台机器有 kit"，**不再看 `kitCli`**。
+   */
+  kitRender?: RenderTarget
 }
 
 /** 一次渲染的结论：成不成、为什么、以及渲染器自报的页图尺寸与缺字 */
@@ -222,41 +286,100 @@ function kitCliFor(options: RendererDeps): string | null {
 }
 
 /**
- * 找一个能用的 PPT 渲染器，**按优先级**（顺序就是文件头注里那三条）：
- *   0. 环境变量显式指定（测试 / 排障）；
- *   1. **随包的 LibreOffice kit**（跨平台；只看文件在不在，不起进程）——放第一位是因为它可预期：
- *      用户装没装 Office、在哪个平台都不影响它；
- *   2. 没 kit 才轮到 Windows 的 PowerPoint COM：先扫 Office 常见安装位置（不起进程，绝大多数
- *      机器在这里就命中），没中才真问一次 COM（`New-Object -ComObject PowerPoint.Application`）——
- *      MSI / 商店版 Office 装在别处时靠它兜住，没装 Office 时它是**快速失败**（注册表查不到）；
- *   3. 两条都没有 → `'none'`。结论缓存起来，后续调用不再付这份代价。
- *
- * **非 Windows 且没有随包 kit** 才是 `'none'`（本实现的第二条路只有 COM）；有 kit 的机器上，
- * 任何平台都回 `'libreoffice'` —— 这正是 round 68 要的："没有 PowerPoint"不等于"不能渲染"。
+ * 随包 kit 那条路的**可跑目标**（`null` = 这条路不可用）。
+ *   - 注入了 `kitRender` 就直接用它（单测：既不用真有 kit，也不启进程）；
+ *   - 否则要有 CLI 才算可用（`kitCliFor` 找到了就绑上 `renderWithLibreOffice`）。
+ * 主路（探测命中 libreoffice）与 round 78 的兜底回退**共用**这一份 —— 两条路对"kit 在不在"
+ * 的判断必须是同一个，否则会出现"主路说没有、回退以为有"这种自相矛盾。
  */
-export function detectRenderer(options: RendererDeps = {}): PptRenderer {
+function kitTargetFor(options: RendererDeps): RenderTarget | null {
+  if (options.kitRender !== undefined) return options.kitRender
+  const cli = kitCliFor(options)
+  if (cli === null) return null
+  return (deck, outDir, signal) => renderWithLibreOffice(deck, outDir, cli, signal)
+}
+
+/**
+ * 环境变量**强制指定**的渲染器（`null` = 没强制，走自动探测）。
+ * 抽出来单独一份是为了让"这次是自动探测还是用户点名"可判：自动探测出来的 COM 才有资格
+ * 在失败时回退到 kit（见 `shouldFallbackToKit`），**点名的没有**。
+ */
+export function forcedRenderer(): PptRenderer | null {
   const forced = process.env[RENDERER_ENV]?.trim().toLowerCase()
   if (forced === 'none' || forced === 'off') return 'none'
   if (forced === 'libreoffice' || forced === 'kit' || forced === 'soffice') return 'libreoffice'
   if (forced === 'powerpoint') return 'powerpoint'
+  return null
+}
+
+/**
+ * 找一个能用的 PPT 渲染器，**按优先级**（顺序就是文件头注里那三条）：
+ *   0. 环境变量显式指定（测试 / 排障）；
+ *   1. **Windows 上的本机 PowerPoint / WPS COM**（round 77 起是第一位）：个人 PC 上通常就装了
+ *      Office / WPS 之一，用它渲染出来的页图与用户自己双击打开看到的一致（见 `comPowerPoint`）；
+ *   2. 没命中才轮到**随包的 LibreOffice kit**（跨平台兜底：不依赖用户装没装 Office）；
+ *   3. 两条都没有 → `'none'`。结论缓存起来，后续调用不再付这份代价（COM 探测要起 PowerShell）。
+ *
+ * **非 Windows 且没有随包 kit** 才是 `'none'`（本实现的 COM 那条路只有 Windows 有）；
+ * 有 kit 的机器上，任何平台都会回 `'libreoffice'`（除非 Windows 上 COM 先命中）——
+ * 这正是 round 68 要的："没有 PowerPoint"不等于"不能渲染"。
+ */
+export function detectRenderer(options: RendererDeps = {}): PptRenderer {
+  const forced = forcedRenderer()
+  if (forced !== null) return forced
 
   if (cachedRenderer !== null) return cachedRenderer
+
+  if ((options.platform ?? process.platform) === 'win32' && localOfficeAvailable(options)) {
+    cachedRenderer = 'powerpoint'
+    return cachedRenderer
+  }
 
   if (kitCliFor(options) !== null) {
     cachedRenderer = 'libreoffice'
     return cachedRenderer
   }
 
-  if ((options.platform ?? process.platform) !== 'win32') {
-    cachedRenderer = 'none'
-    return cachedRenderer
-  }
+  cachedRenderer = 'none'
+  return cachedRenderer
+}
 
+/**
+ * 探测结果是 COM（本机 PowerPoint / WPS）时，**失败要不要自动换到随包的 kit**（round 78）。
+ *
+ * 纯函数（不读盘、不读 env —— `forced` 由调用方给），三条判据缺一不可：
+ *   - 探测命中的就是 `'powerpoint'`（libreoffice / none 没什么可换的）；
+ *   - **不是**被环境变量点名的（`forced === null`）：用户点了 PowerPoint，就该只有 PowerPoint，
+ *     失败如实失败 —— 换一条再冒它的名字，回执里的渲染器名与尺寸都会说谎；
+ *   - **没有**注入 `render`（`injectedRender === false`）：注入了就是把"跑哪条路"整个接管了，
+ *     老注入点（单测 / 排障）的语义不能被悄悄改掉。
+ *
+ * 至于"kit 到底在不在"，由调用方另判（`kitTargetFor` 给 null 就不换路）。
+ */
+export function shouldFallbackToKit(options: {
+  renderer: PptRenderer
+  forced: PptRenderer | null
+  injectedRender: boolean
+}): boolean {
+  return options.renderer === 'powerpoint' && options.forced === null && !options.injectedRender
+}
+
+/** 本机有没有 PowerPoint / WPS：注入了就用注入的（测试），否则真探测 */
+function localOfficeAvailable(options: RendererDeps): boolean {
+  return options.localOffice !== undefined ? options.localOffice() : comPowerPoint()
+}
+
+/**
+ * 真探测"本机有没有 PowerPoint / WPS"（能不能走 COM）。三步，**代价从小到大**：
+ *   0. 逃生门 `KYCLAW_POWERPOINT` 指到哪算哪（排障用，只看文件在不在）；
+ *   1. 扫 Office 的常见安装位置（纯路径判断、不起进程，绝大多数装了 MS Office 的机器在这里就命中）；
+ *   2. 都没中才真问一次 COM（`New-Object -ComObject PowerPoint.Application`）—— MSI / 商店版 Office
+ *      装在别处、以及 **WPS**（装在 `%LOCALAPPDATA%\Kingsoft\...`，扫 Program Files 扫不到）靠它兜住；
+ *      一件都没装时它是**快速失败**（注册表里查不到 ProgID），不会真的拉起 Office。
+ */
+function comPowerPoint(): boolean {
   const explicit = process.env[POWERPOINT_ENV]?.trim() ?? ''
-  if (explicit !== '' && existsSync(explicit)) {
-    cachedRenderer = 'powerpoint'
-    return cachedRenderer
-  }
+  if (explicit !== '' && existsSync(explicit)) return true
 
   const roots = [
     process.env.ProgramFiles,
@@ -266,34 +389,74 @@ export function detectRenderer(options: RendererDeps = {}): PptRenderer {
 
   for (const root of roots) {
     for (const suffix of POWERPOINT_RELATIVE_PATHS) {
-      if (existsSync(join(root, ...suffix.split('/')))) {
-        cachedRenderer = 'powerpoint'
-        return cachedRenderer
-      }
+      if (existsSync(join(root, ...suffix.split('/')))) return true
     }
   }
 
-  cachedRenderer = comProbePowerPoint() ? 'powerpoint' : 'none'
-  return cachedRenderer
+  return comProbePowerPoint()
+}
+
+/**
+ * 可能出现"PowerPoint COM 由谁承载"的进程名：MS Office 是 `POWERPNT`，WPS 演示是 `wpp`。
+ * 只数 `POWERPNT` 会在 WPS 机器上**恒为 0** —— 下面那道"只关自己起的那一个"的闸门就形同虚设
+ * （排障实测：这台机器的本地服务器正是 `wpp.exe /Automation`）。
+ */
+const POWERPOINT_PROCESS_NAMES = 'POWERPNT, wpp'
+
+/**
+ * 起哪个 PowerShell：**绝对路径优先，不靠 PATH**。
+ *
+ * 排障实测（round 76）：这台机器（以及不少被改过 PATH 的机器）的系统 PATH 里**没有**
+ * `%SystemRoot%\System32\WindowsPowerShell\v1.0` —— 裸名 `powershell.exe` 交给 `spawnSync`
+ * 直接 `ENOENT`（**进程根本没起**），COM 探测于是恒判"没有 PowerPoint"，`render_ppt` 整条 COM
+ * 路被误关（操作者的导出脚本用的是全路径，所以它成功、产品失败）。Windows PowerShell 5.1 的
+ * 落点是固定的：存在就用它（System32 = 64 位；本机实测 64/32 两个视图都能拉起 WPS 的
+ * `PowerPoint.Application`），只有找不到才退回裸名。
+ */
+export function powershellCommand(): string {
+  const root = process.env.SystemRoot ?? process.env.windir
+  if (typeof root === 'string' && root !== '') {
+    const absolute = join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    if (existsSync(absolute)) return absolute
+  }
+  return 'powershell.exe'
+}
+
+/** 探测那条 spawn 的可注入形状（回归测试换成记录器 / 假件；缺省 = 真 `spawnSync`） */
+export type ProbeSpawn = (
+  command: string,
+  args: string[],
+  options: { timeout: number; windowsHide: boolean; encoding: 'utf8' }
+) => { status: number | null; stdout?: string }
+
+const realProbeSpawn: ProbeSpawn = (command, args, options) => spawnSync(command, args, options)
+
+/**
+ * 探测脚本：起一次 COM 判"PowerPoint 在不在"。
+ * `$before` 把 WPS 的 `wpp` 也算进"本来就在跑"——否则在 WPS 机器上它恒为 0，
+ * 下面那道"只关自己起的那一个"的闸门等于没装（会顺手退出用户正开着的 WPS）。
+ */
+export function probeScript(): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$before = @(Get-Process -Name ${POWERPOINT_PROCESS_NAMES} -ErrorAction SilentlyContinue).Count`,
+    'try { $app = New-Object -ComObject PowerPoint.Application } catch { exit 3 }',
+    // 只关我们自己起的那一个：本来就在跑的 PowerPoint/WPS 不能被我们顺手关掉（用户可能正开着文件）
+    'if ($before -eq 0) { try { $app.Quit() } catch { } }',
+    "Write-Output 'ok'"
+  ].join('\n')
 }
 
 /**
  * 真问一次 COM：PowerPoint 在不在这个系统上（覆盖非标准安装位置）。
  * **同步**跑（探测只发生一次，且要就地判结论）：失败一律当"没有"，不抛。
+ * `run` 只为回归测试可注入（默认真 `spawnSync`）——探测与渲染都经 `powershellCommand()`，
+ * 起的是**同一个**绝对路径。
  */
-function comProbePowerPoint(): boolean {
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    '$before = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue).Count',
-    'try { $app = New-Object -ComObject PowerPoint.Application } catch { exit 3 }',
-    // 只关我们自己起的那一个：本来就在跑的 PowerPoint 不能被我们顺手关掉（用户可能正开着文件）
-    'if ($before -eq 0) { try { $app.Quit() } catch { } }',
-    "Write-Output 'ok'"
-  ].join('\n')
-
-  const result = spawnSync(
-    'powershell.exe',
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+export function comProbePowerPoint(run: ProbeSpawn = realProbeSpawn): boolean {
+  const result = run(
+    powershellCommand(),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', probeScript()],
     { timeout: 30_000, windowsHide: true, encoding: 'utf8' }
   )
   return result.status === 0 && String(result.stdout).includes('ok')
@@ -310,17 +473,18 @@ function psQuote(text: string): string {
  * 两处**刻意**的写法：
  *   - `Presentations.Open(deck, ReadOnly:=$true, Untitled:=$false, WithWindow:=$false)`：不开窗口、
  *     不改原文件（只读）——自检不该打扰用户，也不该动被检查的那份产出。
- *   - `$before` 那道闸：`New-Object -ComObject` 在 PowerPoint 已经运行时是**附着到既有实例**，
- *     此时 `Quit()` 会把用户正开着的 PowerPoint 一起关掉。只有"本来没在跑"才允许退出。
+ *   - `$before` 那道闸：`New-Object -ComObject` 在 PowerPoint/WPS 已经运行时是**附着到既有实例**，
+ *     此时 `Quit()` 会把用户正开着的窗口一起关掉。只有"本来没在跑"才允许退出；进程名要算上
+ *     WPS 的 `wpp`（只数 `POWERPNT` 在 WPS 机器上恒为 0，那道闸门等于没装）。
  */
-function renderScript(deck: string, outDir: string): string {
+export function renderScript(deck: string, outDir: string): string {
   return [
     "$ErrorActionPreference = 'Stop'",
     // 不声明输出编码时，管道里拿到的是系统 ANSI（本机 936）——中文错误信息会变乱码
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
     `$deck = ${psQuote(deck)}`,
     `$out = ${psQuote(outDir)}`,
-    '$before = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue).Count',
+    `$before = @(Get-Process -Name ${POWERPOINT_PROCESS_NAMES} -ErrorAction SilentlyContinue).Count`,
     '$app = $null',
     '$pres = $null',
     'try {',
@@ -335,14 +499,38 @@ function renderScript(deck: string, outDir: string): string {
   ].join('\n')
 }
 
-/** 跑一次真渲染：PowerPoint COM 写 PNG 到 outDir（目录由调用方建好、清空） */
-async function renderWithPowerPoint(
+/** 渲染那条子进程的可注入形状（回归测试记录 command；缺省 = 真 `runProcess`） */
+export interface RenderRunSpec {
+  command: string
+  args: readonly string[]
+  timeoutMs: number
+  signal?: AbortSignal
+}
+
+export interface RenderRunResult {
+  spawnError: Error | null
+  aborted: boolean
+  timedOut: boolean
+  exitCode: number | null
+  text: string
+}
+
+export type RenderRunner = (spec: RenderRunSpec) => Promise<RenderRunResult>
+
+const realRenderRun: RenderRunner = (spec) => runProcess(spec)
+
+/**
+ * 跑一次真渲染：PowerPoint COM 写 PNG 到 outDir（目录由调用方建好、清空）。
+ * 起法与探测同源（都经 `powershellCommand()`）；`run` 只为回归测试可注入（默认真 `runProcess`）。
+ */
+export async function renderWithPowerPoint(
   deck: string,
   outDir: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  run: RenderRunner = realRenderRun
 ): Promise<RenderOutcome> {
-  const result = await runProcess({
-    command: 'powershell.exe',
+  const result = await run({
+    command: powershellCommand(),
     args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', renderScript(deck, outDir)],
     timeoutMs: RENDER_TIMEOUT_MS,
     signal
@@ -570,8 +758,8 @@ function outlineText(outline: RenderPptResult['outline']): string {
 
 /** 渲染不出来时的回执（人话 + 为什么 + 退化成什么；绝不假装成功） */
 function degradedMessage(detail: string, outline: RenderPptResult['outline']): string {
-  // 两条路都没有才是这个原因：随包 LibreOffice 没装上 + 本机也没有 PowerPoint
-  const why = detail === '' ? '本机既没有随包渲染器，也没有检测到 PowerPoint' : detail
+  // 两条路都没有才是这个原因：本机没有 PowerPoint / WPS，随包 LibreOffice 也没装上
+  const why = detail === '' ? '本机没有检测到 PowerPoint / WPS，随包的渲染器也没装上' : detail
   return [
     `没能渲染页图（${why}）。`,
     '这次只做了**结构自检**：下面是这份演示文稿逐页的真实文字，请逐页核一遍——',
@@ -683,23 +871,23 @@ export async function createRenderPptTool(
       const outRel = rel(outDir)
 
       // 页图目录是**我们派生的**：先整个清掉再重建，免得上一版多出来的页留在里面冒充这一次的产出。
-      // 整段（清目录 → 渲染 → 收页图清单）都在同一把锁里：两次 render_ppt 撞同一个 deck 时，
-      // 后一次不会在前一次刚清完目录、还没导出完的时候插进来。
-      const kitCli = renderer === 'libreoffice' ? kitCliFor(options) : null
+      // 整段（清目录 → 渲染 → [失败则清掉重来一遍] → 收页图清单）都在同一把锁里：两次 render_ppt
+      // 撞同一个 deck 时，后一次不会在前一次刚清完目录、还没导出完的时候插进来；round 78 的换路
+      // 也在这把锁内 —— 否则两次调用各自清一次目录，页图是谁的、算谁的，就说不清了。
+      const kitTarget = kitTargetFor(options)
       /**
        * 真正跑的那个实现：**注入的 render 优先**（单测与排障）→ 探测命中的那个走真实现。
        * 探测说 `'libreoffice'` 却找不到 CLI，只可能是被人为硬指的（`KYCLAW_PPT_RENDERER` /
        * 注入的 detect）：这时如实退化，**不悄悄改用 PowerPoint** —— 回执里的渲染器名会跟着说谎。
-       * 真实现那条路（两条都是）把 `signal` 传给 `runProcess`：用户点停止时渲染子进程会被收掉。
+       * 真实现（两条都是）把 `signal` 传给 `runProcess`：用户点停止时渲染子进程会被收掉。
        */
-      const render:
-        ((deckPath: string, dir: string, abort?: AbortSignal) => Promise<RenderOutcome>) | null =
+      const render: RenderTarget | null =
         options.render ??
         (renderer === 'libreoffice'
-          ? kitCli === null
-            ? null
-            : (deckPath, dir, abort) => renderWithLibreOffice(deckPath, dir, kitCli, abort)
-          : renderWithPowerPoint)
+          ? kitTarget
+          : renderer === 'powerpoint'
+            ? (options.comRender ?? renderWithPowerPoint)
+            : null)
 
       if (render === null) {
         return {
@@ -714,41 +902,99 @@ export async function createRenderPptTool(
         }
       }
 
-      const outcome = await ctx.state.runExclusive(outDir, async () => {
-        await ctx.fs.remove(outDir, { recursive: true }).catch(() => undefined)
-        await ctx.fs.mkdir(outDir)
-        const rendered = await render(deck, outDir, signal)
-        if (!rendered.ok) return { rendered, pages: [] as RenderPptResult['pages'] }
+      /**
+       * 自动命中的 COM 失败时的兜底（round 78，判据见 `shouldFallbackToKit`）：只有"自动探测出来的
+       * PowerPoint"才换路（点名的 / 注入了 render 的都不换）。kit 那条路不可用（没装 / 没注入）
+       * 就不换，保持原来的退化口径。
+       */
+      const fallback =
+        shouldFallbackToKit({
+          renderer,
+          forced: forcedRenderer(),
+          injectedRender: options.render !== undefined
+        }) && kitTarget !== null
+          ? kitTarget
+          : null
 
-        const names = sortPageFiles((await ctx.fs.readdir(outDir)).map((entry) => entry.name))
-        const pages = await Promise.all(
-          names.map(async (name, position) => {
-            const abs = join(outDir, name)
-            const stat = await statOrNull(ctx, abs)
-            return {
-              index: pageNumberOf(name) || position + 1,
-              path: `${outRel}/${name}`,
-              abs,
-              bytes: stat?.size ?? 0
-            }
-          })
-        )
-        return { rendered, pages }
+      const outcome = await ctx.state.runExclusive(outDir, async () => {
+        /** 一次尝试：先清掉/重建我方派生的页图目录，再让这条渲染器往里写（失败可整条重来） */
+        const attempt = async (
+          target: RenderTarget
+        ): Promise<{ rendered: RenderOutcome; pages: RenderPptResult['pages'] }> => {
+          await ctx.fs.remove(outDir, { recursive: true }).catch(() => undefined)
+          await ctx.fs.mkdir(outDir)
+          const rendered = await target(deck, outDir, signal)
+          if (!rendered.ok) return { rendered, pages: [] }
+
+          const names = sortPageFiles((await ctx.fs.readdir(outDir)).map((entry) => entry.name))
+          const pages = await Promise.all(
+            names.map(async (name, position) => {
+              const abs = join(outDir, name)
+              const stat = await statOrNull(ctx, abs)
+              return {
+                index: pageNumberOf(name) || position + 1,
+                path: `${outRel}/${name}`,
+                abs,
+                bytes: stat?.size ?? 0
+              }
+            })
+          )
+          return { rendered, pages }
+        }
+
+        const first = await attempt(render)
+        // 中止不是"失败"（round 73）：用户点了停止就到此为止，**不要**再换一条路接着渲
+        if (fallback === null || first.rendered.aborted === true) {
+          return { ...first, renderer, downgraded: '' }
+        }
+        // 成不成看两条：命令退出码 + 真的拿到了页图（跑完了却一张都没有，等于失败）
+        if (first.rendered.ok && first.pages.length > 0) {
+          return { ...first, renderer, downgraded: '' }
+        }
+
+        const firstDetail = first.rendered.ok ? NO_PAGES_DETAIL : first.rendered.detail
+        const second = await attempt(fallback)
+        if (second.rendered.aborted === true) return { ...second, renderer, downgraded: '' }
+        if (second.rendered.ok && second.pages.length > 0) {
+          return {
+            ...second,
+            // 页图来自 kit：**报实际的渲染器**，别让模型以为看的是本机 PowerPoint 出的图
+            renderer: 'libreoffice' as PptRenderer,
+            downgraded:
+              `注意：**本机 PowerPoint/WPS 渲染失败，已退回随包渲染器**（${firstDetail}）——` +
+              '下面是随包渲染器（LibreOffice）出的页图；缺字与版式口径跟本机 PowerPoint 不一定是同一套。'
+          }
+        }
+        // 两条都没成：**两条的真实原因都留下**（只报后一条会让人以为是 kit 的锅）
+        const secondDetail = second.rendered.ok ? NO_PAGES_DETAIL : second.rendered.detail
+        return {
+          rendered: {
+            ok: false,
+            detail: `本机 PowerPoint/WPS 渲染失败：${firstDetail}；随包渲染器也没成：${secondDetail}`
+          },
+          pages: [] as RenderPptResult['pages'],
+          renderer,
+          downgraded: ''
+        }
       })
 
       const pages: RenderPptResult['pages'] = outcome.pages
       // 用户中止（round 73）：与"渲染器失败"分开报 —— 别让模型据此判断"这台机器渲染不了"
       if (outcome.rendered.aborted === true) {
-        return { message: abortedMessage(outline), renderer, pages: [], attached: [], outline }
+        return {
+          message: abortedMessage(outline),
+          renderer: outcome.renderer,
+          pages: [],
+          attached: [],
+          outline
+        }
       }
       if (!outcome.rendered.ok || pages.length === 0) {
         const detail =
-          outcome.rendered.ok && pages.length === 0
-            ? '导出命令跑完了，但没有拿到任何页图'
-            : outcome.rendered.detail
+          outcome.rendered.ok && pages.length === 0 ? NO_PAGES_DETAIL : outcome.rendered.detail
         return {
           message: degradedMessage(detail, outline),
-          renderer,
+          renderer: outcome.renderer,
           pages: [],
           attached: [],
           outline
@@ -763,14 +1009,23 @@ export async function createRenderPptTool(
       const skipped = pool.length - visible.length
 
       const size = outcome.rendered.size
-      const notes: string[] = [
+      // 换过路就先说清楚（round 78）：页图来路不同，缺字与版式结论也不同，**不许静默**
+      const notes: string[] =
+        outcome.downgraded === ''
+          ? []
+          : [
+              outcome.downgraded,
+              '（这不影响你继续看图核——但"本机字体/版式完全一致"这句话这次不成立。）',
+              ''
+            ]
+      notes.push(
         size === undefined
           ? `已渲染 ${pages.length} 页，页图在 ${outRel}/。`
           : `已渲染 ${pages.length} 页（${size.width}×${size.height}），页图在 ${outRel}/。`,
         asked.length === 0
           ? `上面直接附了第 ${attached.join('、')} 页的**图**给你看。`
           : `上面直接附了你点名的第 ${attached.join('、')} 页的图。`
-      ]
+      )
       // 缺字只有渲染器知道（PPTX 里声明的字体在本机找不到）：页图会"看着像但字形不对"，
       // 不说清楚的话模型会当成版式问题去改设计。有才说，空数组不占篇幅。
       const missingFonts = outcome.rendered.missingFonts ?? []
@@ -798,7 +1053,7 @@ export async function createRenderPptTool(
 
       return {
         message: notes.join('\n'),
-        renderer,
+        renderer: outcome.renderer,
         dir: outRel,
         pages,
         attached,

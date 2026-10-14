@@ -124,7 +124,7 @@ export function ArchiveSettings(): React.JSX.Element {
               <section
                 key={row.entry.threadId}
                 data-testid={`archive-row-${row.entry.threadId}`}
-                className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+                className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
               >
                 <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
                   <span
@@ -163,7 +163,7 @@ export function ArchiveSettings(): React.JSX.Element {
               <section
                 key={entry.projectId}
                 data-testid={`archive-project-row-${entry.projectId}`}
-                className="flex flex-wrap items-center gap-3 rounded-panel border border-hairline p-3"
+                className="flex flex-wrap items-center gap-3 rounded-panel border border-surface-border p-3"
               >
                 <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
                   <span

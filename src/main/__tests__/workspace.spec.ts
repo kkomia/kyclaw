@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -18,7 +18,7 @@ let root: string
 let rootReal: string
 
 beforeAll(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'kyclaw-workspace-'))
+  tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'kyclaw-workspace-')))
   root = join(tmp, '项目')
   mkdirSync(join(root, '子目录'), { recursive: true })
   writeFileSync(join(tmp, 'a.txt'), 'a')

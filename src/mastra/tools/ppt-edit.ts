@@ -22,6 +22,11 @@
  *   ② 盘上那份和上一版**指纹对不上**（用户手改过 / 删过）→ 列出入口（以源为准覆盖 / 以文件为准
  *      重建源 / 谁也别动），默认**停**，绝不静默覆盖用户的改动；
  *   ③ 应用重启后照样能改 —— 源结构落库（不是内存），换一个进程读同一张表。
+ *
+ * 加一条（round 77）：**改出来的页排不下**（正文类版式连可读下限字号都放不进内容区、或封面 / 章节 /
+ * 结尾的固定框装不下那段文字，见 ppt-fit.ts）也整次拒绝 —— 盘上那份与库里的源结构都不动，报错点名
+ * 第几页、哪一项、差多少、怎么改（拆页 / 减字）。
+ * 与 `create_ppt` 同一条口径：绝不静默落一份明显溢出的稿；缩过字号的页照常落盘，回执里报出来。
  */
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
@@ -34,6 +39,7 @@ import {
   type ArtifactInput
 } from './artifacts'
 import { approvalSessionOf, sessionKey, statOrNull, type ToolContext } from './guard'
+import { overflowMessage, withFitNote } from './ppt-fit'
 import { lookupTemplate, PPT_TEMPLATE_NAMES } from '../../shared/ppt-templates'
 import {
   MAX_SLIDES,
@@ -445,6 +451,13 @@ export async function createEditPptTool(
       // 模板：源结构里记的是**上一版实际用的那套**（create_ppt 落的 rendered.theme），改版沿用
       const rendered = await renderPptx(next)
 
+      // round 77 排版预检：改出来的页里有排不下的（正文类到下限仍放不下、或封面 / 章节 / 结尾的
+      // 固定框装不下那段文字）就**整次拒绝** —— 盘上那份与库里的源结构都不动，
+      // 人话点名第几页、哪一项、差多少、怎么改（见 ppt-fit.ts）。
+      // 与 create_ppt 同一条口径：绝不静默落一份明显溢出的稿。
+      const overflow = overflowMessage(rendered.fits)
+      if (overflow !== null) throw new Error(overflow)
+
       const check = checkPackage(rendered.data, {
         kind: 'pptx',
         slides: rendered.slides,
@@ -458,7 +471,7 @@ export async function createEditPptTool(
         abs,
         rendered.data,
         `${rendered.slides} 页演示文稿，模板「${rendered.theme}」`,
-        { session, check: check.note }
+        { session, check: withFitNote(check.note, rendered.fits) }
       )
 
       // 新的源结构 + 新指纹写回去：下一次编辑就在这一版的基础上改

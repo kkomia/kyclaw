@@ -10,6 +10,15 @@
  * Git = 「改动」；终端 = 「终端」；预览 = 文件名（见 tabLabel）。过长的 CSS 截断（ellipsis + title 属性）。
  * 标签图标：四种工具各一个固定图标，**预览标签按文件类型**（见 tabIconOf / preview/file-icon.ts）。
  *
+ * round 77/78（窄窗兜底）：空间不足时面板会被 AppShell 摆成"铺满内容区"（布局结果，不是用户偏好，
+ * 见 shell-store 的 workPanelFit）。这个形态下面板没有把手、中列也藏起来了，所以头部中间那个槽换成
+ * **能真正走出来的动作**（不再是按不动的禁用 ⤢）：
+ *   - 可用宽还允许"面板 280 + 聊天 480" → `恢复并排布局`（把宽度收进上限，不动全屏偏好）；
+ *   - 真窄到并排不可能（如 800 窗 + 侧栏展开）→ `返回对话`（关面板）。
+ * 用户偏好就是全屏时不换（那时 ⤢ 的"回到窗口化"才有意义，点了会顺手把宽度收回并排上限）。
+ * 标签/工具照旧全挂着：铺满只是中列 hidden，终端的 PTY、浏览器页面、预览都不重挂、不重启
+ * （见 renderTool 的 key 口径）。
+ *
  * 面板底铺 `bg-surface`（与内容区同色，看不出差别）：万一 `<webview>` 这种原生客人不吃祖先的
  * visibility，后画的工具面板仍能把它盖住（浏览器是第一个标签，DOM 顺序在最后）。
  *
@@ -29,10 +38,12 @@
  * 兜底根解析，读回来的是别的文件夹里的同名文件）。
  */
 import {
+  Columns2,
   FolderTree,
   GitBranch,
   Globe,
   Maximize2,
+  MessageSquare,
   Minimize2,
   PanelRight,
   Plus,
@@ -45,7 +56,11 @@ import { cn } from '@renderer/components/ui/cn'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { useShellStore } from '@renderer/lib/shell-store'
+import {
+  canRestoreSplitLayout,
+  isWorkPanelSpaceConstrained,
+  useShellStore
+} from '@renderer/lib/shell-store'
 import { EmptyActions } from './EmptyActions'
 import { fileIconOf, type FileIconComponent } from './preview/file-icon'
 import { matchWorkbenchShortcut, WORKBENCH_ACTIONS } from './workbench-actions'
@@ -94,12 +109,29 @@ export function Workbench(): React.JSX.Element {
   const closeTab = useWorkbenchStore((state) => state.closeTab)
   const selectTab = useWorkbenchStore((state) => state.selectTab)
   const switchRoot = useWorkbenchStore((state) => state.switchRoot)
-  const fullscreen = useShellStore((state) => state.workPanelFullscreen)
+  const fullscreenPref = useShellStore((state) => state.workPanelFullscreen)
+  const fit = useShellStore((state) => state.workPanelFit)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
   const toggleFullscreen = useShellStore((state) => state.toggleWorkPanelFullscreen)
   const setWorkPanelOpen = useShellStore((state) => state.setWorkPanelOpen)
+  const restoreSideBySide = useShellStore((state) => state.restoreSideBySideLayout)
+  // round 77：面板此刻的摆法 = 用户偏好 or 空间不足的临时铺满（两种来源在视觉上同构，
+  // 所以按钮的图标/语义一律看这个 effective 值；偏好本身不被布局改）
+  const spaceConstrained = isWorkPanelSpaceConstrained(fit)
+  const fullscreen = fullscreenPref || spaceConstrained
+  // round 78：受限态下靠"收窄面板"还能不能回到并排（800 这种真窄窗不能 → 改成给"返回对话"）
+  const canRestoreSplit = fit !== null && canRestoreSplitLayout(fit)
   const root = useWorkbenchRoot()
   const rootPath = root.rootPath
+
+  /**
+   * ⤢ 的落点：宽窗一字不动（原有全屏语义）；受限态下顺手把宽度收回并排上限 ——
+   * 否则 auto 会立刻把面板铺回去，看着像"按了没反应"。
+   */
+  const onFullscreenClick = (): void => {
+    toggleFullscreen()
+    if (spaceConstrained) restoreSideBySide()
+  }
 
   // A5（用户实报）+ round 49（用户补充口径）：**变根**（切项目 / 移至项目 / 默认工作区变化）→
   // 面板收起 + 标签换到新根的存根（没有存根 = 空态；旧根的标签存起来，切回来还在）。
@@ -195,13 +227,36 @@ export function Workbench(): React.JSX.Element {
             align="end"
             tooltip="新建标签页"
           />
-          <IconButton
-            data-testid="workbench-fullscreen"
-            label={fullscreen ? '回到窗口化' : '面板全屏'}
-            icon={fullscreen ? <Minimize2 /> : <Maximize2 />}
-            onClick={toggleFullscreen}
-            className="border-transparent hover:bg-hover"
-          />
+          {/* 中间那个槽（round 77/78）：宽窗就是 ⤢ 全屏开关；auto 形态下全屏切换没有意义，
+              换成能真正走出来的动作 —— 能并排就"恢复并排布局"（把宽度收进可用宽），
+              实在太窄就"返回对话"（关面板）。都不动用户的全屏偏好。 */}
+          {spaceConstrained && !fullscreenPref ? (
+            canRestoreSplit ? (
+              <IconButton
+                data-testid="workbench-restore-split"
+                label="恢复并排布局"
+                icon={<Columns2 />}
+                onClick={restoreSideBySide}
+                className="border-transparent hover:bg-hover"
+              />
+            ) : (
+              <IconButton
+                data-testid="workbench-back-to-chat"
+                label="返回对话"
+                icon={<MessageSquare />}
+                onClick={() => setWorkPanelOpen(false)}
+                className="border-transparent hover:bg-hover"
+              />
+            )
+          ) : (
+            <IconButton
+              data-testid="workbench-fullscreen"
+              label={fullscreen ? '回到窗口化' : '面板全屏'}
+              icon={fullscreen ? <Minimize2 /> : <Maximize2 />}
+              onClick={onFullscreenClick}
+              className="border-transparent hover:bg-hover"
+            />
+          )}
           {/* 收起面板。面板**没开**时这里不画：那时"工作台开关"是内容卡右上角的浮动 ▯（AppShell）。
               外层 span 只为延续既有 e2e 契约（walkthrough 用 work-panel-toggle 收起面板）——
               它和浮动 ▯ 是同一个开关的两种摆法，所以沿用同一 testid（Playwright 点容器中心 =

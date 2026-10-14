@@ -15,6 +15,7 @@ import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-mod
 import { registerMemoryIpc } from './ipc/memory'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
+import { registerRulesIpc } from './ipc/rules'
 import { registerSearchIpc } from './ipc/search'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerTelemetryIpc } from './ipc/telemetry'
@@ -28,7 +29,7 @@ import { probeConfiguredProvidersQuietly } from './model-probe'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
 import { printPdf } from './print-pdf'
 import { getProviderKey, secretsPath } from './secrets'
-import { readSettings, settingsPath } from './settings'
+import { initializeDefaultWorkspace, readSettings, settingsPath } from './settings'
 import { readLangfuseConfig } from './telemetry'
 import {
   createInertUpdater,
@@ -126,6 +127,7 @@ if (!app.requestSingleInstanceLock()) {
 
   /** 内嵌服务的追踪状态（T17）：服务没起来 = 没挂上导出 */
   let agentTelemetry: { langfuse: boolean } | null = null
+  let agentRulesRegistered = false
 
   /**
    * round 15：会话 → 项目 id（`@` 文件列表的会话根解析用）。映射在 agent 服务的
@@ -147,6 +149,8 @@ if (!app.requestSingleInstanceLock()) {
 
     const userDataDir = app.getPath('userData')
     const secretsFile = secretsPath(userDataDir)
+    // 首轮设置/工作区 IPC 读取前补齐一次默认工作区；失败只记日志，不挡窗口启动。
+    initializeDefaultWorkspace(userDataDir, app.getPath('home'))
 
     registerWindowIpc()
     // round 63：更新源写进设置后要当场生效，所以设置通道带一个回调（更新器本身是异步装配的，
@@ -187,6 +191,7 @@ if (!app.requestSingleInstanceLock()) {
     // 内嵌浏览器的护栏（webview 的分区/window.open/右键菜单口径，进程级挂一次）
     installWebviewGuard()
     registerProjectsIpc(userDataDir)
+    registerRulesIpc(userDataDir, { processorRegistered: () => agentRulesRegistered })
     // round 64：内置技能目录由这一层算（要 app），插件页总览与 agent 侧共用同一个路径
     registerPluginIpc(userDataDir, { builtinSkillsDir: builtinSkillsDir() })
     registerAgentIpc(() => agentEndpoint)
@@ -306,6 +311,7 @@ if (!app.requestSingleInstanceLock()) {
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
         agentTelemetry = handle.telemetry
+        agentRulesRegistered = handle.rules.processorRegistered
         agentProjectIdOf = handle.projectIdOf
         // round 73：冷启动打点 —— **渲染端"可输入"就卡在这一刻之后**：端点没就绪，对话页一直停在
         // 「正在连接…」；就绪之后还要再等两次 HTTP（会话列表 + 历史回灌）。这一笔单出一行。
@@ -315,12 +321,14 @@ if (!app.requestSingleInstanceLock()) {
           console.log(`[kyclaw] agent token（仅开发期打印，便于 curl 本地联调）：${handle.token}`)
         }
         app.on('will-quit', () => {
+          agentRulesRegistered = false
           handle.stop().catch((error) => {
             console.error('[kyclaw] agent 服务关闭失败', error)
           })
         })
       })
       .catch((error) => {
+        agentRulesRegistered = false
         console.error('[kyclaw] agent 服务启动失败', error)
       })
 

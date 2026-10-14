@@ -418,7 +418,8 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
     await waitForChat(page)
     metrics.shell1280 = await readShell(page)
 
-    // 工作台兜底：1280 下主动开 → 收窄窗口 → 自动收起（--work-panel-collapse-width = 1120）
+    // 工作台窄窗兜底（round 77 改口径）：1280 下主动开 → 收窄窗口 → **不再自动收起**，
+    // 而是临时铺满内容区（中列 hidden 但不卸载）；判据是实测宽，见 --chat-min-readable-width = 480
     await page.getByTestId('work-panel-toggle').click()
     await expect(page.getByTestId('work-panel')).toHaveClass(/is-open/)
     await shot(page, 'C1-工作台展开-1280')
@@ -430,12 +431,20 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
       metrics[`workPanelOpenAt${width}`] = await page
         .getByTestId('work-panel')
         .evaluate((element) => element.classList.contains('is-open'))
-      await shot(page, `C2-窄窗${width}-工作台自动收起`)
+      metrics[`workPanelFullscreenSourceAt${width}`] = await page
+        .getByTestId('work-panel')
+        .getAttribute('data-fullscreen-source')
+      // 面板没关（is-open 仍真），但改成铺满：聊天让位、不挤压
+      await expect(page.getByTestId('work-panel')).toHaveAttribute('data-fullscreen-source', 'auto')
+      await expect(page.getByTestId('main-column')).toHaveClass(/hidden/)
+      await shot(page, `C2-窄窗${width}-工作台铺满内容区`)
     }
     metrics.workPanelWidthAt1000 = await page
       .getByTestId('work-panel')
       .evaluate((element) => element.getBoundingClientRect().width)
     await resizeTo(app, page, 1280)
+    // 拉回宽窗：自动恢复分栏（中列回来）
+    await expect(page.getByTestId('main-column')).not.toHaveClass(/hidden/)
 
     // 设置页（T5 走查项：内容列居中基准 + 左列设置菜单）
     await page.getByTestId('sidebar-menu-trigger').click()

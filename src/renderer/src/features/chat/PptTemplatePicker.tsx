@@ -178,7 +178,7 @@ function TemplateCard({ template, selected, onPick }: TemplateCardProps): React.
       <span
         className={cn(
           'block overflow-hidden rounded-button-lg border-(length:--hairline-width) transition-colors duration-(--motion-main) ease-main motion-reduce:transition-none',
-          selected ? 'border-(--accent)' : 'border-hairline'
+          selected ? 'border-(--accent)' : 'border-surface-border'
         )}
       >
         <PptCoverPreview theme={PPT_THEMES[template.name]} />

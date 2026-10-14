@@ -133,8 +133,11 @@ export async function renderXlsx(sheets: readonly ExcelSheetInput[]): Promise<Bu
  * exceljs 的动态装载：它的 CJS 出口是 `module.exports = require('./lib/exceljs.nodejs.js')`，
  * Node 的 ESM 互操作拿不到具名导出（实测 keys 只有 default），所以走 `.default`；
  * 类型面用 `typeof import('exceljs')` 显式标注（d.ts 是具名导出风格，没有 default 声明）。
+ *
+ * 导出给 `edit_excel` 用（tools/excel-edit.ts）：装载口径只有这一处的理由与指纹一样 ——
+ * 两边各写一份迟早会在"哪个版本、走不走 default"上漂。
  */
-async function loadExcelJs(): Promise<typeof import('exceljs')> {
+export async function loadExcelJs(): Promise<typeof import('exceljs')> {
   const loaded = (await import('exceljs')) as unknown as { default: typeof import('exceljs') }
   return loaded.default
 }

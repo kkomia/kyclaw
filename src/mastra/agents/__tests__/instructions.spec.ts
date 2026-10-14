@@ -142,4 +142,11 @@ describe('P1–P12：稳定层里的规则逐条在位', () => {
     expect(text).toContain('edit_ppt takes only the pages you touch')
     expect(text).toContain('Pass the whole `slides` array to create_ppt only for a first draft')
   })
+
+  it('B3：Cost gates 说清改一份已有的工作簿走 edit_excel（一个数也要重发整张表是花钱的老路）', () => {
+    expect(text).toContain('edit_excel takes only the cells you touch')
+    expect(text).toContain('never resend the whole `sheets` array to create_excel for one number')
+    // 拒绝口径也进了指令：它点名危险部件时不要重试，按它给的出口走
+    expect(text).toContain('do not retry')
+  })
 })

@@ -96,7 +96,8 @@ describe('ChatHeader · 结构', () => {
   it('左上角名称 = 会话标题（文本 + chevron、无描边文字按钮）；左缘与消息列口径对齐（pl-2 + px-2 = pl-4）', () => {
     mount()
 
-    expect(screen.getByTestId('chat-header')).toHaveClass('pl-2', 'pr-14')
+    expect(screen.getByTestId('chat-header')).toHaveClass('pl-2', 'pr-14', 'min-w-0')
+    expect(screen.getByTestId('chat-header')).not.toHaveClass('justify-between')
     const trigger = screen.getByTestId('chat-title')
     expect(trigger).toHaveTextContent('会话甲')
     expect(trigger).toHaveClass('h-8', 'px-2', 'rounded-control', 'hover:bg-hover')

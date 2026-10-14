@@ -390,6 +390,7 @@ describe('语义层（semantic.css）', () => {
     ['--text-primary', 'var(--Labels-Primary)'],
     ['--text-secondary', 'var(--Labels-Secondary)'],
     ['--border-hairline', 'var(--Separators-S1)'],
+    ['--border-surface', 'var(--Separators-S1-active)'],
     ['--fill-hover', 'var(--Fills-F1)'],
     ['--fill-selected', 'var(--Fills-F2)'],
     ['--fill-active', 'var(--Fills-F3)'],
@@ -423,6 +424,12 @@ describe('语义层（semantic.css）', () => {
 
   it.each(ALIASES)('语义 token %s = %s', (name, value) => {
     expectDecl(root, name, value, 'semantic :root')
+  })
+
+  it('自然表面边框独立于分隔线与字段边框', () => {
+    expectDecl(root, '--border-surface', 'var(--Separators-S1-active)', 'semantic :root')
+    expectDecl(root, '--border-field', 'var(--Fills-F1)', 'semantic :root')
+    expect(root.get('--border-surface')).not.toBe(root.get('--border-hairline'))
   })
 
   it('新增 token --accent-text：浅 #0065dd / 深 #3194ff（Kimi 没有蓝字档）', () => {
@@ -581,6 +588,7 @@ describe('tailwind.css 接线', () => {
     ['--color-ink-secondary', '--text-secondary'],
     ['--color-ink-tertiary', '--text-tertiary'],
     ['--color-hairline', '--border-hairline'],
+    ['--color-surface-border', '--border-surface'],
     ['--color-hover', '--fill-hover'],
     ['--color-selected', '--fill-selected'],
     ['--color-active', '--fill-active'],
@@ -720,21 +728,35 @@ describe('T5 导航项与新建会话尺寸（附录 A 实测值）', () => {
   })
 })
 
-describe('壳 · 窄窗兜底阈值（R2 修复轮）', () => {
+describe('壳 · 中列最小可读宽（round 77 取代窄窗固定阈值）', () => {
   const root = semantic.get(':root') ?? new Map<string, string>()
   const appShell = readSource('../../components/shell/AppShell.tsx')
 
-  it('阈值 token = 1120px（侧栏 240 + 内容最小可读宽 480 + 工作台 400）', () => {
-    expectDecl(root, '--work-panel-collapse-width', '1120px', 'semantic :root')
+  it('--chat-min-readable-width = 480px；旧的固定阈值 token 已退休', () => {
+    expectDecl(root, '--chat-min-readable-width', '480px', 'semantic :root')
+    // R2 D4 的 --work-panel-collapse-width = 1120 把"工作台 400 + 侧栏必开"写死了：
+    // 拖宽面板 / 收起侧栏都判不准（round 77 改成按实测宽算），所以不该再留这条。
+    expect(root.has('--work-panel-collapse-width'), '不该再留固定阈值 token').toBe(false)
   })
 
   it('token 与 AppShell 的 TS 兜底同值：只改一处不会两边漂开', () => {
-    const fromToken = Number.parseFloat(root.get('--work-panel-collapse-width') ?? '')
-    const fromTs = /COLLAPSE_WIDTH_FALLBACK\s*=\s*(\d+)/.exec(appShell)?.[1]
+    const fallbackOf = (name: string): number =>
+      Number.parseFloat(new RegExp(`${name}\\s*=\\s*(\\d+)`).exec(appShell)?.[1] ?? '')
 
-    expect(fromTs, 'AppShell.tsx 里没找到 COLLAPSE_WIDTH_FALLBACK').toBeDefined()
+    const fromToken = Number.parseFloat(root.get('--chat-min-readable-width') ?? '')
     expect(fromToken, 'token 值解析失败').toBeGreaterThan(0)
-    expect(fromToken).toBe(Number(fromTs))
+    expect(
+      fallbackOf('CHAT_MIN_READABLE_FALLBACK'),
+      'AppShell.tsx 里没找到 CHAT_MIN_READABLE_FALLBACK'
+    ).toBe(fromToken)
+
+    // 判据里另外两个实测折算也用 token：侧栏遮挡与内容卡右缘留缝
+    expect(fallbackOf('SIDEBAR_WIDTH_FALLBACK')).toBe(
+      Number.parseFloat(root.get('--sidebar-width') ?? '')
+    )
+    expect(fallbackOf('SHELL_EDGE_GAP_FALLBACK')).toBe(
+      Number.parseFloat(light.get('--space-1-5') ?? '')
+    )
   })
 })
 

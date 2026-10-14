@@ -134,6 +134,10 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     expect(screen.getByTestId('preview-name')).toHaveTextContent('说明.md')
     expect(screen.getByTestId('preview-name')).toHaveClass('text-b1')
     expect(screen.getByTestId('preview-path')).toHaveTextContent('docs/说明.md')
+    // round 77：标题栏三个动作都在（用本地应用打开 / 在资源管理器中定位 / 重新读取）
+    expect(screen.getByTestId('preview-open')).toHaveAttribute('aria-label', '用本地应用打开')
+    expect(screen.getByTestId('preview-reveal')).toBeInTheDocument()
+    expect(screen.getByTestId('preview-refresh')).toBeInTheDocument()
   })
 
   /* round 55：根目录文件不画那行路径（relative === 文件名，画出来是逐字重复） */
@@ -179,6 +183,33 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
     )
     expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
       '这个文件不在磁盘上了'
+    )
+  })
+
+  /* round 77：把文件交给本机默认应用（Word / WPS / Excel） */
+  it('「用本地应用打开」走 workbench:open；失败了把话露在预览区（不假装打开）', async () => {
+    bed.bridge.workbench.readFile.mockResolvedValue({
+      kind: 'text',
+      text: '正文\n',
+      size: 7,
+      truncated: false
+    })
+    render(<PreviewTool root={rootOf()} relative="notes.txt" />)
+    await screen.findByTestId('file-preview-text')
+
+    fireEvent.click(screen.getByTestId('preview-open'))
+    await waitFor(() =>
+      expect(bed.bridge.workbench.open).toHaveBeenCalledWith('thread-1', 'notes.txt')
+    )
+    // 成功时预览区照旧（错误态不会自己冒出来）
+    expect(screen.queryByTestId('file-preview-error')).not.toBeInTheDocument()
+
+    bed.bridge.workbench.open.mockRejectedValue(
+      new Error('打不开这个文件（系统没能用默认应用打开它）：拒绝访问')
+    )
+    fireEvent.click(screen.getByTestId('preview-open'))
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent(
+      '打不开这个文件（系统没能用默认应用打开它）'
     )
   })
 

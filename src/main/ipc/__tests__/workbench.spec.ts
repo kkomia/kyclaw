@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  *   1. 通道都注册了、入参先过闸门（非法调用不碰磁盘、不起进程）；
  *   2. 会话根在主进程解析（项目 → 默认工作区下的会话子目录（round 55）→ 唯一授权目录），判不出给人话；
  *   3. 文件/Git 把结果原样回吐；终端把 id 与发起它的 webContents 对上并推输出/退出。
+ *
+ * 交给系统的那几条路径（reveal / open）在断言里要过一遍 `canonical()`：`revealTarget` 走
+ * `resolveInsideWorkspace`，那里用 `realpathSync.native` 归一 —— Windows 上会把 8.3 短名展开成
+ * 长名（本机 tmpdir 是 `C:\LMSTUD~1`，native realpath 给 `C:\lmstudio-temp`）。不归一的话这些
+ * 断言在"临时目录带短名"的机器上必红，而那与被测行为无关。
  */
+const canonical = (path: string): string => realpathSync.native(path)
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
   return {
@@ -121,7 +127,7 @@ afterEach(() => {
 })
 
 describe('通道注册与入参闸门', () => {
-  it('十二条通道都注册了', () => {
+  it('十三条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'terminal:dispose',
       'terminal:resize',
@@ -131,6 +137,7 @@ describe('通道注册与入参闸门', () => {
       'workbench:git-overview',
       'workbench:git-show',
       'workbench:list-dir',
+      'workbench:open',
       'workbench:read-bytes',
       'workbench:read-file',
       'workbench:reveal',
@@ -138,7 +145,7 @@ describe('通道注册与入参闸门', () => {
     ])
   })
 
-  it('相对路径族（list-dir / read-file / read-bytes / reveal）：缺参、空 threadId、走样一律拒', async () => {
+  it('相对路径族（list-dir / read-file / read-bytes / reveal / open）：缺参、空 threadId、走样一律拒', async () => {
     // 同步的那三个（立刻给人话）
     for (const channel of [IPC_CHANNELS.workbench.listDir, IPC_CHANNELS.workbench.readFile]) {
       const handler = handlerOf(channel)
@@ -155,9 +162,14 @@ describe('通道注册与入参闸门', () => {
       await expect(readBytes(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
     }
 
-    const reveal = handlerOf(IPC_CHANNELS.workbench.reveal)
-    for (const args of [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]) {
-      await expect(reveal(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
+    // reveal 与 open 都是 async（要 await shell）、闸门同一套
+    for (const channel of [IPC_CHANNELS.workbench.reveal, IPC_CHANNELS.workbench.open]) {
+      const handler = handlerOf(channel)
+      for (const args of [[], [''], ['t'], ['t', 1], ['t', 'a', 'b']]) {
+        await expect(handler(EVENT, ...args), `${channel} ${JSON.stringify(args)}`).rejects.toThrow(
+          IpcInputError
+        )
+      }
     }
   })
 
@@ -310,11 +322,11 @@ describe('文件族', () => {
 
   it('reveal：目录走 shell.openPath，文件走 showItemInFolder', async () => {
     await handlerOf(IPC_CHANNELS.workbench.reveal)(EVENT, 't', 'src')
-    expect(mocks.openPath).toHaveBeenCalledWith(join(project, 'src'))
+    expect(mocks.openPath).toHaveBeenCalledWith(canonical(join(project, 'src')))
     expect(mocks.showItemInFolder).not.toHaveBeenCalled()
 
     await handlerOf(IPC_CHANNELS.workbench.reveal)(EVENT, 't', 'README.md')
-    expect(mocks.showItemInFolder).toHaveBeenCalledWith(join(project, 'README.md'))
+    expect(mocks.showItemInFolder).toHaveBeenCalledWith(canonical(join(project, 'README.md')))
   })
 
   it('openPath 回非空 = 没打开成：转成人话错误', async () => {
@@ -322,6 +334,65 @@ describe('文件族', () => {
     await expect(handlerOf(IPC_CHANNELS.workbench.reveal)(EVENT, 't', 'src')).rejects.toThrow(
       /打不开这个文件夹：拒绝访问/
     )
+  })
+
+  /* round 77：workbench:open —— 用系统默认应用打开文件（个人 PC 上通常就是 Word / WPS / Excel） */
+  it('open：文件交给 shell.openPath（本机默认应用），回真正给出去的那条绝对路径', async () => {
+    const result = await handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', 'README.md')
+    expect(mocks.openPath).toHaveBeenCalledWith(canonical(join(project, 'README.md')))
+    // 与 reveal 分工不同：这里**不**走 showItemInFolder（那是"在资源管理器里定位"）
+    expect(mocks.showItemInFolder).not.toHaveBeenCalled()
+    expect(result).toEqual({ path: canonical(join(project, 'README.md')) })
+  })
+
+  it('open：目录一律拒（打开文件夹是 reveal 的语义，别混），也不碰 shell', async () => {
+    await expect(handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', 'src')).rejects.toThrow(
+      /这是一个文件夹/
+    )
+    expect(mocks.openPath).not.toHaveBeenCalled()
+    expect(mocks.showItemInFolder).not.toHaveBeenCalled()
+  })
+
+  it('open：越界路径与不存在的文件都拒（containment / 存在性与 reveal 同一条闸门）', async () => {
+    await expect(handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', '../别的')).rejects.toThrow(
+      /路径不可用/
+    )
+    await expect(
+      handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', '没有这个.docx')
+    ).rejects.toThrow(/不在磁盘上/)
+    expect(mocks.openPath).not.toHaveBeenCalled()
+  })
+
+  it('open：只把文档/媒体交给系统 —— 可执行文件、脚本、快捷方式一律拒（不碰 shell）', async () => {
+    for (const name of ['安装包.exe', '更新.bat', 'run.ps1', '脚本.js', '快捷方式.lnk', 'noext']) {
+      writeFileSync(join(project, name), 'x')
+      await expect(handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', name), name).rejects.toThrow(
+        /不用系统应用打开这类文件/
+      )
+    }
+    expect(mocks.openPath).not.toHaveBeenCalled()
+
+    // 放行的那些照旧走 shell（含旧版 Office 与纯文本）
+    for (const name of ['方案.docx', '旧方案.doc', '说明.md', '笔记.txt']) {
+      writeFileSync(join(project, name), 'x')
+      await handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', name)
+    }
+    expect(mocks.openPath).toHaveBeenCalledTimes(4)
+  })
+
+  it('open：shell.openPath 回非空（系统没能用默认应用打开）→ 人话错误，不假装打开', async () => {
+    mocks.openPath.mockResolvedValueOnce('没有与此文件关联的应用')
+    await expect(handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', 'README.md')).rejects.toThrow(
+      /打不开这个文件（系统没能用默认应用打开它）：没有与此文件关联的应用/
+    )
+  })
+
+  it('open：会话根判不出时与人话拒绝（与其余工作台通道共用同一句）', async () => {
+    writeSettings(settingsPath(dir), { ...defaultSettings() })
+    await expect(handlerOf(IPC_CHANNELS.workbench.open)(EVENT, 't', 'README.md')).rejects.toThrow(
+      /还没有工作区/
+    )
+    expect(mocks.openPath).not.toHaveBeenCalled()
   })
 })
 

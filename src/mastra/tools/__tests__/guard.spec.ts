@@ -139,6 +139,14 @@ describe('needsApproval：spec §5.2 的审批判定', () => {
     expect(needsApproval(bed.ctx, 'edit_ppt', { path: join(bed.outside, 'x.pptx'), ops: [] })).toBe(
       false
     )
+    // edit_excel 与 create_excel 同一把尺（同一个 path 就地覆盖，先解析再改）
+    expect(
+      needsApproval(bed.ctx, 'edit_excel', { path: join(bed.outside, 'x.xlsx'), ops: [] })
+    ).toBe(false)
+    // edit_docx 同理
+    expect(
+      needsApproval(bed.ctx, 'edit_docx', { path: join(bed.outside, 'x.docx'), ops: [] })
+    ).toBe(false)
   })
 
   it('外部工具（MCP，ask 档）：没有 full 也没有全名规则时一律问——path 只是它的一个入参，不能证明安全', () => {

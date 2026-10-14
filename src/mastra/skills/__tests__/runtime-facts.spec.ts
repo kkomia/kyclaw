@@ -77,12 +77,20 @@ describe('skillRuntimeFactsText：四种组合各说清"自检怎么收尾"', ()
 
     expect(text).toContain('页图渲染：不可用')
     expect(text).toContain('逐页文字结构')
-    // round 68：不可用是"随包那份没装上 **且** 本机也没有 PowerPoint"，不是"没有 PowerPoint"
-    expect(text).toContain('既没有随包渲染器、也没有 PowerPoint')
+    // round 77：不可用是"本机没有 PowerPoint / WPS **且** 随包那份也没装上"，两条路都说了
+    expect(text).toContain('既没有 PowerPoint / WPS、也没有随包渲染器')
     expect(text).toContain('只做了结构与内容校验，未做视觉检查')
     expect(text).toContain('LibreOffice')
     expect(text).toContain('不要装渲染器')
     expect(text).toContain('不要为此换模型')
+  })
+
+  it('本机引擎（powerpoint）那条也说到 WPS：个人 PC 上装的多半是它', () => {
+    const text = skillRuntimeFactsText({ pptRenderer: 'powerpoint', vision: true })
+
+    expect(text).toContain('页图渲染：可用')
+    expect(text).toContain('PowerPoint / WPS')
+    expect(text).toContain('你自己打开这份 pptx 看到的一致')
   })
 
   it('读图能力没有结论：以实际收到的内容为准（图到了就看、没到就声明没看过）', () => {

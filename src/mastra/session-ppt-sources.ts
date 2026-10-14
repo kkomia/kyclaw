@@ -13,7 +13,6 @@
  * 行数据进出一律过 shared/session-ppt-sources.ts 的 zod（库里的行坏了要当场看出来，不是喂给模型）。
  */
 import type { LibSQLStore, SqliteClient } from '@mastra/libsql'
-import { createHash } from 'node:crypto'
 import {
   pptSourceRecordInputSchema,
   pptSourceRecordSchema,
@@ -24,10 +23,11 @@ import {
 /** 表名（自建表，与 Mastra 自己的表同库不同表） */
 export const SESSION_PPT_SOURCES_TABLE = 'session_ppt_sources'
 
-/** 文件指纹的口径**只有这一处**：内容 sha256 十六进制（大小声明的 size 由调用方另存） */
-export function sha256Of(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex')
-}
+/**
+ * 文件指纹：实现搬到了 `fingerprint.ts`（两个源结构 store 平级共用一份，谁也别再写第二遍）。
+ * 这里原样转出去 —— 既有调用方（tools/ppt.ts、tools/ppt-edit.ts 与 spec）的 import 路径不变。
+ */
+export { sha256Of } from './fingerprint'
 
 export interface SessionPptSourceStore {
   /** 建表（幂等；内部缓存，重复调用只建一次） */

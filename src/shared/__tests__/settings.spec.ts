@@ -20,9 +20,11 @@ describe('AppSettings schema', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
+      globalRules: '',
       providers: [],
       workspaces: [],
       defaultWorkspace: null,
+      defaultWorkspaceInitialized: false,
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -211,6 +213,9 @@ describe('默认工作区与项目 schema（T18）', () => {
   it('补丁 schema 里没有 defaultWorkspace / projects：两者都要过主进程的路径校验，各走专用通道', () => {
     expect(appSettingsPatchSchema.safeParse({ defaultWorkspace: 'D:\\ws' }).success).toBe(false)
     expect(appSettingsPatchSchema.safeParse({ defaultWorkspace: null }).success).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ defaultWorkspaceInitialized: true }).success).toBe(
+      false
+    )
     expect(appSettingsPatchSchema.safeParse({ projects: [] }).success).toBe(false)
     expect(
       appSettingsPatchSchema.safeParse({

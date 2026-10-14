@@ -19,15 +19,23 @@
  *     占位页 —— 那是无信息页，技能里明令禁止，工具层不该反过来批量生产它。没给就没有。
  *   - 一页既排不出内容（没有任何版式可挑）也没有显式 layout 时跳过（JSON 里常有多余空对象）；
  *     全都空则补一页占位，免得产出物是"零页演示文稿"（PowerPoint 打不开）。
- *   - 版式固定 **16:9**（LAYOUT_16x9）；所有文本框开 `fit: 'shrink'`（PowerPoint 侧"溢出自动缩小"）。
+ *   - 版式固定 **16:9**（LAYOUT_16x9）。文本框仍带 `fit:'shrink'`，但那是**空操作**：pptxgenjs 只写
+ *     裸 `<a:normAutofit/>`，缩放值要 PowerPoint 打开后按需算 —— 而"生成 → 导出页图"这条路上
+ *     没人算过（证据与标定见 ppt-fit.ts 头注）。**真正的防溢出是 `ppt-fit.ts` 的排版预算**。
+ *   - **排版预检**（round 77）：落盘前**逐页**量一遍（八种版式都量 —— 正文 / 分栏 / 表格 / 数字卡 /
+ *     引言量内容块，封面标题与副标题、章节页的引导语与章标题、结尾页那句话量各自的固定框；
+ *     页面标题最多两行，规则线与正文顶随之让位）。正文类版式的缩字号有**可读下限**
+ *     （正文 11pt / 分栏 10pt / 表格 10pt / 引言 16pt），封面 / 章节 / 结尾的框是设计给死的、
+ *     不缩字号：到下限仍排不下 → **拒绝这次输入，一个字节都不写**，报错点名第几页、哪一项、
+ *     差多少、怎么改（拆页 / 减字）。缩过字号的页照常落盘，但会在回执里报出来。
  *   - **断言**（`expect`）：用户说"必须 6 页""第 3 页必须有这句话"时写进来。落盘前真解包逐条核
  *     （页数按包内 slide 部件数；文本只看那一页的 slide 部件，图表文字与演讲者备注不算），
  *     没过**不拦落盘**，但回执会点名"哪一条没过、差在哪"，改不改由模型决定。
- *   - 内容与落盘分离：`renderPptx` 是纯入口（幻灯片数据 → 字节 + 实际页数 + 主题名，无 IO）。
+ *   - 内容与落盘分离：`renderPptx` 是纯入口（幻灯片数据 → 字节 + 实际页数 + 主题名 + 逐页排版结论，无 IO）。
  *   - 依赖：pptxgenjs（纯 JS，无原生依赖；Node 侧 `write({outputType:'nodebuffer'})` 直接回 Buffer）。
  */
 import type { Tool } from '@mastra/core/tools'
-import { coverPlan, motifBoxes, type PptBox } from '../../shared/ppt-templates'
+import { coverPlan, motifBoxes, type PptBox, type PptCoverPlan } from '../../shared/ppt-templates'
 import { z } from '../../shared/zod'
 import { sha256Of, type SessionPptSourceStore } from '../session-ppt-sources'
 import { assertPackage, checkPackage } from './artifact-check'
@@ -38,9 +46,43 @@ import {
   type ArtifactInput
 } from './artifacts'
 import { approvalSessionOf, sessionKey, type ToolContext } from './guard'
+import {
+  CLOSING_FRAME,
+  contentPlan,
+  fitPage,
+  FRAME,
+  overflowMessage,
+  paraSpaceAfterPt,
+  PPT_LAYOUTS,
+  quotePlan,
+  SECTION_FRAME,
+  statsPlan,
+  tablePlan,
+  titleLayout,
+  TWO_COLUMN_HEADING_H,
+  TWO_COLUMN_INSET,
+  twoColumnPlan,
+  withFitNote,
+  type CoverFrame,
+  type FitPageInput,
+  type PageFit,
+  type PptLayout,
+  type TitleLayout
+} from './ppt-fit'
 import { PPT_FONT, PPT_TEMPLATE_NAMES, resolveTheme, type PptTheme } from './ppt-themes'
 
-/** 输入上限（round 38 登记"输入规模无上限" + round 62 覆盖新字段）：超限让模型知道怎么改 */
+/**
+ * 传给外部的两个名字都源自 `ppt-fit.ts`（那里是唯一真相源）：版式清单与页面栅格。
+ * `FRAME` 被测试用来核"文本框有没有越过内容底"，`PPT_LAYOUTS` 是 `layout` 的取值清单。
+ */
+export { FRAME, PPT_LAYOUTS } from './ppt-fit'
+export type { PageFit, PptLayout } from './ppt-fit'
+
+/**
+ * 输入上限（round 38 登记"输入规模无上限" + round 62 覆盖新字段）：超限让模型知道怎么改。
+ * 与"一页真实放得下多少"（`ppt-fit.ts` 逐页量）是两把尺子：能整次拒绝的都靠量测，
+ * 这里只把**物理上永远排不下**的几条收回真实容量（表格行数：行高下限 0.4in，一页最多 7 行）。
+ */
 export const MAX_SLIDES = 60
 const MAX_BULLETS_PER_SLIDE = 30
 const MAX_BULLET_CHARS = 500
@@ -50,7 +92,11 @@ const MAX_SECTION_CHARS = 80
 const MAX_STATS = 6
 const MAX_STAT_VALUE_CHARS = 24
 const MAX_STAT_LABEL_CHARS = 60
-const MAX_TABLE_ROWS = 20
+/**
+ * 表格行数上限 = **一页真放得下的行数 − 表头那一行**（行高下限 0.4in × 7 行 = 2.8in，
+ * 内容区 3.16in）：给到 20 行只会换来一次"排不下"的整次失败（见 ppt-fit.ts 的 tablePlan）。
+ */
+const MAX_TABLE_ROWS = 6
 const MAX_TABLE_COLS = 8
 const MAX_CELL_CHARS = 200
 const MAX_QUOTE_CHARS = 300
@@ -58,20 +104,6 @@ const MAX_QUOTE_SOURCE_CHARS = 120
 const MAX_COLUMN_BULLETS = 12
 /** 断言条数上限：回执里要逐条报，太多会把上下文吃光 */
 const MAX_EXPECTS = 20
-
-/** 八种版式（`layout` 取值；顺序也是文档里介绍的顺序） */
-export const PPT_LAYOUTS = [
-  'cover',
-  'section',
-  'content',
-  'stats',
-  'table',
-  'two-column',
-  'quote',
-  'closing'
-] as const
-
-export type PptLayout = (typeof PPT_LAYOUTS)[number]
 
 const statSchema = z.object({
   value: z
@@ -83,7 +115,9 @@ const statSchema = z.object({
     .string()
     .min(1)
     .max(MAX_STAT_LABEL_CHARS, `数字卡的标签最长 ${MAX_STAT_LABEL_CHARS} 字，请精简`)
-    .describe('Caption under the figure')
+    .describe(
+      'Caption under the figure; cards sit side by side, so with 4 or more cards keep it to roughly 15 chars'
+    )
 })
 
 const tableSchema = z.object({
@@ -99,9 +133,13 @@ const tableSchema = z.object({
         .max(MAX_TABLE_COLS, `表格最多 ${MAX_TABLE_COLS} 列，请减少列数`)
     )
     .min(1, 'table 版式至少要有一行数据；不要表格请改用 content 版式')
-    .max(MAX_TABLE_ROWS, `表格最多 ${MAX_TABLE_ROWS} 行，请拆分页面或只留关键行`)
+    .max(
+      MAX_TABLE_ROWS,
+      `表格最多 ${MAX_TABLE_ROWS} 行数据（表头另占一行；一页只放得下 7 行字），请拆分页面或只留关键行`
+    )
     .describe(
-      'Data rows, a two-dimensional string array with one array per row; numbers are written as strings too'
+      'Data rows, a two-dimensional string array with one array per row; numbers are written as strings too. ' +
+        `Real page capacity is about 7 rows once the header is counted (at most ${MAX_TABLE_ROWS} data rows)`
     )
 })
 
@@ -147,27 +185,42 @@ export const pptSlideSchema = z.object({
     .string()
     .max(MAX_TITLE_CHARS, `每页标题最长 ${MAX_TITLE_CHARS} 字，请精简`)
     .optional()
-    .describe('Slide title; adding it shows the title with a theme-coloured rule under it'),
+    .describe(
+      'Slide title; adding it shows the title with a theme-coloured rule under it. Real capacity: two lines on a content page, ' +
+        'one line on a cover / section / closing page; a longer title fails the whole call and nothing is saved'
+    ),
   subtitle: z
     .string()
     .max(MAX_SUBTITLE_CHARS, `副标题最长 ${MAX_SUBTITLE_CHARS} 字，请精简`)
     .optional()
-    .describe('Slide subtitle, used by the cover layout only'),
+    .describe(
+      'Slide subtitle, used by the cover layout only; it has one line of room on the cover'
+    ),
   bullets: z
     .array(z.string().max(MAX_BULLET_CHARS, `单条要点最长 ${MAX_BULLET_CHARS} 字，请精简`))
     .max(MAX_BULLETS_PER_SLIDE, `一页最多 ${MAX_BULLETS_PER_SLIDE} 条要点，请拆分页面`)
     .optional()
-    .describe('Body bullet points, each with a theme-coloured dot; shorter reads better'),
+    .describe(
+      'Body bullet points, each with a theme-coloured dot; shorter reads better. ' +
+        'How much really fits one page: about 10 lines at 15pt (4-5 bullets of ≤25 chars); ' +
+        'the size is stepped down to a readable floor, and a page that still cannot fit is rejected — split it'
+    ),
   section: z
     .string()
     .max(MAX_SECTION_CHARS, `章节名最长 ${MAX_SECTION_CHARS} 字，请精简`)
     .optional()
-    .describe('Section name; setting it makes a section slide with a large auto-numbered index'),
+    .describe(
+      'Section name; setting it makes a section slide with a large auto-numbered index. One line only (roughly 18 CJK chars): ' +
+        'the section slide has a single fixed size, so a longer name fails the whole call'
+    ),
   stats: z
     .array(statSchema)
     .max(MAX_STATS, `一页最多 ${MAX_STATS} 张数字卡，请精简或拆页`)
     .optional()
-    .describe('KPI number cards, which make a stats slide with the cards side by side'),
+    .describe(
+      'KPI number cards, which make a stats slide with the cards side by side; the more cards, the narrower each one — ' +
+        'with 4 or more cards the labels must be short'
+    ),
   table: tableSchema
     .optional()
     .describe('Table, which makes a table slide with a themed header row and banded data rows'),
@@ -326,27 +379,18 @@ export interface PptxInput {
   slides: readonly PptSlideInput[]
 }
 
-/** 渲染结果：字节 + **实际写入的页数** + 主题名（自检与调用方共用这一处口径） */
+/** 渲染结果：字节 + **实际写入的页数** + 主题名 + 逐页排版结论（自检与调用方共用这一处口径） */
 export interface PptxResult {
   data: Buffer
   slides: number
   theme: string
+  /**
+   * 逐页排版预算结论（round 77，见 `ppt-fit.ts`）：`report` 的页**排不下**，调用方据此拒绝这次输入；
+   * `shrunk` 的页缩过字号，回执里报出来。八种版式都量（封面 / 章节页 / 结尾页量各自的固定框），
+   * 故页号连续、与 PowerPoint 的页序一一对应。
+   */
+  fits: PageFit[]
 }
-
-/** 正文类页面的栅格（英寸）：标题 → 强调短线 → 内容 → 页脚 */
-const FRAME = {
-  x: 0.6,
-  w: 8.8,
-  titleY: 0.4,
-  titleH: 0.72,
-  ruleY: 1.18,
-  ruleW: 1.0,
-  ruleH: 0.06,
-  bodyY: 1.5,
-  hairlineY: 5.02,
-  footerY: 5.08,
-  footerH: 0.3
-} as const
 
 /** 动态 import 的 pptxgenjs 实例 / Slide / 文本 run / 表格 类型（从默认导出推，不依赖它的 UMD 命名空间） */
 type PptxModule = typeof import('pptxgenjs')
@@ -363,6 +407,10 @@ type PptxTableCell = PptxTableRows[number][number]
  * **没有自动结尾页**：模型不给结尾页就没有结尾页。
  * `defaultTheme` = **这个会话**在对话页固定的模板名（按 threadId 现读；空串 / 不认得都退到自动挑，
  * 见 resolveTheme）。
+ *
+ * 返回值里的 `fits` 是**逐页排版结论**（纯量测，不抛错）：排不下的页由工具层拒绝落盘，
+ * 这里照实报出来 —— 渲染入口不做策略判断，测试与调用方能各取所需。
+ * 封面那一页按 `coverPlan(theme)` 的框量（两种封面构图的标题块宽度不同）。
  */
 export async function renderPptx(input: PptxInput, defaultTheme?: string): Promise<PptxResult> {
   const { default: PptxGenJS } = await import('pptxgenjs')
@@ -372,6 +420,9 @@ export async function renderPptx(input: PptxInput, defaultTheme?: string): Promi
   const theme = resolveTheme(input, defaultTheme)
   const plan = planPages(input)
   const footerLeft = input.title?.trim() ?? ''
+  // 封面那两个固定框随模板走（band 封面的标题块窄 0.8in），故由这里按当前模板传进去
+  const cover = coverFrameOf(coverPlan(theme))
+  const fits = plan.map((page, index) => fitPage(fitInputOf(page), index + 1, cover))
 
   let slides = 0
   if (plan.length === 0) {
@@ -391,7 +442,31 @@ export async function renderPptx(input: PptxInput, defaultTheme?: string): Promi
   return {
     data: Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer),
     slides,
-    theme: theme.name
+    theme: theme.name,
+    fits
+  }
+}
+
+/** 排版预算要看的那几个字段（与 `pptSlideSchema` 同形；量测不碰 `expect` / `path` / `theme`） */
+function fitInputOf(page: PlannedPage): FitPageInput {
+  return {
+    layout: page.layout,
+    title: page.slide.title,
+    subtitle: page.slide.subtitle,
+    section: page.slide.section,
+    bullets: page.slide.bullets,
+    columns: page.slide.columns,
+    table: page.slide.table,
+    stats: page.slide.stats,
+    quote: page.slide.quote
+  }
+}
+
+/** 模板的封面几何 → 排版预算要的那两个框（唯一一处映射，见 ppt-fit.ts 的 CENTER_COVER_FRAME） */
+function coverFrameOf(plan: PptCoverPlan): CoverFrame {
+  return {
+    title: { w: plan.title.w, h: plan.title.h, size: plan.titleSize },
+    subtitle: { w: plan.subtitle.w, h: plan.subtitle.h, size: plan.subtitleSize }
   }
 }
 
@@ -448,6 +523,13 @@ export async function createPptTool(
       // 缺省模板按**本会话**取（round 66：模板选择是会话级的）；显式 theme 仍然最优先（见 resolveTheme）
       const rendered = await renderPptx(input, options.getDefaultTheme?.(session))
 
+      // round 77 排版预检：有页排不下就**拒绝这次输入** —— 一个字节都不写，点名第几页、哪一项、
+      // 差多少、怎么改（拆页 / 减字 / 标题改短）。缩过字号的页不拦，回执里报出来（见下）。
+      // 为什么不"照写 + 回执提醒"：溢出稿在页图上是**看不见就交付**的（模型常常不看图），
+      // 而这份文件一发出去就是用户看到的成品 —— 宁可这一轮报错，也不落一份明显溢出的稿。
+      const overflow = overflowMessage(rendered.fits)
+      if (overflow !== null) throw new Error(overflow)
+
       // 产出后结构自检：包都读不通（fatal）就不落盘；某项不过照写但回执注明（断言没过也照写，
       // 让模型自己决定改还是报用户 —— 见 artifact-check 的 assertItems）
       const check = checkPackage(rendered.data, {
@@ -464,7 +546,7 @@ export async function createPptTool(
         abs,
         rendered.data,
         `${input.slides.length} 页演示文稿，模板「${rendered.theme}」`,
-        { session, check: check.note }
+        { session, check: withFitNote(check.note, rendered.fits) }
       )
 
       // round 76：把这份 deck 的**源结构**记进会话级映射，edit_ppt 之后就在它的基础上改。
@@ -693,70 +775,74 @@ function drawCover(ctx: PageContext, page: PlannedPage): void {
   }
 }
 
-/** 章节页：大号序号 + 章节名（序号自动排；给了 title 就当上方的小标签） */
+/** 章节页：大号序号 + 章节名（序号自动排；给了 title 就当上方的小标签）；几何与量测共用 SECTION_FRAME */
 function drawSection(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   addMotif(ctx)
   const kicker = trimText(page.slide.title)
   if (kicker !== undefined) {
     addBox(ctx.slide, kicker, {
-      x: 0.75,
-      y: 0.72,
-      w: 8.4,
-      h: 0.4,
-      fontSize: 13,
+      ...frameBoxOf(SECTION_FRAME.kicker),
+      fontSize: SECTION_FRAME.kicker.size,
       color: ctx.theme.muted,
       valign: 'middle'
     })
   }
   addBox(ctx.slide, String(page.sectionIndex), {
-    x: 0.72,
-    y: 1.15,
-    w: 2.2,
-    h: 1.3,
-    fontSize: 64,
+    ...frameBoxOf(SECTION_FRAME.index),
+    fontSize: SECTION_FRAME.index.size,
     bold: true,
     color: ctx.theme.accent,
     valign: 'middle'
   })
   addBox(ctx.slide, trimText(page.slide.section) ?? '', {
-    x: 0.75,
-    y: 2.5,
-    w: 8.4,
-    h: 0.85,
-    fontSize: 32,
+    ...frameBoxOf(SECTION_FRAME.name),
+    fontSize: SECTION_FRAME.name.size,
     bold: true,
     color: ctx.theme.title,
     valign: 'middle'
   })
-  addTitleRule(ctx, 0.78, 3.55, 1.2)
+  addTitleRule(ctx, SECTION_FRAME.rule.x, SECTION_FRAME.rule.y, SECTION_FRAME.rule.w)
   addFooter(ctx)
 }
 
-/** 正文要点页：标题 + 短线 + 逐条要点（每条一个主题色圆点） */
+/** 固定框 → addBox 认的几何（x/y/w/h 四件套；字号另给，因为它是 token 不是盒子的一部分） */
+function frameBoxOf(box: { x: number; y: number; w: number; h: number }): {
+  x: number
+  y: number
+  w: number
+  h: number
+} {
+  return { x: box.x, y: box.y, w: box.w, h: box.h }
+}
+
+/** 正文要点页：标题 + 短线 + 逐条要点（每条一个主题色圆点）；框与字号由排版预算给（见 ppt-fit.ts） */
 function drawContent(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   const title = trimText(page.slide.title)
-  if (title !== undefined) addTitleBlock(ctx, title)
+  const titleFit = titleLayout(title)
+  if (title !== undefined) addTitleBlock(ctx, title, titleFit)
 
   const bullets = cleanBullets(page.slide.bullets)
   if (bullets.length > 0) {
+    const plan = contentPlan(bullets, titleFit)
     addBullets(ctx, bullets, {
       x: FRAME.x,
-      y: title === undefined ? 1.25 : FRAME.bodyY,
-      w: FRAME.w,
-      h: title === undefined ? 3.6 : 3.35,
-      fontSize: 15
+      y: plan.y,
+      w: plan.w,
+      h: plan.h,
+      fontSize: plan.fontSize
     })
   }
   addFooter(ctx)
 }
 
-/** KPI 数字卡页：一行卡片，每张 = 浅底圆角卡 + 主题色顶条 + 大数字 + 标签 */
+/** KPI 数字卡页：一行卡片，每张 = 浅底圆角卡 + 主题色顶条 + 大数字 + 标签（字号由排版预算给） */
 function drawStats(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   const title = trimText(page.slide.title)
-  if (title !== undefined) addTitleBlock(ctx, title)
+  const titleFit = titleLayout(title)
+  if (title !== undefined) addTitleBlock(ctx, title, titleFit)
 
   const stats = (page.slide.stats ?? []).filter((stat) => stat.value.trim() !== '')
   if (stats.length === 0) {
@@ -764,35 +850,32 @@ function drawStats(ctx: PageContext, page: PlannedPage): void {
     return
   }
 
-  const top = title === undefined ? 1.3 : 1.85
-  const gap = 0.25
-  const cardW = (FRAME.w - gap * (stats.length - 1)) / stats.length
-  const cardH = 2.2
+  const plan = statsPlan(stats, titleFit)
 
   stats.forEach((stat, index) => {
-    const x = FRAME.x + index * (cardW + gap)
+    const x = FRAME.x + index * (plan.cardW + plan.gap)
     ctx.slide.addShape(ctx.pptx.ShapeType.roundRect, {
       x,
-      y: top,
-      w: cardW,
-      h: cardH,
+      y: plan.top,
+      w: plan.cardW,
+      h: plan.cardH,
       fill: { color: ctx.theme.canvas },
       line: { color: ctx.theme.muted, width: 0.75 },
       rectRadius: 0.08
     })
     ctx.slide.addShape(ctx.pptx.ShapeType.rect, {
       x,
-      y: top,
-      w: cardW,
+      y: plan.top,
+      w: plan.cardW,
       h: 0.07,
       fill: { color: ctx.theme.accent }
     })
     addBox(ctx.slide, stat.value.trim(), {
       x,
-      y: top + 0.3,
-      w: cardW,
-      h: 1.0,
-      fontSize: 30,
+      y: plan.valueY,
+      w: plan.cardW,
+      h: plan.valueH,
+      fontSize: plan.value.fontSize,
       bold: true,
       color: ctx.theme.accent,
       align: 'center',
@@ -800,10 +883,10 @@ function drawStats(ctx: PageContext, page: PlannedPage): void {
     })
     addBox(ctx.slide, stat.label.trim(), {
       x: x + 0.08,
-      y: top + 1.4,
-      w: cardW - 0.16,
-      h: 0.7,
-      fontSize: 12,
+      y: plan.labelY,
+      w: plan.cardW - 0.16,
+      h: plan.labelH,
+      fontSize: plan.label.fontSize,
       color: ctx.theme.body,
       align: 'center',
       valign: 'top'
@@ -812,15 +895,17 @@ function drawStats(ctx: PageContext, page: PlannedPage): void {
   addFooter(ctx)
 }
 
-/** 表格页：主题色表头 + 数据行隔行浅底 + 主题色描边 */
+/** 表格页：主题色表头 + 数据行隔行浅底 + 主题色描边；行高/字号由排版预算按行给（见 ppt-fit.ts） */
 function drawTable(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   const title = trimText(page.slide.title)
-  if (title !== undefined) addTitleBlock(ctx, title)
+  const titleFit = titleLayout(title)
+  if (title !== undefined) addTitleBlock(ctx, title, titleFit)
 
   const headers = (page.slide.table?.headers ?? []).map((text) => text.trim())
   const rows = (page.slide.table?.rows ?? []).map((row) => row.map((cell) => cell.trim()))
-  const cols = Math.max(headers.length, ...rows.map((row) => row.length), 1)
+  const plan = tablePlan({ headers, rows }, titleFit)
+  const cols = plan.cols
 
   const body: PptxTableRows = []
   if (headers.length > 0) {
@@ -849,11 +934,13 @@ function drawTable(ctx: PageContext, page: PlannedPage): void {
 
   ctx.slide.addTable(body, {
     x: FRAME.x,
-    y: title === undefined ? 1.3 : 1.7,
+    y: plan.y,
     w: FRAME.w,
     colW: Array.from({ length: cols }, () => FRAME.w / cols),
-    rowH: 0.4,
-    fontSize: 12,
+    // 行高**按行**给（放不下的行自己变高），并把这个总高当表格框的 h：声明即所得
+    rowH: plan.rowH,
+    h: plan.height,
+    fontSize: plan.fontSize,
     fontFace: PPT_FONT,
     color: ctx.theme.body,
     valign: 'middle',
@@ -862,33 +949,31 @@ function drawTable(ctx: PageContext, page: PlannedPage): void {
   addFooter(ctx)
 }
 
-/** 左右分栏：两栏浅底卡（左缘一道主题色竖条）+ 小标题 + 要点 */
+/** 左右分栏：两栏浅底卡（左缘一道主题色竖条）+ 小标题 + 要点；卡高到内容底，字号由排版预算给 */
 function drawTwoColumn(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   const title = trimText(page.slide.title)
-  if (title !== undefined) addTitleBlock(ctx, title)
+  const titleFit = titleLayout(title)
+  if (title !== undefined) addTitleBlock(ctx, title, titleFit)
 
-  const top = title === undefined ? 1.3 : 1.7
-  const height = title === undefined ? 3.4 : 3.05
-  const gap = 0.5
-  const colW = (FRAME.w - gap) / 2
   const columns = (page.slide.columns ?? []).slice(0, 2)
+  const plan = twoColumnPlan(columns, titleFit)
 
   columns.forEach((column, index) => {
-    const x = FRAME.x + index * (colW + gap)
+    const x = FRAME.x + index * (plan.colW + plan.gap)
     ctx.slide.addShape(ctx.pptx.ShapeType.roundRect, {
       x,
-      y: top,
-      w: colW,
-      h: height,
+      y: plan.top,
+      w: plan.colW,
+      h: plan.height,
       fill: { color: ctx.theme.canvas },
       rectRadius: 0.06
     })
     ctx.slide.addShape(ctx.pptx.ShapeType.rect, {
       x,
-      y: top,
+      y: plan.top,
       w: 0.07,
-      h: height,
+      h: plan.height,
       fill: { color: ctx.theme.accent }
     })
 
@@ -896,10 +981,10 @@ function drawTwoColumn(ctx: PageContext, page: PlannedPage): void {
     if (heading !== undefined) {
       addBox(ctx.slide, heading, {
         x: x + 0.25,
-        y: top + 0.15,
-        w: colW - 0.45,
-        h: 0.5,
-        fontSize: 15,
+        y: plan.top + 0.15,
+        w: plan.colW - TWO_COLUMN_INSET,
+        h: TWO_COLUMN_HEADING_H,
+        fontSize: plan.heading.fontSize,
         bold: true,
         color: ctx.theme.accent,
         valign: 'middle'
@@ -908,12 +993,13 @@ function drawTwoColumn(ctx: PageContext, page: PlannedPage): void {
 
     const bullets = cleanBullets(column.bullets)
     if (bullets.length > 0) {
+      const bulletsY = plan.top + (heading === undefined ? 0.2 : 0.75)
       addBullets(ctx, bullets, {
         x: x + 0.25,
-        y: heading === undefined ? top + 0.2 : top + 0.75,
-        w: colW - 0.45,
-        h: height - (heading === undefined ? 0.35 : 0.9),
-        fontSize: 13
+        y: bulletsY,
+        w: plan.colW - TWO_COLUMN_INSET,
+        h: FRAME.contentBottom - bulletsY,
+        fontSize: plan.verdict.fontSize
       })
     }
   })
@@ -924,8 +1010,9 @@ function drawTwoColumn(ctx: PageContext, page: PlannedPage): void {
 function drawQuote(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   const title = trimText(page.slide.title)
+  const titleFit = titleLayout(title)
   if (title !== undefined) {
-    addTitleBlock(ctx, title)
+    addTitleBlock(ctx, title, titleFit)
   } else {
     addBox(ctx.slide, '“', {
       x: 0.5,
@@ -939,20 +1026,24 @@ function drawQuote(ctx: PageContext, page: PlannedPage): void {
     })
   }
 
-  const top = title === undefined ? 1.5 : 1.8
+  // 竖条与引言框同高、出处紧贴其下 —— 引言再长也不会压到页脚（见 ppt-fit 的 quotePlan）
+  const plan = quotePlan(
+    { text: page.slide.quote?.text ?? '', source: page.slide.quote?.source },
+    titleFit
+  )
   ctx.slide.addShape(ctx.pptx.ShapeType.rect, {
     x: FRAME.x,
-    y: top,
+    y: plan.top,
     w: 0.08,
-    h: 1.9,
+    h: plan.textH,
     fill: { color: ctx.theme.accent }
   })
   addBox(ctx.slide, trimText(page.slide.quote?.text) ?? '', {
     x: 1.15,
-    y: top,
+    y: plan.top,
     w: 7.7,
-    h: 1.9,
-    fontSize: 24,
+    h: plan.textH,
+    fontSize: plan.verdict.fontSize,
     color: ctx.theme.title,
     lineSpacingMultiple: 1.25,
     valign: 'middle'
@@ -962,9 +1053,9 @@ function drawQuote(ctx: PageContext, page: PlannedPage): void {
   if (source !== undefined) {
     addBox(ctx.slide, `—— ${source}`, {
       x: 1.15,
-      y: top + 2.0,
+      y: plan.sourceY,
       w: 7.7,
-      h: 0.4,
+      h: plan.sourceH,
       fontSize: 13,
       color: ctx.theme.muted,
       align: 'right',
@@ -974,22 +1065,19 @@ function drawQuote(ctx: PageContext, page: PlannedPage): void {
   addFooter(ctx)
 }
 
-/** 结尾页：一句话 + 短线 + 装饰块（文字 = 模型给的 `title`；没有兜底文案，见 layoutReady） */
+/** 结尾页：一句话 + 短线 + 装饰块（文字 = 模型给的 `title`；没有兜底文案，见 layoutReady）；几何与量测共用 CLOSING_FRAME */
 function drawClosing(ctx: PageContext, page: PlannedPage): void {
   paintCanvas(ctx.slide, ctx.theme)
   addMotif(ctx)
   addBox(ctx.slide, trimText(page.slide.title) ?? '', {
-    x: 1.2,
-    y: 2.25,
-    w: 7.6,
-    h: 1.0,
-    fontSize: 36,
+    ...frameBoxOf(CLOSING_FRAME.text),
+    fontSize: CLOSING_FRAME.text.size,
     bold: true,
     color: ctx.theme.title,
     align: 'center',
     valign: 'middle'
   })
-  addTitleRule(ctx, 4.5, 3.42)
+  addTitleRule(ctx, CLOSING_FRAME.rule.x, CLOSING_FRAME.rule.y, CLOSING_FRAME.rule.w)
   addFooter(ctx)
 }
 
@@ -1014,24 +1102,35 @@ function paintCanvas(slide: PptxSlide, theme: PptTheme): void {
   slide.background = { color: theme.bg }
 }
 
-/** 文本框统一口径：字体「微软雅黑」+ 溢出自动缩小（round 38 的防溢出口径，新页一律沿用） */
+/**
+ * 文本框统一口径：字体「微软雅黑」+ `fit:'shrink'`。
+ *
+ * ⚠️ `fit:'shrink'` 在**生成 → 导出这条路径上不生效**：pptxgenjs 只写裸 `<a:normAutofit/>`，
+ * 缩放值要 PowerPoint 打开后按需计算（库源码注释原话："Shrink does not work automatically"），
+ * 导出页图时没人算过 —— 所以它只是"事后在 PowerPoint 里手动改这一页"的第二道保险，
+ * **不能**当"排不下也不会溢出"的理由。真正的防溢出是 `ppt-fit.ts` 的排版预算：
+ * 量测 → 缩到可读下限 → 仍排不下就拒绝这次输入。
+ */
 function addBox(slide: PptxSlide, text: string | PptxTextRun[], options: PptxTextOptions): void {
   slide.addText(text, { fontFace: PPT_FONT, fit: 'shrink', ...options })
 }
 
-/** 正文类页面的标题块：标题 + 标题下的主题色短线（统一点缀系统的核心记号） */
-function addTitleBlock(ctx: PageContext, title: string): void {
+/**
+ * 正文类页面的标题块：标题 + 标题下的主题色短线。
+ * 标题最多两行（`titleLayout` 给的字号/框高）；短线落在标题框**之下**，不被第二行文字穿过。
+ */
+function addTitleBlock(ctx: PageContext, title: string, layout: TitleLayout): void {
   addBox(ctx.slide, title, {
     x: FRAME.x,
     y: FRAME.titleY,
     w: FRAME.w,
-    h: FRAME.titleH,
-    fontSize: 26,
+    h: layout.boxH,
+    fontSize: layout.fontSize,
     bold: true,
     color: ctx.theme.title,
     valign: 'middle'
   })
-  addTitleRule(ctx)
+  addTitleRule(ctx, FRAME.x, layout.ruleY)
 }
 
 /** 标题下的一条 accent 短线 */
@@ -1088,7 +1187,10 @@ function addFooter(ctx: PageContext): void {
   })
 }
 
-/** 要点列表：每条一个主题色圆点（● 是独立 run，圆点颜色才跟得上主题）+ 1.25 倍行距、段后 10pt */
+/**
+ * 要点列表：每条一个主题色圆点（● 是独立 run，圆点颜色才跟得上主题）+ 1.25 倍行距。
+ * 段后距**随字号缩放**（15pt → 10pt，与原来写死的那个值一致）：不缩段后距的话，缩字号买不到行数。
+ */
 function addBullets(
   ctx: PageContext,
   bullets: readonly string[],
@@ -1118,7 +1220,7 @@ function addBullets(
     fontSize: area.fontSize,
     color: ctx.theme.body,
     lineSpacingMultiple: 1.25,
-    paraSpaceAfter: 10,
+    paraSpaceAfter: paraSpaceAfterPt(area.fontSize),
     valign: 'top'
   })
 }

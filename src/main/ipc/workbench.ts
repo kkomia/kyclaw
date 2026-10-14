@@ -41,6 +41,7 @@ import {
 import { settingsPath } from '../settings'
 import { gitLog, gitOverview, gitShow, type GitRunner } from '../workbench-git'
 import {
+  assertOpenable,
   listDir,
   readFileBytes,
   readFilePreview,
@@ -163,6 +164,38 @@ export function registerWorkbenchIpc(
       if (problem !== '') throw new Error(`打不开这个文件夹：${problem}`)
     } else {
       shell.showItemInFolder(target)
+    }
+    return { path: target }
+  })
+
+  /**
+   * 用**系统默认应用**打开一个文件（个人 PC 上通常就是 Word / WPS / Excel 这件）。
+   *
+   * 与 reveal 的分工是刻意的：reveal 是"在资源管理器里定位"（目录也认，走 openPath/showItemInFolder），
+   * 这里是"把文件交给用户装的那件应用"。三道闸门按顺序：
+   *   1. containment / 存在性复用 `revealTarget`（resolveInsideWorkspace + stat 一次，同一条闸门）；
+   *   2. **目录一律拒**：openPath 打在目录上会打开资源管理器，那就把 reveal 的语义混进来了，
+   *      用户会以为"用本地应用打开"= 打开文件夹；
+   *   3. **扩展名闸门** `assertOpenable`：`shell.openPath` 在 Windows 上就是 ShellExecute，
+   *      一个 .exe / .bat / .ps1 / .lnk 交过去是**执行** —— 工作区里的文件模型也能写，
+   *      这条通道不能变成"模型写、用户点、系统跑"（只有文档与媒体放行，见那张表）。
+   *      认不出的类型也给不出"用哪个应用开"这件事 —— 那本该由用户自己决定（先定位再开）。
+   * `shell.openPath` 失败时回**非空字符串**（不是抛），在这里翻成人话错误 —— 不假装打开。
+   */
+  ipcMain.handle(IPC_CHANNELS.workbench.open, async (_event, ...args) => {
+    const [threadId, relative] = parseIpcArgs(
+      workbenchRelativeArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.open
+    )
+    const target = revealTarget(rootOf(threadId), relative)
+    if (statSync(target).isDirectory()) {
+      throw new Error('这是一个文件夹：文件夹请用「在文件资源管理器中打开」，这里只打开文件')
+    }
+    assertOpenable(relative)
+    const problem = await shell.openPath(target)
+    if (problem !== '') {
+      throw new Error(`打不开这个文件（系统没能用默认应用打开它）：${problem}`)
     }
     return { path: target }
   })
