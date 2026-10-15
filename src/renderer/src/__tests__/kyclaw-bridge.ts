@@ -1,12 +1,16 @@
 import { vi, type Mock } from 'vitest'
-import type {
-  ConnectionTestResult,
-  KyclawAgentApi,
-  KyclawApi,
-  KyclawWindowApi,
-  LangfuseState,
-  SearchKeyStates,
-  UpdateState
+import {
+  CONNECTION_TEST_SCOPE_NOTE,
+  type ConnectionTestResult,
+  type KyclawAgentApi,
+  type KyclawApi,
+  type KyclawSettingsApi,
+  type KyclawWindowApi,
+  type LangfuseState,
+  type ProviderModelDiscoveryResult,
+  type ProviderModelOption,
+  type SearchKeyStates,
+  type UpdateState
 } from '@shared/ipc'
 import {
   defaultSettings,
@@ -49,7 +53,37 @@ export interface SettingsApiStub {
   testProvider: Mock<(id: string) => Promise<ConnectionTestResult>>
   /** round 22：模型元数据探测（默认回当前设置；用例喂 probedModels） */
   probeModels: Mock<(id: string) => Promise<AppSettings>>
+  /** 用户反馈 007：列端点上的可选模型（只读；默认空表，用例喂清单） */
+  listProviderModels: Mock<(id: string) => Promise<ProviderModelOption[]>>
+  /** 用户反馈 007：拿刚填的地址与密钥发现模型（默认"读不到"，用例喂清单/失败原因） */
+  discoverProviderModels: Mock<KyclawSettingsApi['discoverProviderModels']>
   removeProvider: Mock<(id: string) => Promise<AppSettings>>
+}
+
+/** 造一份「测试连接」结果（005 的新形状）；用例按需改某一步或整体 ok */
+export interface ConnectionTestPatch {
+  ok?: boolean
+  latencyMs?: number
+  message?: string
+  steps?: ConnectionTestResult['steps']
+}
+
+/**
+ * 「测试连接」三步全绿的结果。暴露成工厂是为了让"没验出来 / 某一步失败"这些用例
+ * 只写它关心的那一步。
+ */
+export function passingConnectionTest(patch: ConnectionTestPatch = {}): ConnectionTestResult {
+  return {
+    ok: patch.ok ?? true,
+    latencyMs: patch.latencyMs ?? 128,
+    steps: patch.steps ?? [
+      { id: 'connectivity', status: 'passed', latencyMs: 40, detail: '端点返回了一条可解析的响应' },
+      { id: 'streaming', status: 'passed', latencyMs: 60, detail: '流式拿到 4 个字符的正文' },
+      { id: 'tools', status: 'passed', latencyMs: 28, detail: '模型也真调了 kyclaw_probe' }
+    ],
+    ...(patch.message === undefined ? {} : { message: patch.message }),
+    scopeNote: CONNECTION_TEST_SCOPE_NOTE
+  }
 }
 
 export interface WorkspaceApiStub {
@@ -138,9 +172,16 @@ function settingsApi(state: BridgeState): SettingsApiStub {
       }
       return states
     }),
-    testProvider: vi.fn(async () => ({ ok: true as const, latencyMs: 128 })),
+    testProvider: vi.fn(async () => passingConnectionTest()),
     // round 22：模型元数据探测（默认空操作回当前设置；用例用 mockResolvedValue 喂 probedModels）
     probeModels: vi.fn(async () => state.current),
+    // 用户反馈 007：列端点上的模型（默认空表 = 读不到；用例用 mockResolvedValue 喂清单）
+    listProviderModels: vi.fn(async () => [] as ProviderModelOption[]),
+    // 用户反馈 007：拿刚填的地址/密钥发现模型（默认"读不到"——不假装成功）
+    discoverProviderModels: vi.fn(async (): Promise<ProviderModelDiscoveryResult> => ({
+      ok: false,
+      message: '读不到这条端点的模型清单'
+    })),
     removeProvider: vi.fn(async (id: string) => {
       state.current = {
         ...state.current,

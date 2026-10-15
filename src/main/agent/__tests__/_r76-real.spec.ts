@@ -35,7 +35,6 @@ import { startAgentServer, type AgentServerHandle } from '../service'
 import { KYCLAW_AGENT_ID } from '../../../mastra/agents/kyclaw'
 import { resolveModel } from '../../../mastra/model'
 import { checkPackage, readZipEntries } from '../../../mastra/tools/artifact-check'
-import { computeCost, pricingFor } from '../../../mastra/usage'
 import { settingsPath, writeSettings } from '../../settings'
 import { defaultSettings, type Workspace } from '../../../shared/settings'
 import type { ProviderConfig } from '../../../shared/providers'
@@ -159,7 +158,6 @@ interface TurnRecord {
   promptTokens: number
   cachedTokens: number
   outputTokens: number
-  cost: number | null
   tools: Array<{ name: string; inputChars: number }>
 }
 
@@ -199,7 +197,6 @@ describe.runIf(enabled)('R76 探针：整份重生成 vs 只发增量（真模�
         return response
       }) as typeof globalThis.fetch
 
-      const pricing = pricingFor(MODEL)
       const dirs: string[] = []
       const servers: AgentServerHandle[] = []
       const report: Record<string, unknown> = { model: MODEL, task: TASK, change: CHANGE }
@@ -276,14 +273,6 @@ describe.runIf(enabled)('R76 探针：整份重生成 vs 只发增量（真模�
             promptTokens,
             cachedTokens,
             outputTokens,
-            cost:
-              pricing === null
-                ? null
-                : computeCost(pricing, {
-                    input: promptTokens,
-                    output: outputTokens,
-                    cachedInput: cachedTokens
-                  }),
             tools: toolCallsOfSse(body)
           }
         }
@@ -350,11 +339,11 @@ describe.runIf(enabled)('R76 探针：整份重生成 vs 只发增量（真模�
         const createInput = biggest((before.firstTurn as TurnRecord) ?? beforeEdit)
 
         console.log(
-          `[r76] before 改一页：输出 ${beforeEdit.outputTokens} token / ¥${(beforeEdit.cost ?? 0).toFixed(4)}；` +
+          `[r76] before 改一页：输入 ${beforeEdit.promptTokens}（缓存 ${beforeEdit.cachedTokens}）/ 输出 ${beforeEdit.outputTokens} token；` +
             `最大入参 ${biggest(beforeEdit)} 字符（整份重发：第一版 create_ppt 的入参 ${createInput} 字符）；工具 ${beforeEdit.tools.map((c) => c.name).join('→')}`
         )
         console.log(
-          `[r76] after  改一页：输出 ${afterEdit.outputTokens} token / ¥${(afterEdit.cost ?? 0).toFixed(4)}；` +
+          `[r76] after  改一页：输入 ${afterEdit.promptTokens}（缓存 ${afterEdit.cachedTokens}）/ 输出 ${afterEdit.outputTokens} token；` +
             `最大入参 ${biggest(afterEdit)} 字符；工具 ${afterEdit.tools.map((c) => c.name).join('→')}`
         )
         console.log(

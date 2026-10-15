@@ -1299,6 +1299,68 @@ describe('round 19 · / 命令分区（压缩上下文）与压缩 notice', () =
   })
 })
 
+/**
+ * round 85（用户实报 016 问题三：「/」菜单里没有"进入规划模式"）。
+ *
+ * 命令浮窗里多一条模式入口，选中走的是 ＋ 菜单那条**同一个实现**（Composer 的 `mode.plan.onSelect`
+ * = ChatPage 的 enterPlan）；不传 mode（未就绪 / 已在规划里）时这条不出现。
+ */
+describe('round 85 · / 命令浮窗里的「进入规划模式」', () => {
+  it('键入 /：默认高亮仍是「压缩上下文」（命令分区首条），模式入口排在它后面', () => {
+    const onCompact = vi.fn()
+    const onSelect = vi.fn()
+    setup({ onCompact, mode: { plan: { onSelect }, tasks: null } })
+    const input = typeAt('/')
+
+    expect(screen.getByTestId('suggest-command:compact')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('suggest-command:plan')).toHaveTextContent('进入规划模式')
+
+    // 习惯性打 `/` 再回车 = 压缩上下文（不是被切进规划模式）
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onCompact).toHaveBeenCalledTimes(1)
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(input).toHaveValue('')
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+  })
+
+  it('下移到模式入口再回车 → mode.plan.onSelect（清掉触发词、浮窗收起）', () => {
+    const onSelect = vi.fn()
+    setup({ mode: { plan: { onSelect }, tasks: null } })
+    const input = typeAt('/')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(screen.getByTestId('suggest-command:plan')).toHaveAttribute('data-active', 'true')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(input).toHaveValue('')
+    expect(screen.getByTestId('composer-suggest')).not.toHaveAttribute('data-open')
+  })
+
+  it('正在跑 / 等审批（plan.disabled）：行可见但禁用，停在它上面回车不触发', () => {
+    const onSelect = vi.fn()
+    setup({ mode: { plan: { onSelect, disabled: true }, tasks: null } })
+    const input = typeAt('/')
+
+    const row = screen.getByTestId('suggest-command:plan')
+    expect(row).toBeDisabled()
+    // 下移到这条禁用行：回车什么都不发生（触发词也留着）
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(input).toHaveValue('/')
+    expect(screen.getByTestId('composer-suggest')).toHaveAttribute('data-open', 'true')
+  })
+
+  it('没有 mode（实例未就绪 / 已在规划里）：这条不出现，命令分区只有压缩', () => {
+    setup()
+    typeAt('/')
+
+    expect(screen.queryByTestId('suggest-command:plan')).not.toBeInTheDocument()
+    expect(screen.getByTestId('suggest-command:compact')).toBeInTheDocument()
+  })
+})
+
 describe('round 22 · probed 实测优先（菜单值来自真实元数据）', () => {
   const FLASH = {
     id: 'deepseek',
@@ -1384,6 +1446,50 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
 
     await tick()
     expect(bridge.probeModels).not.toHaveBeenCalled()
+  })
+
+  it('手动「刷新模型信息」：**不看 TTL**，缓存新鲜也再探一次（手动可重试）', async () => {
+    const bridge = mountChip(probedNow())
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    await tick()
+    // 自动那条路：缓存新鲜 → 不问
+    expect(bridge.probeModels).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('model-refresh-meta'))
+
+    await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
+    expect(bridge.probeModels).toHaveBeenCalledTimes(1)
+  })
+
+  it('手动刷新的反馈：拿到新时间戳 → "已刷新"', async () => {
+    const bridge = mountChip(probedNow())
+    bridge.probeModels.mockResolvedValueOnce({
+      ...defaultSettings(),
+      providers: [FLASH],
+      probedModels: {
+        'deepseek:deepseek-flash': {
+          contextWindow: 1_048_576,
+          fetchedAt: new Date(Date.now() + 60_000).toISOString()
+        }
+      }
+    })
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-refresh-meta'))
+
+    expect(await screen.findByTestId('composer-notice')).toHaveTextContent('模型信息已刷新')
+  })
+
+  it('手动刷新没问出新时间戳（端点不可达 / 没给元数据）→ 如实说"没能刷新"，不假装成功', async () => {
+    const bridge = mountChip(probedNow())
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-refresh-meta'))
+
+    // 默认 stub 回吐的设置里 fetchedAt 没变 = 这一趟什么也没问出来
+    expect(await screen.findByTestId('composer-notice')).toHaveTextContent('没能刷新')
+    expect(bridge.probeModels).toHaveBeenCalledWith('deepseek')
   })
 })
 
@@ -1869,5 +1975,115 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     expect(source).not.toMatch(/minHeight:\s*['"]?\d+px/)
     expect(source).toContain('min-h-(--composer-input-min-height)')
     expect(source).toContain('min-h-(--composer-input-min-height-hero)')
+  })
+})
+
+describe('用户反馈 001/002/004 · 模型菜单 = 通道 × 模型', () => {
+  const MULTI = {
+    id: 'deepseek',
+    type: 'openai-compatible' as const,
+    baseUrl: 'https://api.deepseek.com',
+    name: '公司网关',
+    model: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
+    isDefault: true
+  }
+  const OTHER = {
+    id: 'other',
+    type: 'openai-compatible' as const,
+    baseUrl: 'https://example.com',
+    model: 'gpt-4o-mini',
+    isDefault: false
+  }
+
+  let bridge: KyclawBridgeStubs
+
+  function mount(providers: readonly unknown[], extra: Partial<AppSettings> = {}): void {
+    const initial = { ...defaultSettings(), ...extra, providers } as AppSettings
+    bridge = installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    setup()
+  }
+
+  beforeEach(() => {
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  afterEach(() => {
+    clearKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  })
+
+  it('001：一条通道两个模型 → 两条条目；选另一个 = 写回该通道的 model + isDefault 挪到它', async () => {
+    mount([MULTI])
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    // 当前模型沿用旧 testid，另一个按模型名区分
+    expect(screen.getByTestId('composer-model-deepseek')).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByTestId('composer-model-deepseek-deepseek-v4-pro')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('composer-model-deepseek-deepseek-v4-pro'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        providers: [
+          // 001：写回的是该通道的 `model`（当前选中的那个），注册清单原样不动
+          { ...MULTI, model: 'deepseek-v4-pro', isDefault: true }
+        ]
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-model')).toHaveTextContent('deepseek-v4-pro')
+    )
+    // 落盘回来的设置里 isDefault 只在一条上
+    expect(
+      useSettingsStore.getState().settings.providers.filter((provider) => provider.isDefault)
+    ).toHaveLength(1)
+  })
+
+  it('001：跨通道选模型也把默认挪过去（既有字段就是选择器，没有第二个"当前模型"）', async () => {
+    mount([MULTI, OTHER])
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('composer-model-other'))
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        providers: [
+          { ...MULTI, isDefault: false },
+          { ...OTHER, isDefault: true }
+        ]
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-model')).toHaveTextContent('gpt-4o-mini')
+    )
+  })
+
+  it('002：有歧义时（多通道）每条右侧标出渠道名（手填的渠道名优先）', () => {
+    mount([MULTI, OTHER])
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+
+    expect(screen.getByTestId('composer-model-deepseek')).toHaveTextContent('公司网关')
+    // 没填渠道名的一条显示 id（回落口径见 providerLabel）
+    expect(screen.getByTestId('composer-model-other')).toHaveTextContent('other')
+  })
+
+  it('004：模型名按展示名显示——但落盘的 model 仍是 API 标识原文', () => {
+    mount([{ ...MULTI, model: 'deepseek-v4-pro', models: undefined }], {
+      modelOverrides: { 'deepseek:deepseek-v4-pro': { displayName: '深度思考模型' } }
+    })
+
+    expect(screen.getByTestId('composer-model')).toHaveTextContent('深度思考模型')
+
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-model-deepseek')).toHaveTextContent('深度思考模型')
+    // 选它（已经是当前这一条 → 空操作）：展示名不参与任何写回
+    fireEvent.click(screen.getByTestId('composer-model-deepseek'))
+    expect(bridge.update).not.toHaveBeenCalled()
+    expect(useSettingsStore.getState().settings.providers[0]?.model, '展示名不进 model').toBe(
+      'deepseek-v4-pro'
+    )
   })
 })

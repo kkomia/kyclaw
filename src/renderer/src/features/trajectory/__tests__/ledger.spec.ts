@@ -60,7 +60,6 @@ const doc: TrajectoryDoc = buildTrajectory({
       contextInput: 4000,
       contextCachedInput: 3000,
       stepCount: 2,
-      cost: 0.01,
       createdAt: new Date(1500).toISOString()
     }
   ]

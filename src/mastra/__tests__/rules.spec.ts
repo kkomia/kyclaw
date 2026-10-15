@@ -23,7 +23,7 @@ const context = (
   get: (key: string) => (key === 'MastraMemory' ? { thread: { id } } : undefined)
 })
 
-describe('我的规矩输入处理器', () => {
+describe('约束输入处理器', () => {
   it('只从 MastraMemory.thread.id 解析线程，不从猜测字段读取', () => {
     expect(rulesThreadId(context(' t1 '))).toBe(' t1 ')
     expect(rulesThreadId({ get: () => ({ threadId: 't1' }) })).toBeNull()

@@ -93,6 +93,12 @@ asarUnpack:
 # app-update.yml 写进 resources/（测试机开箱即"检查更新/自助下载"）；上传由 R62 的上传脚本
 # 单独做，electron-builder 本身仍然 --publish never（scripts/package.mjs 写死）。
 # KYCLAW_UPDATE_URL 仍可覆盖（本机模拟 / 临时切通道，见 src/main/updater.ts）。
+#
+# 更新说明（0.1.1）：**刻意不在这里写 releaseInfo** —— 发行日志是版本绑定的
+# （build/release-notes/<版本>.md），由 `pnpm package` 出包时按 package.json 的版本现算，
+# 用标准的 `-c.releaseInfo.releaseNotesFile=release-notes/<版本>.md` 传给 electron-builder，
+# 由它写进 latest.yml 的 releaseNotes（客户端「设置 → 关于」的「更新内容」显示这一段）。
+# 写死在这里的路径换版本号不会跟着变——那正是"下一版复用上一版日志"的坑。
 publish:
   provider: generic
   url: http://192.168.31.18:9000/kyclaw/releases/

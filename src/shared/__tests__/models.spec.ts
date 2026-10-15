@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CONTEXT_WINDOW_SOURCE_LABELS,
   contextTokensFor,
   contextWindowOf,
+  contextWindowSourceOf,
   DEFAULT_CONTEXT_WINDOW,
+  displayNameOf,
   effectiveEffortId,
   formatTokens,
   isProbedFresh,
   modelSpecOf,
+  overrideKeyOf,
   probedKeyOf,
   requestProviderOptions,
   thinkingEffortsOf,
@@ -194,6 +198,60 @@ describe('round 22 · probed 实测优先（GET /models 的真实元数据盖过
   it('探测键：`<providerId>:<modelId>`（模型名原文，不归一）', () => {
     expect(probedKeyOf('deepseek', 'deepseek-flash')).toBe('deepseek:deepseek-flash')
     expect(probedKeyOf('p1', 'DeepSeek-V4-Pro')).toBe('p1:DeepSeek-V4-Pro')
+  })
+})
+
+describe('用户反馈 003/004 · 手动覆盖（override → probed → 注册表 → 默认）', () => {
+  const PROBED: ProbedModelSpec = {
+    contextWindow: 1_048_576,
+    fetchedAt: '2026-10-11T00:00:00.000Z'
+  }
+
+  it('上下文长度：手动覆盖排在最前（实测也让位）；只覆盖有值的那个字段', () => {
+    expect(contextWindowOf('deepseek-flash', PROBED, { contextWindow: 900_000 })).toBe(900_000)
+    expect(contextWindowOf('deepseek-flash', undefined, { contextWindow: 900_000 })).toBe(900_000)
+    expect(contextTokensFor('deepseek-flash', 50, PROBED, { contextWindow: 900_000 })).toBe(450_000)
+    // 手动值非法（0 / 负数 / NaN / 小数取整）→ 当没给，回落实测/注册表
+    expect(contextWindowOf('deepseek-flash', PROBED, { contextWindow: 0 })).toBe(1_048_576)
+    expect(contextWindowOf('deepseek-flash', PROBED, { contextWindow: -5 })).toBe(1_048_576)
+    expect(contextWindowOf('deepseek-flash', PROBED, { contextWindow: Number.NaN })).toBe(1_048_576)
+    expect(contextWindowOf('deepseek-flash', PROBED, { contextWindow: 900_000.4 })).toBe(900_000)
+    // 只有 displayName 的覆盖记录不影响上下文
+    expect(contextWindowOf('deepseek-flash', PROBED, { displayName: '主力' })).toBe(1_048_576)
+  })
+
+  it('来源标注（006）：手动 > 实测 > 回退（注册表与默认都算"回退"）', () => {
+    expect(contextWindowSourceOf(PROBED, { contextWindow: 900_000 })).toBe('manual')
+    expect(contextWindowSourceOf(PROBED, { displayName: '主力' })).toBe('measured')
+    expect(contextWindowSourceOf(PROBED, undefined)).toBe('measured')
+    expect(contextWindowSourceOf(undefined, undefined)).toBe('fallback')
+    expect(contextWindowSourceOf({ vision: true }, undefined)).toBe('fallback')
+    // 非法值不当数：与 modelSpecOf 取到同一个结论
+    expect(contextWindowSourceOf(PROBED, { contextWindow: 0 })).toBe('measured')
+    expect(CONTEXT_WINDOW_SOURCE_LABELS).toEqual({
+      manual: '手动',
+      measured: '实测',
+      fallback: '回退'
+    })
+  })
+
+  it('展示名（004）：只影响展示——手填优先、空白回落模型名，且与取值链无关', () => {
+    expect(displayNameOf('deepseek-flash', { displayName: '  主力  ' })).toBe('主力')
+    expect(displayNameOf('deepseek-flash', { displayName: '   ' })).toBe('deepseek-flash')
+    expect(displayNameOf('deepseek-flash', undefined)).toBe('deepseek-flash')
+    expect(displayNameOf(undefined, { displayName: '主力' })).toBe('主力')
+    // 展示名不改上下文长度：同一份覆盖记录里两个字段互不干扰
+    expect(contextWindowOf('deepseek-flash', undefined, { displayName: '主力' })).toBe(128_000)
+  })
+
+  it('覆盖记录的键与探测同一形状（`<providerId>:<model>`，模型名原文不归一）', () => {
+    expect(overrideKeyOf('deepseek', 'deepseek-flash')).toBe('deepseek:deepseek-flash')
+    expect(overrideKeyOf('p1', 'DeepSeek-V4-Pro')).toBe(probedKeyOf('p1', 'DeepSeek-V4-Pro'))
+  })
+
+  it('视觉不由覆盖说话：只有探测结论与注册表两层', () => {
+    expect(visionOf('deepseek-flash', { contextWindow: 900_000, vision: true })).toBe(true)
+    expect(visionOf('deepseek-flash', { contextWindow: 900_000 })).toBe(false)
   })
 })
 

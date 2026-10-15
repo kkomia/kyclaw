@@ -1,17 +1,25 @@
 /**
  * 用量 API（T14；round 18 加会话上下文）——挂在 agent 服务（service.ts）上的 Hono 子路由：
  *
- * 三条：
- *   GET /api/usage?range=today|month    窗口内的 token 与花费（含按模型拆分）
+ * 三条（**只管 token，不管轨迹原料**）：
+ *   GET /api/usage?range=today|month    窗口内的 token（含按模型拆分）
  *   GET /api/usage/context?threadId=    该会话的"最近一轮 / 首轮基线 / 今日缓存合计"
  *                                       （上下文环与 hover 明细的数据面）
  *   GET /api/usage/thread?threadId=     该会话的**逐轮用量行**（时间升序）——轨迹视图的
  *                                       "这一轮 token 花在哪"的原料（见 shared/trajectory.ts）
  *
+ * 请求快照（轨迹的"系统 / 上下文"两行的原料）**不在这里**：round 87 起住在
+ * `routes/trajectory.ts`（`/api/trajectory/requests*`）—— 用户反馈 017 要的就是"用量坏了
+ * 不该把轨迹一起带走"，所以两条数据面各有各的路由、表与异常处理。
+ *
  * 纪律同线程/MCP 路由：入参过 zod（range / threadId 脏值即 400）、回包过 shared/usage 的 schema。
  * 窗口边界按**本地日历**切（rangeStart），与用户在页面上看到的"今天/本月"一致。
+ *
+ * round 87（用户反馈 017）：**每条腿自己兜住异常**。以前只有入参校验，任何抛出（库坏了 / 读表失败 /
+ * 行形状对不上）都变成裸 500 —— 渲染端拿不到人话，整页轨迹跟着一起挂。现在统一走 `fail()`：
+ * 200 之外一定回 `{ error: 人话 }`，让上游（trajectory-api.ts）能把这句人话带出来。
  */
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { usageRangeSchema, usageResponseSchema, usageThreadContextSchema } from '../../shared/usage'
 import { trajectoryThreadUsageResponseSchema } from '../../shared/trajectory'
 import { rangeStart, summarizeUsage, threadTokenReadout, type UsageStore } from '../usage'
@@ -26,17 +34,36 @@ function badRequest(detail: string): { error: string } {
   return { error: `invalid-input: ${detail}` }
 }
 
+/** 抛出 → 人话（不带栈、不带内部类型名；500 是"服务这边出错了"，不是入参问题） */
+function failureMessage(cause: unknown): string {
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return detail.trim() === '' ? '读取失败' : `读取失败：${detail}`
+}
+
 export function createUsageRouter(options: UsageRouterOptions): Hono {
   const router = new Hono()
   const now = options.now ?? ((): Date => new Date())
+
+  /** 一次请求的读表动作包一层：抛出 → 500 + 人话（不是裸 500），并在这里落一条日志 */
+  const read = async (context: Context, load: () => Promise<Response>): Promise<Response> => {
+    try {
+      return await load()
+    } catch (error) {
+      console.error('[kyclaw] 用量接口读表失败（已回人话）', error)
+      return context.json({ error: failureMessage(error) }, 500)
+    }
+  }
 
   router.get('/', async (context) => {
     // 不传 range 走"今天"（页面默认档）；脏值 400，不静默回落
     const range = usageRangeSchema.safeParse(context.req.query('range') ?? 'today')
     if (!range.success) return context.json(badRequest('range'), 400)
+    const window = range.data
 
-    const rows = await options.store.listSince(rangeStart(range.data, now()))
-    return context.json(usageResponseSchema.parse(summarizeUsage(rows, range.data)))
+    return read(context, async () => {
+      const rows = await options.store.listSince(rangeStart(window, now()))
+      return context.json(usageResponseSchema.parse(summarizeUsage(rows, window)))
+    })
   })
 
   router.get('/context', async (context) => {
@@ -44,31 +71,33 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
     const threadId = typeof raw === 'string' ? raw.trim() : ''
     if (threadId === '') return context.json(badRequest('threadId'), 400)
 
-    // round 59：lastInput / baselineInput / lastCachedInput 统一走 usage.ts 的 threadTokenReadout
-    // （压缩记录的 tokensBefore 用的是同一口径，两处不能各算一套）
-    const { lastInput, lastCachedInput, baselineInput } = await threadTokenReadout(
-      options.store,
-      threadId
-    )
-    const today = await options.store.listSince(rangeStart('today', now()))
+    return read(context, async () => {
+      // round 59：lastInput / baselineInput / lastCachedInput 统一走 usage.ts 的 threadTokenReadout
+      // （压缩记录的 tokensBefore 用的是同一口径，两处不能各算一套）
+      const { lastInput, lastCachedInput, baselineInput } = await threadTokenReadout(
+        options.store,
+        threadId
+      )
+      const today = await options.store.listSince(rangeStart('today', now()))
 
-    let todayInput = 0
-    let todayCachedInput = 0
-    for (const row of today) {
-      todayInput += row.tokens.input
-      todayCachedInput += Math.max(0, row.cachedInput ?? 0)
-    }
+      let todayInput = 0
+      let todayCachedInput = 0
+      for (const row of today) {
+        todayInput += row.tokens.input
+        todayCachedInput += Math.max(0, row.cachedInput ?? 0)
+      }
 
-    return context.json(
-      usageThreadContextSchema.parse({
-        threadId,
-        lastInput,
-        lastCachedInput,
-        baselineInput,
-        todayInput,
-        todayCachedInput
-      })
-    )
+      return context.json(
+        usageThreadContextSchema.parse({
+          threadId,
+          lastInput,
+          lastCachedInput,
+          baselineInput,
+          todayInput,
+          todayCachedInput
+        })
+      )
+    })
   })
 
   /**
@@ -86,32 +115,37 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
     const threadId = typeof raw === 'string' ? raw.trim() : ''
     if (threadId === '') return context.json(badRequest('threadId'), 400)
 
-    const rows = await options.store.listByThread(threadId)
-    return context.json(
-      trajectoryThreadUsageResponseSchema.parse({
-        threadId,
-        runs: rows.map((row) => {
-          const extras = row as Partial<UsageRunExtras>
-          return {
-            id: row.id,
-            runId: row.runId,
-            model: row.model,
-            provider: row.provider,
-            input: row.tokens.input,
-            output: row.tokens.output,
-            total: row.tokens.total,
-            cachedInput: row.cachedInput,
-            contextInput: countOrNull(extras.contextInput),
-            contextCachedInput: countOrNull(extras.contextCachedInput),
-            stepCount: countOrNull(extras.stepCount),
-            cost: row.cost,
-            createdAt: row.createdAt
-          }
+    return read(context, async () => {
+      const rows = await options.store.listByThread(threadId)
+      return context.json(
+        trajectoryThreadUsageResponseSchema.parse({
+          threadId,
+          runs: rows.map((row) => {
+            const extras = row as Partial<UsageRunExtras>
+            return {
+              id: row.id,
+              runId: row.runId,
+              model: row.model,
+              provider: row.provider,
+              input: row.tokens.input,
+              output: row.tokens.output,
+              total: row.tokens.total,
+              cachedInput: row.cachedInput,
+              contextInput: countOrNull(extras.contextInput),
+              contextCachedInput: countOrNull(extras.contextCachedInput),
+              stepCount: countOrNull(extras.stepCount),
+              createdAt: row.createdAt
+            }
+          })
         })
-      })
-    )
+      )
+    })
   })
 
+  /**
+   * 轨迹视图的"请求"面**不在这里**：round 87 起是 `/api/trajectory/requests*`
+   * （用户反馈 017：用量这条路坏了不该把轨迹原料一起带走）。
+   */
   return router
 }
 

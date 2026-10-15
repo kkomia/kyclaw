@@ -7,11 +7,12 @@
  *   - `step-start` 出现在**下一步开始时**（起点标记），不是每一步都有；
  *   - `tool-invocation` 只有 `updatedAt`（结果落下那一刻），没有自己的 `createdAt`。
  *
- * 钉住的都是"不编造"这条线：时刻缺一头 → 时长为 null（不是 0）；没有系统提示词就不产 `系统` 行。
+ * 钉住的都是"不编造"这条线：时刻缺一头 → 时长为 null（不是 0）；消息里没有系统提示词，
+ * 「系统 / 上下文」两行只由**请求快照**腿产出（round 87），没有快照就不产（留白）。
  */
 import { describe, expect, it } from 'vitest'
 import type { StoredMessage } from '@shared/threads'
-import type { TrajectoryUsageRun } from '@shared/trajectory'
+import type { TrajectoryRequestSummary, TrajectoryUsageRun } from '@shared/trajectory'
 import { buildTrajectory, formatClock, formatDuration, searchableTextOf } from '../model'
 
 function message(
@@ -52,7 +53,6 @@ function usageRun(
     contextInput: null,
     contextCachedInput: null,
     stepCount: null,
-    cost: null,
     createdAt: new Date(at).toISOString(),
     ...extra
   }
@@ -364,13 +364,12 @@ describe('buildTrajectory · 轮级用量归属', () => {
     const doc = buildTrajectory({
       messages: [U1, A1, U2],
       usageRuns: [
-        usageRun('a', 1300, { input: 100, output: 10, contextInput: 800, stepCount: 2, cost: 0.5 }),
+        usageRun('a', 1300, { input: 100, output: 10, contextInput: 800, stepCount: 2 }),
         usageRun('b', 1500, {
           input: 300,
           output: 20,
           contextInput: 4200,
-          stepCount: 5,
-          cost: 0.25
+          stepCount: 5
         })
       ]
     })
@@ -380,9 +379,10 @@ describe('buildTrajectory · 轮级用量归属', () => {
       output: 30,
       contextInput: 4200,
       steps: 7,
-      cost: 0.75,
       runs: 2
     })
+    // 负向守卫：轮级用量里没有计费字段（用户口径 014 不做计费）
+    expect(doc.turns[0]?.usage).not.toHaveProperty('cost')
   })
 
   it('没记过账的会话：用量是 null（不是 0）', () => {
@@ -570,5 +570,196 @@ describe('轨迹行：MCP 元工具解包（round 75）', () => {
     const row = injected.rows.find((item) => item.toolCallId === 'c7')!
     expect(row.toolName).toBe('mcp__mcp-2__echo')
     expect(row.inputRaw).toBe('{\n  "msg": "hi"\n}')
+  })
+})
+
+describe('buildTrajectory · 请求快照 → 系统 / 上下文 / 失败行（round 87 / 用户反馈 015）', () => {
+  function summary(
+    id: string,
+    at: number,
+    extra: Partial<TrajectoryRequestSummary> = {}
+  ): TrajectoryRequestSummary {
+    return {
+      id,
+      runId: `run-${id}`,
+      step: 0,
+      status: 'complete',
+      error: null,
+      model: 'deepseek-flash',
+      provider: 'deepseek.chat',
+      messageCount: 3,
+      toolCount: 2,
+      systemChars: '你是 kyclaw。\n## Runtime snapshot'.length,
+      toolsChars: 64,
+      truncated: false,
+      createdAt: new Date(at).toISOString(),
+      ...extra
+    }
+  }
+
+  it('一次请求两条（系统 / 上下文），紧跟在该轮用户消息行之后；行里带请求 id 与计数', () => {
+    const doc = buildTrajectory({
+      messages: [U1, A1, U2],
+      requests: [summary('s1', 1500)]
+    })
+
+    // 位置：用户行 → 系统 → 上下文 → 助手那些行
+    expect(doc.rows[0]).toMatchObject({ kind: 'user', turn: 1 })
+    const system = doc.rows[1]!
+    const context = doc.rows[2]!
+    expect(system).toMatchObject({
+      kind: 'system',
+      turn: 1,
+      step: null,
+      // 正文不在行里（一条请求实测 ~96 KB）：明细面板按 request.id 按需取
+      body: null,
+      source: '请求快照',
+      modelId: 'deepseek-flash',
+      isError: false,
+      pending: false,
+      // 第 1 步（0 基）→ 界面上说"第 1 次请求"
+      request: { id: 's1', step: 0, status: 'complete', truncated: false }
+    })
+    expect(system.text).toBe('第 1 步 · 系统指令 · 30 字')
+    expect(context).toMatchObject({
+      kind: 'context',
+      turn: 1,
+      step: null,
+      source: '请求快照',
+      body: null,
+      request: { id: 's1', step: 0, status: 'complete', truncated: false }
+    })
+    expect(context.text).toBe('第 1 步 · 上下文 · 3 条消息 · 2 件工具')
+
+    // 时刻锚点 = 本轮用户消息的时刻（存储里没有"请求发出时刻"，借一个已记录的锚点），时长留白
+    expect(system).toMatchObject({
+      startedAt: 1000,
+      endedAt: 1000,
+      durationMs: null,
+      timingSource: 'session'
+    })
+    // 两行都属于第 1 轮（轮清单的 rowIndexes 也认得它们）
+    expect(doc.turns[0]?.rowIndexes).toEqual(expect.arrayContaining([1, 2]))
+  })
+
+  it('一轮多步：每一步各一对行（"后续工具结果"就在后几步里），步号写在文案上', () => {
+    const doc = buildTrajectory({
+      messages: [U1],
+      requests: [summary('s1', 1500), summary('s2', 1600, { step: 1, messageCount: 5 })]
+    })
+
+    const systemRows = doc.rows.filter((row) => row.kind === 'system')
+    expect(systemRows.map((row) => row.request?.step)).toEqual([0, 1])
+    expect(systemRows.map((row) => row.turn)).toEqual([1, 1])
+    expect(systemRows[0]?.text).toContain('第 1 步')
+    expect(systemRows[1]?.text).toContain('第 2 步')
+    expect(doc.rows.filter((row) => row.kind === 'context')[1]?.text).toContain('5 条消息')
+  })
+
+  it('多轮的请求：各自落在自己那一轮的用户行之后；归属口径与用量腿同一处', () => {
+    const doc = buildTrajectory({
+      messages: [U1, A1, U2],
+      requests: [summary('s1', 1500), summary('s2', 3500)]
+    })
+
+    const systemRows = doc.rows.filter((row) => row.kind === 'system')
+    expect(systemRows.map((row) => row.turn)).toEqual([1, 2])
+    // 第 2 轮的两行紧跟第 2 轮的用户行（不是被甩到列表末尾）
+    const u2Index = doc.rows.findIndex((row) => row.kind === 'user' && row.turn === 2)
+    expect(doc.rows[u2Index + 1]).toMatchObject({ kind: 'system', turn: 2 })
+    expect(doc.rows[u2Index + 2]).toMatchObject({ kind: 'context', turn: 2 })
+  })
+
+  it('没有请求记录（老会话 / 请求体没拿到）→ 这些行不出现（留白，不编）', () => {
+    const doc = buildTrajectory({ messages: [U1, A1, U2] })
+    expect(
+      doc.rows.some(
+        (row) => row.kind === 'system' || row.kind === 'context' || row.kind === 'error'
+      )
+    ).toBe(false)
+  })
+
+  it('落在首条用户消息之前的请求：归到「轮次之间」（turn null）放在最前，时刻照旧留白', () => {
+    const doc = buildTrajectory({
+      messages: [U1, A1],
+      requests: [summary('s0', 500, { createdAt: new Date(0).toISOString() })]
+    })
+
+    expect(doc.rows[0]).toMatchObject({ kind: 'system', turn: null, startedAt: null })
+    expect(doc.rows[1]).toMatchObject({ kind: 'context', turn: null })
+    expect(doc.rows[2]).toMatchObject({ kind: 'user', turn: 1 })
+  })
+
+  it('认不出的字段照实留白：没系统指令 / 没工具 / 没条数各自成话，不假装 0', () => {
+    const doc = buildTrajectory({
+      messages: [U1],
+      requests: [
+        summary('s1', 1500, {
+          systemChars: null,
+          toolsChars: null,
+          messageCount: null,
+          toolCount: null
+        })
+      ]
+    })
+
+    const [system, context] = doc.rows.slice(1, 3)
+    expect(system?.text).toBe('第 1 步 · 系统指令 · 未捕获')
+    expect(system?.body).toBeNull()
+    expect(context?.text).toBe('第 1 步 · 上下文（未捕获）')
+    expect(context?.body).toBeNull()
+  })
+
+  it('失败的那次请求：一行「失败」，原因为文案与正文，isError 标出来（正文未知就不给正文）', () => {
+    const doc = buildTrajectory({
+      messages: [U1],
+      requests: [
+        summary('s1', 1500, {
+          status: 'error',
+          error: 'Bad Request',
+          step: null,
+          systemChars: null,
+          toolsChars: null,
+          messageCount: null,
+          toolCount: null
+        })
+      ]
+    })
+
+    const failure = doc.rows[1]!
+    expect(failure).toMatchObject({
+      kind: 'error',
+      turn: 1,
+      isError: true,
+      body: 'Bad Request',
+      request: { id: 's1', step: null, status: 'error', truncated: false }
+    })
+    expect(failure.text).toContain('请求失败')
+    expect(failure.text).toContain('Bad Request')
+    // 失败的那次只有一行（没有"系统 / 上下文"两行可给）
+    expect(doc.rows.filter((row) => row.kind === 'error')).toHaveLength(1)
+    expect(doc.rows.filter((row) => row.kind === 'context')).toHaveLength(0)
+  })
+
+  it('截断标记进文案（正文超上限时界面照实说）', () => {
+    const doc = buildTrajectory({
+      messages: [U1],
+      requests: [summary('s1', 1500, { truncated: true })]
+    })
+    const system = doc.rows.find((row) => row.kind === 'system')!
+    expect(system.text).toContain('已截断')
+    expect(system.request?.truncated).toBe(true)
+  })
+
+  it('系统 / 上下文行仍进可搜文本（计数与标签能被搜索命中）', () => {
+    const doc = buildTrajectory({
+      messages: [U1],
+      requests: [summary('s1', 1500)]
+    })
+    const system = doc.rows.find((row) => row.kind === 'system')!
+    expect(searchableTextOf(system)).toContain('系统指令')
+    expect(searchableTextOf(system)).toContain('30 字')
+    const context = doc.rows.find((row) => row.kind === 'context')!
+    expect(searchableTextOf(context)).toContain('3 条消息')
   })
 })

@@ -106,7 +106,15 @@ describe('Tailwind 编译护栏', () => {
     // 仍是 72px —— 推导见 ChatPage 里 welcome-spacer 的那段注释
     ['mt-18', ['margin-top: calc(var(--spacing) * 18)']],
     // round 76：初始页两行（CollapsibleRow）的收合 —— 高度与淡出走同一条过渡（主档时长，不硬切）
-    ['transition-[grid-template-rows,opacity]', ['transition-property: grid-template-rows,opacity']]
+    [
+      'transition-[grid-template-rows,opacity]',
+      ['transition-property: grid-template-rows,opacity']
+    ],
+    // round 87：消息导览轨的行高不再写死 h-7，改由组件按条数算好、经这两个变量喂进去
+    // （常态 / hover·聚焦展开态）——变量简写必须真编译得出 height
+    ['h-(--rail-row)', ['height: var(--rail-row)']],
+    ['hover:h-(--rail-row-open)', ['height: var(--rail-row-open)']],
+    ['focus-visible:h-(--rail-row-open)', ['height: var(--rail-row-open)']]
   ]
 
   it.each(UTILITY_CASES)('工具类 %s 生成 token 引用', async (candidate, declarations) => {

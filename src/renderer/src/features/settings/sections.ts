@@ -54,7 +54,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   },
   {
     id: 'rules',
-    label: '我的规矩',
+    // 用户口径 009：「我的规矩」太抽象，菜单名与页面标题都取这里，统一叫「约束」；
+    // id 不动（它进 URL，改了等于改深链）
+    label: '约束',
     navTestId: 'settings-nav-rules',
     groupTestId: 'settings-group-rules',
     icon: FolderOpen

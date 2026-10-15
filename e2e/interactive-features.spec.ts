@@ -198,10 +198,9 @@ test.describe('interactive features — production UI functional evidence', () =
       await app.page.evaluate(() => {
         location.hash = '/settings/rules'
       })
-      await app.page.getByLabel('全局规矩').fill('INTERACTIVE_RULE_NEXT_TURN_唯一标记')
+      await app.page.getByLabel('全局约束').fill('INTERACTIVE_RULE_NEXT_TURN_唯一标记')
       await app.page.getByRole('button', { name: '保存', exact: true }).click()
       await expect(app.page.getByText('已保存', { exact: true })).toBeVisible()
-      await expect(app.page.getByText(/规则处理器已注册/)).toBeVisible()
       await functionEvidence(app.page, 'rules-saved.png')
       await selectSession(app.page, first)
       const before = provider.requests.length
@@ -240,13 +239,13 @@ test.describe('interactive features — production UI functional evidence', () =
         location.hash = '/settings/rules'
       })
       await app.page
-        .getByLabel('全局规矩')
+        .getByLabel('全局约束')
         .fill('INTERACTIVE_GLOBAL_FORMAT：同一事项默认使用文档。')
       await app.page.getByRole('button', { name: '保存', exact: true }).click()
       await expect(app.page.getByText('已保存', { exact: true })).toBeVisible()
-      await app.page.getByLabel('选择项目规矩').selectOption(project.id)
+      await app.page.getByLabel('选择项目约束').selectOption(project.id)
       const projectRules = 'INTERACTIVE_PROJECT_FORMAT：同一事项改用表格，覆盖全局默认。'
-      const editor = app.page.getByLabel('项目规矩', { exact: true })
+      const editor = app.page.getByLabel('项目约束', { exact: true })
       await editor.fill(projectRules)
       await editor.locator('..').getByRole('button', { name: '保存', exact: true }).click()
       await expect
@@ -255,9 +254,10 @@ test.describe('interactive features — production UI functional evidence', () =
           return existsSync(file) ? readFileSync(file, 'utf8') : null
         })
         .toBe(projectRules)
-      await expect(
-        app.page.getByText(`来源：${join(project.path, '.kyclaw', 'rules.md')}`, { exact: true })
-      ).toBeVisible()
+      // 008：来源只说项目内的相对位置；长绝对路径挂在 tooltip 上（悬停可核对）
+      const source = app.page.getByText('.kyclaw/rules.md（项目内）', { exact: true })
+      await expect(source).toBeVisible()
+      await expect(source).toHaveAttribute('title', join(project.path, '.kyclaw', 'rules.md'))
       await functionEvidence(app.page, 'project-rules-saved-source.png')
       await app.page.evaluate(() => {
         location.hash = '/chat'

@@ -58,7 +58,7 @@ async function readSafely(
   } catch {
     return {
       text: '',
-      diagnostics: [{ scope, code: 'read-failed', message: '无法读取规矩，本轮未加载。' }]
+      diagnostics: [{ scope, code: 'read-failed', message: '无法读取约束，本轮未加载。' }]
     }
   }
 }
@@ -83,7 +83,7 @@ export function createRulesProcessor(dependencies: RulesProcessorDependencies): 
                       {
                         scope: 'project',
                         code: 'project-unavailable',
-                        message: '会话绑定的项目不存在，本轮未加载项目规矩。'
+                        message: '会话绑定的项目不存在，本轮未加载项目约束。'
                       }
                     ]
                   }
@@ -96,7 +96,7 @@ export function createRulesProcessor(dependencies: RulesProcessorDependencies): 
               {
                 scope: 'project',
                 code: 'project-unavailable',
-                message: '无法解析会话绑定项目，本轮未加载项目规矩。'
+                message: '无法解析会话绑定项目，本轮未加载项目约束。'
               }
             ]
           }

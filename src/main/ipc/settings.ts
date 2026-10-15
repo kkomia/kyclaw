@@ -7,7 +7,9 @@
  * 密钥纪律（T8）：
  *   - `settings:set-provider-key` 只在**写**的方向上见到明文，回包只有 `{hasKey:true}`；
  *   - 读密钥只发生在主进程内部（模型解析 / 测试连接），密钥不出主进程；
- *   - 测试连接的失败文案会先抹掉密钥再回给渲染端（供应商可能回显）。
+ *   - 测试连接的失败文案与每一步结论都先抹掉密钥再回给渲染端（供应商可能回显）；
+ *   - `settings:discover-provider-models`（用户反馈 007）是唯一一条"渲染端把明文密钥递进来"的
+ *     通道，因为它探的是**还没保存**的端点；明文只在这一趟请求头里活着，不落盘、不进日志、不回包。
  */
 import { ipcMain } from 'electron'
 import {
@@ -16,11 +18,16 @@ import {
   parseIpcArgs,
   providerIdArgsSchema,
   providerKeyArgsSchema,
+  providerModelDiscoveryArgsSchema,
   settingsUpdateArgsSchema
 } from '../../shared/ipc'
 import { providerConfigProblems, type ProviderKeyState } from '../../shared/providers'
-import { testConnection } from '../connection-test'
-import { probeProviderModelsQuietly } from '../model-probe'
+import { connectionTestNotRun, testConnection } from '../connection-test'
+import {
+  discoverProviderModels,
+  listProviderModels,
+  probeProviderModelsQuietly
+} from '../model-probe'
 import {
   clearProviderKey,
   getProviderKey,
@@ -86,17 +93,18 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
     return states
   })
 
-  // 测试连接：配置来自落盘设置、密钥来自 secrets——测的就是聊天接下来要走的那条路
+  // 测试连接：配置来自落盘设置、密钥来自 secrets——测的就是聊天接下来要走的那条路。
+  // 密钥**可缺**（openai 兼容族：本机服务常这样），空密钥照测（不带 Authorization 头）；
+  // 真要认证由端点回 401/403——那句"认证失败（401）"比在界面里提前拦一句更有信息量。
+  // 分项结论（连通 / 流式 / 流式工具）与"未验证"的含义见 main/connection-test.ts 与 shared/ipc.ts
   ipcMain.handle(IPC_CHANNELS.settings.testProvider, (_event, ...args) => {
     const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.testProvider)
     const provider = readSettings(file).providers.find((candidate) => candidate.id === id)
-    if (!provider) return { ok: false, message: `找不到 provider：${id}` }
+    if (!provider) return connectionTestNotRun(`找不到 provider：${id}`)
 
-    const apiKey = readKey(id)
-    const problems = providerConfigProblems(provider, apiKey !== null)
-    if (apiKey === null || problems.length > 0) {
-      return { ok: false, message: problems.join('；') }
-    }
+    const apiKey = readKey(id) ?? ''
+    const problems = providerConfigProblems(provider, apiKey !== '')
+    if (problems.length > 0) return connectionTestNotRun(problems.join('；'))
     return testConnection(provider, apiKey)
   })
 
@@ -106,6 +114,37 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
   ipcMain.handle(IPC_CHANNELS.settings.probeModels, (_event, ...args) => {
     const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.probeModels)
     return probeProviderModelsQuietly({ file, readKey, providerId: id })
+  })
+
+  // 用户反馈 007：列这个端点上的可选模型（同一趟 GET /models，**只读不落盘**）。
+  // 读不到一律回空数组：端点没有 /models、没配密钥、认证失败、超时… 都不是硬错——
+  // 弹窗那边按"读不到就手填"兜底，不该把一句 warn 变成用户眼前的一个报错
+  ipcMain.handle(IPC_CHANNELS.settings.listProviderModels, async (_event, ...args) => {
+    const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.listProviderModels)
+    const provider = readSettings(file).providers.find((candidate) => candidate.id === id)
+    if (!provider) return []
+
+    const apiKey = readKey(id)
+    if (apiKey === null || apiKey === '') return []
+
+    try {
+      return await listProviderModels(provider, apiKey)
+    } catch (error) {
+      console.warn(`[kyclaw] 读模型清单失败（provider=${id}，可以直接手填）`, error)
+      return []
+    }
+  })
+
+  // 用户反馈 007（补齐）：拿**弹窗里刚填的**地址与密钥发现模型 —— 新注册这条路不必先存再发现。
+  // 明文只活在这一趟请求头里：不落盘、不进日志、不进回包；失败带一句人话（`ok:false`）而不是空表，
+  // 弹窗才能把"读不到（给原因）"和"端点就是空的（手填）"分开说
+  ipcMain.handle(IPC_CHANNELS.settings.discoverProviderModels, async (_event, ...args) => {
+    const [input] = parseIpcArgs(
+      providerModelDiscoveryArgsSchema,
+      args,
+      IPC_CHANNELS.settings.discoverProviderModels
+    )
+    return discoverProviderModels({ type: input.type, baseUrl: input.baseUrl }, input.apiKey)
   })
 
   // 删配置连带清密钥：先落盘配置（写失败要抛给用户），再清密钥（事后写失败只留无害孤儿密文）

@@ -5,6 +5,7 @@ import { Message } from '@renderer/features/chat/Message'
 import { ToolCard } from '@renderer/features/chat/parts/ToolCard'
 import { RESULT_PREVIEW_CHARS } from '@renderer/features/chat/parts/tool-part'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { formatToolName } from '@shared/mcp'
 import { defaultSettings, type McpServerConfig } from '@shared/settings'
 
@@ -261,6 +262,121 @@ describe('MCP 工具显示名（round 14）：用户注册的名字', () => {
       expect(screen.getByTestId('tool-card')).not.toHaveTextContent('mcp__mcp-1__search')
     } finally {
       useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+    }
+  })
+})
+
+/**
+ * round 85 · 行详情里的路径（用户实报 013：编辑工作区内文件时那一行铺出整条绝对路径，太长）。
+ *
+ * 口径：会话根内 → **工作区相对路径**（与文件树 / @ 引用 / 附件同口径）；根外、判不出根 → 原样。
+ * 只改**这一行的显示**：展开的入参面板仍是模型看到的原样（`tool-input`），不改任何回执。
+ */
+describe('round 85 · 工具行的路径显示（根内相对、根外原样）', () => {
+  const ROOT = 'D:\\ws'
+
+  function withRoot(): void {
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        workspaces: [{ path: ROOT, mode: 'ask' }],
+        defaultWorkspace: ROOT
+      },
+      loaded: true
+    })
+    // 没有会话（activeId null）时真根就是默认工作区本身 —— 这里量的是展示转换，会话目录那层见
+    // session-workspace.spec
+    useSessionsStore.setState({ activeId: null })
+  }
+
+  function restore(): void {
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+    useSessionsStore.setState({ activeId: null })
+  }
+
+  it('编辑根内文件：行详情是工作区相对路径；入参面板仍是原样绝对路径（模型看到的没变）', () => {
+    withRoot()
+    try {
+      render(
+        <ToolCard
+          part={{
+            toolName: 'edit',
+            state: 'output-available',
+            input: {
+              path: 'D:\\ws\\src\\features\\chat\\Composer.tsx',
+              oldText: 'a',
+              newText: 'b'
+            },
+            output: '已更新'
+          }}
+        />
+      )
+
+      expect(screen.getByTestId('tool-detail')).toHaveTextContent('src/features/chat/Composer.tsx')
+      fireEvent.click(screen.getByTestId('tool-row'))
+      expect(screen.getByTestId('tool-input')).toHaveTextContent(
+        'D:\\\\ws\\\\src\\\\features\\\\chat\\\\Composer.tsx'
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('根外文件（下载目录一类）保持绝对路径：不改写、不假装它在工作区里', () => {
+    withRoot()
+    try {
+      render(
+        <ToolCard
+          part={{
+            toolName: 'read',
+            state: 'output-available',
+            input: { path: 'C:\\Users\\me\\Downloads\\report.pdf' },
+            output: '内容'
+          }}
+        />
+      )
+
+      expect(screen.getByTestId('tool-detail')).toHaveTextContent(
+        'C:\\Users\\me\\Downloads\\report.pdf'
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('判不出根（没有工作区）：交出来的绝对路径照原样显示，不硬凑相对路径', () => {
+    useSessionsStore.setState({ activeId: null })
+    render(
+      <ToolCard
+        part={{
+          toolName: 'read',
+          state: 'output-available',
+          input: { path: 'D:\\ws\\docs\\a.md' },
+          output: '内容'
+        }}
+      />
+    )
+
+    expect(screen.getByTestId('tool-detail')).toHaveTextContent('D:\\ws\\docs\\a.md')
+  })
+
+  it('glob 的 pattern 命中根内也照样收（同一套转换，不挑工具名）', () => {
+    withRoot()
+    try {
+      render(
+        <ToolCard
+          part={{
+            toolName: 'glob',
+            state: 'output-available',
+            input: { pattern: 'D:\\ws\\src\\**\\*.ts' },
+            output: 'src/a.ts'
+          }}
+        />
+      )
+
+      expect(screen.getByTestId('tool-detail')).toHaveTextContent('src/**/*.ts')
+    } finally {
+      restore()
     }
   })
 })

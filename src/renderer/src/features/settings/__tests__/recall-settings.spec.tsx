@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { RecallStatus } from '@shared/memory'
-import { defaultSettings, SEMANTIC_RECALL_PRESET } from '@shared/settings'
+import { defaultSettings, SEMANTIC_RECALL_PRESET, type AppSettings } from '@shared/settings'
 import { RecallSettings, RecallStatusLine } from '../RecallSettings'
 import { recallStatusText } from '../status-text'
 
@@ -211,6 +211,8 @@ describe('「记忆」栏的语义召回组', () => {
     await waitFor(() => expect(bridge.memory.setEmbeddingKey).toHaveBeenCalledWith('sk-test'))
     // 密钥草稿保存后清空（永远不回显）
     expect(screen.getByTestId('recall-api-key')).toHaveValue('')
+    // 012：保存要有结果反馈
+    await waitFor(() => expect(screen.getByTestId('recall-notice')).toHaveTextContent('已保存'))
   })
 
   it('已存过密钥：占位提示"要换就填新的"，清除密钥走记忆通道', async () => {
@@ -224,6 +226,8 @@ describe('「记忆」栏的语义召回组', () => {
 
     fireEvent.click(screen.getByTestId('recall-clear-key'))
     await waitFor(() => expect(bridge.memory.clearEmbeddingKey).toHaveBeenCalled())
+    // 012：清除密钥也要有结果反馈
+    await waitFor(() => expect(screen.getByTestId('recall-notice')).toHaveTextContent('密钥已清除'))
   })
 
   it('嵌入来源切到「本机引擎」：落盘 source，服务三项收起来，改由「本地模型」组接管', async () => {
@@ -284,5 +288,49 @@ describe('记忆页的状态行', () => {
     render(<RecallStatusLine />)
 
     expect(await screen.findByTestId('recall-status')).toHaveTextContent('已开启（嵌入服务')
+  })
+})
+
+/**
+ * 012（用户口径）：保存成功后又改了输入，「已保存」要立刻消失 —— 那句话描述的是**落盘的那一份**。
+ * 010 收口：就地写入（开关 / 嵌入来源）一次只写一条，连点两下不并发发两次 settings:update。
+ */
+describe('「记忆」栏的保存反馈与就地写入串行（012 / 010）', () => {
+  it('012：保存成功后改服务地址 → 「已保存」立刻消失（不显示假成功）', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    const bridge = installKyclawBridge()
+    render(<RecallSettings />)
+
+    fireEvent.change(screen.getByTestId('recall-base-url'), {
+      target: { value: 'https://api.example.com/v1' }
+    })
+    fireEvent.click(screen.getByTestId('recall-save'))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalled())
+    expect(await screen.findByTestId('recall-notice')).toHaveTextContent('已保存')
+
+    fireEvent.change(screen.getByTestId('recall-base-url'), {
+      target: { value: 'https://api.example.com/v2' }
+    })
+    expect(screen.queryByTestId('recall-notice')).not.toBeInTheDocument()
+    expect(screen.getByTestId('recall-base-url')).toHaveValue('https://api.example.com/v2')
+  })
+
+  it('010：落盘挂着不回来时开关按下即锁住，第二下不再发一次 settings:update', async () => {
+    stubRecallFetch({ ...OFF, enabled: true, state: 'active', active: true })
+    const bridge = installKyclawBridge()
+    bridge.update.mockImplementationOnce(() => new Promise<AppSettings>(() => {}))
+    render(<RecallSettings />)
+
+    const toggle = screen.getByTestId('recall-enabled')
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        semanticRecall: expect.objectContaining({ enabled: false })
+      })
+    )
+    expect(toggle).toBeDisabled()
+    fireEvent.click(toggle)
+    expect(bridge.update).toHaveBeenCalledTimes(1)
   })
 })

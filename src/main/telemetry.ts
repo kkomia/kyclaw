@@ -1,6 +1,7 @@
 /**
- * Langfuse 的设置与密钥（T17；round 67 加代理）：
+ * Langfuse 的设置与密钥（T17；round 67 加代理；round 86 加显式开关）：
  *   - 服务地址与代理落 settings.json（shared/settings.ts 的 `langfuse.endpoint` / `proxyUrl`）；
+ *     显式开关 `langfuse.enabled`（用户口径 010）也在这里读 —— 关着就不导出；
  *   - 公私钥与 provider 密钥同待遇 —— safeStorage 密文落 secrets.json（复用 main/secrets.ts 那套
  *     通用读写，用两个固定的 key id 占位）。明文只在写入的那一刻与"建 exporter 的那一刻"存在，
  *     回渲染端的数据永远只有"有没有"。
@@ -29,12 +30,15 @@ import { readSettings, settingsPath } from './settings'
 export const LANGFUSE_PUBLIC_KEY_ID = 'langfuse:public'
 export const LANGFUSE_SECRET_KEY_ID = 'langfuse:secret'
 
-/** 从落盘设置 + 密钥算出导出配置（三项缺一 = null，即"不导出"） */
+/** 从落盘设置 + 密钥算出导出配置（开关关着、或三项缺一 = null，即"不导出"） */
 export function readLangfuseConfig(
   dataDir: string,
   secretsFile = secretsPath(dataDir)
 ): LangfuseExportConfig | null {
   const { langfuse } = readSettings(settingsPath(dataDir))
+  // round 86（用户口径 010）：显式关闭一律不导出 —— 开关关着时连配置都不算数（不发任何请求）。
+  // 老设置没有这一位时迁移已补 true（main/settings.ts），所以这里只认真正的 false。
+  if (!langfuse.enabled) return null
   return langfuseConfigOf({
     endpoint: langfuse.endpoint,
     proxyUrl: resolveProxyUrl(langfuse.proxyUrl, process.env),
@@ -69,7 +73,7 @@ export function writeLangfuseKeys(secretsFile: string, publicKey: string, secret
   setProviderKey(secretsFile, LANGFUSE_SECRET_KEY_ID, secretKey)
 }
 
-/** 清除公私钥（没有就是空操作）；地址不动——想彻底关就把地址清空保存 */
+/** 清除公私钥（没有就是空操作）；开关与地址不动——想彻底关就把开关关掉（round 86 起是显式的） */
 export function clearLangfuseSecrets(secretsFile: string): void {
   clearProviderKey(secretsFile, LANGFUSE_PUBLIC_KEY_ID)
   clearProviderKey(secretsFile, LANGFUSE_SECRET_KEY_ID)

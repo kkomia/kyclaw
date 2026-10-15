@@ -2,17 +2,31 @@ import { useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
-import { rulesByteLength, rulesTextProblem } from '@shared/rules'
+import { RULES_SCOPE_MAX_BYTES, rulesByteLength, rulesTextProblem } from '@shared/rules'
 import type { ProjectRulesView } from '@shared/rules-ipc'
+
+/**
+ * 设置页「约束」栏（用户口径 008/009）：**一个输入框 + 一句说明**，删掉面向开发者的内部文案
+ * （globalRules 键名、处理器注册状态、刷新按钮、读取范围那几句）。
+ *
+ * 行为层照旧：全局走 settings:update（`globalRules`），项目走 projects:readRules / saveRules，
+ * 读写与持久化口径没动 —— 这一轮只改展示层与文案。
+ *
+ * 状态行只留用户能感知的一件事：**本次运行还没接上约束**时给一行提示（正常运行时这行不出现）。
+ * 原来那颗「刷新规则状态」按钮撤了，能力没丢：窗口 focus 时仍会重读一次状态（见下面 effect）。
+ */
+const MAX_KIB = RULES_SCOPE_MAX_BYTES / 1024
 
 function RuleEditor({
   scope,
+  label,
   text,
   pending,
   onChange,
   onSave
 }: {
   scope: 'global' | 'project'
+  label: string
   text: string
   pending: boolean
   onChange: (text: string) => void
@@ -22,15 +36,21 @@ function RuleEditor({
   return (
     <div className="flex flex-col gap-3">
       <textarea
-        aria-label={scope === 'global' ? '全局规矩' : '项目规矩'}
+        aria-label={label}
         value={text}
         disabled={pending}
         onChange={(event) => onChange(event.target.value)}
         rows={10}
         className="rounded-lg border border-border bg-transparent p-3 text-b2 text-ink"
       />
-      <p>{rulesByteLength(text)} / 16384 字节（UTF-8）</p>
-      {problem ? <p role="alert">{problem.message}</p> : null}
+      <p className="text-c1 text-ink-tertiary">
+        已用 {(rulesByteLength(text) / 1024).toFixed(1)} KiB / {MAX_KIB} KiB
+      </p>
+      {problem ? (
+        <p role="alert" className="text-c1 text-danger">
+          {problem.message}
+        </p>
+      ) : null}
       <div className="flex gap-3">
         <Button disabled={pending || problem !== null} onClick={() => onSave(text)}>
           保存
@@ -47,9 +67,10 @@ function ProjectRulesEditor({ projectId }: { projectId: string }): React.JSX.Ele
   const [view, setView] = useState<ProjectRulesView | null>(null)
   const [text, setText] = useState('')
   const [pending, setPending] = useState(false)
-  const [message, setMessage] = useState('')
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
   // preload 注入的常量桥：通道缺失在"读之前"就能确定，渲染期直接派生，不进 effect 同步 setState。
-  // 项目 / 全局规矩变化由外层 key 重挂重置编辑器（见 RulesSettings 里 ProjectRulesEditor 的 key）。
+  // 项目 / 全局约束变化由外层 key 重挂重置编辑器（见 RulesSettings 里 ProjectRulesEditor 的 key）。
   const channelMissing = window.kyclaw?.projects?.readRules === undefined
   useEffect(() => {
     let alive = true
@@ -60,11 +81,12 @@ function ProjectRulesEditor({ projectId }: { projectId: string }): React.JSX.Ele
         if (alive) {
           setView(next)
           setText(next.text)
-          setMessage('')
+          setNotice('')
+          setError('')
         }
       },
-      (error: unknown) => {
-        if (alive) setMessage(unwrapIpcError(error))
+      (cause: unknown) => {
+        if (alive) setError(unwrapIpcError(cause))
       }
     )
     return () => {
@@ -73,19 +95,21 @@ function ProjectRulesEditor({ projectId }: { projectId: string }): React.JSX.Ele
   }, [projectId])
   const save = async (value: string): Promise<void> => {
     setPending(true)
+    setNotice('')
+    setError('')
     try {
       const api = window.kyclaw?.projects
-      if (!api?.saveRules) throw new Error('项目规矩通道不可用，未保存')
+      if (!api?.saveRules) throw new Error('暂时读不到项目约束，未保存')
       const result = await api.saveRules(projectId, value)
       if (!result.ok) {
-        setMessage(result.diagnostics.map((item) => item.message).join('；'))
+        setError(result.diagnostics.map((item) => item.message).join('；'))
         return
       }
       setView(result.view)
       setText(result.view.text)
-      setMessage('已保存')
-    } catch (error) {
-      setMessage(unwrapIpcError(error))
+      setNotice('已保存')
+    } catch (cause) {
+      setError(unwrapIpcError(cause))
     } finally {
       setPending(false)
     }
@@ -94,32 +118,52 @@ function ProjectRulesEditor({ projectId }: { projectId: string }): React.JSX.Ele
     <div className="flex flex-col gap-3">
       {view ? (
         <>
-          <p>来源：{view.source}</p>
-          <p>
-            {!view.projectIncluded
-              ? '项目规矩不生效：未加载或合并超限。'
-              : view.processorRegistered
-                ? '加载条件满足：仅绑定此项目的会话下一轮采用；本轮明确要求优先。'
-                : '已可编辑保存，聊天规则处理器尚未接线，当前不生效。'}
+          {/* 来源只说项目内的相对位置（不铺长绝对路径占版面，与 013 同一方向）；真路径挂在
+              tooltip 上，要核对这一点时悬停可见 */}
+          <p className="text-c1 text-ink-tertiary" title={view.source}>
+            .kyclaw/rules.md（项目内）
           </p>
+          {view.projectIncluded ? null : (
+            <p className="text-c1 text-ink-secondary">
+              项目约束不生效：没读到项目文件，或合计超限。
+            </p>
+          )}
           {view.diagnostics.map((item, index) => (
-            <p role="alert" key={index}>
+            <p role="alert" key={index} className="text-c1 text-danger">
               {item.message}
             </p>
           ))}
           <RuleEditor
             scope="project"
+            label="项目约束"
             text={text}
             pending={pending}
-            onChange={setText}
+            onChange={(value) => {
+              setText(value)
+              // 012：内容又改了 → 上一次的「已保存」不再描述眼前这份内容
+              setNotice('')
+            }}
             onSave={(value) => void save(value)}
           />
+          {notice ? (
+            <p role="status" className="text-c1 text-ink-secondary">
+              {notice}
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" className="text-c1 text-danger">
+              {error}
+            </p>
+          ) : null}
         </>
       ) : (
-        <p>正在读取项目规矩…</p>
+        <p className="text-b2 text-ink-secondary">正在读取项目约束…</p>
       )}
-      {channelMissing ? <p role="status">项目规矩通道不可用</p> : null}
-      {message ? <p role="status">{message}</p> : null}
+      {channelMissing ? (
+        <p role="status" className="text-c1 text-ink-tertiary">
+          暂时读不到项目约束。
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -131,31 +175,32 @@ export function RulesSettings(): React.JSX.Element {
   const [draft, setDraft] = useState<string | null>(null)
   const text = draft ?? settings.globalRules
   const [projectId, setProjectId] = useState('')
-  const [registered, setRegistered] = useState<boolean | null>(null)
+  /** 本次运行还没接上约束（只有"没接上"要在页面上说话；接上了什么都不显示） */
+  const [notActive, setNotActive] = useState(false)
   const [statusError, setStatusError] = useState('')
-  const [statusRevision, setStatusRevision] = useState(0)
   useEffect(() => {
+    // 只在"没接上"时给一行提示：注册状态是运行事实，窗口 focus 时重读一次，不靠按钮也能自愈。
     let alive = true
     let generation = 0
     const refresh = (): void => {
       const request = ++generation
       const api = window.kyclaw?.projects
       if (!api?.rulesStatus) {
-        setRegistered(null)
-        setStatusError('规则状态通道不可用，无法确认当前运行是否注册处理器。')
+        setNotActive(false)
+        setStatusError('暂时读不到约束的启用状态。')
         return
       }
       api.rulesStatus().then(
         (status) => {
           if (alive && request === generation) {
-            setRegistered(status.processorRegistered)
+            setNotActive(!status.processorRegistered)
             setStatusError('')
           }
         },
-        (error: unknown) => {
+        (cause: unknown) => {
           if (alive && request === generation) {
-            setRegistered(null)
-            setStatusError(unwrapIpcError(error))
+            setNotActive(false)
+            setStatusError(unwrapIpcError(cause))
           }
         }
       )
@@ -166,11 +211,14 @@ export function RulesSettings(): React.JSX.Element {
       alive = false
       window.removeEventListener('focus', refresh)
     }
-  }, [statusRevision])
+  }, [])
   const [pending, setPending] = useState(false)
-  const [message, setMessage] = useState('')
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
   const save = async (value: string): Promise<void> => {
     setPending(true)
+    setNotice('')
+    setError('')
     try {
       const api = window.kyclaw?.settings
       if (!api) throw new Error('设置通道不可用，未保存')
@@ -178,75 +226,81 @@ export function RulesSettings(): React.JSX.Element {
       useSettingsStore.setState({ settings: next })
       // 落盘后清草稿：text 回到 store 的权威值（= next.globalRules）；失败路径不清，草稿留着
       setDraft(null)
-      setMessage('已保存')
-    } catch (error) {
-      setMessage(unwrapIpcError(error))
+      setNotice('已保存')
+    } catch (cause) {
+      setError(unwrapIpcError(cause))
     } finally {
       setPending(false)
     }
   }
   return (
-    <div className="flex flex-col gap-4" data-testid="settings-group-rules">
-      <p>
-        我的规矩是普通偏好，不是硬权限。应用硬约束最高；项目在同事项上覆盖全局默认，本轮明确要求覆盖普通偏好。规矩不会改变权限、Plan
-        模式或审批。
-      </p>
-      <h2>全局规矩</h2>
-      <p>来源：应用设置 globalRules。</p>
-      <p role="status">
-        {registered === null
-          ? '正在确认规则处理器注册状态；保存仅表示持久化，不代表聊天已采用。'
-          : registered
-            ? '规则处理器已注册；保存后下一轮读取全局偏好，本轮明确要求优先。'
-            : '当前运行尚未注册规则处理器，已保存内容暂不用于聊天。'}
-      </p>
-      {statusError ? <p role="alert">{statusError}</p> : null}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="self-start"
-        onClick={() => {
-          setRegistered(null)
-          setStatusRevision((value) => value + 1)
-        }}
-      >
-        刷新规则状态
-      </Button>
-      <RuleEditor
-        scope="global"
-        text={text}
-        pending={pending}
-        onChange={setDraft}
-        onSave={(value) => void save(value)}
-      />
-      {message ? <p role="status">{message}</p> : null}
-      <h2>项目规矩</h2>
-      <label>
-        选择项目{' '}
-        <select
-          aria-label="选择项目规矩"
-          value={projectId}
-          onChange={(event) => setProjectId(event.target.value)}
-        >
-          <option value="">请选择项目</option>
-          {settings.projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p>
-        只读取已绑定项目的 .kyclaw/rules.md，不读取默认工作区或父目录；全局与项目合计最多 24 KiB。
-      </p>
-      {settings.projects.some((project) => project.id === projectId) ? (
-        // key 带上 globalRules：全局规矩一变就得重读项目规矩（合计上限受它影响）——
-        // 靠重挂重置编辑器状态（view / 草稿 / 提示），不再在 effect 里同步 setView(null)
-        <ProjectRulesEditor
-          key={JSON.stringify([projectId, settings.globalRules])}
-          projectId={projectId}
+    <div className="flex flex-col gap-6" data-testid="settings-group-rules">
+      <div className="flex flex-col gap-3">
+        <p className="text-b2 text-ink-secondary">对所有会话生效；项目里写了同一条时以项目为准。</p>
+        <RuleEditor
+          scope="global"
+          label="全局约束"
+          text={text}
+          pending={pending}
+          // 012：输入一动，上一次的「已保存」就不再描述眼前这份内容（与「关于」栏对齐）；
+          // 保存中 textarea/按钮都是 disabled（pending），草稿只在保存失败时才留着
+          onChange={(value) => {
+            setDraft(value)
+            setNotice('')
+          }}
+          onSave={(value) => void save(value)}
         />
-      ) : null}
+        {notice ? (
+          <p data-testid="rules-notice" role="status" className="text-c1 text-ink-secondary">
+            {notice}
+          </p>
+        ) : null}
+        {error ? (
+          <p data-testid="rules-error" role="alert" className="text-c1 text-danger">
+            {error}
+          </p>
+        ) : null}
+        {notActive ? (
+          <p data-testid="rules-not-active" role="status" className="text-c1 text-ink-tertiary">
+            本次运行还没接上约束，重启应用后生效。
+          </p>
+        ) : null}
+        {statusError ? (
+          <p role="alert" className="text-c1 text-danger">
+            {statusError}
+          </p>
+        ) : null}
+      </div>
+
+      {/* 项目约束：与全局分开一段（上面是全局偏好，这里是某一个项目的） */}
+      <div className="flex flex-col gap-3 border-t border-surface-border pt-4">
+        <p className="text-c1 text-ink-secondary">
+          项目约束写在该项目里的 .kyclaw/rules.md；与全局合计最多 24 KiB。
+        </p>
+        <label className="flex items-center gap-2 text-b2 text-ink-secondary">
+          选择项目{' '}
+          <select
+            aria-label="选择项目约束"
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+          >
+            <option value="">请选择项目</option>
+            {settings.projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {settings.projects.some((project) => project.id === projectId) ? (
+          // key 带上 globalRules：全局约束一变就得重读项目约束（合计上限受它影响）——
+          // 靠重挂重置编辑器状态（view / 草稿 / 提示），不再在 effect 里同步 setView(null)
+          <ProjectRulesEditor
+            key={JSON.stringify([projectId, settings.globalRules])}
+            projectId={projectId}
+          />
+        ) : null}
+      </div>
     </div>
   )
 }

@@ -16,7 +16,9 @@ import {
 } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatToolName } from '@shared/mcp'
+import { displayPath } from '../display-path'
 import { TraceFold } from './TraceFold'
 import { askUserResultLabel } from '../ask-user'
 import {
@@ -36,6 +38,9 @@ import type { ToolCardPart } from './tool-part'
  * 状态签 + hover 才露的 chevron；
  * 展开体 = 入参 + 结果（走 TraceFold 的 grid-rows 折叠，不做条件渲染硬切）。
  * 24px 行高、hover 只变字色（无底色）、行级耗时不印。
+ *
+ * round 85：行详情里的路径按**展示口径**显示 —— 会话根内的文件给工作区相对路径（根外 / 判不出根
+ * 原样），见 display-path；**只改这一行的显示**（入参面板与回执文本原样，模型看到的路径不动）。
  *
  * 状态取自 AI SDK 的 tool part 状态机（spec §7.1：input-streaming → input-available →
  * （approval-requested → approval-responded）→ output-available / output-error；v7 另有
@@ -127,6 +132,13 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
   const [override, setOverride] = useState<boolean | null>(null)
   // MCP 工具显示用户注册的服务名（round 14）：`mcp__mcp-1__search` → 「知识库 · search」
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
+  /**
+   * 行详情里的路径按**展示口径**收成工作区相对路径（round 85，用户实报 013：编辑工作区内文件时
+   * 那一行铺出整条绝对路径、太长）。会话根与文件树 / 预览 / 附件同一个来源（`useWorkbenchRoot`，
+   * 它读的是 `sessionRootPathOf` 这份**真根**），本组件不另做路径推断；判不出根 / 根外文件原样显示。
+   * 只动这一行的**显示**：入参面板（`tool-input`）与工具回执仍是原样，模型看到的路径不变。
+   */
+  const { rootPath } = useWorkbenchRoot()
   const displayName = formatToolName(part.toolName, mcpServers)
   const output = part.errorText ?? part.output
   const hasOutput = output !== undefined && output !== ''
@@ -135,6 +147,8 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
   const open = override ?? false
   const tone = STATE_TONES[part.state] ?? 'pending'
   const detail = toolDetailOf(part.input) ?? extraDetailOf(part.toolName, part.input)
+  /** 行详情只改**显示**：根内 → 工作区相对路径，根外 / 判不出根 → 原样（见 display-path） */
+  const shownDetail = detail === null ? null : displayPath(detail, rootPath)
   const live = running && toolStateRunning(part.state)
   const stateLabel =
     part.toolName === 'ask_user'
@@ -150,12 +164,12 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
         <ToolIcon toolName={part.toolName} className="size-[15px] text-ink-tertiary" />
       </span>
       <span className="shrink-0 font-mono text-c1">{displayName}</span>
-      {detail === null ? null : (
+      {shownDetail === null ? null : (
         <span
           data-testid="tool-detail"
           className="min-w-0 truncate font-mono text-c1 text-ink-tertiary"
         >
-          {detail}
+          {shownDetail}
         </span>
       )}
       <span

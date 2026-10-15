@@ -32,12 +32,32 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
       }
     })
     expect(window).toMatchObject({ visible: true, title: 'kyclaw' })
-    // 几何不能要求逐像素相等：宿主显示缩放不是整数倍时（本机 225%），Windows/Chromium 会把窗口
-    // 的物理像素取整，`getBounds()` 回来的 DIP 就差 1~2px（实测 1281×802，内容盒 1280×802；
-    // 探针 `_r84-window-bounds-probe` 证到 scaleFactor=2.25）。所以比"默认 1280×800 ± 4"：
-    // 换成别的几何默认值（1024×768 / 1440×900…）照样红，DPI 取整不误伤。
-    expect(Math.abs((window.width ?? 0) - 1280)).toBeLessThanOrEqual(4)
-    expect(Math.abs((window.height ?? 0) - 800)).toBeLessThanOrEqual(4)
+    // 几何不能要求逐像素相等，两件事叠加（都为实测，别读成"默认值变了"）：
+    //   ① 宿主显示缩放不是整数倍时（本机 225%），Windows/Chromium 会把窗口的物理像素取整，
+    //      `getBounds()` 回来的 DIP 就差 1~2px（实测宽 1282，内容盒 1280；scaleFactor=2.25）；
+    //   ② **窗口永远放不进工作区**：本机主屏 1280×800 DIP（物理 2880×1800 @225%），
+    //      工作区只有 1280×752（任务栏占掉 48）—— 默认要的 800 高放不下，OS 把它夹到工作区
+    //      （实测 getBounds 753 高、内容盒 752）。这是宿主环境（显示器/任务栏）使然。
+    // 所以比的是「默认 1280×800 夹到工作区」± 4（DPI 取整）：工作区比默认大时，这一条就是
+    // 1280×800 那一档；默认值本身由 `src/main/__tests__/store.spec.ts` 的 DEFAULT_WINDOW_STATE 钉着
+    // （换成 1024×768 / 1440×900… 那两处照样红）。
+    const display = await app.evaluate(({ screen }) => {
+      const primary = screen.getPrimaryDisplay()
+      return { workArea: primary.workArea, scaleFactor: primary.scaleFactor }
+    })
+    const expectedWidth = Math.min(1280, display.workArea.width)
+    const expectedHeight = Math.min(800, display.workArea.height)
+    const geometry =
+      `实际 ${window.width}×${window.height}，期望 ${expectedWidth}×${expectedHeight}` +
+      `（工作区 ${display.workArea.width}×${display.workArea.height}，缩放 ${display.scaleFactor}）`
+    expect(
+      Math.abs((window.width ?? 0) - expectedWidth),
+      `窗口宽：${geometry}`
+    ).toBeLessThanOrEqual(4)
+    expect(
+      Math.abs((window.height ?? 0) - expectedHeight),
+      `窗口高：${geometry}`
+    ).toBeLessThanOrEqual(4)
 
     // 最大化按钮真的切状态（不是画着好看的）
     await page.getByTestId('window-maximize').click()

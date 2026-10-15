@@ -15,6 +15,7 @@ import type { WebSearchSettings } from '@shared/search'
 import type { Project } from '@shared/projects'
 import type { KyclawProjectsApi, KyclawWorkspaceApi } from '@shared/ipc'
 import { withAllowedRule } from '@shared/permissions'
+import type { ModelOverride } from '@shared/models'
 import type { ProviderConfig } from '@shared/providers'
 import { setFontTier, setTheme } from './theme'
 
@@ -71,6 +72,11 @@ export interface SettingsState {
   saveProviders: (providers: ProviderConfig[]) => Promise<void>
   /** round 18：保存模型级偏好（思考挡位 / 对话长度百分比；以落盘结果为准，失败抛） */
   saveModelPrefs: (modelPrefs: Record<string, ModelPrefs>) => Promise<void>
+  /**
+   * 用户反馈 003/004：保存模型的手动覆盖（上下文长度 / 显示名，`<providerId>:<model>` 键）。
+   * 与 provider 同族：整表替换、以落盘结果为准、失败抛给调用方。
+   */
+  saveModelOverrides: (overrides: Record<string, ModelOverride>) => Promise<void>
   /** round 20：保存置顶会话 id 列表（侧栏排序用；以落盘结果为准，失败抛） */
   setPinnedThreads: (threadIds: string[]) => Promise<void>
   /** round 20：归档一个会话（写快照进 archivedThreads，并从置顶里摘掉；数据不删） */
@@ -89,8 +95,9 @@ export interface SettingsState {
   /** round 25：取消归档项目（项目与它的会话一并回侧栏；没归档过是幂等空操作） */
   unarchiveProject: (projectId: string) => Promise<void>
   /**
-   * round 67：保存追踪栏的地址与代理（合并写，给谁改谁）——地址留空 = 关闭导出，
-   * 代理留空 = 直连（回落 HTTPS_PROXY 等环境变量）。密钥仍走 telemetry 通道。
+   * round 67：保存追踪栏的开关 / 地址 / 代理（合并写，给谁改谁）——round 86 起开关（`enabled`）
+   * 也走这一条（点开关就地落盘）；地址留空只是"没配"。代理留空 = 直连（回落 HTTPS_PROXY 等环境变量）。
+   * 密钥仍走 telemetry 通道。
    */
   saveLangfuse: (patch: Partial<LangfuseSettings>) => Promise<void>
   /**
@@ -175,6 +182,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   /** round 18：模型级偏好（思考挡位 / 对话长度百分比）——与 provider 同族：失败抛给调用方 */
   saveModelPrefs: async (modelPrefs) => {
     set({ settings: await settingsApi().update({ modelPrefs }) })
+  },
+
+  /** 用户反馈 003/004：手动覆盖表（上下文长度 / 显示名）——整表替换，失败抛给调用方 */
+  saveModelOverrides: async (modelOverrides) => {
+    set({ settings: await settingsApi().update({ modelOverrides }) })
   },
 
   /** round 20：置顶列表（整表替换，顺序无关）；与 provider 同族：失败抛给调用方 */

@@ -129,6 +129,9 @@ export interface ComposerProps {
    * round 81：**模式分组**（「进入规划模式」+「任务清单」）—— 常驻在工具条上的两颗模式按钮
    * 收进左下角这一个 ＋ 菜单里（用户口径：绝不另造第二个模式菜单）；权限 chip 仍在工具条上。
    * 由上层按真实状态给：未就绪时给 null（那一挂没有可动的对象），正在运行时条目禁用。
+   *
+   * round 85：`/` 命令浮窗里的「进入规划模式」用的也是这一份（选中调 `mode.plan.onSelect`）——
+   * 两条入口背后是同一个 `enterPlan`，不是第二套实现。
    */
   mode?: ComposerModeMenu | null
 }
@@ -140,16 +143,23 @@ function uid(): string {
 }
 
 /**
- * 剪贴板里的文件（round 50 粘贴入口）：`files` 与 `items`（kind === 'file'）两处都看 ——
- * 截图工具与资源管理器在不同平台上填的不是同一处，两处同源时按元数据去重。
+ * 剪贴板里的文件（round 50 粘贴入口）。
+ *
+ * **`files` 是唯一来源**，只有它是空的时候才回退去读 `items`（kind === 'file'）。
+ * round 85 修的就是这里：原先两处都读、靠"名字+大小+类型+lastModified"当指纹去重 —— 而这两条路
+ * 在真机上给的**不是同一个 File 对象**（Chromium 各自构造一份，元数据不保证逐字相等；截图工具贴图
+ * 时 lastModified 就对不上），指纹一漏，同一次粘贴就被入队两份（用户实报 011：同一张图被粘两次，
+ * 得手动删掉多出来的一份）。`files` 本来就是这次粘贴的完整文件清单，再读一遍 items 只会制造重复；
+ * items 回退路上仍按指纹去重（有些平台/来源只填 items，同一份也可能出现两次）。
  * 一个文件都没有 = 纯文本粘贴：调用方**不拦截**，保持默认行为。
  */
 function clipboardFilesOf(data: DataTransfer | null): File[] {
-  const keyOf = (file: File): string =>
-    `${file.name}\u0000${file.size}\u0000${file.type}\u0000${file.lastModified}`
   if (data === null) return []
   const files: File[] = Array.from(data.files ?? [])
-  const seen = new Set(files.map(keyOf))
+  if (files.length > 0) return files
+  const keyOf = (file: File): string =>
+    `${file.name}\u0000${file.size}\u0000${file.type}\u0000${file.lastModified}`
+  const seen = new Set<string>()
   for (const item of Array.from(data.items ?? [])) {
     if (item.kind !== 'file') continue
     const file = item.getAsFile()
@@ -200,6 +210,19 @@ export function Composer({
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * 输入框**最近一次挂上来的那个 DOM 节点**（卸载过桥要读它，见 composer-carryover）。
+   *
+   * 为什么不直接读 `textareaRef`：React 在**卸载的 mutation 阶段**就把 ref 置空了，而卸载的
+   * effect cleanup（过桥那一手）跑在**后面的 passive 阶段** —— 那时 `textareaRef.current` 已经是
+   * null，"输入框现在写着什么"就读不到。所以用回调 ref 另存一份节点（置空那一下不跟着清），
+   * 过桥时从这一份读 DOM 的真值。
+   */
+  const lastTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const attachTextarea = useCallback((node: HTMLTextAreaElement | null): void => {
+    textareaRef.current = node
+    if (node !== null) lastTextareaRef.current = node
+  }, [])
   /** 引用覆盖层（chip 的盖层）：与 textarea 同排版，随内容滚动（round 21 起在 textarea 之上） */
   const mirrorRef = useRef<HTMLDivElement>(null)
   /**
@@ -316,7 +339,13 @@ export function Composer({
             {
               plugins: enabledPlugins,
               skills: installedSkills,
-              command: { percent: usagePercent, busy: compactBusy, disabled: compactDisabled }
+              command: { percent: usagePercent, busy: compactBusy, disabled: compactDisabled },
+              // round 85：`/` 里那条「进入规划模式」与 ＋ 菜单同源 —— 只有真的能进（普通模式、
+              // 实例就绪）时才给这条；正在跑 / 等审批 / 压缩中给 disabled（可见、按不动）
+              plan:
+                mode === null || mode.plan === null
+                  ? undefined
+                  : { disabled: mode.plan.disabled === true }
             },
             suggest.query
           )
@@ -347,8 +376,8 @@ export function Composer({
   }, [suggest?.kind, threadId, files, workspaceApi])
 
   /**
-   * round 62：命令行那条使用率的**阈值**（依赖面收窄到 providers / modelPrefs / probedModels，
-   * 见 lib/compact 的 ThresholdSettings）。原来下面那个 effect 直接依赖整个 `settings`：
+   * round 62：命令行那条使用率的**阈值**（依赖面收窄到 providers / modelPrefs / probedModels /
+   * modelOverrides，见 lib/compact 的 ThresholdSettings）。原来下面那个 effect 直接依赖整个 `settings`：
    * 权限规则、工作区、视觉探测结论……任何一处变更，只要 `/` 浮窗还开着就白拉一次用量。
    */
   const thresholdTokens = useMemo(
@@ -356,9 +385,10 @@ export function Composer({
       thresholdTokensOf({
         providers: settings.providers,
         modelPrefs: settings.modelPrefs,
-        probedModels: settings.probedModels
+        probedModels: settings.probedModels,
+        modelOverrides: settings.modelOverrides
       }),
-    [settings.providers, settings.modelPrefs, settings.probedModels]
+    [settings.providers, settings.modelPrefs, settings.probedModels, settings.modelOverrides]
   )
 
   /** 打开 `/` 时取一次使用率（命令行「压缩上下文」的次要位是数值展示，不是解释小字） */
@@ -382,12 +412,15 @@ export function Composer({
   /** 选中一条建议：命令行走"立即执行"（移除触发段）；引用行把触发段换成引用标记 */
   const pickSuggestion = (row: SuggestionRow): void => {
     if (suggest === null || row.disabled === true) return
-    if (row.command === 'compact') {
+    if (row.command !== undefined) {
+      // 命令行：不插引用标记 —— 触发词整段移除后立即执行
       const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
       setCaretToken(suggest.start)
       setDraft(remaining)
       setSuggest(null)
-      onCompact?.()
+      if (row.command === 'compact') onCompact?.()
+      // round 85：`/进入规划模式` 与 ＋ 菜单那条是**同一个实现**（mode.plan.onSelect = enterPlan）
+      else mode?.plan?.onSelect()
       return
     }
     if (row.reference === undefined) return
@@ -594,9 +627,15 @@ export function Composer({
     () => () => {
       if (pendingRef.current === null) return
       keepComposerCarryover({
-        text: draftRef.current,
+        // 抄**输入框此刻真实写着什么**，不抄 `draftRef` 这个 state 镜像：两者会在"state 还没跟上
+        // 用户这一下改动"时分叉（DOM 上有字、state 仍是空），而用户看得见的就是 DOM 那一份 ——
+        // 以它为准，卸载时就不会把半句吞掉（这条口径由 composer-first.spec 的
+        // 「DOM 有字、state 空」那条用例钉住）。`textareaRef` 此刻已被 React 置空，所以读
+        // `lastTextareaRef`（回调 ref 存下的那个节点）。
+        text: lastTextareaRef.current === null ? draftRef.current : lastTextareaRef.current.value,
         attachments: attachmentsRef.current,
-        focused: textareaRef.current !== null && document.activeElement === textareaRef.current
+        focused:
+          lastTextareaRef.current !== null && document.activeElement === lastTextareaRef.current
       })
     },
     []
@@ -707,7 +746,7 @@ export function Composer({
           </div>
         </div>
         <textarea
-          ref={textareaRef}
+          ref={attachTextarea}
           data-testid="composer-input"
           aria-label="输入消息"
           rows={1}

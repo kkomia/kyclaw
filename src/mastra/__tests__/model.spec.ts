@@ -228,11 +228,31 @@ describe('内置 mock · 写文件口令（T16 E2E 的审批冒烟入口）', ()
 })
 
 describe('resolveModel · 半截配置显式报错（不静默回落 mock）', () => {
-  it('有 type/model/baseUrl 但没有 key → "配置不完整：缺 API 密钥"', async () => {
-    const promise = resolveModel([DEEPSEEK], keyReader(), {})
+  it('openai 兼容族**没有 key 也照解析**（本机 / 自建端点那类；不再被"缺 API 密钥"拦住）', async () => {
+    const local: ProviderConfig = {
+      ...DEEPSEEK,
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      model: 'local-model'
+    }
 
-    await expect(promise).rejects.toThrow(ProviderConfigError)
-    await expect(promise).rejects.toThrow(/配置不完整：缺 API 密钥/)
+    const resolved = await resolveModel([local], keyReader(), {})
+
+    expect(resolved.source).toBe('openai-compatible')
+    expect(modelInfo(resolved.model).provider).toBe('kyclaw-openai-compatible.chat')
+  })
+
+  it('anthropic 没有 key → "配置不完整：缺 API 密钥"（官方 SDK 必填）', async () => {
+    const anthropic: ProviderConfig = {
+      id: 'anthropic',
+      type: 'anthropic',
+      model: 'claude-sonnet-4-5',
+      isDefault: true
+    }
+
+    await expect(resolveModel([anthropic], keyReader(), {})).rejects.toThrow(ProviderConfigError)
+    await expect(resolveModel([anthropic], keyReader(), {})).rejects.toThrow(
+      /配置不完整：缺 API 密钥/
+    )
   })
 
   it('openai-compatible 缺 baseUrl → "缺 Base URL"', async () => {
@@ -241,15 +261,17 @@ describe('resolveModel · 半截配置显式报错（不静默回落 mock）', (
     await expect(resolveModel([noBase], WITH_KEY, {})).rejects.toThrow(/配置不完整：缺 Base URL/)
   })
 
-  it('模型名为空 → "缺模型名"；多项缺失按 模型 → Base URL → 密钥 报全', async () => {
+  it('模型名为空 → "缺模型名"；多项缺失按 模型 → Base URL 报全', async () => {
     const empty: ProviderConfig = { ...DEEPSEEK, model: '  ', baseUrl: undefined }
 
     await expect(resolveModel([empty], keyReader(), {})).rejects.toThrow(
-      /配置不完整：缺模型名；配置不完整：缺 Base URL；配置不完整：缺 API 密钥/
+      /配置不完整：缺模型名；配置不完整：缺 Base URL/
     )
   })
 
   it('错误里带 provider id（设置页能指到是哪条配置）', async () => {
-    await expect(resolveModel([DEEPSEEK], keyReader(), {})).rejects.toThrow(/deepseek/)
+    const noBase: ProviderConfig = { ...DEEPSEEK, baseUrl: undefined }
+
+    await expect(resolveModel([noBase], keyReader(), {})).rejects.toThrow(/deepseek/)
   })
 })

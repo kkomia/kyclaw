@@ -34,7 +34,7 @@ export function registerRulesIpc(userDataDir: string, hooks: RulesIpcHooks = {})
       result.diagnostics.push({
         scope: 'project',
         code: 'project-unavailable',
-        message: '项目已删除或路径已改变，不再加载这份项目规矩。'
+        message: '项目已删除或路径已改变，不再加载这份项目约束。'
       })
     }
     const combined = combineRules({ text: current.globalRules, diagnostics: [] }, result)
@@ -71,7 +71,7 @@ export function registerRulesIpc(userDataDir: string, hooks: RulesIpcHooks = {})
             {
               scope: 'project',
               code: 'project-unavailable',
-              message: '规矩文件已保存，但项目随后已删除或路径已改变，不再对该项目生效。'
+              message: '约束文件已保存，但项目随后已删除或路径已改变，不再对该项目生效。'
             }
           ],
           processorRegistered: hooks.processorRegistered?.() ?? false,

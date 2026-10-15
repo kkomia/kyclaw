@@ -8,8 +8,12 @@ import { fetchRecallStatus } from '@renderer/lib/memory-api'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { RecallStatus } from '@shared/memory'
 import type { ProviderKeyState } from '@shared/providers'
-import { SEMANTIC_RECALL_PRESET, SEMANTIC_RECALL_SOURCES } from '@shared/settings'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  SEMANTIC_RECALL_PRESET,
+  SEMANTIC_RECALL_SOURCES,
+  type SemanticRecallSettings
+} from '@shared/settings'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LocalModelSettings } from './LocalModelSettings'
 import { recallStatusText } from './status-text'
 
@@ -110,8 +114,10 @@ export function RecallSettings(): React.JSX.Element {
   const { status, error: statusError, refresh } = useRecallStatus()
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
   const [keyState, setKeyState] = useState<ProviderKeyState | null>(null)
-  const [pending, setPending] = useState<'saving' | 'clearing' | undefined>(undefined)
+  const [pending, setPending] = useState<'saving' | 'clearing' | 'toggling' | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
+  /** 上一次动作的结果（保存 / 清除密钥都在这行说话；012 用户口径） */
+  const [notice, setNotice] = useState('')
 
   const memoryApi = window.kyclaw?.memory
 
@@ -150,7 +156,33 @@ export function RecallSettings(): React.JSX.Element {
 
   const patchDraft = (patch: Partial<Draft>): void => {
     setDraft({ ...current, ...patch })
+    // 012：输入一动，上一次动作留下的「已保存」就不再描述眼前这份内容
+    setNotice('')
   }
+
+  /**
+   * **就地落盘**（开关 / 嵌入来源；与「追踪」栏同一手法）：`pending` 要等下一次渲染才生效，
+   * 连点两下会并发发两次 settings:update —— 用一个 ref 现读的锁把这段串起来（期间控件 disabled）。
+   */
+  const writing = useRef(false)
+  const writeInPlace = useCallback(
+    async (patch: Partial<SemanticRecallSettings>): Promise<void> => {
+      if (writing.current) return
+      writing.current = true
+      setPending('toggling')
+      setError(undefined)
+      setNotice('')
+      try {
+        await saveSemanticRecall(patch)
+      } catch (caught) {
+        setError(messageOf(caught))
+      } finally {
+        writing.current = false
+        setPending(undefined)
+      }
+    },
+    [saveSemanticRecall]
+  )
 
   const save = useCallback(async (): Promise<void> => {
     const baseUrl = current.baseUrl.trim()
@@ -158,6 +190,7 @@ export function RecallSettings(): React.JSX.Element {
     const key = current.key.trim()
 
     setError(undefined)
+    setNotice('')
     setPending('saving')
     try {
       await saveSemanticRecall({ baseUrl, model })
@@ -168,6 +201,7 @@ export function RecallSettings(): React.JSX.Element {
       }
       setDraft(undefined)
       await refresh()
+      setNotice('已保存')
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
@@ -182,8 +216,10 @@ export function RecallSettings(): React.JSX.Element {
     }
     setPending('clearing')
     setError(undefined)
+    setNotice('')
     try {
       setKeyState(await memoryApi.clearEmbeddingKey())
+      setNotice('密钥已清除')
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
@@ -191,10 +227,7 @@ export function RecallSettings(): React.JSX.Element {
     }
   }, [memoryApi])
 
-  const toggle = (next: boolean): void => {
-    setError(undefined)
-    saveSemanticRecall({ enabled: next }).catch((caught: unknown) => setError(messageOf(caught)))
-  }
+  const toggle = (next: boolean): void => void writeInPlace({ enabled: next })
 
   const busy = pending !== undefined
 
@@ -233,12 +266,7 @@ export function RecallSettings(): React.JSX.Element {
                   aria-pressed={settings.source === source}
                   className={cn(settings.source === source && 'bg-selected')}
                   disabled={busy}
-                  onClick={() => {
-                    setError(undefined)
-                    saveSemanticRecall({ source }).catch((caught: unknown) =>
-                      setError(messageOf(caught))
-                    )
-                  }}
+                  onClick={() => void writeInPlace({ source })}
                 >
                   {SOURCE_LABELS[source]}
                 </Chip>
@@ -335,6 +363,12 @@ export function RecallSettings(): React.JSX.Element {
           </div>
         </>
       ) : null}
+
+      {notice === '' ? null : (
+        <p data-testid="recall-notice" role="status" className="text-c1 text-ink-secondary">
+          {notice}
+        </p>
+      )}
 
       {error === undefined ? null : (
         <p data-testid="recall-error" className="text-c1 text-danger">

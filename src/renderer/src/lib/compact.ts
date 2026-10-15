@@ -3,25 +3,30 @@
  *
  * 阈值 = 当前默认模型 × 对话长度（modelPrefs.contextPct，缺省 100%）× 上下文长度 ——
  * 与 ModelChip 上下文环的分母同一处 `contextTokensFor`，环变警示色的那一刻正是自动压缩的触发点。
- * round 22：上下文长度取 **probed 实测优先**（settings.probedModels，`<providerId>:<model>` 键）。
+ * round 22：上下文长度取 **probed 实测优先**（settings.probedModels，`<providerId>:<model>` 键）；
+ * 用户反馈 003：手动覆盖（settings.modelOverrides）排在最前面（环与压缩用同一个分母）。
  */
-import { contextTokensFor, probedKeyOf } from '@shared/models'
+import { contextTokensFor, overrideKeyOf, probedKeyOf } from '@shared/models'
 import type { AppSettings } from '@shared/settings'
 
 /**
- * 阈值的**依赖面**（round 62）：换算只用得上这三块 —— 默认模型来自 providers，上下文长度来自
- * modelPrefs（用户挡位）与 probedModels（实测）。把它单独标出来，调用方就能只依赖这三块
- * （比如输入卡的 `/` 浮窗：任何别的设置变更都不该白拉一次用量）。
+ * 阈值的**依赖面**（round 62）：换算只用得上这四块 —— 默认模型来自 providers，上下文长度来自
+ * modelPrefs（用户挡位）、probedModels（实测）与 modelOverrides（用户手填）。把它单独标出来，
+ * 调用方就能只依赖这几块（比如输入卡的 `/` 浮窗：任何别的设置变更都不该白拉一次用量）。
  */
-export type ThresholdSettings = Pick<AppSettings, 'providers' | 'modelPrefs' | 'probedModels'>
+export type ThresholdSettings = Pick<
+  AppSettings,
+  'providers' | 'modelPrefs' | 'probedModels' | 'modelOverrides'
+>
 
 /** 当前设置下"超阈值"的 token 数（没有 provider → null，不触发也不显示使用率） */
 export function thresholdTokensOf(settings: ThresholdSettings): number | null {
   const provider = settings.providers.find((item) => item.isDefault) ?? settings.providers[0]
   if (provider === undefined) return null
   const probed = settings.probedModels[probedKeyOf(provider.id, provider.model)]
+  const override = settings.modelOverrides[overrideKeyOf(provider.id, provider.model)]
   const pct = settings.modelPrefs[`${provider.id}/${provider.model}`]?.contextPct
-  return contextTokensFor(provider.model, pct, probed)
+  return contextTokensFor(provider.model, pct, probed, override)
 }
 
 /** 最近一轮输入 → 使用率（0–100 的整数；阈值判不出来时返回 null） */

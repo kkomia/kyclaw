@@ -4,16 +4,18 @@ import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
 import { Skeleton } from '@renderer/components/ui/skeleton'
 import { fetchUsage } from '@renderer/lib/usage-api'
-import { formatCost, formatTokens } from '@renderer/lib/usage-format'
+import { formatTokens } from '@renderer/lib/usage-format'
 import { usageRangeSchema, type UsageRange, type UsageResponse } from '@shared/usage'
 
 /**
  * 用量面板（T14 起；round 5 从页面里拆出）：本地记账的窗口统计——今日 / 本月 + 按模型拆分。
  * 面板本体同时被设置页「用量」栏复用（round 5 去重：设置为唯一导航源）。
  *
- * 数据全部来自服务端（/api/usage，libsql 的 usage_runs）：页面不自己算窗口、不自己算价，
+ * 数据全部来自服务端（/api/usage，libsql 的 usage_runs）：页面不自己算窗口，
  * 与"账在服务端"一致。切换窗口时内容按 key 重新挂一次（进场动效跟着走，不硬切）。
- * 数字口径见 lib/usage-format：未知模型的花费显示占位符、部分未计价时合计带 "≥"。
+ *
+ * 用户口径 014：**这一页不做计费** —— 只留 token 用量（总量 / 按模型 / 次数）。
+ * 服务端的用量记账与 /api/usage 回包也一并去掉了计费口径（没有 cost / 币种字段可读）。
  */
 const RANGE_LABELS: Record<UsageRange, string> = {
   today: '今日',
@@ -38,12 +40,6 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
         data-testid="usage-summary"
         className="flex flex-wrap gap-10 rounded-panel bg-secondary p-4"
       >
-        <div className="flex flex-col gap-1">
-          <span className="text-b2 text-ink-secondary">花费</span>
-          <span data-testid="usage-cost" className="text-t1 font-medium text-ink">
-            {formatCost(data.cost, { currency: data.currency, incomplete: data.costIncomplete })}
-          </span>
-        </div>
         <div className="flex flex-col gap-1">
           <span className="text-b2 text-ink-secondary">Token</span>
           <span data-testid="usage-tokens" className="text-t1 font-medium text-ink">
@@ -71,12 +67,6 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
                   className="truncate text-b2 text-ink"
                 >
                   {row.model}
-                </span>
-                <span
-                  data-testid={`usage-model-${index}-cost`}
-                  className="shrink-0 text-b2 text-ink"
-                >
-                  {formatCost(row.cost, { currency: data.currency })}
                 </span>
               </div>
               <div

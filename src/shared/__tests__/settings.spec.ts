@@ -32,11 +32,13 @@ describe('AppSettings schema', () => {
       installedPlugins: [],
       modelPrefs: {},
       probedModels: {},
+      // 用户反馈 003/004：手动覆盖表（上下文长度 / 显示名）默认空
+      modelOverrides: {},
       pinnedThreads: [],
       pinnedProjects: [],
       archivedThreads: [],
       archivedProjects: [],
-      langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
+      langfuse: { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
       semanticRecall: {
         enabled: true,
         source: 'remote',
@@ -76,10 +78,15 @@ describe('AppSettings schema', () => {
     first.providers.push({ id: 'leaked', type: 'anthropic', model: 'm', isDefault: false })
     first.langfuse.endpoint = 'https://leaked.example'
     first.langfuse.proxyUrl = 'http://127.0.0.1:7890'
+    first.langfuse.enabled = false
 
     expect(DEFAULT_SETTINGS.theme).toBe('system')
     expect(DEFAULT_SETTINGS.providers).toEqual([])
-    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' })
+    expect(DEFAULT_SETTINGS.langfuse).toEqual({
+      enabled: true,
+      endpoint: LANGFUSE_PRESET.endpoint,
+      proxyUrl: ''
+    })
     // round 10 的两个新数组同样要新副本
     expect(first.pluginMarketplaces).not.toBe(DEFAULT_SETTINGS.pluginMarketplaces)
     expect(first.installedPlugins).not.toBe(DEFAULT_SETTINGS.installedPlugins)
@@ -291,26 +298,32 @@ describe('权限规则 schema（T13：审批记忆的"永久允许"）', () => {
   })
 })
 
-describe('Langfuse 设置 schema（T17 / round 67：地址 + 代理，密钥不在这里）', () => {
-  it('langfuse 必须是 { endpoint, proxyUrl }（空串 = 没配）；密钥字段一律不收（strict）', () => {
+describe('Langfuse 设置 schema（T17 / round 67 加代理 / round 86 加显式开关；密钥不在这里）', () => {
+  it('langfuse 必须是 { enabled, endpoint, proxyUrl }（地址空串 = 没配）；密钥字段一律不收（strict）', () => {
     expect(
       appSettingsSchema.safeParse({
         ...DEFAULT_SETTINGS,
-        langfuse: { endpoint: '', proxyUrl: '' }
+        langfuse: { enabled: true, endpoint: '', proxyUrl: '' }
       }).success
     ).toBe(true)
     expect(
       appSettingsSchema.safeParse({
         ...DEFAULT_SETTINGS,
-        langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: 'http://127.0.0.1:7890' }
+        langfuse: {
+          enabled: false,
+          endpoint: 'https://cloud.langfuse.com',
+          proxyUrl: 'http://127.0.0.1:7890'
+        }
       }).success
     ).toBe(true)
 
     for (const bad of [
       {},
       { endpoint: 1 },
-      { endpoint: '', secretKey: 'sk-leaked' },
-      { endpoint: '', proxyUrl: '', extra: 1 },
+      { enabled: true, endpoint: '', secretKey: 'sk-leaked' },
+      { enabled: true, endpoint: '', proxyUrl: '', extra: 1 },
+      { endpoint: '', proxyUrl: '' },
+      { enabled: 'yes', endpoint: '', proxyUrl: '' },
       'https://cloud.langfuse.com'
     ]) {
       expect(
@@ -324,28 +337,54 @@ describe('Langfuse 设置 schema（T17 / round 67：地址 + 代理，密钥不�
     expect(
       appSettingsSchema.safeParse({
         ...DEFAULT_SETTINGS,
-        langfuse: { endpoint: 'https://cloud.langfuse.com' }
+        langfuse: { enabled: true, endpoint: 'https://cloud.langfuse.com' }
       }).success
     ).toBe(false)
   })
 
-  it('补丁可以改地址与代理（设置页「追踪」栏走这条路）：整节给全（partial 只放顶层，嵌套仍要完整）', () => {
+  it('缺 enabled（round 86 之前落盘的文件）同样要在读盘前补 true——schema 本身仍要求齐全', () => {
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: '' }
+      }).success
+    ).toBe(false)
+  })
+
+  it('补丁可以改开关 / 地址 / 代理（设置页「追踪」栏走这条路）：整节给全（partial 只放顶层，嵌套仍要完整）', () => {
     expect(
       appSettingsPatchSchema.parse({
-        langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: 'http://127.0.0.1:7890' }
+        langfuse: {
+          enabled: false,
+          endpoint: 'https://cloud.langfuse.com',
+          proxyUrl: 'http://127.0.0.1:7890'
+        }
       })
     ).toEqual({
-      langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: 'http://127.0.0.1:7890' }
+      langfuse: {
+        enabled: false,
+        endpoint: 'https://cloud.langfuse.com',
+        proxyUrl: 'http://127.0.0.1:7890'
+      }
     })
     // 只给一半（T17 那版客户端的写法）不再合法：设置页的 saveLangfuse 会先与落盘值合并再写
     expect(
       appSettingsPatchSchema.safeParse({ langfuse: { endpoint: 'https://cloud.langfuse.com' } })
         .success
     ).toBe(false)
-    expect(appSettingsPatchSchema.safeParse({ langfuse: { endpoint: 1 } }).success).toBe(false)
-    expect(appSettingsPatchSchema.safeParse({ langfuse: { endpoint: '', extra: 1 } }).success).toBe(
-      false
-    )
+    expect(
+      appSettingsPatchSchema.safeParse({
+        langfuse: { enabled: false, endpoint: 'https://cloud.langfuse.com' }
+      }).success
+    ).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({ langfuse: { enabled: true, endpoint: 1, proxyUrl: '' } })
+        .success
+    ).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({ langfuse: { enabled: true, endpoint: '', extra: 1 } })
+        .success
+    ).toBe(false)
   })
 })
 

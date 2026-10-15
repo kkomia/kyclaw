@@ -4,9 +4,12 @@ import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kycl
 import { UsagePage } from '../UsagePage'
 
 /**
- * 用量页（T14）：今日 / 本月切换、汇总数字、按模型拆分（含未知模型的占位显示）。
- * 数字口径的断言刻意写在"页面显示出来的字符串"上（千分位、$、≥、—），
+ * 用量页（T14）：今日 / 本月切换、汇总数字、按模型拆分。
+ * 数字口径的断言刻意写在"页面显示出来的字符串"上（千分位），
  * 这样格式函数与页面接线一起被钉住。
+ *
+ * 用户口径 014：这页只讲 token，不做计费 —— 服务端回包也**没有** cost 一类字段
+ * （fixture 照真实回包同形，所以这里也不带），页面更没有可显示的金额。
  */
 function json(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -18,23 +21,18 @@ function json(payload: unknown): Response {
 const TODAY = {
   range: 'today',
   tokens: { input: 1200, output: 300, total: 1500 },
-  cost: 0.0042,
-  costIncomplete: true,
-  currency: 'USD',
   byModel: [
     {
       model: 'deepseek-flash',
       provider: 'deepseek',
       runs: 2,
-      tokens: { input: 1000, output: 200, total: 1200 },
-      cost: 0.0042
+      tokens: { input: 1000, output: 200, total: 1200 }
     },
     {
       model: 'kyclaw-test-mock',
       provider: 'kyclaw-test',
       runs: 1,
-      tokens: { input: 200, output: 100, total: 300 },
-      cost: null
+      tokens: { input: 200, output: 100, total: 300 }
     }
   ]
 }
@@ -42,16 +40,12 @@ const TODAY = {
 const MONTH = {
   range: 'month',
   tokens: { input: 20000, output: 5000, total: 25000 },
-  cost: 1.5,
-  costIncomplete: false,
-  currency: 'USD',
   byModel: [
     {
       model: 'deepseek-flash',
       provider: 'deepseek',
       runs: 12,
-      tokens: { input: 20000, output: 5000, total: 25000 },
-      cost: 1.5
+      tokens: { input: 20000, output: 5000, total: 25000 }
     }
   ]
 }
@@ -59,9 +53,6 @@ const MONTH = {
 const EMPTY = {
   range: 'today',
   tokens: { input: 0, output: 0, total: 0 },
-  cost: null,
-  costIncomplete: false,
-  currency: 'USD',
   byModel: []
 }
 
@@ -121,19 +112,43 @@ describe('用量页：今日', () => {
     expect(await screen.findByTestId('usage-summary')).toBeInTheDocument()
 
     expect(server.calls.at(-1)?.range).toBe('today')
-    // 有未计价的行 → 合计带 "≥"，不把未知当 0
-    expect(screen.getByTestId('usage-cost')).toHaveTextContent('≥ $0.0042')
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('1,500')
 
     expect(screen.getByTestId('usage-model-0-name')).toHaveTextContent('deepseek-flash')
-    expect(screen.getByTestId('usage-model-0-cost')).toHaveTextContent('$0.0042')
     expect(screen.getByTestId('usage-model-0-tokens')).toHaveTextContent('1,200 Token')
     expect(screen.getByTestId('usage-model-0-runs')).toHaveTextContent('2 次')
 
-    // 未知模型：花费占位，token 照记
+    // 未知模型（不再有"计价"这回事）照记 token，各占一行
     expect(screen.getByTestId('usage-model-1-name')).toHaveTextContent('kyclaw-test-mock')
-    expect(screen.getByTestId('usage-model-1-cost')).toHaveTextContent('—')
     expect(screen.getByTestId('usage-model-1-tokens')).toHaveTextContent('300 Token')
+    expect(screen.queryByTestId('usage-cost')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('usage-model-0-cost')).not.toBeInTheDocument()
+  })
+
+  it('014：回包里若冒出 cost 一类计费字段，页面按取数失败处理（回包 schema 没留后门）', async () => {
+    // 负向守卫：schema 是 strictObject —— 有人把 cost 加回回包时，这一条会红（汇总级与行级都试）
+    installFakeUsage({ today: { ...TODAY, cost: 0.0042 }, month: MONTH })
+    const summaryLevel = render(<UsagePage />)
+    expect(await screen.findByTestId('usage-error')).toHaveTextContent('用量服务回包格式不对')
+    summaryLevel.unmount()
+
+    installFakeUsage({
+      today: { ...TODAY, byModel: [{ ...TODAY.byModel[0], cost: 0.0042 }] },
+      month: MONTH
+    })
+    render(<UsagePage />)
+    expect(await screen.findByTestId('usage-error')).toHaveTextContent('用量服务回包格式不对')
+  })
+
+  it('014：计费相关的展示一个都没有（金额 / 币种 / 「≥」这类未计价口径）', async () => {
+    installFakeUsage({ today: TODAY, month: MONTH })
+    render(<UsagePage />)
+    await screen.findByTestId('usage-summary')
+
+    const text = screen.getByTestId('usage-page').textContent ?? ''
+    expect(text).not.toContain('花费')
+    expect(text).not.toContain('$')
+    expect(text).not.toContain('≥')
   })
 
   it('切到本月：重新取数（range=month），汇总跟着换', async () => {
@@ -143,23 +158,20 @@ describe('用量页：今日', () => {
 
     fireEvent.click(screen.getByTestId('usage-range-month'))
 
-    // 切窗口会重新取数：等新数字上屏（$1.50 只在本月档出现）
+    // 切窗口会重新取数：等新数字上屏（25,000 只在本月档出现）
     await screen.findByText('25,000')
     expect(server.calls.at(-1)?.range).toBe('month')
-    expect(screen.getByTestId('usage-cost')).toHaveTextContent('$1.50')
-    expect(screen.getByTestId('usage-cost')).not.toHaveTextContent('≥')
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('25,000')
     expect(screen.getByTestId('usage-models').children).toHaveLength(2) // 标题 + 一行
     expect(screen.getByTestId('usage-range-month')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('usage-range-today')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('没有记录：给空态，合计显示占位而不是 0', async () => {
+  it('没有记录：给空态，合计显示 0', async () => {
     installFakeUsage({ today: TODAY, month: MONTH }, true)
     render(<UsagePage />)
 
     expect(await screen.findByTestId('usage-empty')).toHaveTextContent('还没有用量记录')
-    expect(screen.getByTestId('usage-cost')).toHaveTextContent('—')
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('0')
     expect(screen.queryByTestId('usage-models')).not.toBeInTheDocument()
   })

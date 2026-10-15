@@ -63,7 +63,9 @@ function DataRow({
       <span
         className={cn(
           'w-12 shrink-0 text-right text-c2',
-          row.kind === 'tool' ? 'text-warning' : 'text-ink-tertiary'
+          row.kind === 'tool' ? 'text-warning' : 'text-ink-tertiary',
+          // 用户反馈 015：失败的那次请求在列表里也看得出来（不是"普通上下文"）
+          row.kind === 'error' && 'text-danger'
         )}
       >
         {KIND_LABEL[row.kind]}

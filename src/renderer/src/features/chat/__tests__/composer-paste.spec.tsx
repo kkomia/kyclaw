@@ -55,8 +55,8 @@ afterEach(() => {
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
 })
 
-function png(name: string, bytes = 'png-bytes'): File {
-  return new File([bytes], name, { type: 'image/png' })
+function png(name: string, bytes = 'png-bytes', lastModified = 1_700_000_000_000): File {
+  return new File([bytes], name, { type: 'image/png', lastModified })
 }
 
 /** 剪贴板形状（真实 DataTransfer 的最小子集 / 平台各填一处的两种情况都要能喂） */
@@ -173,6 +173,62 @@ describe('round 50 · 粘贴入口（截图贴图 / 资源管理器贴文件 →
 
     await screen.findByTestId('composer-attachment-once.png')
     expect(screen.getAllByTestId('composer-image-preview-open')).toHaveLength(1)
+  })
+
+  /**
+   * round 85（用户实报 011「同一张图片被粘贴两次，得手动删掉多一份」）：**两条路给的不是同一个
+   * File 对象**时也要只收一份。
+   *
+   * 上面那条用例里 `files[0]` 与 `items[0].getAsFile()` 返回的是同一个对象，靠"名字+大小+类型+
+   * lastModified"当指纹去重就够。真机上不成立：`clipboardData.files` 与 `items[i].getAsFile()`
+   * 各自构造一份 File，元数据不保证逐字相等（截图工具贴图时 lastModified 就对不上），指纹一碰
+   * 就漏 —— 同一次粘贴于是入队两张。
+   */
+  it('同一份内容在 files 与 items 上是两个 File（元数据不同）：仍只收一份', async () => {
+    mount()
+    const fromFiles = png('once.png', 'png-bytes', 1_700_000_000_000)
+    const fromItems = png('once.png', 'png-bytes', 1_700_000_000_999)
+
+    paste({ files: [fromFiles], items: [{ kind: 'file', getAsFile: () => fromItems }] })
+
+    await screen.findByTestId('composer-attachment-once.png')
+    expect(screen.getAllByTestId('composer-image-preview-open')).toHaveLength(1)
+  })
+
+  it('真的粘了两张不同的图（两条 items，没有 files）：两张都收，不去重过头', async () => {
+    mount()
+
+    paste({
+      files: [],
+      items: [
+        { kind: 'file', getAsFile: () => png('first.png', 'first-bytes') },
+        { kind: 'file', getAsFile: () => png('second.png', 'second-bytes') }
+      ]
+    })
+
+    expect(await screen.findByTestId('composer-attachment-first.png')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-attachment-second.png')).toBeInTheDocument()
+    expect(screen.getAllByTestId('composer-image-preview-open')).toHaveLength(2)
+  })
+
+  /**
+   * 011：去重**只活在一次粘贴之内**（防的是同一次粘贴里 `files` 与 `items` 各给一份）。
+   * 隔了次数的两次独立粘贴是两次不同的用户意图 —— 同一张再贴一次就该有两份，
+   * 不能被"内容相同"吞掉第二份。
+   */
+  it('隔次独立粘贴同一张图：两份都在（去重不跨次，序号 1 / 2）', async () => {
+    mount()
+
+    paste({ files: [png('same.png')] })
+    await screen.findByTestId('composer-attachment-same.png')
+    paste({ files: [png('same.png')] })
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('composer-attachment-same.png')).toHaveLength(2)
+    )
+    expect(screen.getAllByTestId('composer-image-preview-open')).toHaveLength(2)
+    const badges = screen.getAllByTestId('composer-image-badge')
+    expect(badges.map((badge) => badge.textContent)).toEqual(['1', '2'])
   })
 })
 

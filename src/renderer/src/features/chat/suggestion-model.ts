@@ -9,7 +9,14 @@
  * round 19：`/` 浮窗加了**「命令」分区**（首条 = 「压缩上下文」，次要位显示当前使用率）——
  * 命令行不插引用标记，选中是"立即执行"（`command` 字段），由 Composer 转交上层；过滤/键盘
  * 导航照旧（命令行也参与同一根平铺轴）。
+ *
+ * round 85：同一分区多了「进入规划模式」（用户实报 016 问题三：`/` 菜单里没有进规划的入口）——
+ * 它**不是**第二条实现，选中走的是 ＋ 菜单那条**同一个** `enterPlan`（Composer 的 mode props）；
+ * 已在规划里 / 实例未就绪时不传 `plan`，这条就不出现。它排在「压缩上下文」**后面**，默认高亮
+ * 仍是压缩（打 `/` 回车不该被切进规划模式）。
  */
+import { PLAN_ENTER_LABEL } from './plan-ui'
+
 export type SuggestionTriggerKind = 'file' | 'slash'
 
 export interface SuggestionTrigger {
@@ -31,8 +38,8 @@ export interface SuggestionRow {
   /** 不可用（如压缩命令在流式/等审批期间）：可见但点了没反应 */
   disabled?: boolean
   reference?: { kind: '文件' | '插件' | '技能'; label: string }
-  /** 命令行的动作标识（round 19 只有一条「压缩上下文」） */
-  command?: 'compact'
+  /** 命令行的动作标识（round 19 起「压缩上下文」；round 85 加「进入规划模式」） */
+  command?: 'compact' | 'plan'
 }
 
 export interface SuggestionGroup {
@@ -110,6 +117,12 @@ export interface SlashInputs {
     busy: boolean
     disabled: boolean
   }
+  /**
+   * 「进入规划模式」这一条（round 85）：不传 = 这条不出现（**已在规划里**没有"再进入"这件事，
+   * 实例未就绪时也没有可动的对象）；`disabled` = 正在跑 / 等审批 / 压缩中，可见但按不动
+   * （与 ＋ 菜单那条同一档）。选中走的是 ＋ 菜单**同一个实现**，这里只决定露不露这一行。
+   */
+  plan?: { disabled: boolean }
 }
 
 /** / 浮窗的分组（分区只在非空时出现；顺序 = 命令 → 插件 → 技能） */
@@ -118,29 +131,36 @@ export function slashGroups(input: SlashInputs, query: string): SuggestionGroup[
   const hit = (name: string): boolean => q === '' || name.toLowerCase().includes(q)
 
   const groups: SuggestionGroup[] = []
+  const commands: SuggestionRow[] = []
+  // 首选顺序照旧是「压缩上下文」（默认高亮 = 平铺第一行）：习惯性打 `/` 再回车的人不该被切进规划模式。
+  // 模式入口排在它**后面** —— 它是"换一种做法"，要选得先下移一行
   if (hit('压缩上下文')) {
     const command = input.command
-    groups.push({
-      title: '命令',
-      rows: [
-        {
-          id: 'command:compact',
-          label: '压缩上下文',
-          ...(command === undefined
-            ? {}
-            : {
-                ...(command.busy
-                  ? { hint: '压缩中…' }
-                  : command.percent === null
-                    ? {}
-                    : { hint: `已使用 ${command.percent}%` }),
-                disabled: command.disabled || command.busy
-              }),
-          command: 'compact'
-        }
-      ]
+    commands.push({
+      id: 'command:compact',
+      label: '压缩上下文',
+      ...(command === undefined
+        ? {}
+        : {
+            ...(command.busy
+              ? { hint: '压缩中…' }
+              : command.percent === null
+                ? {}
+                : { hint: `已使用 ${command.percent}%` }),
+            disabled: command.disabled || command.busy
+          }),
+      command: 'compact'
     })
   }
+  if (input.plan !== undefined && hit(PLAN_ENTER_LABEL)) {
+    commands.push({
+      id: 'command:plan',
+      label: PLAN_ENTER_LABEL,
+      disabled: input.plan.disabled,
+      command: 'plan'
+    })
+  }
+  if (commands.length > 0) groups.push({ title: '命令', rows: commands })
   const plugins = input.plugins.filter((plugin) => hit(plugin.name))
   if (plugins.length > 0) {
     groups.push({

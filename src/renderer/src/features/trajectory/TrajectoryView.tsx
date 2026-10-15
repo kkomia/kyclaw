@@ -6,6 +6,9 @@
  *   → 选中态（`selectedIndex`）同时喂给时间轴与列表 → 点谁都是**改这一个 state**。
  *
  * 视图档（时长 / 轮次 / 调用）同时改两处（时间轴投影 + 列表排序/分组），口径见 timeline.ts。
+ *
+ * 取数只有**消息腿**是硬腿：它失败才是整页的错误态（`trajectory-error` + 重试）；用量 / 压缩 /
+ * 请求快照三条软腿失败只降级（`trajectory-degraded` 一行人话 + 重试），轨迹照出（round 87 / 017）。
  */
 import { useCallback, useMemo, useState } from 'react'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
@@ -38,11 +41,8 @@ export function TrajectoryView({
   active,
   revision = ''
 }: TrajectoryViewProps): React.JSX.Element {
-  const { doc, messages, usageRuns, compaction, loading, error, reload } = useTrajectoryData({
-    threadId,
-    active,
-    revision
-  })
+  const { doc, messages, usageRuns, requests, compaction, loading, error, usageError, reload } =
+    useTrajectoryData({ threadId, active, revision })
   const title = useSessionsStore(
     (state) => state.threads.find((thread) => thread.id === threadId)?.title ?? null
   )
@@ -95,13 +95,14 @@ export function TrajectoryView({
         doc,
         messages,
         usageRuns,
+        requests,
         compaction
       })
       downloadTrajectoryExport(json, trajectoryExportFileName(threadId))
     } finally {
       setExporting(false)
     }
-  }, [compaction, doc, messages, mode, threadId, title, usageRuns])
+  }, [compaction, doc, messages, mode, requests, threadId, title, usageRuns])
 
   const selectedRow = selectedIndex === null ? null : (rowsByIndex.get(selectedIndex) ?? null)
 
@@ -149,6 +150,27 @@ export function TrajectoryView({
           )
         }
       />
+      {/* 软腿（用量 / 压缩 / 请求快照）没取到：**不挡轨迹**（用户在反馈 017 里点的就是这个），
+          只在顶上留一行人话 + 重试；缺的那部分（token 列 / 「已压缩」行 / 系统·上下文那几行）
+          自动留白，不假装是 0 */}
+      {usageError === null ? null : (
+        <div
+          data-testid="trajectory-degraded"
+          className="flex shrink-0 items-center gap-2 px-3 pt-1"
+        >
+          <p data-testid="trajectory-usage-error" className="min-w-0 flex-1 text-c2 text-warning">
+            {usageError}
+          </p>
+          <button
+            type="button"
+            data-testid="trajectory-usage-retry"
+            onClick={reload}
+            className="shrink-0 rounded-control px-2 py-0.5 text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+          >
+            重试
+          </button>
+        </div>
+      )}
       <TrajectoryToolbar
         mode={mode}
         onModeChange={setMode}
@@ -162,7 +184,6 @@ export function TrajectoryView({
         onExport={onExport}
         exporting={exporting}
       />
-
       <TrajectoryTimeline
         model={timeline}
         rowOf={(index) => rowsByIndex.get(index)}

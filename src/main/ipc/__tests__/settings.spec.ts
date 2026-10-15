@@ -12,7 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
-  return { handlers: new Map<string, Handler>(), decryptFails: false }
+  return {
+    handlers: new Map<string, Handler>(),
+    decryptFails: false,
+    /** 007 的只读发现：默认空表，用例自己喂返回值/抛错 */
+    listProviderModels: vi.fn(async () => [] as { id: string; contextWindow?: number }[]),
+    /** 007（补齐）：拿刚填的地址/密钥发现模型；默认"读不到"，用例自己喂 */
+    discoverProviderModels: vi.fn(
+      async (): Promise<
+        | { ok: true; models: { id: string; contextWindow?: number }[] }
+        | { ok: false; message: string }
+      > => ({ ok: false, message: '读不到模型清单' })
+    )
+  }
 })
 
 vi.mock('electron', () => ({
@@ -35,10 +47,13 @@ vi.mock('electron', () => ({
  * 后台探测（provider 保存后 fire-and-forget，round 22 / 48）换空实现：这份用例只测通道本身的行为，
  * 探测请求（GET /models + 一条带图 chat）会跟"连接测试"抢同一个假服务器、把请求计数搅浑
  * （保存 provider 时还没有 key，但探测的第二趟在微任务里跑，key 可能已经落进去了）。
- * 探测自己的行为在 src/main/__tests__/model-probe.spec.ts 里测。
+ * 探测自己的行为在 src/main/__tests__/model-probe.spec.ts 里测；007 的只读发现（listProviderModels）
+ * 也换成可注入的假件——这里测的是"通道怎么用它"，不是它自己怎么发请求。
  */
 vi.mock('../../model-probe', () => ({
-  probeProviderModelsQuietly: async () => undefined
+  probeProviderModelsQuietly: async () => undefined,
+  listProviderModels: mocks.listProviderModels,
+  discoverProviderModels: mocks.discoverProviderModels
 }))
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -99,6 +114,7 @@ let dir: string
 beforeEach(() => {
   mocks.handlers.clear()
   mocks.decryptFails = false
+  mocks.listProviderModels.mockClear()
   dir = mkdtempSync(join(tmpdir(), 'kyclaw-settings-ipc-'))
   registerSettingsIpc(dir)
 })
@@ -108,9 +124,11 @@ afterEach(() => {
 })
 
 describe('settings 通道 handler', () => {
-  it('七条 invoke 通道都注册了', () => {
+  it('九条 invoke 通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
+      'settings:discover-provider-models',
       'settings:get',
+      'settings:list-provider-models',
       'settings:probe-models',
       'settings:provider-key-states',
       'settings:remove-provider',
@@ -252,25 +270,146 @@ describe('settings:provider-key-states（设置页的"已配置 / 需重录"）'
 })
 
 describe('settings:test-provider（复用已存的配置与密钥）', () => {
-  it('找不到 id → ok:false + 文案（不抛）', () => {
-    expect(handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'nope')).toEqual({
-      ok: false,
-      message: '找不到 provider：nope'
-    })
+  it('找不到 id → ok:false + 文案，三步都是"没跑"（不抛）', () => {
+    const result = handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'nope') as {
+      ok: boolean
+      message: string
+      steps: Array<{ id: string; status: string }>
+    }
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('找不到 provider：nope')
+    expect(result.steps.map((step) => [step.id, step.status])).toEqual([
+      ['connectivity', 'failed'],
+      ['streaming', 'skipped'],
+      ['tools', 'skipped']
+    ])
   })
 
-  it('缺密钥时不发任何请求，直接回"配置不完整：缺 API 密钥"（不静默回落 mock）', async () => {
+  it('anthropic 缺密钥：不发任何请求，直接回"配置不完整：缺 API 密钥"（不静默回落 mock）', async () => {
     const hits: string[] = []
     const server = await startHttpServer((request, response) => {
       hits.push(request.url ?? '')
       response.end('{}')
     })
-    configure({ ...DEEPSEEK, baseUrl: server.url })
+    // anthropic 走官方端点（配置里没有 baseUrl），密钥是必填的
+    configure({
+      id: 'anthropic',
+      type: 'anthropic',
+      model: 'claude-sonnet-4-5',
+      isDefault: true
+    })
 
-    const result = await handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'deepseek')
+    const result = (await handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'anthropic')) as {
+      ok: boolean
+      message: string
+    }
 
-    expect(result).toEqual({ ok: false, message: '配置不完整：缺 API 密钥' })
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('配置不完整：缺 API 密钥')
     expect(hits).toEqual([])
+    await server.close()
+  })
+
+  it('官方云主机（deepseek 预置）+ 没有密钥：直接回"配置不完整：缺 API 密钥"（原口径不变）', async () => {
+    // 地址是官方云主机（预置表里那三个之一）→ 密钥必填：闸门在发请求之前就拦下来
+    configure({
+      id: 'deepseek',
+      type: 'openai-compatible',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-flash',
+      isDefault: true
+    })
+
+    const result = (await handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'deepseek')) as {
+      ok: boolean
+      message: string
+      steps: Array<{ id: string; status: string }>
+    }
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('配置不完整：缺 API 密钥')
+    // 三步全没跑（连通那一步的 detail 就是这句人话）
+    expect(result.steps.map((step) => step.status)).toEqual(['failed', 'skipped', 'skipped'])
+  })
+
+  it('打包态实报：openai 兼容的自定义端点**没有密钥也照样测**（本机服务那类，真 HTTP/SSE 端到端）', async () => {
+    const seen: Array<{ url?: string; authorization?: string; body: Record<string, unknown> }> = []
+    const server = await startHttpServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<
+          string,
+          unknown
+        >
+        seen.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: parsed
+        })
+        if (request.headers.authorization !== undefined) {
+          response.writeHead(401, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ error: { message: '这个端点不要密钥' } }))
+          return
+        }
+        // 流式那两趟（正文 + 工具）走 SSE；非流式那趟走普通 JSON
+        if (parsed.stream === true) {
+          response.writeHead(200, { 'content-type': 'text/event-stream' })
+          response.end(
+            `data: ${JSON.stringify({
+              id: 'c1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'local-model',
+              choices: [{ index: 0, delta: { role: 'assistant', content: 'pong' } }]
+            })}\n\ndata: ${JSON.stringify({
+              id: 'c1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'local-model',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+            })}\n\ndata: [DONE]\n\n`
+          )
+          return
+        }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(
+          JSON.stringify({
+            id: 'c1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'local-model',
+            choices: [
+              { index: 0, message: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }
+            ]
+          })
+        )
+      })
+    })
+    // 没有 setProviderKey → 这条 provider 一个密钥都没有
+    configure({
+      id: 'custom-1',
+      type: 'openai-compatible',
+      baseUrl: server.url,
+      model: 'local-model',
+      isDefault: true
+    })
+
+    const result = (await handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, 'custom-1')) as {
+      ok: boolean
+      steps: Array<{ id: string; status: string }>
+    }
+
+    // 连通 + 流式都真跑通了（第三步是工具那趟，见 connection-test.spec 的判据）
+    expect(result.ok).toBe(true)
+    expect(result.steps.slice(0, 2).map((step) => [step.id, step.status])).toEqual([
+      ['connectivity', 'passed'],
+      ['streaming', 'passed']
+    ])
+    expect(seen.length).toBeGreaterThanOrEqual(2)
+    // 一个 Authorization 头都没发（SDK 在空密钥时不发头，而不是发空 Bearer）
+    expect(seen.every((entry) => entry.authorization === undefined)).toBe(true)
     await server.close()
   })
 
@@ -299,6 +438,156 @@ describe('settings:test-provider（复用已存的配置与密钥）', () => {
   it('入参不合法被闸门拦住', () => {
     expect(() => handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT)).toThrow(IpcInputError)
     expect(() => handlerOf(IPC_CHANNELS.settings.testProvider)(EVENT, '')).toThrow(IpcInputError)
+  })
+})
+
+describe('settings:list-provider-models（用户反馈 007：只读发现，不落盘）', () => {
+  it('拿这条 provider 的密钥列清单，回可选项；设置文件一个字节都不动', async () => {
+    configure(DEEPSEEK)
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'deepseek', KEY)
+    const before = readSettings(settingsPath(dir))
+    mocks.listProviderModels.mockResolvedValueOnce([
+      { id: 'deepseek-flash', contextWindow: 1_048_576 },
+      { id: 'deepseek-v4-pro' }
+    ])
+
+    const list = await handlerOf(IPC_CHANNELS.settings.listProviderModels)(EVENT, 'deepseek')
+
+    expect(list).toEqual([
+      { id: 'deepseek-flash', contextWindow: 1_048_576 },
+      { id: 'deepseek-v4-pro' }
+    ])
+    // 用的是落盘那条配置 + 它自己的密钥（密钥只进主进程）
+    expect(mocks.listProviderModels).toHaveBeenCalledWith(DEEPSEEK, KEY)
+    // 只读：设置（含 probedModels）原样不动
+    expect(readSettings(settingsPath(dir))).toEqual(before)
+    expect(before.probedModels).toEqual({})
+  })
+
+  it('没配密钥 / 不认识这条 provider → 空数组，连请求都不发（不是硬错）', async () => {
+    configure(DEEPSEEK)
+
+    expect(await handlerOf(IPC_CHANNELS.settings.listProviderModels)(EVENT, 'deepseek')).toEqual([])
+    expect(await handlerOf(IPC_CHANNELS.settings.listProviderModels)(EVENT, 'nope')).toEqual([])
+    expect(mocks.listProviderModels).not.toHaveBeenCalled()
+  })
+
+  it('端点没有 /models（抓取抛）→ 空数组 + 一句 warn：不把"读不到"变成用户眼前的报错', async () => {
+    configure(DEEPSEEK)
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'deepseek', KEY)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mocks.listProviderModels.mockRejectedValueOnce(new Error('模型清单请求失败（404）'))
+
+    const list = await handlerOf(IPC_CHANNELS.settings.listProviderModels)(EVENT, 'deepseek')
+
+    expect(list).toEqual([])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('入参不合法被闸门拦住（id 缺失 / 空串 / 多参）', async () => {
+    const handler = handlerOf(IPC_CHANNELS.settings.listProviderModels)
+    for (const args of [[], [''], ['deepseek', 'x']]) {
+      await expect((async () => handler(EVENT, ...args))(), JSON.stringify(args)).rejects.toThrow(
+        IpcInputError
+      )
+    }
+  })
+})
+
+describe('settings:discover-provider-models（007 补齐：还没保存的端点也能发现）', () => {
+  beforeEach(() => {
+    mocks.discoverProviderModels.mockClear()
+  })
+
+  it('把弹窗里刚填的 type/baseUrl/apiKey 交给发现逻辑，回包原样（ok:false 也是一等结果）', async () => {
+    mocks.discoverProviderModels.mockResolvedValueOnce({
+      ok: true,
+      models: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash', contextWindow: 1_048_576 }]
+    })
+
+    const result = await handlerOf(IPC_CHANNELS.settings.discoverProviderModels)(EVENT, {
+      type: 'openai-compatible',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: KEY
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash', contextWindow: 1_048_576 }]
+    })
+    expect(mocks.discoverProviderModels).toHaveBeenCalledWith(
+      { type: 'openai-compatible', baseUrl: 'https://api.example.com/v1' },
+      KEY
+    )
+
+    mocks.discoverProviderModels.mockResolvedValueOnce({ ok: false, message: '认证失败（401）' })
+    await expect(
+      handlerOf(IPC_CHANNELS.settings.discoverProviderModels)(EVENT, {
+        type: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: KEY
+      })
+    ).resolves.toEqual({ ok: false, message: '认证失败（401）' })
+  })
+
+  it('**不落盘**：这条通道不写设置、不写密钥（弹窗里还没点保存）', async () => {
+    const before = readSettings(settingsPath(dir))
+    mocks.discoverProviderModels.mockResolvedValueOnce({ ok: true, models: [] })
+
+    await handlerOf(IPC_CHANNELS.settings.discoverProviderModels)(EVENT, {
+      type: 'openai-compatible',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: KEY
+    })
+
+    expect(readSettings(settingsPath(dir))).toEqual(before)
+    expect(existsSync(secretsPath(dir))).toBe(false)
+  })
+
+  it('apiKey 可以为空串（本机服务那类）：原样交给发现逻辑，通道不替服务一刀切', async () => {
+    mocks.discoverProviderModels.mockResolvedValueOnce({
+      ok: false,
+      message: '这个端点需要 API Key（401）：填一把再试；本机服务通常不需要'
+    })
+
+    await expect(
+      handlerOf(IPC_CHANNELS.settings.discoverProviderModels)(EVENT, {
+        type: 'openai-compatible',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+        apiKey: ''
+      })
+    ).resolves.toEqual({
+      ok: false,
+      message: '这个端点需要 API Key（401）：填一把再试；本机服务通常不需要'
+    })
+    // 空密钥照旧递下去（要不要认证由端点回），通道层不预先拦
+    expect(mocks.discoverProviderModels).toHaveBeenCalledWith(
+      { type: 'openai-compatible', baseUrl: 'http://127.0.0.1:1234/v1' },
+      ''
+    )
+  })
+
+  it('入参不合法被闸门拦住（缺 type / 多字段 / 报错文案里不含密钥）', async () => {
+    const handler = handlerOf(IPC_CHANNELS.settings.discoverProviderModels)
+
+    for (const args of [
+      [],
+      [{ baseUrl: 'https://x', apiKey: KEY }],
+      [{ type: 'openai', baseUrl: 'https://x', apiKey: KEY }],
+      [{ type: 'openai-compatible', baseUrl: 'https://x', apiKey: KEY, evil: 1 }],
+      [{ type: 'openai-compatible', baseUrl: 'https://x', apiKey: KEY }, 'extra']
+    ]) {
+      let thrown: unknown
+      try {
+        await handler(EVENT, ...args)
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown, JSON.stringify(args)).toBeInstanceOf(IpcInputError)
+      // 闸门的报错里也不能出现密钥（zod 的 issue 只说形状，不回显值）
+      expect(JSON.stringify(thrown instanceof Error ? thrown.message : thrown)).not.toContain(KEY)
+    }
   })
 })
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {
   agentEndpointSchema,
+  CONNECTION_TEST_SCOPE_NOTE,
   connectionTestResultSchema,
   IPC_CHANNELS,
   IpcInputError,
@@ -17,6 +18,9 @@ import {
   providerIdArgsSchema,
   providerKeyArgsSchema,
   providerKeyStatesSchema,
+  providerModelDiscoveryArgsSchema,
+  providerModelDiscoveryResultSchema,
+  providerModelListResultSchema,
   setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
   settingsUpdateArgsSchema,
@@ -84,8 +88,37 @@ describe('IPC 契约：settings 通道', () => {
       providerKeyStates: 'settings:provider-key-states',
       testProvider: 'settings:test-provider',
       removeProvider: 'settings:remove-provider',
-      probeModels: 'settings:probe-models'
+      probeModels: 'settings:probe-models',
+      listProviderModels: 'settings:list-provider-models',
+      discoverProviderModels: 'settings:discover-provider-models'
     })
+  })
+
+  it('settings:list-provider-models 的入参与回包（用户反馈 007）：[id] → 可选项数组，缺 contextWindow 也算一条', () => {
+    expect(
+      parseIpcArgs(providerIdArgsSchema, ['deepseek'], 'settings:list-provider-models')
+    ).toEqual(['deepseek'])
+    expect(() => parseIpcArgs(providerIdArgsSchema, [], 'settings:list-provider-models')).toThrow(
+      /list-provider-models/
+    )
+
+    // 回包：有条目 id 就够（端点不回 context_window 的条目照样列得出来）
+    expect(
+      providerModelListResultSchema.parse([
+        { id: 'deepseek-flash', contextWindow: 1_048_576 },
+        { id: 'deepseek-v4-pro' }
+      ])
+    ).toEqual([{ id: 'deepseek-flash', contextWindow: 1_048_576 }, { id: 'deepseek-v4-pro' }])
+    expect(providerModelListResultSchema.parse([])).toEqual([])
+    // 结构不对（空 id / 非法 contextWindow / 多余字段）→ 拒
+    for (const bad of [
+      [{ id: '' }],
+      [{ id: 'm', contextWindow: 0 }],
+      [{ id: 'm', extra: 1 }],
+      'nope'
+    ]) {
+      expect(providerModelListResultSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
   })
 
   it('settings:update 只收一个补丁对象（形状与取值都过 settings schema）', () => {
@@ -178,22 +211,84 @@ describe('IPC 契约：settings 密钥/测试连接通道', () => {
     expect(providerKeyStatesSchema.safeParse({ deepseek: 'configured' }).success).toBe(false)
   })
 
-  it('测试连接回包：ok:true 带延迟 / ok:false 带文案，判别要严', () => {
-    expect(connectionTestResultSchema.parse({ ok: true, latencyMs: 812 })).toEqual({
+  it('测试连接回包：三步结论 + 总耗时 + 范围声明；判别与四档状态都要严', () => {
+    const passing = {
       ok: true,
-      latencyMs: 812
-    })
-    expect(connectionTestResultSchema.parse({ ok: false, message: '认证失败（401）' })).toEqual({
-      ok: false,
-      message: '认证失败（401）'
-    })
+      latencyMs: 812,
+      steps: [
+        { id: 'connectivity', status: 'passed', latencyMs: 100, detail: '通了' },
+        { id: 'streaming', status: 'passed', latencyMs: 700, detail: '拿到正文' },
+        { id: 'tools', status: 'unverified', detail: '模型没调工具' }
+      ],
+      scopeNote: CONNECTION_TEST_SCOPE_NOTE
+    }
+    expect(connectionTestResultSchema.parse(passing)).toEqual(passing)
 
-    expect(connectionTestResultSchema.safeParse({ ok: true }).success).toBe(false)
-    expect(connectionTestResultSchema.safeParse({ ok: false }).success).toBe(false)
+    // 失败也要带 steps（哪一步没过、哪几步没跑，界面据此说人话）
+    const failing = {
+      ok: false,
+      latencyMs: 40,
+      steps: [
+        { id: 'connectivity', status: 'failed', detail: '认证失败（401）' },
+        { id: 'streaming', status: 'skipped', detail: '上一步没有通过，这一步没有跑' },
+        { id: 'tools', status: 'skipped', detail: '上一步没有通过，这一步没有跑' }
+      ],
+      message: '认证失败（401）',
+      scopeNote: CONNECTION_TEST_SCOPE_NOTE
+    }
+    expect(connectionTestResultSchema.parse(failing)).toEqual(failing)
+
+    // 缺字段 / 非法状态 / 非法步骤 id / 少 scopeNote 一律不合法
+    expect(connectionTestResultSchema.safeParse({ ok: true, latencyMs: 1 }).success).toBe(false)
     expect(
-      connectionTestResultSchema.safeParse({ ok: true, latencyMs: 1, message: 'x' }).success
+      connectionTestResultSchema.safeParse({
+        ...passing,
+        steps: [{ id: 'nope', status: 'passed', detail: 'x' }]
+      }).success
     ).toBe(false)
-    expect(connectionTestResultSchema.safeParse({ ok: 'yes', latencyMs: 1 }).success).toBe(false)
+    expect(
+      connectionTestResultSchema.safeParse({
+        ...passing,
+        steps: [{ id: 'connectivity', status: 'maybe', detail: 'x' }]
+      }).success
+    ).toBe(false)
+    expect(connectionTestResultSchema.safeParse({ ...passing, scopeNote: undefined }).success).toBe(
+      false
+    )
+    expect(connectionTestResultSchema.safeParse({ ...passing, ok: 'yes' }).success).toBe(false)
+  })
+
+  it('发现模型的入参/回包：成功带清单（空数组合法）、失败带原因，两者判别要严', () => {
+    expect(
+      providerModelDiscoveryArgsSchema.parse([
+        { type: 'openai-compatible', baseUrl: 'https://x/v1', apiKey: 'sk-a' }
+      ])
+    ).toEqual([{ type: 'openai-compatible', baseUrl: 'https://x/v1', apiKey: 'sk-a' }])
+    // baseUrl 可省（Anthropic 官方域）；apiKey 允许空串（由主进程回一句能照做的人话）
+    expect(providerModelDiscoveryArgsSchema.parse([{ type: 'anthropic', apiKey: '' }])).toEqual([
+      { type: 'anthropic', apiKey: '' }
+    ])
+    expect(
+      providerModelDiscoveryArgsSchema.safeParse([{ baseUrl: 'https://x', apiKey: 'k' }]).success
+    ).toBe(false)
+    expect(
+      providerModelDiscoveryArgsSchema.safeParse([
+        { type: 'openai-compatible', baseUrl: 'https://x', apiKey: 'k', extra: 1 }
+      ]).success
+    ).toBe(false)
+
+    expect(providerModelDiscoveryResultSchema.parse({ ok: true, models: [] })).toEqual({
+      ok: true,
+      models: []
+    })
+    expect(
+      providerModelDiscoveryResultSchema.parse({
+        ok: false,
+        message: '这个端点需要 API Key（401）'
+      })
+    ).toEqual({ ok: false, message: '这个端点需要 API Key（401）' })
+    expect(providerModelDiscoveryResultSchema.safeParse({ ok: true }).success).toBe(false)
+    expect(providerModelDiscoveryResultSchema.safeParse({ ok: false }).success).toBe(false)
   })
 })
 
@@ -375,6 +470,27 @@ describe('IPC 契约：updates 通道（T17）', () => {
     ]) {
       expect(updateStatusSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
     }
+  })
+
+  it('0.1.1：有新版本时带上发行说明（notes / releaseName / releaseDate，三个都可缺）', () => {
+    expect(
+      updateStatusSchema.safeParse({
+        phase: 'available',
+        version: '0.1.1',
+        notes: '- 一条更新内容',
+        releaseName: 'kyclaw 0.1.1',
+        releaseDate: '2026-10-15T00:00:00.000Z'
+      }).success
+    ).toBe(true)
+
+    for (const phase of ['available', 'downloading', 'downloaded'] as const) {
+      expect(updateStatusSchema.safeParse({ phase, notes: '只给说明' }).success, phase).toBe(true)
+    }
+
+    // 没有"这一版"的那几个相位不收发行说明；说明本身也得是字符串
+    expect(updateStatusSchema.safeParse({ phase: 'up-to-date', notes: 'x' }).success).toBe(false)
+    expect(updateStatusSchema.safeParse({ phase: 'idle', notes: 'x' }).success).toBe(false)
+    expect(updateStatusSchema.safeParse({ phase: 'available', notes: 1 }).success).toBe(false)
   })
 
   it('整态：当前版本 + 有没有配源 + 打包内源地址 + 状态（四者齐，别的键不收）', () => {

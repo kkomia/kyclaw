@@ -11,6 +11,24 @@ export function planModeLabel(state: SessionPlan): string {
   ]
 }
 
+/**
+ * **真的在规划里**（round 85，唯一判据）：状态读到过、且不是普通模式。
+ *
+ * 为什么要收成一条：这句话现在有两个出口 —— 模式状态摘要（PlanModeChip）与任务清单的可见性
+ * （TaskDockSlot 的 `planActive`：规划与任务清单是包含关系，进了规划就该看得见那份清单）。
+ * 两个出口必须同一口径，所以判据只写在这里，两边都调它。
+ * 返回值是**类型谓词**：判真即"状态读到过"，调用方（PlanModeChip）随之收窄掉 null。
+ */
+export function planActiveOf(state: SessionPlan | null): state is SessionPlan {
+  return state !== null && state.mode !== 'normal'
+}
+
+/**
+ * 「进入规划模式」这条入口的文案（round 85）：＋ 菜单与 `/` 命令两处是**同一个动作、同一句话**，
+ * 各写一份迟早会长歪，所以只有这一个出处。
+ */
+export const PLAN_ENTER_LABEL = '进入规划模式'
+
 /** 收起时那一行摘要最多铺多少个字（码点；超了加省略号） */
 const PLAN_SUMMARY_CHARS = 60
 

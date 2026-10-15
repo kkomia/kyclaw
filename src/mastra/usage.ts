@@ -1,5 +1,5 @@
 /**
- * 用量记账（T14）：把每一轮对话的 token 花销记进 libsql 的 `usage_runs` 表，并算出花费。
+ * 用量记账（T14）：把每一轮对话的 token 用量记进 libsql 的 `usage_runs` 表。
  *
  * ## 记账钩子的到达位置（先查实现再接线）
  *
@@ -17,84 +17,21 @@
  *     onFinish：这些轮的 token 不落账；
  *   - 审批续跑（resumeStream）是另一次 run，按它自己那次的 usage 落一行。
  *
- * ## 表与价目
+ * ## 表
  *
  * 表 `usage_runs` 落在既有 libsql 库（kyclaw.db）里，与 Mastra 自己的表同库不同表。
  * libsql 的 `LibSQLStore` 没有公开"跑自定义 SQL"的口子（1.25.1 的 api 面只有各 domain store
  * 的固定方法），所以客户端从 storage 的 client 字段取（`usageSqlClient`，带形状检查）——
  * 升级 @mastra/libsql 后这里要复查（检查不过会明确抛错，不会静默丢账）。
  *
- * 价目表是自建的：**未知模型不猜价格**——cost=null，只记 token（spec §7.4）。
+ * 记账只记 **token**（用户口径 014：不做计费）：不猜价、不算钱、回包里也没有金额字段。
  */
 import { randomUUID } from 'node:crypto'
 import type { LibSQLStore, SqliteClient } from '@mastra/libsql'
 import type { UsageRange, UsageResponse, UsageTokens } from '../shared/usage'
 
-/** 花费的币种（价目表的口径；换币种/加非美元模型前先扩这里与 MODEL_PRICING） */
-export const USAGE_CURRENCY = 'USD'
-
 /** usage_runs 的表名（自建表，与 Mastra 的表同库） */
 export const USAGE_TABLE = 'usage_runs'
-
-/**
- * 单价（币种见 USAGE_CURRENCY，单位：每百万 token）。
- * 数值来自 DeepSeek 官方定价页（2026-10 实测）：当前模型 deepseek-flash / deepseek-v4-pro；
- * 官方脚注写明遗留名 deepseek-v4-flash 由 Flash 承载，按 Flash 价计。
- * 取**峰时**价（谷时是峰时的一半）→ 估出来是上限，不低估。
- */
-export interface TokenPricing {
-  /** 输入·缓存未命中 */
-  inputPerMillion: number
-  /** 输入·缓存命中 */
-  cachedInputPerMillion: number
-  /** 输出 */
-  outputPerMillion: number
-}
-
-const DEEPSEEK_FLASH_PRICING: TokenPricing = {
-  inputPerMillion: 0.3,
-  cachedInputPerMillion: 0.006,
-  outputPerMillion: 1.2
-}
-
-export const MODEL_PRICING: Readonly<Record<string, TokenPricing>> = {
-  'deepseek-flash': DEEPSEEK_FLASH_PRICING,
-  // 遗留名（官方定价页脚注：由 Flash 承载、按 Flash 计费）
-  'deepseek-v4-flash': DEEPSEEK_FLASH_PRICING,
-  'deepseek-v4-flash-vision-exp': DEEPSEEK_FLASH_PRICING,
-  'deepseek-v4-pro': {
-    inputPerMillion: 1.32,
-    cachedInputPerMillion: 0.044,
-    outputPerMillion: 3.96
-  }
-}
-
-/**
- * 模型 id → 价目；价目表里没有 → null（未知模型只记 token）。
- * 归一：小写、去空白、去掉 `provider/` 前缀（有的通道把 provider 拼进 id）。
- */
-export function pricingFor(modelId: string | null | undefined): TokenPricing | null {
-  if (typeof modelId !== 'string') return null
-  const normalized = modelId.trim().toLowerCase()
-  const bare = normalized.slice(normalized.lastIndexOf('/') + 1)
-  return MODEL_PRICING[bare] ?? null
-}
-
-/** 花费 = 输入(未命中) + 输入(命中) + 输出；命中数按输入数封顶（不出现负的未命中） */
-export function computeCost(
-  pricing: TokenPricing,
-  tokens: { input: number; output: number; cachedInput?: number }
-): number {
-  const cached = Math.min(Math.max(tokens.cachedInput ?? 0, 0), Math.max(tokens.input, 0))
-  const uncached = Math.max(tokens.input, 0) - cached
-  const output = Math.max(tokens.output, 0)
-  return (
-    (uncached * pricing.inputPerMillion +
-      cached * pricing.cachedInputPerMillion +
-      output * pricing.outputPerMillion) /
-    1_000_000
-  )
-}
 
 /** 一行落库记录（回读时也用它，所以字段名是 camelCase，SQL 列名在 store 里映射） */
 export interface UsageRun {
@@ -107,10 +44,10 @@ export interface UsageRun {
   provider: string | null
   /**
    * 这一轮**所有 LLM 调用**的合计（AI SDK 的 totalUsage：一轮里每调一次模型算一次 step）。
-   * 这是**花费**口径 —— 计费按它算（见 computeCost）。
+   * 是**整轮合计**口径 —— 不是上下文大小（后者见 `contextInput`）。
    */
   tokens: UsageTokens
-  /** provider 报的缓存命中输入；没报就是 null（别当成 0 去算价） */
+  /** provider 报的缓存命中输入；没报就是 null（别当成 0） */
   cachedInput: number | null
   /**
    * round 67：这一轮**最后一次** LLM 调用的输入 tokens —— 也就是这一轮结束时**真实的上下文大小**
@@ -125,8 +62,6 @@ export interface UsageRun {
   contextCachedInput: number | null
   /** round 67：这一轮一共调了几次模型（AI SDK 的 steps 数）；拿不到 → null */
   stepCount: number | null
-  /** 世界货币计价的花费；价目表不认识这个模型 → null */
-  cost: number | null
   /** ISO 时间串（写入时刻） */
   createdAt: string
 }
@@ -174,6 +109,9 @@ export function createUsageStore(client: SqliteClient): UsageStore {
 
   const ensureTable = (): Promise<void> => {
     ready ??= (async () => {
+      // `cost` 是**历史列**（T14 起记过"按价目表算出来的花费"）：用户已装的库里有它，
+      // 新建库也照原样留着 —— 两边表形一致，老库迁移不会因为列不见了炸掉。
+      // 产品已经不做计费（用户口径 014）：写入侧固定写 NULL、读取侧不映射它。
       await client.execute(
         `CREATE TABLE IF NOT EXISTS "${USAGE_TABLE}" (
           "id" TEXT PRIMARY KEY,
@@ -192,18 +130,28 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           "created_at" TEXT NOT NULL
         )`
       )
-      // 已有库补列（round 18 / round 67）：SQLite 的 ALTER 重复执行会报错，忽略即可（列已存在 = 已完成迁移）
+      // 已有库补列（round 18 / round 67）：**列名与类型分开拼**。
+      // round 87 修：旧写法 `ADD COLUMN "${column}"`（column = `'thread_id TEXT'`）会把**整串**
+      // 当列名 —— 建出来的是一个名字叫 `thread_id TEXT` 的怪列，真列根本没补上；紧接着的
+      // `CREATE INDEX … ("thread_id")` 于是报 `no such column: thread_id`，ensureTable 整体抛出，
+      // **用量面每一条路由都 500**（用户反馈 017 里那句"用量服务错误 500"正是这条路：老库
+      // 的 usage_runs 建于 round 18 之前，升上来就撞它）。
+      // 也不再用"ALTER 失败就当列已存在"的 catch 兜底：那会把真正的失败吞掉 ——
+      // 与 compaction.ts 同一口径（**查得到才不补**，其余异常照抛）。
+      const columns = await client.execute(`PRAGMA table_info("${USAGE_TABLE}")`)
+      const existing = new Set(columns.rows.map((row) => String(row.name)))
       for (const column of [
-        'thread_id TEXT',
-        'context_input_tokens INTEGER',
-        'context_cached_input_tokens INTEGER',
-        'step_count INTEGER'
+        'thread_id',
+        'context_input_tokens',
+        'context_cached_input_tokens',
+        'step_count'
       ]) {
-        try {
-          await client.execute(`ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "${column}"`)
-        } catch {
-          // 列已存在
-        }
+        if (existing.has(column)) continue
+        await client.execute(
+          `ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "${column}" ${
+            column === 'thread_id' ? 'TEXT' : 'INTEGER'
+          }`
+        )
       }
       await client.execute(
         `CREATE INDEX IF NOT EXISTS "${USAGE_TABLE}_created_at" ON "${USAGE_TABLE}" ("created_at")`
@@ -239,7 +187,9 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           run.contextInput,
           run.contextCachedInput,
           run.stepCount,
-          run.cost,
+          // cost：历史列，保留兼容 —— 产品不再记账，固定写 NULL（"没记"比写 0 诚实：
+          // 0 会被读成"这次没花钱"）
+          null,
           run.createdAt
         ]
       })
@@ -265,8 +215,8 @@ export function createUsageStore(client: SqliteClient): UsageStore {
   }
 }
 
-/** usage_runs 的列清单（读回用；round 67 加了三列上下文口径） */
-const USAGE_COLUMNS = `"id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "cost", "created_at"`
+/** usage_runs 的列清单（读回用；round 67 加了三列上下文口径。`cost` 是历史列，不读） */
+const USAGE_COLUMNS = `"id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "created_at"`
 
 /** libsql 行 → UsageRun（列名映射只写这一处） */
 function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
@@ -288,7 +238,6 @@ function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
     contextInput: toNullableNumber(row.context_input_tokens),
     contextCachedInput: toNullableNumber(row.context_cached_input_tokens),
     stepCount: toNullableNumber(row.step_count),
-    cost: toNullableNumber(row.cost),
     createdAt: String(row.created_at)
   }
 }
@@ -345,7 +294,7 @@ export function rangeStart(range: UsageRange, now: Date): Date {
   return start
 }
 
-/** 聚合：总量 + 按模型拆分（token 降序）；cost 只算有价的部分，一条都算不出就是 null */
+/** 聚合：总量 + 按模型拆分（token 降序） */
 export function summarizeUsage(rows: readonly UsageRun[], range: UsageRange): UsageResponse {
   const tokens: UsageTokens = { input: 0, output: 0, total: 0 }
   const byModel = new Map<
@@ -355,11 +304,8 @@ export function summarizeUsage(rows: readonly UsageRun[], range: UsageRange): Us
       provider: string | null
       runs: number
       tokens: UsageTokens
-      cost: number | null
     }
   >()
-  let cost: number | null = null
-  let costIncomplete = false
 
   for (const row of rows) {
     tokens.input += row.tokens.input
@@ -371,29 +317,19 @@ export function summarizeUsage(rows: readonly UsageRun[], range: UsageRange): Us
       model: row.model,
       provider: row.provider,
       runs: 0,
-      tokens: { input: 0, output: 0, total: 0 },
-      cost: null
+      tokens: { input: 0, output: 0, total: 0 }
     }
     group.runs += 1
     group.tokens.input += row.tokens.input
     group.tokens.output += row.tokens.output
     group.tokens.total += row.tokens.total
 
-    if (row.cost === null) {
-      costIncomplete = true
-    } else {
-      cost = (cost ?? 0) + row.cost
-      group.cost = (group.cost ?? 0) + row.cost
-    }
     byModel.set(key, group)
   }
 
   return {
     range,
     tokens,
-    cost,
-    costIncomplete,
-    currency: USAGE_CURRENCY,
     byModel: [...byModel.values()].sort(
       (a, b) => b.tokens.total - a.tokens.total || a.model.localeCompare(b.model)
     )
@@ -495,7 +431,6 @@ export function createUsageRecorder(options: {
       const cachedInput = cachedOf(usage ?? null)
       const model = firstText(event.model?.modelId, event.response?.modelId) ?? 'unknown'
       const provider = firstText(event.model?.provider) ?? null
-      const pricing = pricingFor(model)
       // round 67：末一个 step 的 usage = 这一轮结束时的真实上下文（见 UsageRun.contextInput）
       const finalUsage = lastStepUsage(event)
       const contextInput = tokenNumber(finalUsage?.inputTokens) ?? null
@@ -512,10 +447,6 @@ export function createUsageRecorder(options: {
         contextInput,
         contextCachedInput,
         stepCount: stepCountOf(event),
-        cost:
-          pricing === null
-            ? null
-            : computeCost(pricing, { input, output, cachedInput: cachedInput ?? undefined }),
         createdAt: now().toISOString()
       })
     } catch (error) {

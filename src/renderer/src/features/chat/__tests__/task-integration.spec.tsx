@@ -68,6 +68,36 @@ describe('Task renderer integration', () => {
     expect(card.className).toContain('max-h-[min(32vh,20rem)]')
     expect(get.mock.calls.every(([thread]) => thread === 'thread')).toBe(true)
   })
+
+  /**
+   * round 85（用户实报 016 问题二）：**进了规划模式，任务清单就在**（两者是包含关系）。
+   * 平时"没任务 + 收起"是整块不渲染（上面那条用例），规划里这一条不收 —— 摘要行与展开把手都在，
+   * 一键就能展开；收起状态本身仍由 tasks-store 说了算（这里不替用户翻它）。
+   */
+  it('规划模式：没有任务也铺出清单（摘要 + 可展开），普通模式仍整块不渲染', async () => {
+    const get = vi.fn().mockResolvedValue({ revision: 0, updatedAt: null, items: [] })
+    const store = createTasksStore({ get, put: vi.fn() })
+    const { rerender } = render(<TaskDockSlot threadId="plan-thread" store={store} />)
+    await waitFor(() => expect(get).toHaveBeenCalledWith('plan-thread'))
+    // 普通模式：没有任务又收起 = 整块不渲染（既有口径不变）
+    expect(screen.queryByTestId('task-dock-slot')).not.toBeInTheDocument()
+
+    rerender(<TaskDockSlot threadId="plan-thread" store={store} planActive />)
+    const card = await screen.findByTestId('task-list-dock')
+    expect(card).toHaveTextContent('任务清单')
+    expect(card).toHaveAttribute('data-collapsed', 'true')
+    // 收起状态没被偷偷改掉：是"可见 + 一键展开"，不是替用户展开
+    expect(store.getState().sessions['plan-thread']?.collapsed).toBe(true)
+    expect(screen.queryByText('暂无任务')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('task-dock-toggle'))
+    expect(await screen.findByText('暂无任务')).toBeInTheDocument()
+
+    // 退回普通模式（规划结束）又回到既有口径：收起 + 没任务 = 整块消失
+    fireEvent.click(screen.getByTestId('task-dock-toggle'))
+    rerender(<TaskDockSlot threadId="plan-thread" store={store} />)
+    expect(screen.queryByTestId('task-dock-slot')).not.toBeInTheDocument()
+  })
   it('轨迹当前快照和旧 todo 历史独立，旧进度不被新快照覆盖', async () => {
     const store = createTasksStore({ get: async () => snapshot(2, true), put: vi.fn() })
     await store.getState().load('thread')

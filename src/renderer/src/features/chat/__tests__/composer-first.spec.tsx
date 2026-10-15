@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage } from 'ai'
 import type { ThreadSummary } from '@shared/threads'
-import { ChatPage, ChatSession } from '@renderer/features/chat/ChatPage'
+import { ChatPage, ChatSession, PENDING_THREAD_ID } from '@renderer/features/chat/ChatPage'
 import { resetComposerCarryover } from '@renderer/features/chat/composer-carryover'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
@@ -311,5 +311,144 @@ describe('冷启动：端点还没回来', () => {
       expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
     })
     expect(input()).toHaveValue('先写着')
+  }, 15_000)
+})
+
+/**
+ * 冷启动的**这一条顺序**：端点先回来（transport 到手），会话列表（`fetchThreads`）后回来。
+ *
+ * 这段窗口里会发生的事，正是"草稿过桥"要守的：
+ *   - 会话 id 没定之前（`activeId === null`）这一挂**不会自己就绪** —— `ready` 要"真会话 id"
+ *     （`threadId !== null`），占位那一挂的 `pending` 一直是它（`正在载入会话…`）；
+ *     这条不变量同时就是过桥判据一定成立的原因（卸载时 `pending` 非空 → 一定留草稿）。
+ *     拿它钉住：**改动它等于改动过桥的前提**，必须回头复核 composer-carryover 的边界。
+ *   - 列表回来 → `activeId` 定成真 id → ChatPage 换 key 重挂 → 草稿/焦点由过桥带走。
+ */
+describe('冷启动：端点先到、会话 id 后到（同一个会话，换 key 重挂）', () => {
+  it('期间能打字；会话 id 定下来的那一下换挂，草稿一个字不丢', async () => {
+    installKyclawBridge()
+    // 端点这一条链很快（本用例压的是"会话列表比它就绪得更晚"）
+    window.kyclaw.agent.endpoint = vi.fn(
+      async () => ({ baseUrl: 'http://127.0.0.1:9', token: 'tok' }) as const
+    )
+    const threads = deferred<ThreadSummary[]>()
+    vi.mocked(fetchThreads).mockImplementationOnce(() => threads.promise)
+
+    render(
+      <MemoryRouter>
+        <ChatPage />
+      </MemoryRouter>
+    )
+
+    const first = await screen.findByTestId('composer-input')
+    await act(async () => {
+      fireEvent.change(first, { target: { value: '冷启动里敲的半句' } })
+    })
+    expect(first).toHaveValue('冷启动里敲的半句')
+
+    // 给"占位那一挂自己就绪"留出机会（端点已回、被 mock 的历史回灌瞬时返回）：它不会就绪
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 50))
+    })
+    expect(screen.getByTestId('composer-pending')).toHaveTextContent('正在载入会话…')
+    expect(screen.getByTestId('composer-send')).toBeDisabled()
+    expect(input()).toBe(first)
+
+    // 会话列表这才回来 → activeId 定成真 id → 整挂换 key 重挂
+    await act(async () => {
+      threads.resolve([])
+    })
+    await waitFor(() => expect(screen.queryByTestId('chat-loading')).not.toBeInTheDocument())
+
+    // 换挂前后是同一段冷启动、同一个会话：用户敲下的字不许被吞
+    const bridged = input()
+    expect(bridged).not.toBe(first)
+    expect(bridged).toHaveValue('冷启动里敲的半句')
+  }, 15_000)
+
+  /**
+   * 同一段冷启动，但**改动与"换 key 重挂"落在同一批提交上**（React 会把同一个 tick 里来的
+   * 多个更新合成一次提交）：那一挂的 `draft` state 更新与那一挂一起被丢掉 —— 卸载那一刻
+   * `draftRef.current`（只在下一次提交的 effect 里才同步）还是空的。
+   *
+   * 所以过桥的**取值来源**不能是那个 ref：必须以**输入框当前的真实值**为准（用户敲下的东西
+   * 就在 DOM 里）。这条用例把这条口径钉死：卸载前改草稿、同批重挂，草稿照样要过来。
+   */
+  it('改动与重挂同批提交：草稿也要过桥带走（不许拿过期的 state ref 当来源）', async () => {
+    const control = createMockTransport()
+    const runtime = runtimeWith(control, async () => [])
+    const real = 'thread-real'
+    const { rerender } = render(
+      <MemoryRouter>
+        <ChatSession
+          key={PENDING_THREAD_ID}
+          transport={control.transport}
+          threadId={null}
+          runtime={runtime}
+        />
+      </MemoryRouter>
+    )
+
+    const first = await screen.findByTestId('composer-input')
+    const firstValue = first as HTMLTextAreaElement
+
+    await act(async () => {
+      fireEvent.change(first, { target: { value: '冷启动里敲的半句' } })
+      // 同批：换 key 重挂（真 id 到了）
+      rerender(
+        <MemoryRouter>
+          <ChatSession key={real} transport={control.transport} threadId={real} runtime={runtime} />
+        </MemoryRouter>
+      )
+    })
+
+    const bridged = input()
+    expect(bridged).not.toBe(first)
+    // 注释里说明"改动的 state 还没落地"：DOM 上确实已经有那半句（这就是过桥该抄的值）
+    expect(firstValue.value).toBe('冷启动里敲的半句')
+    expect(bridged).toHaveValue('冷启动里敲的半句')
+  }, 15_000)
+
+  /**
+   * 这一条钉的是**过桥的取值来源**：抄"输入框现在真实写着什么"，不是抄 `draft` state 的镜像
+   * （`draftRef` 只在下一次提交的 effect 里才同步）。
+   *
+   * 场景就是实测到过的那种失配形状：**用户敲下的字在输入框里，但 state 这一侧没跟上**
+   * （实机冷启动那一次：值在 DOM 上活了约 200ms、随后被 React 按 state 写回空、发送钮
+   * 因为"没内容"一直禁用）。这里把这个形状**直接造出来**（只写 DOM 的 value、不派发 input，
+   * 于是 onChange/state 都不会动），再让这一挂按 key 重挂 —— 过桥必须以 DOM 为准，
+   * 否则用户看得见的字就这么没了。
+   */
+  it('state 没跟上（DOM 有字、state 空）时重挂：过桥以输入框的真实内容为准', async () => {
+    const control = createMockTransport()
+    const runtime = runtimeWith(control, async () => [])
+    const real = 'thread-real'
+    const { rerender } = render(
+      <MemoryRouter>
+        <ChatSession
+          key={PENDING_THREAD_ID}
+          transport={control.transport}
+          threadId={null}
+          runtime={runtime}
+        />
+      </MemoryRouter>
+    )
+
+    const first = await screen.findByTestId('composer-input')
+    // 只写 DOM（不派发 input）：这就是"用户看得见、而 state 还不知道"的那一刻
+    ;(first as HTMLTextAreaElement).value = '冷启动里敲的半句'
+    expect(screen.getByTestId('composer-send')).toBeDisabled()
+
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <ChatSession key={real} transport={control.transport} threadId={real} runtime={runtime} />
+        </MemoryRouter>
+      )
+    })
+
+    const bridged = input()
+    expect(bridged).not.toBe(first)
+    expect(bridged).toHaveValue('冷启动里敲的半句')
   }, 15_000)
 })

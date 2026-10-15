@@ -130,11 +130,13 @@ describe('preload：window.kyclaw 白名单', () => {
 })
 
 describe('preload：window.kyclaw.settings', () => {
-  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除 / 元数据探测）', async () => {
+  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除 / 元数据探测 / 列端点模型 / 发现模型）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.settings).sort()).toEqual([
+      'discoverProviderModels',
       'get',
+      'listProviderModels',
       'probeModels',
       'providerKeyStates',
       'removeProvider',
@@ -142,6 +144,53 @@ describe('preload：window.kyclaw.settings', () => {
       'testProvider',
       'update'
     ])
+  })
+
+  it('discoverProviderModels 把刚填的入参原样发出去（含密钥），回包过 schema 才交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({ ok: true, models: [{ id: 'm' }] })
+    await expect(
+      kyclawApi.settings.discoverProviderModels({
+        type: 'openai-compatible',
+        baseUrl: 'https://x/v1',
+        apiKey: 'sk-just-typed'
+      })
+    ).resolves.toEqual({ ok: true, models: [{ id: 'm' }] })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:discover-provider-models', {
+      type: 'openai-compatible',
+      baseUrl: 'https://x/v1',
+      apiKey: 'sk-just-typed'
+    })
+
+    // 失败带原因也是一等结果，照原样交给上层（弹窗要把"读不到"和"空清单"分开说）
+    mocks.invoke.mockResolvedValueOnce({ ok: false, message: '认证失败（401）' })
+    await expect(
+      kyclawApi.settings.discoverProviderModels({ type: 'anthropic', apiKey: 'k' })
+    ).resolves.toEqual({ ok: false, message: '认证失败（401）' })
+
+    // 结构不对（两个分支混在一起 / 缺 scopeNote 那一类脏数据）→ 抛，不交给上层
+    mocks.invoke.mockResolvedValueOnce({ ok: true, models: [], message: 'x' })
+    await expect(
+      kyclawApi.settings.discoverProviderModels({ type: 'anthropic', apiKey: 'k' })
+    ).rejects.toThrow(/模型发现响应结构不合法/)
+  })
+
+  it('listProviderModels 打 settings:list-provider-models：回包过 schema 才交给上层（007）', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce([{ id: 'm', contextWindow: 1000 }, { id: 'n' }])
+    await expect(kyclawApi.settings.listProviderModels('deepseek')).resolves.toEqual([
+      { id: 'm', contextWindow: 1000 },
+      { id: 'n' }
+    ])
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:list-provider-models', 'deepseek')
+
+    // 结构不对（脏数据）→ 抛，不把半截清单交给上层
+    mocks.invoke.mockResolvedValueOnce([{ id: '' }])
+    await expect(kyclawApi.settings.listProviderModels('deepseek')).rejects.toThrow(
+      /模型清单响应结构不合法/
+    )
   })
 
   it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
@@ -216,16 +265,26 @@ describe('preload：window.kyclaw.settings', () => {
     await expect(kyclawApi.settings.providerKeyStates()).rejects.toThrow()
   })
 
-  it('testProvider 带上 id，结果按 schema 解析；脏数据（两个分支混在一起）抛错', async () => {
+  it('testProvider 带上 id，结果按 schema 解析；脏数据（缺 steps / 两个分支混在一起）抛错', async () => {
     const { kyclawApi } = await loadPreload()
-    mocks.invoke.mockResolvedValueOnce({ ok: true, latencyMs: 812 })
-
-    await expect(kyclawApi.settings.testProvider('deepseek')).resolves.toEqual({
+    const result = {
       ok: true,
-      latencyMs: 812
-    })
+      latencyMs: 812,
+      steps: [
+        { id: 'connectivity', status: 'passed', latencyMs: 400, detail: '通了' },
+        { id: 'streaming', status: 'passed', latencyMs: 380, detail: '拿到正文' },
+        { id: 'tools', status: 'passed', latencyMs: 32, detail: '调了探针工具' }
+      ],
+      scopeNote: '验证范围：……'
+    }
+    mocks.invoke.mockResolvedValueOnce(result)
+
+    await expect(kyclawApi.settings.testProvider('deepseek')).resolves.toEqual(result)
     expect(mocks.invoke).toHaveBeenLastCalledWith('settings:test-provider', 'deepseek')
 
+    // 旧形状（只有 ok/latencyMs）不再是合法回包：半截结果没法分项显示
+    mocks.invoke.mockResolvedValueOnce({ ok: true, latencyMs: 812 })
+    await expect(kyclawApi.settings.testProvider('deepseek')).rejects.toThrow()
     mocks.invoke.mockResolvedValueOnce({ ok: false, message: '认证失败', latencyMs: 1 })
     await expect(kyclawApi.settings.testProvider('deepseek')).rejects.toThrow()
   })

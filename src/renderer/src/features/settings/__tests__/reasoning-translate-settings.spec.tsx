@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { defaultSettings, REASONING_TRANSLATE_PRESET } from '@shared/settings'
+import { defaultSettings, REASONING_TRANSLATE_PRESET, type AppSettings } from '@shared/settings'
 import { ReasoningTranslateSettings } from '../ReasoningTranslateSettings'
 
 /**
@@ -115,6 +115,8 @@ describe('「思考翻译」组', () => {
     await waitFor(() => expect(bridge.translate.setKey).toHaveBeenCalledWith('sk-translate'))
     // 密钥草稿保存后清空（永远不回显）
     expect(screen.getByTestId('translate-api-key')).toHaveValue('')
+    // 012：保存要有结果反馈
+    await waitFor(() => expect(screen.getByTestId('translate-notice')).toHaveTextContent('已保存'))
   })
 
   it('服务三项可改成任意 OpenAI 兼容端点 + 目标语言：保存的就是用户填的值（trim 之后）', async () => {
@@ -158,6 +160,10 @@ describe('「思考翻译」组', () => {
 
     fireEvent.click(screen.getByTestId('translate-clear-key'))
     await waitFor(() => expect(bridge.translate.clearKey).toHaveBeenCalled())
+    // 012：清除密钥也要有结果反馈
+    await waitFor(() =>
+      expect(screen.getByTestId('translate-notice')).toHaveTextContent('密钥已清除')
+    )
   })
 
   it('密钥读不到（换机）：提示重新录入', async () => {
@@ -178,5 +184,48 @@ describe('「思考翻译」组', () => {
     fireEvent.click(screen.getByTestId('translate-save'))
 
     expect(await screen.findByTestId('translate-error')).toHaveTextContent('设置落盘失败')
+  })
+})
+
+/**
+ * 012（用户口径）：保存成功后又改了输入，「已保存」要立刻消失 —— 那句话描述的是**落盘的那一份**。
+ * 010 收口：就地写入（开关 / 翻译方式）一次只写一条，连点两下不并发发两次 settings:update。
+ */
+describe('「思考翻译」组的保存反馈与就地写入串行（012 / 010）', () => {
+  it('012：保存成功后改服务地址 → 「已保存」立刻消失（不显示假成功）', async () => {
+    const bridge = installKyclawBridge()
+    withSettings({ enabled: true })
+    render(<ReasoningTranslateSettings />)
+
+    fireEvent.change(screen.getByTestId('translate-base-url'), {
+      target: { value: 'https://api.example.com/v1' }
+    })
+    fireEvent.click(screen.getByTestId('translate-save'))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalled())
+    expect(await screen.findByTestId('translate-notice')).toHaveTextContent('已保存')
+
+    fireEvent.change(screen.getByTestId('translate-base-url'), {
+      target: { value: 'https://api.example.com/v2' }
+    })
+    expect(screen.queryByTestId('translate-notice')).not.toBeInTheDocument()
+    expect(screen.getByTestId('translate-base-url')).toHaveValue('https://api.example.com/v2')
+  })
+
+  it('010：落盘挂着不回来时开关按下即锁住，第二下不再发一次 settings:update', async () => {
+    const bridge = installKyclawBridge()
+    bridge.update.mockImplementationOnce(() => new Promise<AppSettings>(() => {}))
+    render(<ReasoningTranslateSettings />)
+
+    const toggle = screen.getByTestId('translate-enabled')
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        reasoningTranslate: expect.objectContaining({ enabled: true })
+      })
+    )
+    expect(toggle).toBeDisabled()
+    fireEvent.click(toggle)
+    expect(bridge.update).toHaveBeenCalledTimes(1)
   })
 })

@@ -25,19 +25,22 @@ import { PendingImageTile } from './PendingImageTile'
 import {
   contextTokensFor,
   contextWindowOf,
+  displayNameOf,
   effectiveEffortId,
   formatTokens,
   isProbedFresh,
+  overrideKeyOf,
   probedKeyOf,
   thinkingEffortsOf,
   visionOf
 } from '@shared/models'
-import type { ProbedModelSpec } from '@shared/models'
+import type { ModelOverride, ProbedModelSpec } from '@shared/models'
 import type { Workspace, WorkspaceMode } from '@shared/settings'
 import type { UsageThreadContext } from '@shared/usage'
-import { withDefaultProvider } from '@shared/providers'
+import { providerLabel, registeredModelsOf } from '@shared/providers'
 import { formatBytes } from './composer-attachments'
 import type { PendingAttachment } from './composer-attachments'
+import { PLAN_ENTER_LABEL } from './plan-ui'
 import type { ReferenceKind } from './reference-markers'
 
 /**
@@ -171,7 +174,7 @@ export function PlusMenu({
     if (mode.plan !== null) {
       items.push({
         id: 'plan',
-        label: '进入规划模式',
+        label: PLAN_ENTER_LABEL,
         icon: <Compass />,
         testId: 'composer-mode-plan',
         disabled: mode.plan.disabled,
@@ -467,12 +470,15 @@ function ContextCardBody({
 function ContextSlider({
   model,
   probed,
+  override,
   pct,
   onCommit
 }: {
   model: string
   /** round 22：该模型的实测元数据（probed 优先；没有就注册表） */
   probed?: ProbedModelSpec
+  /** 用户反馈 003：该模型的手动覆盖（排在实测之前） */
+  override?: ModelOverride
   pct: number
   onCommit: (pct: number) => void
 }): React.JSX.Element {
@@ -483,7 +489,7 @@ function ContextSlider({
     setLastPct(pct)
     setDraft(pct)
   }
-  const window = contextWindowOf(model, probed)
+  const window = contextWindowOf(model, probed, override)
   return (
     <div data-testid="model-context-slider" className="flex w-56 flex-col gap-2">
       <div className="flex items-baseline justify-between text-c1">
@@ -491,7 +497,8 @@ function ContextSlider({
           {draft}%
         </span>
         <span className="text-ink-tertiary tabular-nums">
-          ≈ {formatTokens(contextTokensFor(model, draft, probed))} / {formatTokens(window)}
+          ≈ {formatTokens(contextTokensFor(model, draft, probed, override))} /{' '}
+          {formatTokens(window)}
         </span>
       </div>
       <input
@@ -534,17 +541,21 @@ function useContextStats(
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const probedModels = useSettingsStore((state) => state.settings.probedModels)
+  const modelOverrides = useSettingsStore((state) => state.settings.modelOverrides)
   const [context, setContext] = useState<UsageThreadContext | null>(null)
   /** 取数失败的那条会话（服务没起来 / 还没记录）：没数据时不再给骨架，如实画 0% */
   const [failedThreadId, setFailedThreadId] = useState<string | null>(null)
 
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
   const pref = modelPrefs[current === undefined ? '' : `${current.id}/${current.model}`]
-  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）
+  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）；
+  // 用户反馈 003：手动覆盖排在最前面（override → probed → 注册表 → 默认）
   const probed =
     current === undefined ? undefined : probedModels[probedKeyOf(current.id, current.model)]
+  const override =
+    current === undefined ? undefined : modelOverrides[overrideKeyOf(current.id, current.model)]
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
-  const windowTokens = contextTokensFor(current?.model, pct, probed)
+  const windowTokens = contextTokensFor(current?.model, pct, probed, override)
 
   /** 最近一次发起的取数标识（会话 + 轮次号）：晚回的旧响应不许覆盖新一轮的数字 */
   const lastRequest = useRef('')
@@ -714,11 +725,23 @@ export function ContextChip({
  *   - 思考强度按注册表（shared/models.ts）动态给挡位——选中即落 settings.modelPrefs 并按
  *     agent.ts 的口径真透传（能传的模型才列多档，传不了的如实只有「默认」）；
  *   - 对话长度 = 官方上下文长度 × 10%–100%（滑块，松手即存）；阈值 = 同一根滑块。
+ *
+ * 用户反馈 001/002/004（列表这一截改了）：
+ *   - 条目从「一条 channel」变成「channel × 它注册的模型」（`registeredModelsOf`）：选中的那一条
+ *     写回该 provider 的 `model`，并把 `isDefault` 挪到它 —— 复用既有字段当选择器，
+ *     不另造一个全局 currentModel；
+ *   - 有歧义时（不止一个通道 / 不止一个模型）每条右侧标出**渠道名**（002）；
+ *   - 模型名按展示名显示（004，`displayNameOf`，只影响显示）。
+ *
+ * 实测元数据的取数（round 22 + 用户反馈 006）：**打开菜单**时若缓存缺失/过期（>24h）后台补一趟；
+ * 末尾另有一条**「刷新模型信息」**——不看 TTL，点一次就重试一次（端点刚起来 / Base URL 刚改对 /
+ * 上次探测失败都属于这种情况）。
  */
 export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const providers = useSettingsStore((state) => state.settings.providers)
   const modelPrefs = useSettingsStore((state) => state.settings.modelPrefs)
   const probedModels = useSettingsStore((state) => state.settings.probedModels)
+  const modelOverrides = useSettingsStore((state) => state.settings.modelOverrides)
   const saveProviders = useSettingsStore((state) => state.saveProviders)
   const saveModelPrefs = useSettingsStore((state) => state.saveModelPrefs)
   const [pending, setPending] = useState(false)
@@ -726,9 +749,12 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const current = providers.find((provider) => provider.isDefault) ?? providers[0]
   const prefKey = current === undefined ? '' : `${current.id}/${current.model}`
   const pref = modelPrefs[prefKey]
-  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）
+  // round 22：该模型的实测元数据（probed 优先；没有/字段缺就回落注册表）；
+  // 用户反馈 003：手动覆盖排在最前面
   const probed =
     current === undefined ? undefined : probedModels[probedKeyOf(current.id, current.model)]
+  const currentOverride =
+    current === undefined ? undefined : modelOverrides[overrideKeyOf(current.id, current.model)]
   const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort, probed)
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
 
@@ -739,6 +765,31 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
     void useSettingsStore.getState().probeModels(current.id)
   }, [current, probedModels])
 
+  /**
+   * 手动刷新模型信息（菜单里那一条）：**不看 TTL**——自动那条路 24h 才重探一次，这里点一下就重试一次
+   * （端点刚起来、Base URL 刚改对、上次探测失败……都属于"缓存看着新，但我想再问一遍"）。
+   *
+   * 反馈口径：探测本身是"尽力而为"（主进程失败只 warn），所以用 **fetchedAt 有没有变**来说话——
+   * 变了 = 真问回来一趟；没变 = 端点不可达/没给元数据，沿用现有值。不编成功。
+   */
+  const refreshModelMetaNow = (): void => {
+    if (current === undefined) return
+    const key = probedKeyOf(current.id, current.model)
+    const before = useSettingsStore.getState().settings.probedModels[key]?.fetchedAt
+    onNotice(null)
+    void useSettingsStore
+      .getState()
+      .probeModels(current.id)
+      .then(() => {
+        const after = useSettingsStore.getState().settings.probedModels[key]?.fetchedAt
+        onNotice(
+          after !== undefined && after !== before
+            ? { tone: 'success', text: '模型信息已刷新' }
+            : { tone: 'warning', text: '没能刷新模型信息（端点不可达或没给出元数据），沿用现有值' }
+        )
+      })
+  }
+
   const savePrefs = (patch: { thinkingEffort?: string; contextPct?: number }): void => {
     if (current === undefined) return
     const next = { ...modelPrefs, [prefKey]: { ...pref, ...patch } }
@@ -748,11 +799,21 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
     })
   }
 
-  const select = (id: string): void => {
-    if (id === current?.id) return
+  /**
+   * 选一个「channel × 模型」（001）：`isDefault` 挪到这条通道、`model` 写回选的这个
+   * —— 既有字段就是选择器，没有第二个"当前模型"的真相来源。
+   */
+  const select = (providerId: string, model: string): void => {
+    if (providerId === current?.id && model === current.model) return
     setPending(true)
     onNotice(null)
-    saveProviders(withDefaultProvider(providers, id)).then(
+    saveProviders(
+      providers.map((candidate) =>
+        candidate.id === providerId
+          ? { ...candidate, model, isDefault: true }
+          : { ...candidate, isDefault: false }
+      )
+    ).then(
       () => setPending(false),
       (error: unknown) => {
         setPending(false)
@@ -764,18 +825,40 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const efforts = thinkingEffortsOf(current?.model, probed)
   const effortLabel = efforts.find((effort) => effort.id === effortId)?.label ?? '默认'
 
+  // 有歧义时（多通道 / 多模型）每条右侧标出渠道名 —— 只有一条通道一个模型时不啰嗦，与旧版一模一样
+  const pairs = providers.flatMap((provider) =>
+    registeredModelsOf(provider).map((model) => ({ provider, model }))
+  )
+  const showChannelName = providers.length > 1 || pairs.length > providers.length
+
+  const modelItems: MenuEntry[] = pairs.map(({ provider, model }) => {
+    const override = modelOverrides[overrideKeyOf(provider.id, model)]
+    const selected = provider.isDefault && model === provider.model
+    const vision = visionOf(model, probedModels[probedKeyOf(provider.id, model)])
+    // 模型名为空（半截配置）时用渠道名当标签，这类条目右侧就不再重复印一遍渠道名
+    const label = model === '' ? providerLabel(provider) : displayNameOf(model, override)
+    return {
+      id: `${provider.id}\u0000${model}`,
+      label,
+      selected,
+      trailing:
+        vision || (showChannelName && model !== '') ? (
+          <span className="flex items-center gap-2">
+            {showChannelName && model !== '' ? <span>{providerLabel(provider)}</span> : null}
+            {vision ? <span>{VISION_MARK}</span> : null}
+          </span>
+        ) : undefined,
+      // 同一条通道的当前模型沿用旧 testid（`composer-model-<id>`），其余按模型名区分
+      testId:
+        model === provider.model
+          ? `composer-model-${provider.id}`
+          : `composer-model-${provider.id}-${model}`,
+      onSelect: () => select(provider.id, model)
+    }
+  })
+
   const items: MenuEntry[] = [
-    ...providers.map((provider) => ({
-      id: provider.id,
-      label: provider.model === '' ? provider.id : provider.model,
-      selected: provider.isDefault,
-      // 模块 2：视觉模型给一个小标记（不解释后端；判据 = 探测结论 > 注册表 > false，见 visionOf）
-      trailing: visionOf(provider.model, probedModels[probedKeyOf(provider.id, provider.model)])
-        ? VISION_MARK
-        : undefined,
-      testId: `composer-model-${provider.id}`,
-      onSelect: select
-    })),
+    ...modelItems,
     { id: 'split', type: 'separator' },
     {
       id: 'efforts',
@@ -805,18 +888,34 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
             <ContextSlider
               model={current?.model ?? ''}
               probed={probed}
+              override={currentOverride}
               pct={pct}
               onCommit={(nextPct) => savePrefs({ contextPct: nextPct })}
             />
           )
         }
       ]
+    },
+    { id: 'split-refresh', type: 'separator' },
+    {
+      // 手动重试那一趟 GET /models（不看 TTL）；结果用 fetchedAt 有没有变来说话，见 refreshModelMetaNow
+      id: 'refresh-meta',
+      label: '刷新模型信息',
+      testId: 'model-refresh-meta',
+      disabled: current === undefined,
+      onSelect: () => refreshModelMetaNow()
     }
     // round 42 二轮：这里**不再**拼上下文明细区块——那是隔壁 ContextChip 的弹层内容
     // （用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。menu.tsx 的顶层 custom 保留。
   ]
 
-  const label = current === undefined ? '' : current.model === '' ? current.id : current.model
+  // 触发器显示当前模型的展示名（004）；模型名为空（半截配置）时回落渠道名
+  const triggerLabel =
+    current === undefined
+      ? ''
+      : current.model === ''
+        ? providerLabel(current)
+        : displayNameOf(current.model, currentOverride)
 
   return (
     <Menu
@@ -829,7 +928,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
           disabled={pending}
           className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
         >
-          <span className="truncate">{label}</span>
+          <span className="truncate">{triggerLabel}</span>
         </button>
       }
       items={items}

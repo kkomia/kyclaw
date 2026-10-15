@@ -21,7 +21,7 @@ afterEach(() => {
 })
 const call = (channel: string, ...args: unknown[]): unknown => handlers.get(channel)!(null, ...args)
 
-describe('项目规矩 IPC', () => {
+describe('项目约束 IPC', () => {
   it('status 无参数且每次现取实际注册状态，未注入默认 false', () => {
     registerRulesIpc('unused')
     expect(call(RULES_IPC_CHANNELS.status)).toEqual({ processorRegistered: false })

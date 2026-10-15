@@ -96,6 +96,13 @@ import { createPlanRoutes } from './routes/plans'
 import { planRefSchema } from '../shared/plan'
 import { createRulesProcessor, type RulesProcessorDependencies } from './rules'
 import {
+  createRequestFailureRecorder,
+  createRequestSnapshotRecorder,
+  createRequestSnapshotStore,
+  tapStreamFailures,
+  type RequestSnapshotStore
+} from './request-log'
+import {
   createUsageRecorder,
   createUsageStore,
   threadTokenReadout,
@@ -176,6 +183,11 @@ export interface KyclawMastra {
   memory: MastraMemory
   /** 用量表的读写口（/api/usage 与记账钩子共用一份） */
   usage: UsageStore
+  /**
+   * round 87：请求快照（系统指令 / 工具表）的表读写口
+   * （/api/trajectory/requests 与记账钩子共用一份；用户反馈 015 的原料）
+   */
+  requestSnapshots: RequestSnapshotStore
   /** 会话↔项目映射的表读写口 + 内存镜像（/api/projects/mappings 与工具取根共用一份） */
   sessionProjects: SessionProjectStore
   /**
@@ -227,6 +239,17 @@ function userFacingError(error: Error): { status: 400 | 500; message: string } {
     }
   }
   return { status: 500, message: '服务出错了，请重试；若一直这样，重启应用再试一次。' }
+}
+
+/**
+ * 这一轮**真实的 runId**：`prepareTaskChatParams` 每条请求都产一个（任务处理链会按它校验
+ * 每一步的 runId），所以会话入口的失败行也挂得上真 run。
+ * 用窄读而不是断言：`ChatStreamHandlerParams` 的类型面没声明这个字段，运行时才有。
+ */
+function preparedRunId(params: unknown): string | null {
+  if (typeof params !== 'object' || params === null) return null
+  const value = (params as { runId?: unknown }).runId
+  return typeof value === 'string' && value.trim() !== '' ? value : null
 }
 
 export async function createKyclawMastra(options: {
@@ -383,6 +406,21 @@ export async function createKyclawMastra(options: {
   // 用量表与既有 Mastra 表同库：建表在这里（服务起来就建好），记账/查询共用这一个 store
   const usage = createUsageStore(usageSqlClient(storage))
   await usage.ensureTable()
+  // round 87：请求快照（系统指令 / 工具表 / 消息清单）同库，供轨迹页的系统 / 上下文 / 失败行（用户反馈 015）
+  const requestSnapshots = createRequestSnapshotStore(usageSqlClient(storage))
+  await requestSnapshots.ensureTable()
+  const recordRequest = createRequestSnapshotRecorder({ store: requestSnapshots })
+  /**
+   * 失败那次请求的记账（用户反馈 015）：`onFinish` 在 provider 报错时**不触发**（实测），所以失败
+   * 由**三个模型调用入口**各自的 UI 消息流观察（chat 路由 / ask-user 续跑 / Plan 续跑）——
+   * 每一处都把自己那一轮**真实的** threadId / runId 交进来（认不出就 null，不编）。
+   */
+  const recordRequestFailure = createRequestFailureRecorder({ store: requestSnapshots })
+  const noteFailure =
+    (threadId: string | null, runId: string | null) =>
+    (errorText: string): void => {
+      void recordRequestFailure({ threadId, runId, error: errorText })
+    }
   // 会话↔项目映射（T18）同库同寿命：表在这里建好；内存镜像是工具同步取根的来源
   const sessionProjects = createSessionProjectStore(storage)
   // round 66：会话↔PPT 模板映射同库同寿命（模板选择是会话级的，不再落全局设置）
@@ -456,7 +494,11 @@ export async function createKyclawMastra(options: {
         toolCallId: input.toolCallId,
         memory: { thread: input.threadId, resource: 'local-user' }
       })
-      return toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true })
+      // Plan 续跑也是"一次真实的模型请求"：失败同样落在同一条账上（thread / run 都是真的）
+      return tapStreamFailures(
+        toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true }),
+        noteFailure(input.threadId, input.runId)
+      )
     }
   })
   const recordUsage = createUsageRecorder({ store: usage })
@@ -464,6 +506,8 @@ export async function createKyclawMastra(options: {
     maxSteps: KYCLAW_MAX_STEPS,
     onFinish: async (event: Parameters<typeof recordUsage>[0]) => {
       await recordUsage(event)
+      // 请求快照与用量并排落，但它是**旁路**：自己兜住异常（写失败只记日志），不把这一轮打成失败
+      await recordRequest(event)
       const threadId = event.response?.dbMessages?.find(
         (message) => typeof message.threadId === 'string'
       )?.threadId
@@ -540,7 +584,11 @@ export async function createKyclawMastra(options: {
         toolCallId: input.toolCallId,
         memory: { thread: input.threadId, resource: 'local-user' }
       })
-      return toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true })
+      // ask-user 续跑（回答卡片之后那一次模型请求）：失败记账同上，thread / run 都是挂起时那一轮
+      return tapStreamFailures(
+        toAISdkStream(result, { from: 'agent', version: 'v7', sendReasoning: true }),
+        noteFailure(input.threadId, input.runId)
+      )
     }
   })
   const mastra = new MastraClass({
@@ -584,7 +632,14 @@ export async function createKyclawMastra(options: {
                 },
                 params: { ...params, ...request, abortSignal: context.req.raw.signal }
               })
-              return createUIMessageStreamResponse({ stream })
+              return createUIMessageStreamResponse({
+                // 这一轮的 runId：续跑（审批 / ask_user）用挂起时那一轮的 runId；新的一轮用
+                // `prepareTaskChatParams` 刚产出的那个（任务处理链按它校验每一步）
+                stream: tapStreamFailures(
+                  stream,
+                  noteFailure(memoryScope.thread, resumedRunId ?? preparedRunId(params))
+                )
+              })
             }
           }),
           middleware: askUserRoutes.middleware
@@ -612,6 +667,7 @@ export async function createKyclawMastra(options: {
     storage,
     memory,
     usage,
+    requestSnapshots,
     sessionProjects,
     sessionPptTemplates,
     sessionPptSources,

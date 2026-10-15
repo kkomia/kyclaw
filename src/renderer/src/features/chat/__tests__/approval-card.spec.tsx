@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings, type McpServerConfig, type Workspace } from '@shared/settings'
 import { ApprovalCard, type ApprovalDecision } from '../ApprovalCard'
@@ -255,6 +256,116 @@ describe('ApprovalCard · 看得见在批什么（round28）', () => {
     expect(detail).toHaveAttribute('data-kind', 'move-to')
     expect(detail).toHaveTextContent('→ docs/a.txt')
     expect(screen.getByTestId('approval-target')).toHaveTextContent('a.txt')
+  })
+})
+
+/**
+ * round 86（用户实报 013 的后半）：审批卡的**目标路径**也收成工作区相对路径 —— 上一轮只改了工具卡，
+ * 审批卡上那条整条绝对路径同样太长。口径与工具卡一字不差（同一份 `display-path.ts`、同一份会话根
+ * `sessionRootPathOf`）：根内 → 相对；根外 / 判不出根 → 原样。
+ * **绝对路径不丢**：那一行的 tooltip 里始终是原文 —— 审批卡的决策面就是"到底动哪个文件"。
+ */
+describe('round 86 · 审批卡的目标路径显示（根内相对、绝对路径在 tooltip 里）', () => {
+  const ROOT = 'D:\\ws'
+
+  function withRoot(): void {
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        workspaces: [{ path: ROOT, mode: 'ask' }],
+        defaultWorkspace: ROOT
+      },
+      loaded: true
+    })
+    // 没有会话（activeId null）时真根就是默认工作区本身 —— 这里量的是展示转换（工具卡同一手法）
+    useSessionsStore.setState({ activeId: null })
+  }
+
+  function restore(): void {
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+    useSessionsStore.setState({ activeId: null })
+  }
+
+  /** focus 唤出 Radix 的 Tooltip，取出它的原文（键盘可达，与应用内其它 tooltip 同一读法） */
+  async function tooltipTextOf(target: HTMLElement): Promise<string> {
+    fireEvent.focus(target)
+    let text = ''
+    await waitFor(() => {
+      const describedBy = target.getAttribute('aria-describedby')
+      expect(describedBy).toBeTruthy()
+      text = document.getElementById(describedBy ?? '')?.textContent ?? ''
+      expect(text).not.toBe('')
+    })
+    return text
+  }
+
+  it('根内文件：卡面是相对路径，tooltip 里是绝对路径原文（决策面不丢）', async () => {
+    withRoot()
+    try {
+      decideWith({
+        toolName: 'write',
+        input: { path: 'D:\\ws\\src\\a.txt', content: 'x' },
+        path: 'D:\\ws\\src\\a.txt'
+      })
+
+      const target = screen.getByTestId('approval-target')
+      expect(target).toHaveTextContent('src/a.txt')
+      expect(target).not.toHaveTextContent('D:\\ws')
+      expect(await tooltipTextOf(target)).toBe('D:\\ws\\src\\a.txt')
+    } finally {
+      restore()
+    }
+  })
+
+  it('根外文件：原样显示绝对路径（不改写、也不假装它在工作区里）', async () => {
+    withRoot()
+    try {
+      decideWith({
+        toolName: 'write',
+        input: { path: 'C:\\Windows\\evil.txt', content: 'x' },
+        path: 'C:\\Windows\\evil.txt'
+      })
+
+      const target = screen.getByTestId('approval-target')
+      expect(target).toHaveTextContent('C:\\Windows\\evil.txt')
+      expect(await tooltipTextOf(target)).toBe('C:\\Windows\\evil.txt')
+    } finally {
+      restore()
+    }
+  })
+
+  it('判不出根（没有工作区）：交出来的绝对路径照原样显示，不硬凑相对路径', async () => {
+    useSessionsStore.setState({ activeId: null })
+    decideWith({
+      toolName: 'write',
+      input: { path: 'D:\\ws\\docs\\a.md', content: 'x' },
+      path: 'D:\\ws\\docs\\a.md'
+    })
+
+    expect(screen.getByTestId('approval-target')).toHaveTextContent('D:\\ws\\docs\\a.md')
+  })
+
+  it('bash 的 cwd 目标（同一个显示口径，不挑工具名）：根内 → 相对', async () => {
+    withRoot()
+    try {
+      decideWith({
+        toolName: 'bash',
+        input: { command: 'git status', cwd: 'D:\\ws\\sub' },
+        path: 'D:\\ws\\sub'
+      })
+
+      expect(screen.getByTestId('approval-target')).toHaveTextContent('sub')
+      // bash 的命令体是另一件事（approval-detail），一个字符不改
+      expect(screen.getByTestId('approval-detail')).toHaveTextContent('git status')
+    } finally {
+      restore()
+    }
+  })
+
+  it('对照组：没有目标路径（path: null）时什么都不铺（入口条件没动）', () => {
+    decideWith({ toolName: 'mcp__x__do', input: { anything: 1 }, path: null })
+
+    expect(screen.queryByTestId('approval-target')).not.toBeInTheDocument()
   })
 })
 

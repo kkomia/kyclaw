@@ -3,6 +3,7 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Tooltip } from '@renderer/components/ui/tooltip'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatToolName } from '@shared/mcp'
 import type { Workspace } from '@shared/settings'
 import {
@@ -14,6 +15,7 @@ import {
   type ApprovalRequest
 } from './approval'
 import { approvalDiff, type DiffLine } from './approval-diff'
+import { displayPath } from './display-path'
 
 /**
  * 审批条上的单条（T13；round 29 位置迁移）：写类工具在 ask 工作区里要用户决策时出现。
@@ -41,6 +43,11 @@ import { approvalDiff, type DiffLine } from './approval-diff'
  *
  * 展示形状与工具卡同一族（圆角面板 + 一条 hairline），diff 区用底色分层、不再套第二层框线（雷点 7）。
  * 行级 diff 的 +/- 用 --Colors-DiffAdd / --Colors-DiffDelete（经 semantic 的 --diff-add / --diff-delete）。
+ *
+ * round 86（用户实报 013 的后半）：目标路径按**展示口径**收成工作区相对路径（`displayPath`，与工具卡
+ * 同一份实现、同一份会话根）——整条绝对路径铺在卡片上太长。**绝对路径不丢**：那一行本来就有
+ * tooltip 挂着原文，判"到底动哪个文件"时鼠标一停就看得见；根外 / 判不出根则原样显示绝对路径
+ * （与工具卡同一口径：`display-path.ts` 只做展示，模型看到的入参一个字不动）。
  */
 export type ApprovalDecision = 'once' | 'session' | 'forever' | 'deny'
 
@@ -103,6 +110,13 @@ export function ApprovalCard({
   const scope = approvalScopeNote(request.input, request.toolName, workspaces, outsideMode)
   const title =
     TOOL_LABELS[request.toolName.toLowerCase()] ?? formatToolName(request.toolName, mcpServers)
+  /**
+   * 目标路径的显示（round 86，013）：会话根内 → 工作区相对路径；根外 / 判不出根 → 原样。
+   * 会话根与工具卡 / 文件树 / 附件同一个来源（`useWorkbenchRoot` 读的是 `sessionRootPathOf` 那份真根），
+   * 转换本身也只有一条实现（`displayPath` → `relativeInRoot`）。绝对路径留在 tooltip 里。
+   */
+  const { rootPath } = useWorkbenchRoot()
+  const shownPath = request.path === null ? null : displayPath(request.path, rootPath)
 
   return (
     <div
@@ -121,14 +135,15 @@ export function ApprovalCard({
         </span>
       </div>
 
-      {request.path === null ? null : (
-        <Tooltip label={request.path} side="bottom" align="start">
+      {shownPath === null ? null : (
+        // tooltip 里始终是**绝对路径原文**（决策面：到底动哪个文件）；卡面上是收窄后的相对路径
+        <Tooltip label={request.path ?? ''} side="bottom" align="start">
           <span
             data-testid="approval-target"
             tabIndex={0}
             className="min-w-0 truncate rounded-button-sm font-mono text-c1 text-ink-secondary"
           >
-            {request.path}
+            {shownPath}
           </span>
         </Tooltip>
       )}

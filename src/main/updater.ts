@@ -13,8 +13,9 @@
  *      app-update.yml，不给渠道就会去找 latest.yml（beta 包直接 404）。
  *      源上只有另一条渠道的 yml 时换一条再试一次（本会话记住哪条通）——beta 包对着只有 latest.yml
  *      的源、正式包对着只有 beta.yml 的源，都能更新。
- *   3. **不骚扰**：没有任何弹窗、通知或错误框。状态只落在设置页「关于」栏的一行文字里，
- *      错误也只是一句截断过的话；启动检查是静默的。
+ *   3. **不骚扰**：没有弹窗、通知或错误框；状态只落在设置页「关于」栏的一行文字里，错误也只是一句
+ *      截断过的话，启动检查是静默的。新版本的**发行日志**（源上渠道 yml 里的 releaseNotes/
+ *      releaseName/releaseDate）跟着状态一起走，只显示当前这一版的那一份，缺了就什么也不显示。
  *   4. **不自动装**：检出后自动下载（进度同样只进状态），但**安装必须用户点"重启并安装"**
  *      （autoInstallOnAppQuit = false）—— 本机模拟源给的是假安装包，静默安装不可接受。
  *
@@ -131,12 +132,15 @@ export function readBundledUpdateUrl(resourcesPath: string): string | null {
   }
 }
 
-/** 假后端（单测）与真后端（electron-updater）共用的那一小块面 */
+/**
+ * 假后端（单测）与真后端（electron-updater）共用的那一小块面。
+ * 两个"有新版本"的事件都带同一份 UpdateInfo（真件上就是 electron-updater 的类型）。
+ */
 export interface UpdateBackendEvents {
-  'update-available': (info: { version: string }) => void
+  'update-available': (info: UpdateInfoLike) => void
   'update-not-available': () => void
   'download-progress': (progress: { percent: number }) => void
-  'update-downloaded': (info: { version: string }) => void
+  'update-downloaded': (info: UpdateInfoLike) => void
   error: (error: Error) => void
 }
 
@@ -187,6 +191,95 @@ function versionOf(info: unknown): string | undefined {
   return typeof version === 'string' && version.length > 0 ? version : undefined
 }
 
+/** 发行说明的文本上限：状态要经 IPC 推给窗口，别把源上一个无上限的字符串整份搬过去 */
+const NOTES_TEXT_LIMIT = 20_000
+
+/** 去掉两端空白；空串 = 没有（不编一个空字符串出来给界面显示） */
+function textOf(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const text = raw.trim()
+  return text.length === 0 ? undefined : text
+}
+
+/**
+ * 发行说明的两种形状（electron-updater 的 `UpdateInfo.releaseNotes`）：generic 源（我们的局域网
+ * MinIO / Gitee 静态目录）是 `string`；GitHub 的"全量更新日志"是 `[{ version, note }]`。
+ * 数组按**目标版本**挑条目，挑不到就整条丢掉 —— 宁可不显示，也不把别的版本的日志挂在眼前这一版上。
+ */
+function notesOf(raw: unknown, version: string | undefined): string | undefined {
+  if (Array.isArray(raw)) {
+    const matched = raw.find(
+      (entry) =>
+        version !== undefined &&
+        textOf((entry as { version?: unknown } | null)?.version) === version
+    )
+    return textOf((matched as { note?: unknown } | null)?.note)
+  }
+  return textOf(raw)
+}
+
+/** 发行说明的截断（只截不留痕：状态不是日志窗口） */
+function clampNotes(notes: string | undefined): string | undefined {
+  if (notes === undefined || notes.length <= NOTES_TEXT_LIMIT) return notes
+  return `${notes.slice(0, NOTES_TEXT_LIMIT - 1)}…`
+}
+
+/** 后端给的一份"新版本信息"（真件是 electron-updater 的 UpdateInfo；四个字段都可能缺） */
+export interface UpdateInfoLike {
+  version?: unknown
+  releaseNotes?: unknown
+  releaseName?: unknown
+  releaseDate?: unknown
+}
+
+/**
+ * 一次检出的"给人看的那部分"。为什么记这一份而不是每次从相位里抠：
+ * 下载进度与下载完成两个事件也要带上**同一份**（它们有的不带说明，有的只带版本）。
+ */
+interface Release {
+  version: string | undefined
+  notes: string | undefined
+  releaseName: string | undefined
+  releaseDate: string | undefined
+}
+
+/** 从后端给的一份信息里读出这四个字段（读不出来的就是 undefined，不猜） */
+function releaseOf(info: unknown): Release {
+  const record = (info ?? {}) as Record<string, unknown>
+  const version = versionOf(info)
+  return {
+    version,
+    notes: clampNotes(notesOf(record.releaseNotes, version)),
+    releaseName: textOf(record.releaseName),
+    releaseDate: textOf(record.releaseDate)
+  }
+}
+
+/**
+ * 下载完成那一份常常不带全：缺的字段用检出那次补上（版本一致 = 同一版，缺说明时沿用这一版的）。
+ * 版本**不同**的完成事件不是"这一次下载"，调用方直接丢掉（见 bindEvents）；版本一致但没带说明的
+ * 也不回退到别的版本 —— 只有检出那一次记下的那一份。
+ */
+function mergeRelease(previous: Release, next: Release): Release {
+  return {
+    version: next.version ?? previous.version,
+    notes: next.notes ?? previous.notes,
+    releaseName: next.releaseName ?? previous.releaseName,
+    releaseDate: next.releaseDate ?? previous.releaseDate
+  }
+}
+
+/** 状态里的发行说明三个字段（共用一处；没有的就是 undefined，界面按"没提供"处理） */
+function releaseFields(
+  release: Release | null
+): Pick<Release, 'notes' | 'releaseName' | 'releaseDate'> {
+  return {
+    notes: release?.notes,
+    releaseName: release?.releaseName,
+    releaseDate: release?.releaseDate
+  }
+}
+
 /**
  * "源上没有这条渠道的 yml"：electron-updater 给这类失败挂了 ERR_UPDATER_CHANNEL_FILE_NOT_FOUND
  * 错误码（挂在错误对象上），换了包装层可能只剩那句 `Cannot find channel "beta.yml"` 文案——两条都认。
@@ -230,13 +323,25 @@ export function createUpdater(options: {
   /** 渠道记忆：默认按版本推；渠道文件不存在时换另一条，试通了就记住（本会话内沿用） */
   let channel = channelOf(currentVersion)
   let status: UpdateStatus = { phase: 'idle' }
-  /** 本次检出到的目标版本（下载进度要带上它，单独记不用从相位里抠） */
-  let targetVersion: string | undefined
+  /** 本次检出到的那一份（版本 + 发行说明）：下载进度/下载完成都要带上它，见 mergeRelease */
+  let release: Release | null = null
+  /**
+   * 会话号（换源 +1）。后端的事件不带源的信息，但"我们发起的那次检查"带着它的会话号：
+   * 旧源迟到的结论（连同那一版的发行说明）就此认领不到新源头上（见 bindEvents）。
+   */
+  let session = 0
+  /** 还没收尾的那次检查（electron-updater 会把并发检查并成一次，见 check()） */
+  let running: { session: number; observed: Error | null; done: Promise<void> } | null = null
+  /** 最后那次检出之后有下载在跑（换源时靠它判断"可能有旧源的下载还在飞"） */
+  let downloading = false
+  /**
+   * 可能有旧源的下载还在飞（下载不带源信息，也取消不掉）：这期间的进度先不显示——
+   * 把旧源的百分比挂到新源那一版头上，比不显示更糟。
+   */
+  let staleDownload = false
 
   let backend: UpdateBackend | null = null
   let backendLoading: Promise<UpdateBackend | null> | null = null
-  /** 检查期间后端的错误先交给 check()（可能要换渠道重试）；检查之外（下载失败等）直接进状态 */
-  let collectCheckError: ((error: Error) => void) | null = null
   /** 源落到后端是异步的：check 前先等它（刚改完源就点检查时不会用着上一个源） */
   let pendingApply: Promise<void> = Promise.resolve()
 
@@ -252,31 +357,60 @@ export function createUpdater(options: {
     options.onChange?.(snapshot())
   }
 
+  /** 这个事件算不算"当前源这次检查"的（旧源迟到的、没在检查的一律不算） */
+  const forCurrentCheck = (): boolean => running !== null && running.session === session
+
   const bindEvents = (target: UpdateBackend): void => {
     target.on('update-available', (info) => {
-      targetVersion = versionOf(info)
-      setStatus({ phase: 'available', version: targetVersion })
+      if (!forCurrentCheck()) return
+      // 检出是"这一份"的起点：版本与它的发行说明一起记下、一起进状态（缺说明就是缺，不沿用上一份）
+      release = releaseOf(info)
+      downloading = true
+      setStatus({ phase: 'available', version: release.version, ...releaseFields(release) })
     })
     target.on('update-not-available', () => {
+      if (!forCurrentCheck()) return
       setStatus({ phase: 'up-to-date' })
     })
     target.on('download-progress', (progress) => {
-      // 下载中也要带上目标版本（available 那一下记下来的）
+      // 没有"当前源检出的那一份"、或可能有旧源的下载还在飞：都不显示（进度认不出是哪个源的）
+      if (release === null || staleDownload) return
       setStatus({
         phase: 'downloading',
-        version: targetVersion,
-        percent: Math.max(0, Math.min(100, Math.round(progress.percent)))
+        version: release.version,
+        percent: Math.max(0, Math.min(100, Math.round(progress.percent))),
+        ...releaseFields(release)
       })
     })
     target.on('update-downloaded', (info) => {
-      targetVersion = versionOf(info) ?? targetVersion
-      setStatus({ phase: 'downloaded', version: targetVersion })
-    })
-    target.on('error', (error) => {
-      if (collectCheckError !== null) {
-        collectCheckError(error)
+      // 有下载收尾了（不管是哪个源的）：这一条之后，进度就能重新归属了
+      downloading = false
+      staleDownload = false
+      if (release === null) return
+      const finished = releaseOf(info)
+      // 报的版本与检出那版不同 = 不是这一次下载（换源后旧源迟到的完成事件）：整份丢掉，
+      // 不记它的版本、不带它的说明，也就不会让界面拿旧源那份去装
+      if (
+        finished.version !== undefined &&
+        release.version !== undefined &&
+        finished.version !== release.version
+      ) {
         return
       }
+      release = mergeRelease(release, finished)
+      setStatus({ phase: 'downloaded', version: release.version, ...releaseFields(release) })
+    })
+    target.on('error', (error) => {
+      // 检查期间的错误交给那次检查（可能要换渠道重试）；之外只认"当前这一份下载"的错
+      const attempt = running
+      if (attempt !== null && attempt.session === session) {
+        attempt.observed ??= error
+        return
+      }
+      // 检查之外出错 = 下载结束了（认不认这条都一样）
+      downloading = false
+      staleDownload = false
+      if (release === null) return
       setStatus({ phase: 'error', message: errorText(error) })
     })
   }
@@ -335,23 +469,31 @@ export function createUpdater(options: {
 
   /**
    * 跑一次检查，并把"这一次尝试"的错误收干净（后端的事件与 check() 的拒绝两条路都算）。
-   * 只有"渠道文件不存在"会交给调用方去换渠道重试，其余错误当场落状态。
+   * 只有"渠道文件不存在"会交给调用方去换渠道重试，其余错误当场落状态（会话换了的就什么都不写）。
    */
   const attemptCheck = async (target: UpdateBackend): Promise<CheckAttempt> => {
-    let observed: Error | null = null
-    collectCheckError = (error) => {
-      observed ??= error
+    const attempt = {
+      session,
+      observed: null as Error | null,
+      done: Promise.resolve()
     }
+    running = attempt
+    attempt.done = (async () => {
+      try {
+        await target.check()
+      } catch (error) {
+        attempt.observed ??= toError(error)
+      }
+    })()
     try {
-      await target.check()
-    } catch (error) {
-      observed ??= toError(error)
+      await attempt.done
     } finally {
-      collectCheckError = null
+      if (running === attempt) running = null
     }
+    const observed = attempt.observed
     if (observed === null) return { kind: 'ok' }
     if (!isChannelFileMissing(observed)) {
-      setStatus({ phase: 'error', message: errorText(observed) })
+      if (attempt.session === session) setStatus({ phase: 'error', message: errorText(observed) })
       return { kind: 'ok' }
     }
     return { kind: 'channel-missing', error: observed }
@@ -361,13 +503,20 @@ export function createUpdater(options: {
     state: snapshot,
 
     check: async () => {
+      const mine = session
       await pendingApply
       if (source.kind === 'none') return snapshot()
       const target = await ensureBackend()
       if (target === null) return snapshot()
+      // 上一次检查还在飞：等它收尾再发自己那一次（不 await 的话 electron-updater 会把两次并成
+      // 一次，这一次的结论其实是上一个源的）
+      const previous = running
+      if (previous !== null) await previous.done
+      if (session !== mine) return snapshot()
       setStatus({ phase: 'checking' })
 
       const first = await attemptCheck(target)
+      if (session !== mine) return snapshot()
       if (first.kind === 'channel-missing') {
         // 渠道兜底：源上只有另一条渠道的 yml（beta 包对着只有 latest.yml 的源）时换一条再试一次，
         // 试通了就把这条记在本会话里，后面直接用；两条都没有就把版本推导的那条还回去，报第一次的错
@@ -376,6 +525,7 @@ export function createUpdater(options: {
         await applySource(source, channel)
         setStatus({ phase: 'checking' })
         const second = await attemptCheck(target)
+        if (session !== mine) return snapshot()
         if (second.kind === 'channel-missing') {
           // 两条都没有：把记忆还回版本推导的那条（feed 也一并设回去，记忆与后端别各说各话），
           // 报第一次的错——版本推导的那条才是"本该有"的
@@ -398,9 +548,14 @@ export function createUpdater(options: {
       const next = options.resolveSource()
       if (sameSource(next, source)) return
       source = next
-      // 换源 = 换渠道记忆、相位归 idle：旧源上的"已是最新/已下载"对新源不成立
+      // 换源 = 新会话 + 相位归 idle：旧源上那个版本的结论与发行说明一并作废，旧源迟到的
+      // 检查结论/下载进度/完成事件也认领不到新源头上（见 session）
+      session += 1
       channel = channelOf(currentVersion)
-      targetVersion = undefined
+      release = null
+      // 换源时可能旧源的下载还在飞（取消不掉）：进度先按住，等有下载收尾再放行（见 staleDownload）
+      staleDownload = downloading
+      downloading = false
       pendingApply = applySource(source, channel)
       setStatus({ phase: 'idle' })
     }

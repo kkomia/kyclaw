@@ -8,7 +8,7 @@
  * mcpServers（T12）的取值在下面（元素形状 + 缺省），业务校验与路由在 shared/mcp.ts 与
  * mastra/routes/mcp.ts；projects（T18）的元素 schema 在 shared/projects.ts，defaultWorkspace 是
  * 「未指定项目的会话」用的那个默认工作区（地位 = Kimi「其他 → 通用 → 存储位置」）；
- * langfuse（T17）只有服务地址一项——公私钥走 secrets.json（safeStorage）。
+ * langfuse（T17）是"开关 + 服务地址 + 代理"三项——公私钥走 secrets.json（safeStorage）。
  * 追加字段时记得同步 main/settings.ts 的读盘迁移（旧文件补空值）。
  *
  * round 66：**会话级的状态不放这里**。PPT 模板选择从 `pptTemplate` 挪到了
@@ -72,14 +72,24 @@ export const permissionsSchema = z.strictObject({
 })
 
 /**
- * Langfuse 追踪的**非密钥**部分（T17；round 67 加代理）：
+ * Langfuse 追踪的**非密钥**部分（T17；round 67 加代理；round 86 加**显式开关**）：
+ *   - `enabled`：显式开关（用户口径 010）—— `false` = 用户明确关掉，一律不导出；
  *   - `endpoint`：实例地址（默认 = 用户现用那台，见 LANGFUSE_PRESET，设置页里随手改）；
  *   - `proxyUrl`：HTTP(S) 代理（空串 = 直连；填了才起作用，也可以改用环境变量兜底）。
  * 公私钥与 provider 密钥同待遇——safeStorage 密文落 secrets.json（main/secrets.ts），
- * 所以这里没有它们。三项齐 = 开启导出（缺一不导出、也不报错，见 mastra/telemetry.ts）。
- * 地址空串 = 没配（默认关），也就是"内容不出机器"的默认姿态（R18 的遥测禁用不受影响）。
+ * 所以这里没有它们。开关开着且三项齐 = 开启导出（缺一不导出、也不报错，见 mastra/telemetry.ts）；
+ * 开关关着时即使三项齐全也不导出（判定入口只有 main/telemetry.ts 的 readLangfuseConfig）。
+ *
+ * 开关的缺省是 **true**（与 semanticRecall.enabled 同一口径）：这个字段是后加的，老落盘文件没有它，
+ * 而"没显式关过"就等于开着 —— 迁移（main/settings.ts）只认 `false` 这一种显式关闭，
+ * 免得升级一次就把正在上报的老用户静默关掉。真要说"内容不出机器"，靠的仍是"地址与密钥没配齐"。
  */
 export const langfuseSettingsSchema = z.strictObject({
+  /**
+   * 显式开关（round 86）：`false` = 不导出（也不上报任何东西）；缺省与老文件迁移都取 true。
+   * 与地址的区别：地址空串是"没配"，这一位是"用户不要"——两者都不导出，但状态行分得清。
+   */
+  enabled: z.boolean(),
   endpoint: z.string(),
   /**
    * 代理地址（round 67）：形如 `http://127.0.0.1:7890`；没写协议时补 `http://`
@@ -203,6 +213,23 @@ export const probedModelSchema = z.strictObject({
 })
 
 export type ProbedModel = z.infer<typeof probedModelSchema>
+
+/**
+ * 手动覆盖（用户反馈 003/004）的一条：用户对某个模型显式声明的**上下文长度**与**显示名**。
+ *
+ * 为什么是独立一张表（不塞进 probedModels）：探测那一趟每次都整条重写自己那条记录
+ * （`{...probed[key], ...meta, fetchedAt}`），用户的声明住在那里会被下一次探测默默压掉。
+ * 键与探测同一形状 `"<providerId>:<model>"`（见 shared/models.ts 的 overrideKeyOf）。
+ * `displayName` **只影响展示**（设置页那一行、composer 的模型菜单）——不进任何 key、请求或探测。
+ */
+export const modelOverrideSchema = z.strictObject({
+  /** 手动上下文长度（tokens；正整数才生效——取值链里排在实测之前） */
+  contextWindow: z.number().int().positive().optional(),
+  /** 展示名（只影响展示；绝不进任何 key / 请求 / 探测） */
+  displayName: z.string().optional()
+})
+
+export type ModelOverrideSetting = z.infer<typeof modelOverrideSchema>
 
 /**
  * 出站边界的白名单（round 73）：fetch 默认**只访问公网** —— 环回 / 私网 / 链路本地地址
@@ -392,6 +419,12 @@ export const appSettingsSchema = z.strictObject({
    * 已经删掉：能力只由探测说话（读盘时由 main/settings.ts 的迁移剥掉旧键）。
    */
   probedModels: z.record(z.string(), probedModelSchema),
+  /**
+   * 用户反馈 003/004 的手动覆盖（`<providerId>:<model>` → 上下文长度 / 显示名；走 settings:update 补丁）。
+   * 与 probedModels 分开存是刻意的：探测写盘压不掉用户的声明（取值链 override → probed → 注册表 → 默认）。
+   * 旧落盘文件没有这个键，读盘迁移补空表（main/settings.ts）。
+   */
+  modelOverrides: z.record(z.string(), modelOverrideSchema),
   /** round 20 的置顶会话 id 列表（顺序无关；侧栏把置顶的排在时间分组之前，带小图钉标识） */
   pinnedThreads: z.array(z.string().min(1)),
   /** round 25 的置顶项目 id 列表（侧栏项目区里置顶的排前；带小图钉标识） */
@@ -400,7 +433,7 @@ export const appSettingsSchema = z.strictObject({
   archivedThreads: z.array(archivedThreadSchema),
   /** round 25 的归档项目快照（侧栏隐藏该项目及其会话；取消归档一并恢复） */
   archivedProjects: z.array(archivedProjectSchema),
-  /** T17 的 Langfuse 追踪（默认关；地址与代理在设置页「追踪」栏填，密钥走 secrets.json） */
+  /** T17 的 Langfuse 追踪（显式开关 + 地址 + 代理，在设置页「追踪」栏；密钥走 secrets.json） */
   langfuse: langfuseSettingsSchema,
   /** round 28 模块 3 的语义召回（round 58 起 thread 作用域，只召回本会话；开关 + 嵌入来源，远程 key 走 secrets.json） */
   semanticRecall: semanticRecallSettingsSchema,
@@ -550,11 +583,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   installedPlugins: [],
   modelPrefs: {},
   probedModels: {},
+  modelOverrides: {},
   pinnedThreads: [],
   pinnedProjects: [],
   archivedThreads: [],
   archivedProjects: [],
-  langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
+  langfuse: { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
   semanticRecall: DEFAULT_SEMANTIC_RECALL,
   reasoningTranslate: DEFAULT_REASONING_TRANSLATE,
   webSearch: DEFAULT_WEB_SEARCH,
@@ -575,11 +609,12 @@ export function defaultSettings(): AppSettings {
     installedPlugins: [],
     modelPrefs: {},
     probedModels: {},
+    modelOverrides: {},
     pinnedThreads: [],
     pinnedProjects: [],
     archivedThreads: [],
     archivedProjects: [],
-    langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
+    langfuse: { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
     semanticRecall: { ...DEFAULT_SEMANTIC_RECALL },
     reasoningTranslate: { ...DEFAULT_REASONING_TRANSLATE },
     webSearch: { ...DEFAULT_WEB_SEARCH },

@@ -91,7 +91,7 @@ import { compactionLevels, type CompactionLevel, type ThreadCompaction } from '.
 import type { KyclawModel } from './model'
 import type { ModelResolver } from './agents/kyclaw'
 import { ProviderConfigError } from './model'
-import { computeCost, pricingFor, type UsageStore } from './usage'
+import { type UsageStore } from './usage'
 
 /** thread_compactions 表名（自建表，与 Mastra 的表同库） */
 export const COMPACTION_TABLE = 'thread_compactions'
@@ -1374,7 +1374,6 @@ export function createCompactionService(
         if (input + output > 0) {
           const modelId = typeof model.modelId === 'string' ? model.modelId : 'unknown'
           const provider = typeof model.provider === 'string' ? model.provider : null
-          const pricing = pricingFor(modelId)
           await options.usage.insert({
             id: randomUUID(),
             runId: null,
@@ -1393,14 +1392,6 @@ export function createCompactionService(
             contextInput: input,
             contextCachedInput: result.usage.cachedInputTokens ?? null,
             stepCount: 1,
-            cost:
-              pricing === null
-                ? null
-                : computeCost(pricing, {
-                    input,
-                    output,
-                    cachedInput: result.usage.cachedInputTokens
-                  }),
             createdAt: now().toISOString()
           })
         }

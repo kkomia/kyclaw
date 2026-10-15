@@ -74,8 +74,15 @@ export const docxBlockSchema = z.discriminatedUnion('type', [
       .describe('Header row; when given it becomes a bold first row'),
     rows: z
       .array(z.array(z.string()))
+      // round 84：下限 1 行（与 create_ppt 的「至少要有一行数据」同一口径），同时避开
+      // LM Studio 语法编译器的一个实测缺陷：**只有 maxItems 的数组**在 1999–2001 这个窗口会
+      // 让整轮请求 400（`Failed to initialize samplers: failed to parse grammar`）；补了
+      // minItems 之后同一上限可以正常编译（实测 1600/1800/2000/2047 均通过）。
+      .min(1, '表格至少要有一行数据')
       .max(MAX_TABLE_ROWS, `一张表最多 ${MAX_TABLE_ROWS} 行，请拆分表格`)
-      .describe(`Data rows, a two-dimensional string array, at most ${MAX_TABLE_ROWS} rows`)
+      .describe(
+        `Data rows, a two-dimensional string array, 1 to ${MAX_TABLE_ROWS} rows, at least one`
+      )
   })
 ])
 

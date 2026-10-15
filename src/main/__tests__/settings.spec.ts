@@ -44,11 +44,16 @@ describe('设置存储（userData 下的 settings.json）', () => {
       installedPlugins: [],
       modelPrefs: {},
       probedModels: {},
+      modelOverrides: {},
       pinnedThreads: [],
       pinnedProjects: [],
       archivedThreads: [],
       archivedProjects: [],
-      langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: 'http://127.0.0.1:7890' },
+      langfuse: {
+        enabled: true,
+        endpoint: 'https://cloud.langfuse.com',
+        proxyUrl: 'http://127.0.0.1:7890'
+      },
       semanticRecall: {
         enabled: true,
         source: 'remote' as const,
@@ -119,7 +124,11 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(DEFAULT_SETTINGS.workspaces).toEqual([])
     expect(DEFAULT_SETTINGS.projects).toEqual([])
     expect(DEFAULT_SETTINGS.permissions.rules).toEqual([])
-    expect(DEFAULT_SETTINGS.langfuse).toEqual({ endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' })
+    expect(DEFAULT_SETTINGS.langfuse).toEqual({
+      enabled: true,
+      endpoint: LANGFUSE_PRESET.endpoint,
+      proxyUrl: ''
+    })
   })
 
   it('旧的落盘文件（T13 之前没有 permissions、T12 之前没有 mcpServers、T18 之前没有 defaultWorkspace/projects、T17 之前没有 langfuse、round 20 之前没有 pinned/archived、round 28 之前没有 semanticRecall、round 32 之前没有 reasoningTranslate、round 45 之前没有 webSearch、round 63 之前没有 updateUrl、round 67 之前没有 langfuse.proxyUrl）读出空值：升级不丢原有设置', () => {
@@ -147,12 +156,14 @@ describe('设置存储（userData 下的 settings.json）', () => {
       installedPlugins: [],
       modelPrefs: {},
       probedModels: {},
+      modelOverrides: {},
       pinnedThreads: [],
       pinnedProjects: [],
       archivedThreads: [],
       archivedProjects: [],
-      // round 67：T17 之前根本没有 langfuse 这一节（整节缺失）→ 补预置地址 + 空代理
-      langfuse: { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
+      // round 67：T17 之前根本没有 langfuse 这一节（整节缺失）→ 补预置地址 + 空代理；
+      // round 86：显式开关也缺 → 补 true（没显式关过 = 开着）
+      langfuse: { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' },
       semanticRecall: {
         enabled: true,
         source: 'remote',
@@ -177,6 +188,43 @@ describe('设置存储（userData 下的 settings.json）', () => {
     })
   })
 
+  it('用户反馈 003/004：手动覆盖（上下文长度 / 显示名）落盘读回；老文件缺这一节 → 补空表，不丢原有设置', () => {
+    const file = settingsPath(dir)
+    // 老文件：完全没有 modelOverrides 这一节（strict schema 会整份丢掉，所以迁移必须补空表）
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      'utf8'
+    )
+    const migrated = readSettings(file)
+    expect(migrated.theme).toBe('dark')
+    expect(migrated.modelOverrides).toEqual({})
+
+    // 写进去一读回来（键 = `<providerId>:<model>`）
+    writeSettings(file, {
+      ...DEFAULT_SETTINGS,
+      modelOverrides: {
+        'ds:deepseek-flash': { contextWindow: 900_000, displayName: '主力模型' },
+        'ds:deepseek-v4-pro': { displayName: '深度思考' }
+      }
+    })
+    expect(readSettings(file).modelOverrides).toEqual({
+      'ds:deepseek-flash': { contextWindow: 900_000, displayName: '主力模型' },
+      'ds:deepseek-v4-pro': { displayName: '深度思考' }
+    })
+
+    // 取值不合法（0 / 非整数 / 不是对象 / 多字段）→ 整份当坏文件（既有口径），不半截落盘
+    for (const bad of [
+      { 'ds:m': { contextWindow: 0 } },
+      { 'ds:m': { contextWindow: 1.5 } },
+      { 'ds:m': 'nope' },
+      { 'ds:m': { nope: 1 } }
+    ]) {
+      writeFileSync(file, JSON.stringify({ ...DEFAULT_SETTINGS, modelOverrides: bad }), 'utf8')
+      expect(readSettings(file), JSON.stringify(bad)).toEqual(DEFAULT_SETTINGS)
+    }
+  })
+
   it('round 67：T17 那版落盘的 langfuse 只有 endpoint（没有 proxyUrl）——补空串，地址原样留着', () => {
     const file = settingsPath(dir)
     writeFileSync(
@@ -193,8 +241,63 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
     const settings = readSettings(file)
     expect(settings.theme).toBe('dark')
-    // 老地址一个字符不改（用户想换新地址在设置页里改，迁移不替用户做决定）
-    expect(settings.langfuse).toEqual({ endpoint: 'http://192.168.31.18:3000', proxyUrl: '' })
+    // 老地址一个字符不改（用户想换新地址在设置页里改，迁移不替用户做决定）；
+    // round 86：那版也没有显式开关 → 补 true（没显式关过 = 开着）
+    expect(settings.langfuse).toEqual({
+      enabled: true,
+      endpoint: 'http://192.168.31.18:3000',
+      proxyUrl: ''
+    })
+  })
+
+  /**
+   * round 86（用户口径 010）：显式开关是后加的字段。老用户"没显式关过"必须还是开着 ——
+   * 升级一次就把正在上报的人静默关掉，是这条迁移唯一要防的事。反向那一半同样要钉：
+   * 显式存下来的 false 不能被迁移当成"缺省"翻回 true。
+   */
+  it('round 86：老设置没有 langfuse.enabled → 补 true（不被静默关掉）；显式 false 原样保留', () => {
+    const file = settingsPath(dir)
+    const base = {
+      theme: 'dark',
+      fontTier: 'large',
+      providers: [],
+      workspaces: [],
+      langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: '' }
+    }
+    writeFileSync(file, JSON.stringify(base), 'utf8')
+    expect(readSettings(file).langfuse).toEqual({
+      enabled: true,
+      endpoint: 'https://cloud.langfuse.com',
+      proxyUrl: ''
+    })
+
+    // 用户自己在设置页关过（落盘里明明白白一个 false）→ 读回来还是关着
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...base,
+        langfuse: { enabled: false, endpoint: 'https://cloud.langfuse.com', proxyUrl: '' }
+      }),
+      'utf8'
+    )
+    expect(readSettings(file).langfuse.enabled).toBe(false)
+
+    // 这一节被手改坏（enabled 不是布尔）→ 归一到 true，不把整份设置（主题/provider…）当坏文件丢掉
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...base,
+        langfuse: { enabled: 'yes', endpoint: 'https://cloud.langfuse.com', proxyUrl: '' }
+      }),
+      'utf8'
+    )
+    const recovered = readSettings(file)
+    expect(recovered.theme).toBe('dark')
+    expect(recovered.langfuse).toEqual({
+      enabled: true,
+      endpoint: 'https://cloud.langfuse.com',
+      proxyUrl: ''
+    })
   })
 
   it('round 48：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {

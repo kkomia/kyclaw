@@ -150,4 +150,57 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
     )
     expect(blocked[0]?.rows[0]).toMatchObject({ disabled: true })
   })
+
+  /**
+   * round 85（用户实报 016 问题三：「/」菜单里没有"进入规划模式"）：命令分区多一条模式入口。
+   * 不传 `plan` = 这条不出现（已在规划里 / 实例未就绪）；传了就是命令行（command: 'plan'），
+   * 选中由 Composer 走 ＋ 菜单那条同一个实现。
+   */
+  it('命令分区：给了 plan 就多一条「进入规划模式」（命令行，不是引用行）', () => {
+    const groups = slashGroups(
+      {
+        plugins: [{ id: 'mcp-1', name: '知识库' }],
+        skills: [],
+        command: { percent: 24, busy: false, disabled: false },
+        plan: { disabled: false }
+      },
+      ''
+    )
+    expect(groups.map((group) => group.title)).toEqual(['命令', '插件'])
+    // 首选顺序照旧：压缩在第一条（默认高亮 = 平铺第一行），模式入口排它后面
+    expect(groups[0]?.rows).toEqual([
+      {
+        id: 'command:compact',
+        label: '压缩上下文',
+        hint: '已使用 24%',
+        disabled: false,
+        command: 'compact'
+      },
+      { id: 'command:plan', label: '进入规划模式', disabled: false, command: 'plan' }
+    ])
+    // 关键词过滤各认各的：打「规划」只剩模式入口，打「压缩」只剩压缩
+    const onlyPlan = slashGroups({ plugins: [], skills: [], plan: { disabled: false } }, '规划')
+    expect(onlyPlan[0]?.rows).toEqual([
+      { id: 'command:plan', label: '进入规划模式', disabled: false, command: 'plan' }
+    ])
+    const onlyCompact = slashGroups({ plugins: [], skills: [], plan: { disabled: false } }, '压缩')
+    expect(onlyCompact[0]?.rows.map((row) => row.id)).toEqual(['command:compact'])
+  })
+
+  it('命令分区：plan.disabled（正在跑 / 等审批 / 压缩中）→ 行还在但按不动', () => {
+    const groups = slashGroups({ plugins: [], skills: [], plan: { disabled: true } }, '')
+    expect(groups[0]?.rows.map((row) => row.id)).toEqual(['command:compact', 'command:plan'])
+    expect(groups[0]?.rows[1]).toMatchObject({
+      id: 'command:plan',
+      disabled: true,
+      command: 'plan'
+    })
+  })
+
+  it('没有 plan 输入（已在规划里 / 未就绪）：命令分区照旧只有压缩，不留一条点不动的门', () => {
+    const groups = slashGroups({ plugins: [], skills: [] }, '')
+    expect(groups[0]?.rows.map((row) => row.id)).toEqual(['command:compact'])
+    // 只匹配模式入口的关键词 → 整个命令分区不出现（不是留一条空的）
+    expect(slashGroups({ plugins: [], skills: [] }, '规划')).toEqual([])
+  })
 })

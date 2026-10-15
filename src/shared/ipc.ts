@@ -9,7 +9,12 @@
  */
 import { z } from './zod'
 import type { LocalModelsOverview } from './local-models'
-import { providerKeyStateSchema, type ProviderKeyState } from './providers'
+import {
+  providerKeyStateSchema,
+  providerTypeSchema,
+  type ProviderKeyState,
+  type ProviderType
+} from './providers'
 import type { PluginIconResponse, PluginsOverview } from './plugins'
 import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
 import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from './search'
@@ -58,7 +63,7 @@ export const IPC_CHANNELS = {
     setProviderKey: 'settings:set-provider-key',
     /** 各 provider 的密钥状态（无入参，返回 { [id]: {hasKey, needsReentry} }） */
     providerKeyStates: 'settings:provider-key-states',
-    /** 测试连接（入参 [id]，主进程发一条最小请求，返回延迟或错误文案） */
+    /** 测试连接（入参 [id]，主进程分项验证连通/流式/流式工具，返回 ConnectionTestResult） */
     testProvider: 'settings:test-provider',
     /** 删除一条 provider 配置（连同它的密钥；入参 [id]，返回合并后的 AppSettings） */
     removeProvider: 'settings:remove-provider',
@@ -66,7 +71,25 @@ export const IPC_CHANNELS = {
      * round 22：探测一个 provider 的模型元数据（GET /models，入参 [id]，返回合并后的 AppSettings）。
      * 尽力而为：源不可达/端点不支持时静默回当前设置（模型菜单打开、连接测试成功、过期重抓都走它）。
      */
-    probeModels: 'settings:probe-models'
+    probeModels: 'settings:probe-models',
+    /**
+     * 用户反馈 007：列这个 provider 端点上的可选模型（入参 [id]，返回 `{ id, contextWindow? }[]`）。
+     * **只读**——不落盘、不动 probedModels，给"新增 / 给端点加模型"的弹窗挑模型用；
+     * 拿不到清单（端点没有 /models、认证失败、超时…）一律回**空数组**，不是硬错。
+     */
+    listProviderModels: 'settings:list-provider-models',
+    /**
+     * 用户反馈 007（补齐）：拿**用户刚在弹窗里填的**地址与密钥列一次模型清单
+     * （入参 [{ type, baseUrl?, apiKey }]，返回 ProviderModelDiscoveryResult）。
+     *
+     * 为什么另开一条而不是复用 `listProviderModels`：那条只认**已落盘**的 provider id，
+     * 于是"新注册"这条路必须先手填一个模型名、存下去，才谈得上发现——顺序是反的。
+     * 这一条的地址与密钥都是这次调用现给的：**明文只在主进程里活这一次**，不落盘、不进日志、
+     * 不进回包（用户没点保存之前，这个端点在设置里根本不存在）。
+     * 与那条的另一个差别：**失败要带一句人话回来**（`ok:false`），弹窗得把"读不到"和
+     * "端点就是空的"分开说——那条静默回空表在这里会变成误导。
+     */
+    discoverProviderModels: 'settings:discover-provider-models'
   },
   workspace: {
     /** 打开原生选择器添加一个授权目录（无入参，取消=不改动；返回合并后的 AppSettings） */
@@ -305,6 +328,49 @@ export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(
 export const providerIdArgsSchema = z.tuple([z.string().min(1)])
 
 /**
+ * settings:list-provider-models 的回包条目（用户反馈 007）：模型 id + （端点给了才有）上下文长度。
+ * "列得出来"与"看得清元数据"是两件事：端点不回 context_window 的条目照样列（只有 id）。
+ */
+export const providerModelOptionSchema = z.strictObject({
+  id: z.string().min(1),
+  contextWindow: z.number().int().positive().optional()
+})
+
+export type ProviderModelOption = z.infer<typeof providerModelOptionSchema>
+
+/** settings:list-provider-models 的回包：可选项数组（读不到清单 = 空数组，不是错误） */
+export const providerModelListResultSchema = z.array(providerModelOptionSchema)
+
+/**
+ * settings:discover-provider-models 的入参（用户反馈 007）：
+ * `type` + 用户**刚填的** `baseUrl` + `apiKey`。
+ * `apiKey` 允许空串，**不是"形状宽松"而是"业务上允许"**：本机服务（LM Studio / llama.cpp /
+ * ollama）压根不要密钥，空着也要能试。空着就不发 Authorization 头，要不要认证由端点回
+ * （401/403 才说"这个端点需要 API Key"）——闸门与界面都不替服务一刀切。
+ * **明文只活这一次调用**——不落盘、不进日志。
+ */
+export const providerModelDiscoveryArgsSchema = z.tuple([
+  z.strictObject({
+    type: providerTypeSchema,
+    baseUrl: z.string().optional(),
+    apiKey: z.string()
+  })
+])
+
+/**
+ * settings:discover-provider-models 的回包：
+ *   - `ok:true` 带清单（**空数组是合法的**：端点就是没给出模型，这是"读到了，只是空的"）；
+ *   - `ok:false` 带一句人话（缺地址/密钥、认证失败、端点没有 /models、超时…）。
+ * 两者必须分得开：弹窗对"读不到"要说原因，对"端点没有模型"要说"直接手填"。
+ */
+export const providerModelDiscoveryResultSchema = z.discriminatedUnion('ok', [
+  z.strictObject({ ok: z.literal(true), models: z.array(providerModelOptionSchema) }),
+  z.strictObject({ ok: z.literal(false), message: z.string() })
+])
+
+export type ProviderModelDiscoveryResult = z.infer<typeof providerModelDiscoveryResultSchema>
+
+/**
  * workspace:add 的入参：[path]（path 是不是真目录由主进程校验，这里只保证形状）。
  * **没有 mode**：新加的工作区一律以 ask 落盘 —— 渲染端不能"顺手"把 full 塞进授权列表。
  */
@@ -423,15 +489,69 @@ export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(tru
 export const providerKeyStatesSchema = z.record(z.string(), providerKeyStateSchema)
 
 /**
- * "测试连接"的结果：成功给延迟（ms），失败给一句人话（已抹掉可能被供应商回显的密钥）。
- * 判别字段是 `ok`，UI 与 preload 用同一份 schema。
+ * 一步诊断的 id（用户反馈 005：**分项验证**，不是"HTTP 200 就算能对话"）：
+ *   - `connectivity` 连通：非流式请求能不能往返（地址 / 密钥 / 模型名对不对）；
+ *   - `streaming`   流式：真消费 SSE，拿到正文且**正常收尾**才算数；
+ *   - `tools`       流式工具：带一条只读探针工具再走一次**流式**调用，端点收下工具定义、
+ *                   模型**合法**调用探针、探针真被执行拿到返回值才算通。
+ * 为什么是这三项：本应用每一轮对话都是"流式 + 工具表"，只验其中一半就等于没验。
  */
-export const connectionTestResultSchema = z.discriminatedUnion('ok', [
-  z.strictObject({ ok: z.literal(true), latencyMs: z.number() }),
-  z.strictObject({ ok: z.literal(false), message: z.string() })
-])
+export const connectionTestStepIdSchema = z.enum(['connectivity', 'streaming', 'tools'])
+
+/**
+ * 一步的结论。四档的区别要说清，因为它们**不是**成功/失败两分：
+ *   - `passed`    这一步真跑过，且拿到了明确的正面证据；
+ *   - `failed`    这一步真跑过，端点/网络/模型明确说了不行；
+ *   - `unverified` 跑过了但**拿不到结论**（只有思考没有正文、被输出上限截断、模型没按提示调工具…）
+ *                 —— 它既不是成功也不是失败，界面必须如实说"没验出来"，不许冒充成功；
+ *   - `skipped`   前置那一步没过，这一步没跑。
+ */
+export const connectionTestStepStatusSchema = z.enum(['passed', 'failed', 'unverified', 'skipped'])
+
+export const connectionTestStepSchema = z.strictObject({
+  id: connectionTestStepIdSchema,
+  status: connectionTestStepStatusSchema,
+  /** 这一步花了多久（ms；`skipped` 没有） */
+  latencyMs: z.number().optional(),
+  /** 一句人话：这一步验的是什么、实际看到了什么（已抹掉密钥） */
+  detail: z.string()
+})
+
+export type ConnectionTestStepId = z.infer<typeof connectionTestStepIdSchema>
+export type ConnectionTestStepStatus = z.infer<typeof connectionTestStepStatusSchema>
+export type ConnectionTestStep = z.infer<typeof connectionTestStepSchema>
+
+/**
+ * "测试连接"的结果（用户反馈 005 重写）。
+ *
+ * `ok` 的含义收窄为**"能对话"**：连通与流式两步都 `passed` 才是 true。
+ * `unverified` 不算通过（没看到正文就不敢说能聊），也**不算失败**——它是一句"没验出来"，
+ * 界面照它说话；注册照旧放行（验证是诊断，不是准入闸门：注册自由 > 能力门槛）。
+ *
+ * 失败文案与每一步的 detail 都已抹掉密钥（供应商可能回显，见 main/error-text.ts）。
+ */
+export const connectionTestResultSchema = z.strictObject({
+  /** 能对话吗：连通 + 流式都 `passed` 才 true（工具那一步不参与这个判定，见 `steps`） */
+  ok: z.boolean(),
+  /** 从第一步开始到全部结束的总耗时（ms；配置不全、没跑起来时是 0） */
+  latencyMs: z.number(),
+  /** 逐步结论（顺序即执行顺序：连通 → 流式 → 工具；没跑到的是 `skipped`） */
+  steps: z.array(connectionTestStepSchema),
+  /** 有哪一步不是 `passed` 时的一句总结（已抹掉密钥）；三步全绿时没有 */
+  message: z.string().optional(),
+  /** 这次验证**覆盖不到**什么（005 要求"明确说明验证范围"）；界面必须显示它 */
+  scopeNote: z.string()
+})
 
 export type ConnectionTestResult = z.infer<typeof connectionTestResultSchema>
+
+/**
+ * 验证范围的固定话术（主进程写在结果里，渲染端原样显示）。
+ * 说清两件事：这一步**具体验了什么**（三步各自的形式，包括工具那步也是流式的、探针只读不落副作用），
+ * 以及它**不能**保证什么（本应用真正的工具表在生产的长上下文 / 网络 / 端点限流下是否都兼容）。
+ */
+export const CONNECTION_TEST_SCOPE_NOTE =
+  '验证范围：非流式往返、流式返回正文、以及一次**流式**的最小工具调用（探针只回显参数，不执行任何有副作用的工具）。它不能保证本应用的全部工具、长上下文与真实网络下都兼容——注册只是放行，真实可用性以第一轮对话为准。'
 
 /** 无入参通道的入参 schema：ipcRenderer.invoke 不给参数时 args 为空数组 */
 export const noArgsSchema = z.tuple([])
@@ -459,21 +579,44 @@ export const updatePhaseSchema = z.enum([
 ])
 
 /**
+ * 新版本"给人看的那部分"（0.1.1 起：更新源 latest.yml 里的 releaseNotes / releaseName /
+ * releaseDate）。三个都是可选的，缺了就不显示、不影响更新。
+ *
+ * `notes` 是**纯文本**：主进程已经把 electron-updater 的两种形状（string / `[{version, note}]`）
+ * 归一成一个字符串（见 main/updater.ts 的 notesOf），渲染端按纯文本显示，不做 HTML/Markdown 注入。
+ */
+const updateReleaseShape = {
+  notes: z.string().optional(),
+  releaseName: z.string().optional(),
+  releaseDate: z.string().optional()
+}
+
+/**
  * 一次更新检视的状态：按相位判别（每个相位只带自己那几个字段——`idle` 带上 percent 是形状错误，
  * 不是"多余信息"）。version 只在有新版本时给；percent 只在下载中给；message 只在 error 时给
- * （已截断、不带栈）。
+ * （已截断、不带栈）；发行说明只在"有新版本"的那三个阶段给（available / downloading / downloaded
+ * 都带着**同一个版本**的那一份）。
  */
 export const updateStatusSchema = z.discriminatedUnion('phase', [
   z.strictObject({ phase: z.literal('idle') }),
   z.strictObject({ phase: z.literal('checking') }),
   z.strictObject({ phase: z.literal('up-to-date') }),
-  z.strictObject({ phase: z.literal('available'), version: z.string().optional() }),
+  z.strictObject({
+    phase: z.literal('available'),
+    version: z.string().optional(),
+    ...updateReleaseShape
+  }),
   z.strictObject({
     phase: z.literal('downloading'),
     version: z.string().optional(),
-    percent: z.number().optional()
+    percent: z.number().optional(),
+    ...updateReleaseShape
   }),
-  z.strictObject({ phase: z.literal('downloaded'), version: z.string().optional() }),
+  z.strictObject({
+    phase: z.literal('downloaded'),
+    version: z.string().optional(),
+    ...updateReleaseShape
+  }),
   z.strictObject({ phase: z.literal('error'), message: z.string().optional() })
 ])
 
@@ -634,6 +777,20 @@ export interface KyclawSettingsApi {
    * 返回合并后的完整设置；源不可达/端点不支持时**静默回当前设置**（不抛、不打扰用户）。
    */
   probeModels(id: string): Promise<AppSettings>
+  /**
+   * 用户反馈 007：列出该 provider 端点上的可选项（GET /models，**只读不落盘**）。
+   * 读不到（端点没有 /models、没有密钥、认证失败、超时…）回空数组——不是错误，弹窗按"手填"兜底。
+   */
+  listProviderModels(id: string): Promise<ProviderModelOption[]>
+  /**
+   * 用户反馈 007：拿**刚填的**地址与密钥发现模型（还没保存的新渠道也走它）。
+   * `ok:false` 是带原因的一等结果（不是异常）；密钥只在这一次调用里存在，不回包、不落盘。
+   */
+  discoverProviderModels(input: {
+    type: ProviderType
+    baseUrl?: string
+    apiKey: string
+  }): Promise<ProviderModelDiscoveryResult>
 }
 
 /** preload 暴露给渲染端的 agent 服务面（服务未起时 endpoint() 会 reject） */

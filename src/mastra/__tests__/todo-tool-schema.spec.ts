@@ -93,10 +93,24 @@ beforeAll(async () => {
   schema = await todoFunctionSchema()
 })
 
-it('顶层 type 是 object（provider 的 function schema 硬要求）', () => {
+it('顶层 type/properties（LM Studio/DeepSeek 的 function schema 硬要求；properties 不能是空对象）', () => {
   expect(schema.type).toBe('object')
   expect(schema.$schema).toBe('http://json-schema.org/draft-07/schema#')
-  expect(Object.keys(schema).sort()).toEqual(['$schema', 'oneOf', 'type'])
+  // 缺 properties 整轮 400（LM Studio）；空对象又会让语法只允许 `{}`（模型调用退化成空参数），
+  // 所以顶层必须列全三个分支用到的字段名
+  expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+    'action',
+    'changes',
+    'expectedRevision',
+    'items'
+  ])
+  expect(Object.keys(schema).sort()).toEqual([
+    '$schema',
+    'additionalProperties',
+    'oneOf',
+    'properties',
+    'type'
+  ])
 })
 
 it('oneOf 三个 action 分支原样保留：互斥与必填不变', () => {

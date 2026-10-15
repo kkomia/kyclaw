@@ -44,19 +44,42 @@
  *     后续 part 还会写进这一行（实测比它内部的 step-start 还早），拿它当"写完的时刻"会把时长
  *     算成 0 甚至负数。行时刻只在整条消息一个带时间戳的 part 都没有时才当兜底。
  *
- * ## 不编造的两处
+ * ## 系统 / 上下文 / 失败行从哪来（round 87 / 用户反馈 015）
  *
- *   - **系统提示词**：存储里没有它（Mastra 只存 user/assistant 消息，实测 role 只有这两种），
- *     所以投影里**不生成 `系统` 行**——`textKind` 支持它只是为了让"将来真有这种 part"时不必改结构；
+ * 存储消息里**没有**系统提示词、也没有记忆 / 规矩的注入（Mastra 只存 user/assistant 消息，
+ * 实测 role 只有这两种），所以这几行不由消息腿产出，而是由**请求快照**腿
+ * （`requests`：服务端在 run 收尾时从 onFinish 事件的 `steps[].request.body` 里抽出的系统指令 /
+ * 工具表 / 消息清单，见 src/mastra/request-log.ts）产出 —— **一步一步**：一轮里每调一次模型
+ * （step）就是一次真实请求、就有自己的一组行，紧跟在该轮的用户消息行之后。
+ *    - 「系统」行：这一次请求的系统指令长度（正文按需取）；
+ *    - 「上下文」行：消息条数 + 工具件数（正文按需取）——第 2 步往后带着这一轮的工具结果；
+ *    - 「失败」行：这一次请求失败了（provider 报错时拿不到请求体，如实记这件事本身）。
+ * 快照腿没记过（老会话 / 请求体没拿到）时这些行都不出现：留白，不编。
+ *
+ * 各行的**时刻锚点** = 本轮用户消息的时刻：存储里没有"请求发出时刻"这个点，借一个已记录的
+ * 锚点让它们在该轮的同一段里立足（时长仍照旧留白）；时间轴的时长档不画没有时刻的行，
+ * 轮次档照画。**正文不在行里**：一条请求实测 ~96 KB（3 条 system 1.4 万字 + 35 件工具 8.1 万字），
+ * 明细面板按 `row.request.id` 按需取（见 use-request-detail.ts）。
+ *
+ * ## 不编造的一处
+ *
  *   - **TTFT / 逐请求 token**：没有首 token 时刻、也没有逐 step 的 usage，明细里如实留白。
  */
 import type { CompactionLevel, StoredMessage, ThreadCompaction } from '@shared/threads'
-import type { TrajectoryUsageRun } from '@shared/trajectory'
+import type { TrajectoryRequestSummary, TrajectoryUsageRun } from '@shared/trajectory'
 import { resolveMcpToolCallInput, resolveMcpToolCallName } from '@shared/mcp'
 import { projectTodoOutput } from '../chat/task-history'
 
-/** 行的类型（取值口径对齐 dsh 的 kind 词汇；`system` 见头注的"不编造"） */
-export type TrajectoryKind = 'system' | 'user' | 'context' | 'compacted' | 'message' | 'tool'
+/** 行的类型（取值口径对齐 dsh 的 kind 词汇；`system` / `context` / `error` 见头注「系统 / 上下文 / 失败行从哪来」） */
+export type TrajectoryKind =
+  | 'system'
+  | 'user'
+  | 'context'
+  | 'compacted'
+  | 'message'
+  | 'tool'
+  /** 用户反馈 015：**这一轮请求失败了**（provider 报错时拿不到请求体，只能记这件事本身） */
+  | 'error'
 
 /** 行的类型 → 界面上的词（列表标签、搜索、导出共用一处口径） */
 export const KIND_LABEL: Readonly<Record<TrajectoryKind, string>> = {
@@ -65,7 +88,8 @@ export const KIND_LABEL: Readonly<Record<TrajectoryKind, string>> = {
   context: '上下文',
   compacted: '已压缩',
   message: '助手',
-  tool: '工具'
+  tool: '工具',
+  error: '失败'
 }
 
 /**
@@ -97,7 +121,7 @@ export type TrajectoryTimingSource = 'session' | 'none'
 
 /** 轮级用量（一轮可能落了好几行账，这里合起来给界面看） */
 export interface TrajectoryUsage {
-  /** 该轮**所有模型调用**的输入合计（= 计费口径的输入，不是上下文大小） */
+  /** 该轮**所有模型调用**的输入合计（整轮合计口径，不是上下文大小） */
   input: number
   output: number
   total: number
@@ -110,12 +134,21 @@ export interface TrajectoryUsage {
   contextInput: number | null
   /** 该轮一共调了几次模型；没有 → null */
   steps: number | null
-  /** 有价部分的合计；一行都没价 = null */
-  cost: number | null
   /** 参与合计的模型 id（去重，按出现顺序） */
   models: string[]
   /** 这一轮落了几行账（>1 = 这一轮跑了不止一次 run） */
   runs: number
+}
+
+export interface TrajectoryRequestRef {
+  /** 请求快照的行 id（`GET /api/trajectory/requests/detail?id=` 用它取正文） */
+  id: string
+  /** 这一次调用是这一轮的第几步（0 基）；失败记录认不出 = null */
+  step: number | null
+  /** `complete` = 拿到了请求体；`error` = 这一次请求失败了 */
+  status: 'complete' | 'error'
+  /** 请求体里有正文被截断（系统指令 / 工具表 / 某条消息超上限） */
+  truncated: boolean
 }
 
 export interface TrajectoryRow {
@@ -141,6 +174,11 @@ export interface TrajectoryRow {
   isError: boolean
   /** 这一步还没收尾（等审批 / 半截）——界面显示"进行中"且**不给时长** */
   pending: boolean
+  /**
+   * 用户反馈 015：这一行对应哪一次**模型请求**（系统 / 上下文 / 失败三类行才有）。
+   * 明细面板拿 `id` 去按需取正文（一条请求实测 ~96 KB，列表不背它）。
+   */
+  request: TrajectoryRequestRef | null
   interactionStatus?: 'waiting' | 'answered' | 'cancelled'
   taskRevision?: number
   /** 模型 id（助手行 / 工具行所属的步）；没有 = null */
@@ -196,6 +234,12 @@ export interface BuildTrajectoryInput {
   usageRuns?: readonly TrajectoryUsageRun[]
   /** 压缩记录（没有 = 没压过） */
   compaction?: ThreadCompaction | null
+  /**
+   * round 87：该会话的**逐次模型请求摘要**（时间升序；没有 = 没记过 —— 老会话、或这一轮的请求体
+   * 没拿到）。它产出 `system` / `context` 两类行（系统指令 / 上下文与工具账），
+   * 失败的那次请求产出一行 `error`；正文按需取（见 `requestRowsOf`）。
+   */
+  requests?: readonly TrajectoryRequestSummary[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -531,14 +575,13 @@ function stepsOf(
   return steps
 }
 
-/** 轮级用量的合计（同一轮的账合起来；缓存/花费"一行都没报"才是 null） */
+/** 轮级用量的合计（同一轮的账合起来；缓存"一行都没报"才是 null） */
 function usageOfRows(rows: readonly TrajectoryUsageRun[]): TrajectoryUsage | null {
   if (rows.length === 0) return null
   let input = 0
   let output = 0
   let total = 0
   let cachedInput: number | null = null
-  let cost: number | null = null
   /** 上下文大小是**快照**（不是合计）：取这一轮最后一条有值的账（时间升序的最后一条） */
   let contextInput: number | null = null
   let steps: number | null = null
@@ -548,12 +591,124 @@ function usageOfRows(rows: readonly TrajectoryUsageRun[]): TrajectoryUsage | nul
     output += row.output
     total += row.total
     if (row.cachedInput !== null) cachedInput = (cachedInput ?? 0) + row.cachedInput
-    if (row.cost !== null) cost = (cost ?? 0) + row.cost
     if (row.contextInput !== null) contextInput = row.contextInput
     if (row.stepCount !== null) steps = (steps ?? 0) + row.stepCount
     if (!models.includes(row.model)) models.push(row.model)
   }
-  return { input, output, total, cachedInput, contextInput, steps, cost, models, runs: rows.length }
+  return { input, output, total, cachedInput, contextInput, steps, models, runs: rows.length }
+}
+
+/**
+ * 工具表原文长度 → 人话（认不出 = null：不把"没记上"说成"0 个工具"）
+ */
+function sizeText(chars: number | null): string | null {
+  return chars === null ? null : `${chars.toLocaleString('en-US')} 字`
+}
+
+/**
+ * 一次请求 → 轨迹行（**一步一步**：一轮里每调一次模型 = 一次请求）。
+ *
+ *   - `status: 'complete'`：两行 —— 「系统」（系统指令长度；正文按需取）与
+ *     「上下文」（消息条数 + 工具件数；正文按需取）。一轮里的第 2 步往后还会带着这一轮的工具
+ *     结果，这几行就是"后续工具结果"的入口；
+ *   - `status: 'error'`：一行 —— 「失败」（provider 报错时拿不到请求体，如实记这件事本身）。
+ *
+ * `turn` / `anchorAt` 由调用方按同一套归属口径算好（见 buildTrajectory 里的 `ownerOf`）；
+ * 各行的**时刻**都取锚点（本轮用户消息的时刻）而**时长**留白 —— 存储里没有"请求发出时刻"，
+ * 借一个已记录的锚点让它们站在该轮的同一段里，不另编一个点（见头注）。
+ */
+function requestRowsOf(
+  summary: TrajectoryRequestSummary,
+  turn: number | null,
+  anchorAt: number | null
+): Array<Omit<TrajectoryRow, 'index' | 'usage'>> {
+  const timed = {
+    startedAt: anchorAt,
+    endedAt: anchorAt,
+    durationMs: null,
+    timingSource: timingSourceOf(anchorAt, anchorAt),
+    pending: false
+  }
+  const ref: TrajectoryRequestRef = {
+    id: summary.id,
+    step: summary.step,
+    status: summary.status,
+    truncated: summary.truncated
+  }
+  const stepLabel = summary.step === null ? '' : `第 ${summary.step + 1} 步 · `
+
+  if (summary.status === 'error') {
+    return [
+      {
+        kind: 'error',
+        turn,
+        step: null,
+        // "正文未捕获"是明说的：provider 报错时拿不到请求体（实测 onFinish 都不触发），
+        // 这一行只有"失败了"与原因，不假装有请求正文
+        text: `${stepLabel}请求失败（正文未捕获） · ${summarize(summary.error ?? '原因未报', 120)}`,
+        body: summary.error,
+        thinking: null,
+        toolName: null,
+        toolCallId: null,
+        inputRaw: null,
+        outputRaw: null,
+        isError: true,
+        ...timed,
+        request: ref,
+        modelId: summary.model,
+        raw: jsonOf(summary),
+        source: '请求快照 · 失败'
+      }
+    ]
+  }
+
+  const systemText = sizeText(summary.systemChars)
+  const contextParts = [
+    summary.messageCount === null ? null : `${summary.messageCount} 条消息`,
+    summary.toolCount === null ? null : `${summary.toolCount} 件工具`
+  ].filter((part): part is string => part !== null)
+  const truncatedNote = summary.truncated ? ' · 已截断' : ''
+  return [
+    {
+      kind: 'system',
+      turn,
+      step: null,
+      text: `${stepLabel}系统指令 · ${systemText ?? '未捕获'}${truncatedNote}`,
+      body: null,
+      thinking: null,
+      toolName: null,
+      toolCallId: null,
+      inputRaw: null,
+      outputRaw: null,
+      isError: false,
+      ...timed,
+      request: ref,
+      modelId: summary.model,
+      raw: jsonOf(summary),
+      source: '请求快照'
+    },
+    {
+      kind: 'context',
+      turn,
+      step: null,
+      text:
+        contextParts.length === 0
+          ? `${stepLabel}上下文（未捕获）`
+          : `${stepLabel}上下文 · ${contextParts.join(' · ')}${truncatedNote}`,
+      body: null,
+      thinking: null,
+      toolName: null,
+      toolCallId: null,
+      inputRaw: null,
+      outputRaw: null,
+      isError: false,
+      ...timed,
+      request: ref,
+      modelId: summary.model,
+      raw: jsonOf(summary),
+      source: '请求快照'
+    }
+  ]
 }
 
 /**
@@ -561,6 +716,7 @@ function usageOfRows(rows: readonly TrajectoryUsageRun[]): TrajectoryUsage | nul
  *
  * 顺序是**存储顺序**（服务端 recall 已是时间升序），不在这里重排——列表要按别的序排时
  * 由视图层对 `rows` 排序（`sortTrajectoryRows`），模型层只保证"时间序 + 稳定 index"。
+ * 请求快照产出的「系统 / 上下文 / 失败」那几行插在该轮用户消息行之后（见头注）。
  */
 export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
   const rows: TrajectoryRow[] = []
@@ -600,6 +756,7 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
         outputRaw: null,
         isError: false,
         pending: false,
+        request: null,
         modelId: null,
         startedAt: writtenAt,
         endedAt: writtenAt,
@@ -653,6 +810,7 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
         outputRaw: null,
         isError: false,
         pending: step.endedAt === null,
+        request: null,
         modelId: stepModel,
         startedAt: step.startedAt,
         endedAt: step.endedAt,
@@ -702,6 +860,7 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
           outputRaw: resultText,
           isError: call.isError,
           pending: call.pending,
+          request: null,
           modelId: stepModel,
           startedAt: entry.startedAt,
           endedAt,
@@ -742,6 +901,7 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
       outputRaw: null,
       isError: false,
       pending: false,
+      request: null,
       modelId: null,
       startedAt,
       endedAt: startedAt,
@@ -761,34 +921,69 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
     }
   }
 
+  // index 在两类插行（压缩 / 请求快照）之后要重排（时间轴的按 index 定位依赖它连续），
+  // 所以上面那些 splice 都得排在它之前
+  /**
+   * 落账时刻 → 归属的轮：落在 [本轮起始, 下一轮起始) 里就算这一轮的。
+   * 不走"就近猜测"：时刻落在两轮之间时归**前一轮**（run 是那一轮发起的，收尾晚于消息落库）。
+   * 用量行与请求快照**共用这一处**（两条腿的归属口径不能分叉）。
+   */
+  const ownerOf = (at: number): number | null => {
+    for (const [position, start] of turnStarts.entries()) {
+      if (start.startedAt === null) continue
+      const next = turnStarts[position + 1]
+      const upper = next?.startedAt ?? Number.POSITIVE_INFINITY
+      if (at >= start.startedAt && at < upper) return start.turn
+    }
+    return null
+  }
+
+  // 请求快照 → 「系统 / 上下文」两行（**一步一步**：一轮里每调一次模型 = 两条），
+  // 插在该轮用户消息行之后；失败的那次请求是一行「失败」。口径见头注。
+  // index / usage 先占位（0 / null）：下面的重排与用量归属会按最终位置补齐
+  const snapshotRows = new Map<number, TrajectoryRow[]>()
+  const orphanSnapshots: TrajectoryRow[] = []
+  for (const summary of input.requests ?? []) {
+    const at = Date.parse(summary.createdAt)
+    const owner = Number.isFinite(at) ? ownerOf(at) : null
+    const anchor =
+      owner === null ? null : (turnStarts.find((start) => start.turn === owner)?.startedAt ?? null)
+    const produced: TrajectoryRow[] = requestRowsOf(summary, owner, anchor).map((row) => ({
+      ...row,
+      index: 0,
+      usage: null
+    }))
+    if (owner === null) {
+      // 无轮可挂（首条用户消息之前的快照）：放在最前面，列表把它们归进「轮次之间」那一组
+      orphanSnapshots.push(...produced)
+      continue
+    }
+    const bucket = snapshotRows.get(owner) ?? []
+    bucket.push(...produced)
+    snapshotRows.set(owner, bucket)
+  }
+  if (orphanSnapshots.length > 0) rows.unshift(...orphanSnapshots)
+  for (const [turn, bucket] of [...snapshotRows.entries()].sort(
+    (left, right) => left[0] - right[0]
+  )) {
+    const anchorIndex = rows.findIndex((row) => row.kind === 'user' && row.turn === turn)
+    rows.splice(anchorIndex === -1 ? rows.length : anchorIndex + 1, 0, ...bucket)
+  }
+
   // index 在 splice 之后要重排（时间轴的按 index 定位依赖它连续）
   rows.forEach((row, index) => {
     row.index = index
   })
 
   /**
-   * 轮级用量归属：账的落账时刻落在 [本轮起始, 下一轮起始) 里就算这一轮的。
-   * 不走"就近猜测"：落账时刻在两轮之间时，归**前一轮**（run 是那一轮发起的，收尾晚于消息落库）。
+   * 轮级用量归属（口径与上面的 ownerOf 同一处）。
    */
   const runs = [...(input.usageRuns ?? [])]
   const unattributedUsage: TrajectoryUsageRun[] = []
   const usageByTurn = new Map<number, TrajectoryUsageRun[]>()
   for (const run of runs) {
     const at = Date.parse(run.createdAt)
-    if (!Number.isFinite(at)) {
-      unattributedUsage.push(run)
-      continue
-    }
-    let owner: number | null = null
-    for (const [position, start] of turnStarts.entries()) {
-      if (start.startedAt === null) continue
-      const next = turnStarts[position + 1]
-      const upper = next?.startedAt ?? Number.POSITIVE_INFINITY
-      if (at >= start.startedAt && at < upper) {
-        owner = start.turn
-        break
-      }
-    }
+    const owner = Number.isFinite(at) ? ownerOf(at) : null
     if (owner === null) {
       unattributedUsage.push(run)
       continue

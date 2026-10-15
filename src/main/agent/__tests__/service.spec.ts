@@ -336,17 +336,16 @@ describe('startAgentServer', () => {
     expect(secondBody).not.toContain('第一轮')
   }, 60_000)
 
-  it('配了 provider 却读不到密钥 → 对话报错（400 + 中文人话），不回 mock 文案与假成功（T8 裁决 + C-1）', async () => {
-    // 缺省 resolver 没有密钥来源：settings 里有 provider 时必然"配置不完整"
+  it('配了必须密钥的渠道（anthropic）却读不到密钥 → 对话报错（400 + 中文人话），不回 mock 文案与假成功（T8 裁决 + C-1）', async () => {
+    // 缺省 resolver 没有密钥来源：anthropic 必须密钥 → settings 里配了它必然"配置不完整"
     const withProvider = mkdtempSync(join(tmpdir(), 'kyclaw-agent-configured-'))
     writeSettings(settingsPath(withProvider), {
       ...DEFAULT_SETTINGS,
       providers: [
         {
-          id: 'deepseek',
-          type: 'openai-compatible',
-          baseUrl: 'https://api.deepseek.com',
-          model: 'deepseek-flash',
+          id: 'anthropic',
+          type: 'anthropic',
+          model: 'claude-sonnet-4-5',
           isDefault: true
         }
       ]
@@ -377,6 +376,75 @@ describe('startAgentServer', () => {
       errorLog.mockRestore()
       try {
         rmSync(withProvider, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      } catch {
+        console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）')
+      }
+    }
+  }, 60_000)
+
+  it('打包态实报：无密钥的本机端点也能**真对话**（openai 兼容自定义渠道，真 HTTP/SSE，且不发 Authorization 头）', async () => {
+    // 真起一个 OpenAI 兼容的假端点（只回 SSE 正文），并记下每一条请求的 Authorization 头
+    const seen: Array<string | undefined> = []
+    const provider = createServer((request, response) => {
+      seen.push(request.headers.authorization)
+      request.on('data', () => {})
+      request.on('end', () => {
+        const chunk = (delta: Record<string, unknown>, finish: string | null = null): string =>
+          `data: ${JSON.stringify({
+            id: 'c1',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'local-model',
+            choices: [{ index: 0, delta, finish_reason: finish }]
+          })}\n\n`
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.end(
+          [
+            chunk({ role: 'assistant' }),
+            chunk({ content: '本机端点回复：你好' }),
+            chunk({}, 'stop'),
+            'data: [DONE]\n\n'
+          ].join('')
+        )
+      })
+    })
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve))
+    const port = (provider.address() as AddressInfo).port
+
+    const dataDir = mkdtempSync(join(tmpdir(), 'kyclaw-agent-keyless-'))
+    writeSettings(settingsPath(dataDir), {
+      ...DEFAULT_SETTINGS,
+      providers: [
+        {
+          id: 'custom-1',
+          type: 'openai-compatible',
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          model: 'local-model',
+          isDefault: true
+        }
+      ]
+    })
+
+    try {
+      // 默认 resolver 没有密钥来源 = 这条 provider 一个密钥都没有（正是 LM Studio 那类本机服务）
+      const server = await start({ dataDir })
+
+      const response = await chat(server.baseUrl, {
+        headers: { authorization: `Bearer ${server.token}` }
+      })
+      const body = await response.text()
+
+      expect(response.status).toBe(200)
+      // 真的走通了对话（不是 mock 文案、也不是 400 的假成功）
+      expect(body).toContain('本机端点回复：你好')
+      expect(body).not.toContain(MOCK_REPLY_CHUNKS[0])
+      // 关键证据：整轮对话一个 Authorization 头都没发出去（空密钥 → SDK 不发头，而不是空的 Bearer）
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen.every((value) => value === undefined)).toBe(true)
+    } finally {
+      await closeServer(provider)
+      try {
+        rmSync(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
       } catch {
         console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）')
       }

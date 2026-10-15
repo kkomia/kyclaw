@@ -36,9 +36,11 @@ export function settingsPath(userDataDir: string): string {
  * T13 的 permissions、T12 的 mcpServers、T18 的 defaultWorkspace / projects、T17 的 langfuse、
  * round 10 的 pluginMarketplaces / installedPlugins、round 18 的 modelPrefs、
  * round 20 的 pinnedThreads / archivedThreads、round 22 的 probedModels、
+ * 用户反馈 003/004 的 modelOverrides（手动上下文长度 / 显示名，缺了补空表）、
  * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）、round 32 的 reasoningTranslate、
  * round 45 的 webSearch、round 63 的 updateUrl、round 67 的 langfuse.proxyUrl、
- * round 75 的 outsideWorkspaceMode（"工作区之外"那一档，缺了补 `ask`：保守档）。
+ * round 75 的 outsideWorkspaceMode（"工作区之外"那一档，缺了补 `ask`：保守档）、
+ * round 86 的 langfuse.enabled（010 的显式开关，缺了补 `true`：没显式关过 = 开着）。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  *
@@ -61,13 +63,20 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.defaultWorkspaceInitialized === undefined) next.defaultWorkspaceInitialized = false
   if (next.projects === undefined) next.projects = []
   if (next.langfuse === undefined) {
-    next.langfuse = { endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' }
+    next.langfuse = { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' }
   } else {
-    // round 67：代理是后加的字段（T17 那版只有 endpoint）——补空串，用户原来填的地址原样留着
+    // round 67 的代理、round 86 的显式开关（010）都是后加的字段：
+    //   - 代理缺了补空串；用户原来填的地址原样留着；
+    //   - 开关**只认显式的 false**（`!== false` 一律视为开启）——升级不该把正在上报的老用户静默关掉。
+    // 这一节整体重建：非布尔的 enabled（被手改坏的值）在这里就归一到 true，不会连带整份设置当坏文件。
     const langfuse = next.langfuse
     if (typeof langfuse === 'object' && langfuse !== null && !Array.isArray(langfuse)) {
       const entry = langfuse as Record<string, unknown>
-      if (entry.proxyUrl === undefined) next.langfuse = { ...entry, proxyUrl: '' }
+      next.langfuse = {
+        ...entry,
+        enabled: entry.enabled !== false,
+        proxyUrl: entry.proxyUrl === undefined ? '' : entry.proxyUrl
+      }
     }
   }
   if (next.pluginMarketplaces === undefined) next.pluginMarketplaces = []
@@ -76,6 +85,8 @@ function migrateStoredSettings(raw: unknown): unknown {
   // round 48：手动"支持看图"开关删除——旧的覆盖记录不再读，直接剥掉（留着的键会让 strict 校验失败）
   delete next.modelCapabilities
   if (next.probedModels === undefined) next.probedModels = {}
+  // 用户反馈 003/004：手动覆盖表（上下文长度 / 显示名）是后加的必填字段 → 老文件补空表
+  if (next.modelOverrides === undefined) next.modelOverrides = {}
   if (next.pinnedThreads === undefined) next.pinnedThreads = []
   if (next.pinnedProjects === undefined) next.pinnedProjects = []
   if (next.archivedThreads === undefined) next.archivedThreads = []

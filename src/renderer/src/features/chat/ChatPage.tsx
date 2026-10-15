@@ -40,6 +40,7 @@ import { useStore } from 'zustand'
 import { PlanModeChip } from './PlanModeChip'
 import { PlanApprovalDock } from './PlanApprovalDock'
 import { planSession } from '@renderer/lib/plans-store'
+import { planActiveOf } from './plan-ui'
 import { rendererPlansStore, settledPlan } from './plan-runtime'
 import { EMPTY_ASK_USER_THREAD, useAskUserStore } from './ask-user-store'
 import { askUserCallKey } from './ask-user-ui'
@@ -782,6 +783,33 @@ function ActiveChat({
     state.setCollapsed(threadId, !taskSession(state, threadId).collapsed)
   }, [threadId])
   /**
+   * round 86（用户实报 016 问题二的后半）：**进入规划模式的那一刻**把任务清单自动展开一次
+   * （上一轮只做到"规划里这一格不消失 + 一键展开"）。
+   *
+   * 只在"**读到过**非规划 → 规划"这一条上升沿动手：`active` 用三态 —— `null` = 这条会话的
+   * 计划状态还没读到过（`planSession` 对没缓存的 thread 回 `EMPTY_PLAN_SESSION`，`state` 是 null），
+   * `false` = 读到过且是普通模式。所以：
+   *   - 主动进规划（`enterPlan`，普通模式 → 规划中）：`false → true`，展开；
+   *   - 首次读到 / 切到（切回）一条**本来就在规划里**的会话、以及切会话本身：`null → true`
+   *     或换了 threadId，都**不动** —— 那份 `collapsed` 是用户自己的（tasks-store 里持久留着），
+   *     不该因为"页面刚打开"就被抹成展开；
+   *   - 之后用户手动收起：模式没变，没有上升沿，不再被任何 plan 回包顶开（每次渲染都强开的话，
+   *     收起状态就形同虚设）。
+   *
+   * 收起状态仍然只有一个来源：tasks-store 的 `collapsed`（这里只调 `setCollapsed`，
+   * 不另存平行状态）。
+   */
+  const planExpandBaseline = useRef<{ threadId: string; active: boolean | null } | null>(null)
+  useEffect(() => {
+    const active = plan.state === null ? null : planActiveOf(plan.state)
+    const previous = planExpandBaseline.current
+    planExpandBaseline.current = { threadId, active }
+    if (previous === null || previous.threadId !== threadId) return
+    if (active === true && previous.active === false) {
+      tasksStore.getState().setCollapsed(threadId, false)
+    }
+  }, [plan.state, threadId])
+  /**
    * ＋ 菜单里的**模式分组**（round 81）：原先工具条上那两颗常驻按钮（「进入规划模式」「任务清单」）
    * 都收进这一个 ＋（用户口径：绝不另造第二个模式菜单）。两边都是真状态、真回调：
    *   - 规划：只在普通模式时给这条（已在规划里就没有"再进入"这件事）；运行 / 等审批 / 压缩中禁用；
@@ -1383,11 +1411,14 @@ function ActiveChat({
           >
             {/* round 81：工具条那一行常驻模式按钮没了 —— 「进入规划模式」「任务清单」都在输入卡的
                 ＋ 菜单里（见 Composer 的 mode props / ComposerControls 的 PlusMenu）。这一格就只剩
-                任务清单本体：有任务给紧凑摘要、点摘要展开；没有任务且收起时整块不渲染。 */}
+                任务清单本体：有任务给紧凑摘要、点摘要展开；没有任务且收起时整块不渲染。
+                round 85（016 问题二）：**在规划模式里这一格不收** —— 规划与任务清单是包含关系，
+                进了规划就该看得见那份清单（判据 planActiveOf 与模式摘要同一口径）。 */}
             <TaskDockSlot
               key={threadId}
               threadId={ready ? threadId : null}
               materialized={realThread}
+              planActive={planActiveOf(plan.state)}
             />
             {/* 草稿会话进入规划失败（还没物化那一档）：原先是工具条里的一行，现在挂在清单上方同一列宽 */}
             {planActionError && !realThread ? (

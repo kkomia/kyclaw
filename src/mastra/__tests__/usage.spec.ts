@@ -3,11 +3,11 @@
  * T14 Step 2：用量记账。
  *
  * 两层：
- *   1. 价目与花费计算（纯函数）：已知模型按价目算、未知模型 cost=null、缓存档打折、
- *      统计窗口的边界（今天 = 本地零点起；本月 = 本地 1 号零点起）；
+ *   1. 聚合与窗口（纯函数）：统计窗口的边界（今天 = 本地零点起；本月 = 本地 1 号零点起）、
+ *      按模型分组的 token 汇总；
  *   2. 真服务集成（startAgentServer：chat 路由 v7 + libsql + Memory + usage 表）：
  *      一轮对话的 usage 从 chat 流里被记账钩子提取 → 写进 libsql 的 `usage_runs` →
- *      `GET /api/usage` 能按模型看到 token 与花费。
+ *      `GET /api/usage` 能按模型看到 token（**没有计费口径**：回包里没有 cost 一类字段）。
  *
  * 记账钩子的到达位置见 src/mastra/usage.ts 头注（chatRoute 的 defaultOptions.onFinish）。
  */
@@ -25,11 +25,8 @@ import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
 import type { KyclawModel } from '../model'
 import { createUsageRouter } from '../routes/usage'
 import {
-  computeCost,
   createUsageRecorder,
   createUsageStore,
-  MODEL_PRICING,
-  pricingFor,
   rangeStart,
   summarizeUsage,
   threadTokenReadout,
@@ -71,7 +68,6 @@ function run(overrides: {
   contextInput?: number | null
   contextCachedInput?: number | null
   stepCount?: number | null
-  cost?: number | null
   at?: Date
 }): UsageRun {
   const input = overrides.input ?? 0
@@ -87,7 +83,6 @@ function run(overrides: {
     contextInput: overrides.contextInput ?? null,
     contextCachedInput: overrides.contextCachedInput ?? null,
     stepCount: overrides.stepCount ?? null,
-    cost: overrides.cost ?? null,
     createdAt: (overrides.at ?? new Date()).toISOString()
   }
 }
@@ -101,74 +96,53 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-describe('价目与花费计算', () => {
-  it('价目查找：认大小写与 provider 前缀，认 DeepSeek 的现行与遗留模型名，其余 null', () => {
-    expect(pricingFor('deepseek-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
-    expect(pricingFor('DeepSeek-Flash')).toEqual(MODEL_PRICING['deepseek-flash'])
-    expect(pricingFor('deepseek/deepseek-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
-    expect(pricingFor('deepseek-v4-pro')).toEqual(MODEL_PRICING['deepseek-v4-pro'])
-    // 遗留名 deepseek-v4-flash 由 Flash 承载（官方定价页脚注），按 Flash 计价
-    expect(pricingFor('deepseek-v4-flash')).toEqual(MODEL_PRICING['deepseek-flash'])
-    expect(pricingFor('kimi-k3')).toBeNull()
-    expect(pricingFor('')).toBeNull()
-    expect(pricingFor(null)).toBeNull()
-    expect(pricingFor(undefined)).toBeNull()
-  })
-
-  it('花费 = 输入(未命中) + 输入(命中) + 输出，按百万 token 单价折算', () => {
-    const pricing = MODEL_PRICING['deepseek-flash']
-    expect(computeCost(pricing, { input: 1_000_000, output: 1_000_000 })).toBeCloseTo(
-      pricing.inputPerMillion + pricing.outputPerMillion,
-      10
-    )
-    // 全部命中缓存：输入按命中价
-    expect(
-      computeCost(pricing, { input: 1_000_000, output: 0, cachedInput: 1_000_000 })
-    ).toBeCloseTo(pricing.cachedInputPerMillion, 10)
-    // 命中数超过输入数：按输入数封顶（不出现负的"未命中"）
-    expect(
-      computeCost(pricing, { input: 1_000_000, output: 0, cachedInput: 2_000_000 })
-    ).toBeCloseTo(pricing.cachedInputPerMillion, 10)
-    expect(computeCost(pricing, { input: 0, output: 0 })).toBe(0)
-  })
-
+describe('窗口与聚合（纯函数）', () => {
   it('窗口边界：今天 = 本地零点起；本月 = 本地 1 号零点起', () => {
     const now = new Date(2026, 9, 15, 13, 45, 30) // 2026-10-15 13:45:30（本地）
     expect(rangeStart('today', now).getTime()).toBe(new Date(2026, 9, 15, 0, 0, 0, 0).getTime())
     expect(rangeStart('month', now).getTime()).toBe(new Date(2026, 9, 1, 0, 0, 0, 0).getTime())
   })
 
-  it('汇总：按模型分组（token 降序）、有价部分求和、未知模型让 costIncomplete 为真', () => {
+  it('汇总：按模型分组（token 降序）、同 provider+model 合并；不认识的模型照记 token', () => {
     const rows: UsageRun[] = [
-      run({ model: 'a-known', provider: 'p', input: 100, output: 50, cost: 0.5 }),
-      run({ model: 'a-known', provider: 'p', input: 30, output: 10, cost: 0.1 }),
-      run({ model: 'b-unknown', provider: null, input: 7, output: 3, cost: null })
+      run({ model: 'a-known', provider: 'p', input: 100, output: 50 }),
+      run({ model: 'a-known', provider: 'p', input: 30, output: 10 }),
+      run({ model: 'b-unknown', provider: null, input: 7, output: 3 })
     ]
 
     const summary = summarizeUsage(rows, 'today')
     expect(summary.tokens).toEqual({ input: 137, output: 63, total: 200 })
-    expect(summary.cost).toBeCloseTo(0.6, 10)
-    expect(summary.costIncomplete).toBe(true)
     expect(summary.byModel.map((row) => [row.model, row.runs])).toEqual([
       ['a-known', 2],
       ['b-unknown', 1]
     ])
     expect(summary.byModel[0]?.tokens).toEqual({ input: 130, output: 60, total: 190 })
-    expect(summary.byModel[0]?.cost).toBeCloseTo(0.6, 10)
-    expect(summary.byModel[1]?.cost).toBeNull()
   })
 
-  it('汇总边界：空列表 = 全 0 且 cost=null；全是未知模型 = cost=null（不把未知当 0）', () => {
+  it('汇总边界：空列表 = 全 0 且 byModel 空', () => {
     expect(summarizeUsage([], 'today')).toMatchObject({
       tokens: { input: 0, output: 0, total: 0 },
-      cost: null,
-      costIncomplete: false,
       byModel: []
     })
-    expect(summarizeUsage([run({ model: 'x', cost: null })], 'today')).toMatchObject({
-      cost: null,
-      costIncomplete: true
-    })
+    expect(summarizeUsage([run({ model: 'x' })], 'today').byModel).toHaveLength(1)
+  })
+
+  it('014：汇总结果里没有计费口径（cost / costIncomplete / 币种都不回了）', () => {
+    const summary = summarizeUsage(
+      [run({ model: 'deepseek-flash', provider: 'deepseek', input: 10, output: 1 })],
+      'today'
+    )
+    // 负向守卫：这三个字段是**故意删掉**的（用户口径 014 不做计费），别顺手加回来
+    expect(Object.keys(summary).sort()).toEqual(['byModel', 'range', 'tokens'])
+    expect(summary).not.toHaveProperty('cost')
+    expect(summary).not.toHaveProperty('costIncomplete')
+    expect(summary).not.toHaveProperty('currency')
+    expect(Object.keys(summary.byModel[0] ?? {}).sort()).toEqual([
+      'model',
+      'provider',
+      'runs',
+      'tokens'
+    ])
   })
 })
 
@@ -187,7 +161,7 @@ describe('记账钩子：从 onFinish 事件取"上下文口径"（round 67）',
 
   it('末个 step 的 usage 落进 contextInput；stepNumber+1 落进 stepCount；整轮合计仍进 tokens', async () => {
     const row = await record({
-      // AI SDK 的 totalUsage = 全部 step 之和（花费口径）
+      // AI SDK 的 totalUsage = 全部 step 之和（整轮合计口径）
       totalUsage: {
         inputTokens: 221_356,
         outputTokens: 3_928,
@@ -357,12 +331,15 @@ describe('用量路由：窗口过滤（真 libsql，注入 now）', () => {
     }
   })
 
-  it('空窗口：全 0、cost=null、costIncomplete=false、byModel 空', async () => {
+  it('空窗口：全 0、byModel 空；回包不带计费字段', async () => {
+    const raw = await app.request('/api/usage?range=today')
+    expect(raw.status).toBe(200)
+    // 负向守卫：/api/usage 的回包里**没有** cost / costIncomplete / currency（014 不做计费）
+    expect(Object.keys((await raw.json()) as object).sort()).toEqual(['byModel', 'range', 'tokens'])
+
     expect(await get('today')).toMatchObject({
       range: 'today',
       tokens: { input: 0, output: 0, total: 0 },
-      cost: null,
-      costIncomplete: false,
       byModel: []
     })
   })
@@ -531,16 +508,11 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
     }
   })
 
-  it('已知模型：token 从 chat 流进表，花费按价目算出来', async () => {
+  it('已知模型：token 从 chat 流进表（记账只记 token，不算钱）', async () => {
     await chat('thread-usage-known', '你好')
     const today = await waitForRuns(1)
 
     expect(today.tokens).toEqual({ input: 1, output: 3, total: 4 })
-    expect(today.costIncomplete).toBe(false)
-    expect(today.cost).toBeCloseTo(
-      computeCost(MODEL_PRICING['deepseek-flash'], { input: 1, output: 3 }),
-      12
-    )
     expect(today.byModel).toHaveLength(1)
     expect(today.byModel[0]).toMatchObject({
       model: 'deepseek-flash',
@@ -548,7 +520,6 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
       runs: 1,
       tokens: { input: 1, output: 3, total: 4 }
     })
-    expect(today.byModel[0]?.cost).toBeGreaterThan(0)
     // 本地日历的窗口口径：同一批行在"本月"里也应当出现（今天 ⊂ 本月）
     expect((await usage('month')).tokens).toEqual(today.tokens)
 
@@ -566,21 +537,108 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
     })
   }, 30_000)
 
-  it('未知模型：只记 token，cost=null、costIncomplete=true（不把未知当 0）', async () => {
+  it('未知模型：token 照记、按模型各占一行（计价口径已删，不再区分"认不认识"）', async () => {
     currentModel = mock('kyclaw-test', 'kyclaw-test-mock')
     await chat('thread-usage-unknown', '再问一句')
     const today = await waitForRuns(2)
 
     expect(today.tokens).toEqual({ input: 2, output: 6, total: 8 })
-    expect(today.costIncomplete).toBe(true)
     const unknown = today.byModel.find((row) => row.model === 'kyclaw-test-mock')
     expect(unknown).toMatchObject({
       provider: 'kyclaw-test',
       runs: 1,
-      tokens: { input: 1, output: 3, total: 4 },
-      cost: null
+      tokens: { input: 1, output: 3, total: 4 }
     })
-    // 已知模型那一行照常计价
-    expect(today.byModel.find((row) => row.model === 'deepseek-flash')?.cost).toBeGreaterThan(0)
+    // 已知模型那一行照常在列
+    expect(today.byModel.find((row) => row.model === 'deepseek-flash')?.runs).toBe(1)
   }, 30_000)
+})
+
+/**
+ * 014（不做计费）的兼容面：老库的 `usage_runs` 有 `cost` 列，而且**真有值**（T14 时代记过按价目表
+ * 算出来的花费）。这一轮不能把老库读炸、也不能动老数据 —— 只在写入侧固定写 NULL、读取侧不映射它。
+ *
+ * 这里按**老形状**造库：连 round 18 / 67 补的列都没有（`ensureTable` 该把它们补上），cost 有值。
+ */
+describe('014 兼容：老库（带 cost 值）照样读写', () => {
+  let dir: string
+  let storage: LibSQLStore
+
+  beforeAll(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'kyclaw-usage-legacy-'))
+    storage = new LibSQLStore({
+      id: 'kyclaw-usage-legacy',
+      url: `file:${join(dir, 'kyclaw.db').replace(/\\/g, '/')}`
+    })
+  })
+
+  afterAll(async () => {
+    await storage?.close()
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch {
+      console.warn('[kyclaw] 临时目录未能立刻删除（libsql 句柄延迟释放，交给系统清理）：', dir)
+    }
+  })
+
+  it('老形状（cost 有值、缺 round 18/67 那几列）：token 照读，新行 cost 写 NULL，老值不动', async () => {
+    const client = usageSqlClient(storage)
+    await client.execute(
+      `CREATE TABLE "usage_runs" (
+        "id" TEXT PRIMARY KEY,
+        "run_id" TEXT,
+        "model" TEXT NOT NULL,
+        "provider" TEXT,
+        "input_tokens" INTEGER NOT NULL DEFAULT 0,
+        "output_tokens" INTEGER NOT NULL DEFAULT 0,
+        "total_tokens" INTEGER NOT NULL DEFAULT 0,
+        "cached_input_tokens" INTEGER,
+        "cost" REAL,
+        "created_at" TEXT NOT NULL
+      )`
+    )
+    await client.execute({
+      sql: `INSERT INTO "usage_runs"
+        ("id", "run_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cost", "created_at")
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        'legacy-1',
+        'run-1',
+        'legacy-model',
+        'deepseek',
+        100,
+        20,
+        120,
+        50,
+        0.0123,
+        '2026-10-15T09:00:00.000Z'
+      ]
+    })
+
+    const store = createUsageStore(client)
+    // 建表幂等 + 补列都在这一句里跑（老库少的那几列补上，cost 列原样留着）
+    const rows = await store.listSince(new Date('2026-10-14T00:00:00.000Z'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: 'legacy-1',
+      model: 'legacy-model',
+      provider: 'deepseek',
+      tokens: { input: 100, output: 20, total: 120 },
+      cachedInput: 50
+    })
+    // 读回来的行里没有计费口径（usage.ts 已经没有这个概念）
+    expect(rows[0]).not.toHaveProperty('cost')
+
+    // 再写一行新记录：老行的历史值原样留着，新行的 cost 是 NULL（"没记"比 0 诚实）
+    await store.insert(
+      run({ model: 'new-model', input: 1, output: 1, at: new Date('2026-10-15T10:00:00.000Z') })
+    )
+    const costs = await client.execute(
+      `SELECT "model", "cost" FROM "usage_runs" ORDER BY "created_at" ASC`
+    )
+    expect(costs.rows.map((row) => [row.model, row.cost])).toEqual([
+      ['legacy-model', 0.0123],
+      ['new-model', null]
+    ])
+  })
 })

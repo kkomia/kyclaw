@@ -1,13 +1,16 @@
 /**
- * 模型注册表（round 18；round 22 起**实测优先**）：模型名 → 上下文长度与思考挡位。
+ * 模型注册表（round 18；round 22 起**实测优先**；用户反馈 003 起支持**手动覆盖**）：
+ * 模型名 → 上下文长度与思考挡位。
  *
- * 口径（round 22 更新；round 48 补视觉）：
- *   - **取值优先级：probed（实测，settings.probedModels）→ 注册表 → 保守默认**——
+ * 口径（round 22 更新；round 48 补视觉；用户反馈 003/004 加手动覆盖）：
+ *   - **取值优先级：override（用户手填）→ probed（实测，settings.probedModels）→ 注册表 → 保守默认**——
  *     round 18 按名字猜的 deepseek-flash=128K 是臆测，官方端点实测是 1M（1048576）；
- *     每个取数函数都接受可选的 `probed` 参数按字段覆盖（probed 没给的字段才回落注册表）；
- *   - **视觉能力（模块 2）也在 probed 里**（round 48）：主进程真发一条带图请求探测出来的结论
+ *     每个取数函数都接受可选的 `probed` / `override` 参数按字段覆盖（谁给了才覆盖谁）；
+ *   - **手动覆盖只覆盖上下文长度**（挡位没有手动项）；它住在独立一张表里（settings.modelOverrides，
+ *     键见 overrideKeyOf）——塞进 probedModels 会被下一次探测整条压掉；
+ *   - **视觉能力（模块 2）只由探测说话**（round 48）：主进程真发一条带图请求探测出来的结论
  *     （见 main/model-probe.ts），没有探测结论时才回落注册表——用户不再有手动开关；
- *   - 匹配用「归一后的模型名前缀」（小写、去 `provider/` 前缀）——与 usage.ts 的 pricingFor 同口径；
+ *   - 匹配用「归一后的模型名前缀」（小写、去 `provider/` 前缀）；
  *   - `thinkingEfforts` 的 id 就是**要透传给供应商的值**（如 `low`/`high`/`max`），`default` 表示不传；
  *     能不能真透传由适配器决定（见 shared/providers.ts 的 `providerOptionsKeyFor`）：
  *     DeepSeek 官方端点支持 `reasoning_effort: low|high|max`（@ai-sdk/deepseek 的 provider options），
@@ -70,6 +73,72 @@ export const PROBED_MODELS_TTL_MS = 24 * 60 * 60 * 1000
 /** 探测记录的键：`<providerId>:<modelId>`（provider 的模型名原文，不归一） */
 export function probedKeyOf(providerId: string, model: string): string {
   return `${providerId}:${model}`
+}
+
+/**
+ * 手动覆盖（用户反馈 003/004）：用户对某个模型显式声明的**上下文长度**与**显示名**。
+ *
+ * 为什么独立于 `probedModels`：探测那一趟每次都整条重写自己那条记录（`{...probed[key], ...meta}`），
+ * 用户的声明住在那里会被下一次探测默默压掉。所以另立一张表（`settings.modelOverrides`），
+ * 键与探测记录同一形状（见 overrideKeyOf）。
+ *
+ * `displayName` **只影响展示**（设置页那一行、composer 的模型菜单）：
+ * 它不进任何 key（`<providerId>:<model>` 里的 model 始终是原文）、不进请求体、也不进探测。
+ */
+export interface ModelOverride {
+  /** 手动上下文长度（tokens；正整数才生效，见 contextWindowSourceOf 的取值链） */
+  contextWindow?: number
+  /** 展示名（只影响展示；绝不进任何 key / 请求 / 探测） */
+  displayName?: string
+}
+
+/** 手动覆盖表的键：与探测记录**同一个形状**（`<providerId>:<model>`，模型名原文不归一） */
+export function overrideKeyOf(providerId: string, model: string): string {
+  return probedKeyOf(providerId, model)
+}
+
+/** 有效正整数（0 / 负数 / NaN / 非数字 = 没给）——取值链与来源判定共用这一处 */
+function validTokens(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.round(value)
+}
+
+/**
+ * 上下文长度的**来源**（用户反馈 006：UI 必须标出这个数字是哪来的）。
+ *   - `manual`   用户手填的（settings.modelOverrides）；
+ *   - `measured` 端点实测的（GET /models 的 context_window）；
+ *   - `fallback` 注册表按模型名给的值 / 保守默认 —— **都是"回退"**，不是实测。
+ */
+export type ContextWindowSource = 'manual' | 'measured' | 'fallback'
+
+/** 来源的中文标注（设置页那一行与展开区共用一份措辞） */
+export const CONTEXT_WINDOW_SOURCE_LABELS: Record<ContextWindowSource, string> = {
+  manual: '手动',
+  measured: '实测',
+  fallback: '回退'
+}
+
+/**
+ * 这个上下文长度从哪来（与 modelSpecOf 的取值链**同一份判据**，不会各说各话）：
+ * 手动覆盖 > 探测实测 > 回退（注册表 / 保守默认）。
+ */
+export function contextWindowSourceOf(
+  probed?: ProbedModelSpec,
+  override?: ModelOverride
+): ContextWindowSource {
+  if (validTokens(override?.contextWindow) !== undefined) return 'manual'
+  if (validTokens(probed?.contextWindow) !== undefined) return 'measured'
+  return 'fallback'
+}
+
+/**
+ * 模型的展示名（用户反馈 004）：手填的展示名优先，否则模型名原文（半截配置的空模型名 = 空串，
+ * 调用方回落通道名）。**纯展示**——发送、探测、密钥仍然只认 `provider.model` 原文。
+ */
+export function displayNameOf(model: string | null | undefined, override?: ModelOverride): string {
+  const name = override?.displayName?.trim()
+  if (name !== undefined && name !== '') return name
+  return typeof model === 'string' ? model.trim() : ''
 }
 
 /**
@@ -161,25 +230,31 @@ const REGISTRY: ReadonlyArray<{ prefix: string; spec: ModelSpec }> = [
   }
 ]
 
-/** 模型名归一：小写、去空白、去 `provider/` 前缀（与 pricingFor 同口径） */
+/** 模型名归一：小写、去空白、去 `provider/` 前缀 */
 export function normalizeModelId(model: string | null | undefined): string {
   if (typeof model !== 'string') return ''
   const normalized = model.trim().toLowerCase()
   return normalized.slice(normalized.lastIndexOf('/') + 1)
 }
 
-/** 模型 → 规格（round 22 优先级：**probed 实测 → 注册表 → 保守默认**，不抛） */
-export function modelSpecOf(model: string | null | undefined, probed?: ProbedModelSpec): ModelSpec {
+/**
+ * 模型 → 规格（取值链：**手动覆盖 → 实测 probed → 注册表 → 保守默认**，不抛）。
+ * 手动覆盖只影响上下文长度（挡位没有手动项，视觉只由探测说话）。
+ */
+export function modelSpecOf(
+  model: string | null | undefined,
+  probed?: ProbedModelSpec,
+  override?: ModelOverride
+): ModelSpec {
   const fallback = registrySpecOf(model)
-  if (probed === undefined) return fallback
 
-  // 上下文长度：实测有效（正整数）才覆盖注册表
+  // 上下文长度：手动覆盖 > 实测（有效正整数才生效）> 注册表 > 保守默认
   const contextWindow =
-    typeof probed.contextWindow === 'number' &&
-    Number.isFinite(probed.contextWindow) &&
-    probed.contextWindow > 0
-      ? Math.round(probed.contextWindow)
-      : fallback.contextWindow
+    validTokens(override?.contextWindow) ??
+    validTokens(probed?.contextWindow) ??
+    fallback.contextWindow
+
+  if (probed === undefined) return { ...fallback, contextWindow }
 
   // 思考挡位：实测给了非空挡位表才覆盖（表内剔除 `default`——那是"不传"的本地语义，
   // 统一放列表首个；顺序照端点；未知挡位标签原样显示，如实）
@@ -245,22 +320,24 @@ export function thinkingEffortsOf(
   return modelSpecOf(model, probed).thinkingEfforts
 }
 
-/** 该模型的上下文长度（probed 实测优先） */
+/** 该模型的上下文长度（手动覆盖 > 实测 > 注册表 > 默认） */
 export function contextWindowOf(
   model: string | null | undefined,
-  probed?: ProbedModelSpec
+  probed?: ProbedModelSpec,
+  override?: ModelOverride
 ): number {
-  return modelSpecOf(model, probed).contextWindow
+  return modelSpecOf(model, probed, override).contextWindow
 }
 
-/** 对话长度百分比 → tokens（夹到 10–100、取整；probed 实测优先） */
+/** 对话长度百分比 → tokens（夹到 10–100、取整；取值链同 contextWindowOf） */
 export function contextTokensFor(
   model: string | null | undefined,
   pct: number | undefined,
-  probed?: ProbedModelSpec
+  probed?: ProbedModelSpec,
+  override?: ModelOverride
 ): number {
   const clamped = Math.min(100, Math.max(10, Math.round(pct ?? 100)))
-  return Math.round((modelSpecOf(model, probed).contextWindow * clamped) / 100)
+  return Math.round((modelSpecOf(model, probed, override).contextWindow * clamped) / 100)
 }
 
 /**

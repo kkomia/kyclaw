@@ -110,7 +110,7 @@ describe('任务冻结契约', () => {
     expect(todoInputSchema.safeParse(input).success).toBe(false)
   })
 
-  it('导出给 provider 的 JSON Schema 顶层是 object，oneOf 分支原样保留', () => {
+  it('导出给 provider 的 JSON Schema 顶层是 object（带 properties），oneOf 分支原样保留', () => {
     const schema = z.toJSONSchema(todoInputSchema, {
       target: 'draft-7',
       io: 'input'
@@ -120,7 +120,15 @@ describe('任务冻结契约', () => {
     // 判别联合只导出 oneOf，缺的就是这一个 type（见 agent-comparison run/code-task-1.json）
     expect(schema.type).toBe('object')
     expect(schema.$schema).toBe('http://json-schema.org/draft-07/schema#')
-    expect(Object.keys(schema).sort()).toEqual(['$schema', 'oneOf', 'type'])
+    // LM Studio 还要求顶层 properties 存在（缺了整轮 400），且**不能为空对象**——
+    // 空对象会让它的语法只允许 `{}`（模型调用退化成空参数），所以顶层要列全分支字段
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+      'action',
+      'changes',
+      'expectedRevision',
+      'items'
+    ])
+    expect(Object.keys(schema).sort()).toEqual(['$schema', 'oneOf', 'properties', 'type'])
     expect(schema.oneOf?.map((branch) => branch.required)).toEqual([
       ['action'],
       ['action', 'expectedRevision', 'items'],

@@ -16,6 +16,8 @@ import {
   projectFolderSchema,
   projectOpenInExplorerResultSchema,
   providerKeyStatesSchema,
+  providerModelDiscoveryResultSchema,
+  providerModelListResultSchema,
   searchKeyStatesSchema,
   setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
@@ -150,7 +152,24 @@ const settingsApi: KyclawSettingsApi = {
     parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.removeProvider, id)),
   // round 22：模型元数据探测（静默失败，回合并后的设置——半截不用防，parseSettings 兜底）
   probeModels: async (id) =>
-    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.probeModels, id))
+    parseSettings(await ipcRenderer.invoke(IPC_CHANNELS.settings.probeModels, id)),
+  // 用户反馈 007：列端点上的可选模型（**只读**发现；结构不对就抛，弹窗自己按"读不到"兜底）
+  listProviderModels: async (id) => {
+    const parsed = providerModelListResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.listProviderModels, id)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 模型清单响应结构不合法')
+    return parsed.data
+  },
+  // 用户反馈 007：拿**刚填的**地址与密钥发现模型（还没保存的新渠道也走它）。
+  // 密钥原样递给主进程（用户在界面上就是刚敲进去的），回包里只有模型清单或一句人话
+  discoverProviderModels: async (input) => {
+    const parsed = providerModelDiscoveryResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.discoverProviderModels, input)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 模型发现响应结构不合法')
+    return parsed.data
+  }
 }
 
 /**

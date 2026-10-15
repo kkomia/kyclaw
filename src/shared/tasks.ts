@@ -76,14 +76,31 @@ export const taskWriteSchema = z.discriminatedUnion('action', [taskReplaceSchema
  * （每 action 字段互斥/必填、strictObject 拒未知键、任务 CAS 与错误文案都不变），
  * 模型侧则是一份合法的 object schema——oneOf 的三个分支原样保留，互斥与必填照旧可读。
  * 只补顶层 type，不碰 anyOf/oneOf 的其它位置（分支内的 anyOf 仍是可空字段的本来形状）。
+ *
+ * round 84：再补顶层 `properties`。LM Studio（llama.cpp 系）的入参校验要求
+ * `parameters.properties` **必须存在且是对象**——判别联合导出时没有这个键，于是整轮 400
+ * （实测：`invalid_type ... path [.., "properties"], message "Required"`，2026-10-15 内网复现）。
+ *
+ * 而且**不能给空对象**：LM Studio 会把这个 schema 编译成语法，`properties: {}` 等于"一个键都不许
+ * 出现"，模型只能发出 `{}`（实测：调用成功但参数为空，运行时必被 zod 拒）。所以这里列出三个分支
+ * 用到的**全部字段**（形状从宽，嵌套只给 `{type: "object"}`）——真正的约束仍在 oneOf 分支与
+ * zod 运行时。字段集若变化，这里要跟着改；`tool-schema-compat.spec.ts` 会盯着"分支里出现的
+ * 字段名必须都在顶层 properties 里"。
  */
+const TODO_WIRE_PROPERTIES = {
+  action: { type: 'string' },
+  expectedRevision: { type: 'integer' },
+  items: { type: 'array', items: { type: 'object' } },
+  changes: { type: 'array', items: { type: 'object' } }
+} as const
+
 export const todoInputSchema = z
   .discriminatedUnion('action', [
     z.strictObject({ action: z.literal('get') }),
     taskReplaceSchema,
     taskUpdateSchema
   ])
-  .meta({ type: 'object' })
+  .meta({ type: 'object', properties: TODO_WIRE_PROPERTIES })
 
 export const taskItemSchema = z
   .strictObject({

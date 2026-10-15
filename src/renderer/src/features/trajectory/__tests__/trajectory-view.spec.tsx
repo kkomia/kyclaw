@@ -27,11 +27,19 @@ vi.mock('@renderer/lib/threads-api', () => ({
 }))
 
 vi.mock('@renderer/lib/trajectory-api', () => ({
-  fetchThreadUsageRuns: vi.fn(async () => [])
+  fetchThreadUsageRuns: vi.fn(async () => []),
+  fetchThreadRequestSummaries: vi.fn(async () => []),
+  fetchRequestDetail: vi.fn(async () => {
+    throw new Error('没排到这条腿的用例不该取正文')
+  })
 }))
 
 import { fetchThreadMessages, fetchThreadCompaction } from '@renderer/lib/threads-api'
-import { fetchThreadUsageRuns } from '@renderer/lib/trajectory-api'
+import {
+  fetchRequestDetail,
+  fetchThreadRequestSummaries,
+  fetchThreadUsageRuns
+} from '@renderer/lib/trajectory-api'
 
 const THREAD_ID = 't1'
 
@@ -91,7 +99,6 @@ const USAGE: TrajectoryUsageRun[] = [
     contextInput: 4200,
     contextCachedInput: 3900,
     stepCount: 2,
-    cost: 0.0123,
     createdAt: new Date(1500).toISOString()
   }
 ]
@@ -109,6 +116,9 @@ function mount(): { click: ReturnType<typeof vi.fn>; createObjectURL: ReturnType
 
   vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
   vi.mocked(fetchThreadUsageRuns).mockResolvedValue(USAGE)
+  vi.mocked(fetchThreadRequestSummaries).mockResolvedValue([])
+  vi.mocked(fetchRequestDetail).mockReset()
+  vi.mocked(fetchRequestDetail).mockRejectedValue(new Error('没排到这条腿的用例不该取正文'))
   vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
 
   const createObjectURL = vi.fn(() => 'blob:kyclaw')
@@ -125,6 +135,7 @@ beforeEach(() => {
   resetSessionsStore()
   vi.mocked(fetchThreadMessages).mockClear()
   vi.mocked(fetchThreadUsageRuns).mockClear()
+  vi.mocked(fetchThreadRequestSummaries).mockClear()
 })
 
 afterEach(() => {
@@ -411,5 +422,267 @@ describe('轨迹页 · 取数', () => {
     // 一次请求都没发；界面是空壳（这一层此时本来就被上级隐藏着）
     expect(vi.mocked(fetchThreadMessages)).not.toHaveBeenCalled()
     expect(screen.getByTestId('trajectory-ledger-empty')).toBeInTheDocument()
+  })
+
+  it('round 87 / 017：用量接口 500 时轨迹照样出得来 —— 只有一行非致命提示，不是整页错误', async () => {
+    installKyclawBridge(defaultSettings())
+    useSessionsStore.setState({
+      threads: [{ id: THREAD_ID, title: '新闻会话', updatedAt: '2026-10-13T00:00:00.000Z' }],
+      activeId: THREAD_ID,
+      loaded: true,
+      error: null,
+      notices: {}
+    })
+    vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
+    // 用量腿 500：以前 Promise.all 一荣俱荣，整页只剩一行错误 + 重试
+    vi.mocked(fetchThreadUsageRuns).mockRejectedValue(new Error('读取失败：usage_runs 表锁住了'))
+    vi.mocked(fetchThreadRequestSummaries).mockResolvedValue([])
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
+
+    render(<TrajectoryView threadId={THREAD_ID} active revision="rev-1" />)
+
+    // 轨迹照出：行、轮表头都在
+    await screen.findByTestId('trajectory-ledger')
+    expect(screen.getByTestId('trajectory-row-0')).toBeInTheDocument()
+    expect(screen.getByTestId('trajectory-turn-1')).toBeInTheDocument()
+    // 整页错误态**没有**出现
+    expect(screen.queryByTestId('trajectory-error')).not.toBeInTheDocument()
+    // 非致命的提示在，且带上了服务端那句人话
+    const notice = screen.getByTestId('trajectory-usage-error')
+    expect(notice).toHaveTextContent('用量未取到')
+    expect(notice).toHaveTextContent('读取失败：usage_runs 表锁住了')
+    // 缺用量 → 本轮 token 自动留白（表头不显示用量文案，也不显示 0）
+    expect(screen.getByTestId('trajectory-turn-1')).not.toHaveTextContent('输入')
+
+    // 提示旁边的重试：再把用量取回来，提示消失、用量文案出现
+    vi.mocked(fetchThreadUsageRuns).mockResolvedValue(USAGE)
+    fireEvent.click(screen.getByTestId('trajectory-usage-retry'))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('trajectory-usage-error')).not.toBeInTheDocument()
+    )
+    await waitFor(() => expect(screen.getByTestId('trajectory-turn-1')).toHaveTextContent('输入'))
+  })
+
+  it('round 87 / 015：请求腿出得来时，轨迹里有「系统 / 上下文」两行 + 明细按需取正文', async () => {
+    installKyclawBridge(defaultSettings())
+    useSessionsStore.setState({
+      threads: [{ id: THREAD_ID, title: '新闻会话', updatedAt: '2026-10-13T00:00:00.000Z' }],
+      activeId: THREAD_ID,
+      loaded: true,
+      error: null,
+      notices: {}
+    })
+    const system = `你是 kyclaw。\n${'运行时快照。'.repeat(300)}`
+    vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
+    vi.mocked(fetchThreadUsageRuns).mockResolvedValue([])
+    vi.mocked(fetchThreadRequestSummaries).mockResolvedValue([
+      {
+        id: 's1',
+        runId: 'run-1',
+        step: 0,
+        status: 'complete',
+        error: null,
+        model: 'deepseek-flash',
+        provider: 'deepseek.chat',
+        messageCount: 3,
+        toolCount: 1,
+        systemChars: system.length,
+        toolsChars: 43,
+        truncated: false,
+        createdAt: new Date(1500).toISOString()
+      }
+    ])
+    vi.mocked(fetchRequestDetail).mockResolvedValue({
+      id: 's1',
+      runId: 'run-1',
+      step: 0,
+      status: 'complete',
+      error: null,
+      model: 'deepseek-flash',
+      provider: 'deepseek.chat',
+      messageCount: 3,
+      toolCount: 1,
+      systemChars: system.length,
+      toolsChars: 43,
+      truncated: false,
+      createdAt: new Date(1500).toISOString(),
+      system,
+      tools: '[\n  {\n    "type": "function"\n  }\n]',
+      messages: [
+        { role: 'system', text: system, chars: system.length, truncated: false },
+        { role: 'user', text: '你好', chars: 2, truncated: false },
+        { role: 'tool', text: '文件内容', chars: 4, truncated: false }
+      ]
+    })
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
+
+    render(<TrajectoryView threadId={THREAD_ID} active revision="rev-1" />)
+    await screen.findByTestId('trajectory-ledger')
+
+    // 两行都在（一次请求两条，插在该轮用户行之后）；列表**只有计数**（正文按需取）
+    const systemRow = screen.getByTestId('trajectory-row-1')
+    expect(systemRow).toHaveAttribute('data-kind', 'system')
+    expect(systemRow).toHaveTextContent('系统指令')
+    const contextRow = screen.getByTestId('trajectory-row-2')
+    expect(contextRow).toHaveAttribute('data-kind', 'context')
+    expect(contextRow).toHaveTextContent('上下文 · 3 条消息 · 1 件工具')
+    // 列表时期一次正文都没取（懒取）
+    expect(fetchRequestDetail).not.toHaveBeenCalled()
+
+    // 明细的「预览」页签：按 id 取回系统指令原文，长正文可折叠（默认收着，能展开）
+    fireEvent.click(systemRow)
+    fireEvent.click(await screen.findByTestId('trajectory-tab-preview'))
+    await screen.findByTestId('trajectory-long-text')
+    expect(fetchRequestDetail).toHaveBeenCalledWith('s1')
+    expect(screen.getByTestId('trajectory-long-text')).toHaveAttribute('data-expanded', 'false')
+    expect(screen.getByTestId('trajectory-long-text-toggle')).toHaveTextContent('展开全部')
+    fireEvent.click(screen.getByTestId('trajectory-long-text-toggle'))
+    expect(screen.getByTestId('trajectory-long-text')).toHaveAttribute('data-expanded', 'true')
+
+    // 「请求」页签：这一次发给模型的消息清单（系统 / 用户 / 工具 —— 含后续工具结果）
+    fireEvent.click(screen.getByTestId('trajectory-tab-request'))
+    const panel = await screen.findByTestId('trajectory-tab-panel-request')
+    expect(panel).toHaveTextContent('3 条消息')
+    expect(screen.getByTestId('trajectory-request-message-0')).toHaveTextContent('系统')
+    expect(screen.getByTestId('trajectory-request-message-2')).toHaveTextContent('文件内容')
+  })
+
+  it('round 87 / 017：请求快照腿失败 → 只降级一行，轨迹照出（与用量腿各归各）', async () => {
+    installKyclawBridge(defaultSettings())
+    useSessionsStore.setState({
+      threads: [{ id: THREAD_ID, title: '新闻会话', updatedAt: '2026-10-13T00:00:00.000Z' }],
+      activeId: THREAD_ID,
+      loaded: true,
+      error: null,
+      notices: {}
+    })
+    vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
+    vi.mocked(fetchThreadUsageRuns).mockResolvedValue(USAGE)
+    vi.mocked(fetchThreadRequestSummaries).mockRejectedValue(
+      new Error('读取失败：request_snapshots 表坏了')
+    )
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
+
+    render(<TrajectoryView threadId={THREAD_ID} active revision="rev-1" />)
+
+    await screen.findByTestId('trajectory-ledger')
+    expect(screen.queryByTestId('trajectory-error')).not.toBeInTheDocument()
+    const notice = screen.getByTestId('trajectory-usage-error')
+    expect(notice).toHaveTextContent('请求快照未取到')
+    expect(notice).toHaveTextContent('读取失败：request_snapshots 表坏了')
+    // 用量那条腿照旧出得来（不被请求快照的失败带走）
+    expect(screen.getByTestId('trajectory-turn-1')).toHaveTextContent('输入')
+  })
+
+  it('round 87 / 017：**用量腿失败也拦不住请求明细**（负向守卫：两条腿各取各的）', async () => {
+    installKyclawBridge(defaultSettings())
+    useSessionsStore.setState({
+      threads: [{ id: THREAD_ID, title: '新闻会话', updatedAt: '2026-10-13T00:00:00.000Z' }],
+      activeId: THREAD_ID,
+      loaded: true,
+      error: null,
+      notices: {}
+    })
+    vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
+    // 用量腿 500（用户反馈 017 里那种"用量服务错误 500"）
+    vi.mocked(fetchThreadUsageRuns).mockRejectedValue(new Error('读取失败：usage_runs 表锁住了'))
+    vi.mocked(fetchThreadRequestSummaries).mockResolvedValue([
+      {
+        id: 's1',
+        runId: 'run-1',
+        step: 0,
+        status: 'complete',
+        error: null,
+        model: 'deepseek-flash',
+        provider: 'deepseek.chat',
+        messageCount: 3,
+        toolCount: 35,
+        systemChars: 14000,
+        toolsChars: 81000,
+        truncated: false,
+        createdAt: new Date(1500).toISOString()
+      }
+    ])
+    vi.mocked(fetchRequestDetail).mockResolvedValue({
+      id: 's1',
+      runId: 'run-1',
+      step: 0,
+      status: 'complete',
+      error: null,
+      model: 'deepseek-flash',
+      provider: 'deepseek.chat',
+      messageCount: 3,
+      toolCount: 35,
+      systemChars: 14000,
+      toolsChars: 81000,
+      truncated: false,
+      createdAt: new Date(1500).toISOString(),
+      system: '你是 kyclaw。',
+      tools: null,
+      messages: [{ role: 'user', text: '你好', chars: 2, truncated: false }]
+    })
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
+
+    render(<TrajectoryView threadId={THREAD_ID} active revision="rev-1" />)
+    await screen.findByTestId('trajectory-ledger')
+
+    // 用量腿失败只留一行提示；**请求明细照出**（系统 / 上下文两行都在，还能按需取正文）
+    expect(screen.getByTestId('trajectory-usage-error')).toHaveTextContent('用量未取到')
+    expect(screen.getByTestId('trajectory-row-1')).toHaveAttribute('data-kind', 'system')
+    expect(screen.getByTestId('trajectory-row-2')).toHaveTextContent(
+      '上下文 · 3 条消息 · 35 件工具'
+    )
+
+    fireEvent.click(screen.getByTestId('trajectory-row-2'))
+    fireEvent.click(await screen.findByTestId('trajectory-tab-request'))
+    expect(await screen.findByTestId('trajectory-tab-panel-request')).toHaveTextContent('1 条消息')
+  })
+
+  it('round 87 / 015：失败的那次请求是一行「失败」（只给概述与原始内容，不给空正文）', async () => {
+    installKyclawBridge(defaultSettings())
+    useSessionsStore.setState({
+      threads: [{ id: THREAD_ID, title: '新闻会话', updatedAt: '2026-10-13T00:00:00.000Z' }],
+      activeId: THREAD_ID,
+      loaded: true,
+      error: null,
+      notices: {}
+    })
+    vi.mocked(fetchThreadMessages).mockResolvedValue(MESSAGES)
+    vi.mocked(fetchThreadUsageRuns).mockResolvedValue([])
+    vi.mocked(fetchThreadRequestSummaries).mockResolvedValue([
+      {
+        id: 's1',
+        runId: null,
+        step: null,
+        status: 'error',
+        error: 'Bad Request',
+        model: 'deepseek-flash',
+        provider: null,
+        messageCount: null,
+        toolCount: null,
+        systemChars: null,
+        toolsChars: null,
+        truncated: false,
+        createdAt: new Date(1500).toISOString()
+      }
+    ])
+    vi.mocked(fetchThreadCompaction).mockResolvedValue(null)
+
+    render(<TrajectoryView threadId={THREAD_ID} active revision="rev-1" />)
+    await screen.findByTestId('trajectory-ledger')
+
+    const failureRow = screen.getByTestId('trajectory-row-1')
+    expect(failureRow).toHaveAttribute('data-kind', 'error')
+    expect(failureRow).toHaveAttribute('data-error', 'true')
+    expect(failureRow).toHaveTextContent('请求失败')
+    expect(failureRow).toHaveTextContent('Bad Request')
+
+    fireEvent.click(failureRow)
+    // 失败行只有「概述 / 原始内容」：没有请求体可给，就不摆一个空的「请求」页签
+    expect(await screen.findByTestId('trajectory-tab-panel-overview')).toHaveTextContent('失败')
+    expect(screen.queryByTestId('trajectory-tab-request')).not.toBeInTheDocument()
+    // 也没取过明细（失败行没有正文）
+    expect(fetchRequestDetail).not.toHaveBeenCalled()
   })
 })

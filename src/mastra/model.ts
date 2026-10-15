@@ -4,10 +4,14 @@
  * 四种口径：
  *   - `KYCLAW_FORCE_MOCK=1` 强制内置 mock（T16 E2E / 离线开发用）；
  *   - **一条 provider 都没配** → 同样回内置 mock（首次启动、离线都不至于打不开）；
- *   - 配了且配置完整 → openai-compatible（baseUrl + apiKey + model）/ anthropic；
+ *   - 配了且配置完整 → openai-compatible（baseUrl + model，**密钥可缺**）/ anthropic（**必须有密钥**）；
  *     DeepSeek 官方端点走官方包 `@ai-sdk/deepseek`（reasoning 等能力贴着自家协议），其余走通用兼容层；
- *   - 配了但**半截**（缺 key / 缺 baseUrl / 缺模型名）→ 抛 `ProviderConfigError`（"配置不完整：缺 X"），
+ *   - 配了但**半截**（缺 baseUrl / 缺模型名 / anthropic 缺密钥）→ 抛 `ProviderConfigError`（"配置不完整：缺 X"），
  *     绝不静默回落 mock——否则用户会以为自己在用真模型。
+ *
+ * 密钥口径（打包态实报修正）：`openai-compatible` 没密钥也照发——本机服务（LM Studio / llama.cpp /
+ * ollama）与自建网关常常不校验密钥，而 SDK 在 `apiKey` 为空时**不发 Authorization 头**；真要认证由
+ * 服务端回 401/403。只有 `anthropic` 仍强制密钥（官方 SDK 的 x-api-key 必填）。见 `providerKeyOptional`。
  *
  * mock 是 ai/test 的 MockLanguageModelV4 + simulateReadableStream：零网络、逐段增量、可预期，
  * 所以"链路是否真通"能被断言，而不是靠连真模型碰运气。
@@ -313,7 +317,14 @@ export function withToolMediaFallback(model: KyclawModel): KyclawModel {
 
 /**
  * 按配置造模型（resolveModel 与"测试连接"共用同一条装配路径）。
- * 调用前配置已被 `providerConfigProblems` 验过（openai-compatible 的 baseUrl 非空）。
+ * 调用前配置已被 `providerConfigProblems` 验过（openai-compatible 的 baseUrl 非空；anthropic 已给密钥）。
+ *
+ * **空密钥时不传 `apiKey` 这个字段**（而不是传空串）：
+ *   - 通用兼容层：`...options.apiKey && { Authorization }`，空值/缺省都不发头——这正是"优先无头"；
+ *     传空串会发出 `Authorization: Bearer `（空凭据），有些网关把它当"无效凭据"直接 401；
+ *   - DeepSeek 官方包：`loadApiKey` 只认**字符串**（空串照收）→ 会发一个空的 `Bearer `，还会把
+ *     `DEEPSEEK_API_KEY` 环境变量挡在外面。缺省传才会回落到环境变量；两者都没有则在请求前抛
+ *     `LoadAPIKeyError`（一句人话，连接测试会翻出来）。
  * `env` 只影响通用兼容层的"工具结果里带图"开关（见 TOOL_MEDIA_ENV）。
  */
 export async function buildLanguageModel(
@@ -321,15 +332,17 @@ export async function buildLanguageModel(
   apiKey: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): Promise<KyclawModel> {
+  const keyOption = apiKey.trim() === '' ? {} : { apiKey }
+
   if (config.type === 'anthropic') {
     const { createAnthropic } = await import('@ai-sdk/anthropic')
-    return createAnthropic({ apiKey }).chat(config.model)
+    return createAnthropic(keyOption).chat(config.model)
   }
 
   const baseUrl = config.baseUrl ?? ''
   if (isDeepSeekBaseUrl(baseUrl)) {
     const { createDeepSeek } = await import('@ai-sdk/deepseek')
-    return createDeepSeek({ apiKey, baseURL: baseUrl }).chat(config.model)
+    return createDeepSeek({ ...keyOption, baseURL: baseUrl }).chat(config.model)
   }
 
   const toolMedia = toolMediaEnabled(env)
@@ -337,7 +350,7 @@ export async function buildLanguageModel(
   const model = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: baseUrl,
-    apiKey,
+    ...keyOption,
     // 不开这一项，工具结果里的图片会被 JSON.stringify 成字符串**静默丢掉**（见文件头注）
     supportsMultiPartToolContent: toolMedia
   }).chatModel(config.model)
@@ -348,6 +361,7 @@ export async function buildLanguageModel(
 /**
  * 按设置解析模型（env 可注入，测试不必动 process.env）：
  * 默认标记优先；半截配置抛 ProviderConfigError（"配置不完整：缺 X"），不静默回落 mock。
+ * 密钥可缺（openai 兼容族，见文件头注）；anthropic 缺密钥仍抛。
  */
 export async function resolveModel(
   providers: readonly ProviderConfig[] | undefined,
@@ -363,9 +377,11 @@ export async function resolveModel(
     return { model: await mockModel(), source: 'mock', mockReason: 'unconfigured' }
   }
 
-  const apiKey = readKey(config.id)
-  const problems = providerConfigProblems(config, apiKey !== null)
-  if (apiKey === null || problems.length > 0) {
+  // 密钥**可缺**（openai 兼容族：本机 / 自建端点常常不要密钥，SDK 在空密钥时不发 Authorization
+  // 头）；真要认证由服务端回 401/403，不在本地替它拦。anthropic 仍必须有密钥（providerConfigProblems 把关）。
+  const apiKey = readKey(config.id) ?? ''
+  const problems = providerConfigProblems(config, apiKey !== '')
+  if (problems.length > 0) {
     throw new ProviderConfigError(config.id, problems)
   }
 

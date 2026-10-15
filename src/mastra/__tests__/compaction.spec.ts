@@ -46,7 +46,7 @@ import {
   type CompactionMemory
 } from '../compaction'
 import { createThreadsRouter } from '../routes/threads'
-import { pricingFor, type UsageRun, type UsageStore } from '../usage'
+import { type UsageRun, type UsageStore } from '../usage'
 
 const CHAT_USAGE = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -444,8 +444,6 @@ describe('压缩服务（假 memory + 假模型）', () => {
       tokens: { input: 11, output: 111, total: 122 },
       cachedInput: 3
     })
-    expect(run.cost).not.toBeNull()
-    expect(pricingFor('deepseek-flash')).not.toBeNull()
   })
 
   it('round 59：记录带压缩前后 token——before = 最近一轮实测输入，after = 基线 + 摘要与保留段的字符折算', async () => {

@@ -1,22 +1,35 @@
 /**
  * 轨迹导出（纯序列化 + 一层浏览器下载薄壳）：dsh 有 session 导出，这里给同一件事。
  *
- * 导出的是**一件事的完整快照**，三部分都在里面（用户点名的"对话 + 轨迹 + 用量"）：
+ * 导出的是**一件事的完整快照**，几部分都在里面（用户点名的"对话 + 轨迹 + 用量"）：
  *   - `conversation.messages`：存储消息**原文**（不做任何加工，拿到别处能原样回放）；
  *   - `trajectory`：投影出来的轮次与步骤（含每步的时刻 / 时长 / 计时来源 / 工具入参结果）；
- *   - `usage`：该会话的逐轮用量行 + 合计（含没归属进任何轮的那些，不丢账）。
+ *   - `usage`：该会话的逐轮用量行 + 合计（含没归属进任何轮的那些，不丢账）；
+ *   - `requests`：该会话的逐次模型请求（用户反馈 015）—— **只带摘要**：一步一步的状态、
+ *     消息条数、工具件数、系统指令长度与失败原因。
+ *
+ * 「请求正文」为什么不进导出：一条请求实测 ~96 KB（3 条 system 1.4 万字 + 35 件工具 8.1 万字），
+ * 一轮里还有好几步 —— 几百轮的会话导一次就是几十 MB，外部工具也读不动。正文按需从本地取
+ * （`GET /api/trajectory/requests/detail?id=`，`requests.summaries[].id`），导出里把这条口径写清。
  *
  * 序列化与"怎么落盘"分开：`serializeTrajectoryExport` 是纯函数（可单测，不碰 DOM），
  * `downloadTrajectoryExport` 才碰 Blob / a[download]。
  */
 import type { StoredMessage, ThreadCompaction } from '@shared/threads'
-import type { TrajectoryUsageRun } from '@shared/trajectory'
+import type { TrajectoryRequestSummary, TrajectoryUsageRun } from '@shared/trajectory'
 import type { TrajectoryDoc, TrajectoryRow } from './model'
 import type { TrajectoryViewMode } from './timeline'
 
 /** 导出格式标识（外部工具认这个字段；改形状就升 version） */
 export const TRAJECTORY_EXPORT_FORMAT = 'kyclaw-trajectory'
-export const TRAJECTORY_EXPORT_VERSION = 1
+/** v2：用量里去掉计费口径（`usage.totals.cost` 与每行 run 的 `cost`；用户口径 014 不做计费） */
+/** v3：新增 `requests` 段（逐轮请求快照：系统指令 / 工具表 / 上下文条数；用户反馈 015） */
+/** v4：`requests` 改**逐次请求的摘要** + 正文按需取的口径说明（一条请求 ~96 KB，不进导出） */
+export const TRAJECTORY_EXPORT_VERSION = 4
+
+/** 请求正文不进导出的原因（写进载荷，别让外部工具以为"导出缺了东西"） */
+export const REQUESTS_DETAIL_NOTE =
+  '请求正文不进导出（一条请求 ~96 KB、一轮多步）；按 requests.summaries[].id 从本地取：GET /api/trajectory/requests/detail?id='
 
 export interface TrajectoryExportInput {
   thread: { id: string; title: string | null }
@@ -26,6 +39,8 @@ export interface TrajectoryExportInput {
   /** 存储消息原文 */
   messages: readonly StoredMessage[]
   usageRuns: readonly TrajectoryUsageRun[]
+  /** 逐次模型请求的摘要（round 87；没有 = 没记过/老会话，导出里是空数组而不是缺字段） */
+  requests: readonly TrajectoryRequestSummary[]
   compaction: ThreadCompaction | null
   /** 测试注入"现在" */
   now?: Date
@@ -53,6 +68,8 @@ function rowOf(row: TrajectoryRow): Record<string, unknown> {
     timingSource: row.timingSource,
     pending: row.pending,
     isError: row.isError,
+    /** 这一行属于哪一次模型请求（系统 / 上下文 / 失败三类行才有；用户反馈 015） */
+    request: row.request,
     tool:
       row.kind !== 'tool'
         ? null
@@ -79,10 +96,16 @@ export interface TrajectoryExportPayload {
     runs: readonly TrajectoryUsageRun[]
     /** `runs` 里**没能归属进任何轮**的交叉索引（不丢账，也便于看出"有账无轮"） */
     unattributed: readonly TrajectoryUsageRun[]
-    totals: { input: number; output: number; cachedInput: number; cost: number | null }
+    totals: { input: number; output: number; cachedInput: number }
   }
   compaction: ThreadCompaction | null
   conversation: { messages: readonly StoredMessage[] }
+  /**
+   * round 87：逐次模型请求的**摘要**（一步一步：状态 / 消息条数 / 工具件数 / 系统指令长度 /
+   * 失败原因）。`rowOf` 里那几类的行与它同源；正文按 `summaries[].id` 从本地按需取
+   * （见 `note`）。
+   */
+  requests: { note: string; summaries: readonly TrajectoryRequestSummary[] }
   trajectory: {
     compactions: number
     turns: ReadonlyArray<Record<string, unknown>>
@@ -90,24 +113,21 @@ export interface TrajectoryExportPayload {
   }
 }
 
-/** 合计：缓存/花费"一行都没报"就是 null，不当事先记 0（同 usage.ts 的口径） */
+/** 合计：缓存没报的行按 0 计入（这是"报了多少"的合计，不区分"没报"） */
 function totalsOf(runs: readonly TrajectoryUsageRun[]): {
   input: number
   output: number
   cachedInput: number
-  cost: number | null
 } {
   let input = 0
   let output = 0
   let cachedInput = 0
-  let cost: number | null = null
   for (const run of runs) {
     input += run.input
     output += run.output
     cachedInput += run.cachedInput ?? 0
-    if (run.cost !== null) cost = (cost ?? 0) + run.cost
   }
-  return { input, output, cachedInput, cost }
+  return { input, output, cachedInput }
 }
 
 /** 轨迹文档 + 原料 → 导出载荷（纯数据，未序列化） */
@@ -126,6 +146,7 @@ export function trajectoryExportPayload(input: TrajectoryExportInput): Trajector
     },
     compaction: input.compaction,
     conversation: { messages: input.messages },
+    requests: { note: REQUESTS_DETAIL_NOTE, summaries: input.requests },
     trajectory: {
       compactions: input.doc.compactions,
       turns: input.doc.turns.map((turn) => ({

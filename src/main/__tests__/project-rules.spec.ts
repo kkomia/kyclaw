@@ -37,7 +37,7 @@ async function rejected(path: string): Promise<void> {
   })
 }
 
-describe('项目规矩安全文件读写', () => {
+describe('项目约束安全文件读写', () => {
   it.runIf(process.platform === 'win32')(
     '真实 Windows 8.3 短路径与长路径读写同一规则且仍拒绝 junction',
     async () => {
@@ -136,6 +136,38 @@ describe('项目规矩安全文件读写', () => {
     await rm(join(root, '.kyclaw'))
     await mkdir(join(root, '.kyclaw', 'rules.md'), { recursive: true })
     await rejected(root)
+  })
+
+  /**
+   * 用户口径 009：这几句 message 是设置页「约束」栏 / 会话里真会显示给用户的话，
+   * 措辞统一说「约束」（旧说法「我的规矩」只剩历史）。文案分散在多个模块，
+   * 「一处都不许再出现『规矩』」那条整体守卫在 shared/__tests__/rules.spec.ts。
+   */
+  it('面向用户的诊断说「约束」：超限 / 非 UTF-8 / 读不出来 / 路径不安全', async () => {
+    const root = await temporary()
+    await saveProjectRules(project(root), '')
+    const file = join(root, '.kyclaw', 'rules.md')
+
+    for (const [bytes, expected] of [
+      [Buffer.alloc(RULES_SCOPE_MAX_BYTES + 1, 97), '项目约束超过 16 KiB，整份未加载。'],
+      [Buffer.from([0xc3, 0x28]), '项目约束不是合法 UTF-8 文本，整份未加载。']
+    ] as const) {
+      await writeFile(file, bytes)
+      const result = await readProjectRules(project(root))
+      expect(result.diagnostics.map((item) => item.message)).toEqual([expected])
+    }
+
+    expect(
+      (await readProjectRules(project(join(root, 'missing')))).diagnostics.map(
+        (item) => item.message
+      )
+    ).toEqual(['无法读取项目约束，本轮未加载。'])
+
+    const unsafe = await temporary()
+    await writeFile(join(unsafe, '.kyclaw'), '不是目录')
+    expect(
+      (await readProjectRules(project(unsafe))).diagnostics.map((item) => item.message)
+    ).toEqual(['项目约束路径不安全：不允许符号链接、junction 或非预期文件类型。'])
   })
 
   it('项目根、其父节点及 .kyclaw 的 symlink/junction 均拒绝读写', async () => {

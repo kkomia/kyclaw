@@ -1,5 +1,5 @@
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
 import { Input } from '@renderer/components/ui/input'
@@ -51,8 +51,10 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
 
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
   const [keyState, setKeyState] = useState<ProviderKeyState | null>(null)
-  const [pending, setPending] = useState<'saving' | 'clearing' | undefined>(undefined)
+  const [pending, setPending] = useState<'saving' | 'clearing' | 'toggling' | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
+  /** 上一次动作的结果（保存 / 清除密钥都在这行说话；012 用户口径） */
+  const [notice, setNotice] = useState('')
 
   const translateApi = window.kyclaw?.translate
 
@@ -90,6 +92,8 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
 
   const patchDraft = (patch: Partial<Draft>): void => {
     setDraft({ ...current, ...patch })
+    // 012：输入一动，上一次动作留下的「已保存」就不再描述眼前这份内容
+    setNotice('')
   }
 
   const save = useCallback(async (): Promise<void> => {
@@ -99,6 +103,7 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
     const key = current.key.trim()
 
     setError(undefined)
+    setNotice('')
     setPending('saving')
     try {
       await saveReasoningTranslate({ baseUrl, model, targetLanguage })
@@ -108,6 +113,7 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
         setKeyState(await translateApi.keyState())
       }
       setDraft(undefined)
+      setNotice('已保存')
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
@@ -122,8 +128,10 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
     }
     setPending('clearing')
     setError(undefined)
+    setNotice('')
     try {
       setKeyState(await translateApi.clearKey())
+      setNotice('密钥已清除')
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
@@ -131,10 +139,29 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
     }
   }, [translateApi])
 
-  const patch = (next: Parameters<typeof saveReasoningTranslate>[0]): void => {
-    setError(undefined)
-    saveReasoningTranslate(next).catch((caught: unknown) => setError(messageOf(caught)))
-  }
+  /**
+   * **就地落盘**（开关 / 翻译方式）：`pending` 要等下一次渲染才生效，连点两下会并发发两次
+   * settings:update —— 用一个 ref 现读的锁把这段串起来（期间控件 disabled）。
+   */
+  const writing = useRef(false)
+  const patch = useCallback(
+    async (next: Parameters<typeof saveReasoningTranslate>[0]): Promise<void> => {
+      if (writing.current) return
+      writing.current = true
+      setPending('toggling')
+      setError(undefined)
+      setNotice('')
+      try {
+        await saveReasoningTranslate(next)
+      } catch (caught) {
+        setError(messageOf(caught))
+      } finally {
+        writing.current = false
+        setPending(undefined)
+      }
+    },
+    [saveReasoningTranslate]
+  )
 
   const busy = pending !== undefined
 
@@ -147,7 +174,7 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
           label="启用思考翻译"
           data-testid="translate-enabled"
           disabled={busy}
-          onCheckedChange={(next) => patch({ enabled: next })}
+          onCheckedChange={(next) => void patch({ enabled: next })}
         />
       </div>
 
@@ -163,7 +190,7 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
                   aria-pressed={settings.mode === mode}
                   className={settings.mode === mode ? 'bg-selected' : undefined}
                   disabled={busy}
-                  onClick={() => patch({ mode })}
+                  onClick={() => void patch({ mode })}
                 >
                   {MODE_LABELS[mode]}
                 </Chip>
@@ -248,6 +275,12 @@ export function ReasoningTranslateSettings(): React.JSX.Element {
           </div>
         </>
       ) : null}
+
+      {notice === '' ? null : (
+        <p data-testid="translate-notice" role="status" className="text-c1 text-ink-secondary">
+          {notice}
+        </p>
+      )}
 
       {error === undefined ? null : (
         <p data-testid="translate-error" className="text-c1 text-danger">

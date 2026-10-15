@@ -62,6 +62,12 @@ async function renderSession(control: MockTransport, runtime: ThreadChatRuntime)
     </MemoryRouter>
   )
   await screen.findByTestId('composer-input')
+  // 只等输入卡**不够**（全量门禁实测到的抢跑）：输入卡第一帧就在（round 76 刻意不等端点/历史），
+  // 而这一排是**初始页**的件（`hero = ready && messages.length === 0 && …`，见 ChatPage）——
+  // 要等这一会话的加载走完才挂上；机器满载时 await findByTestId('composer-input') 会在 ready
+  // 之前就返回（那一刻 DOM 里只有 chat-loading），后面同步的 getByTestId 于是找不到胶囊。
+  // 本文件全部断言说的都是"初始页上这一排的行为"，所以等到这一排真的出现再往下走。
+  await screen.findByTestId('composer-capability-row')
 }
 
 /** 输入框（发送的唯一入口还是它） */

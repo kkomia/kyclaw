@@ -19,6 +19,7 @@ import { createProjectsRouter } from '../../mastra/routes/projects'
 import { createSessionPptTemplatesRouter } from '../../mastra/routes/session-ppt-templates'
 import { createThreadsRouter } from '../../mastra/routes/threads'
 import { createTasksRouter } from '../../mastra/routes/tasks'
+import { createTrajectoryRouter } from '../../mastra/routes/trajectory'
 import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, selectProviderConfig, type KyclawModel } from '../../mastra/model'
@@ -65,8 +66,14 @@ export const MCP_ROUTE_PREFIX = '/api/mcp'
 /** 记忆 API 的挂载前缀（T14；working memory 的查看/编辑/清空） */
 export const MEMORY_ROUTE_PREFIX = '/api/memory'
 
-/** 用量 API 的挂载前缀（T14；token 与花费的窗口统计） */
+/** 用量 API 的挂载前缀（T14；token 的窗口统计） */
 export const USAGE_ROUTE_PREFIX = '/api/usage'
+
+/**
+ * 轨迹数据面的挂载前缀（round 87 / 用户反馈 015 + 017）：逐次模型请求的摘要与明细。
+ * 与 `/api/usage` **分开**是有意的 —— 用量那条路坏了不该把轨迹原料一起带走（用户反馈 017）。
+ */
+export const TRAJECTORY_ROUTE_PREFIX = '/api/trajectory'
 
 /** 项目映射 API 的挂载前缀（T18；会话↔项目映射的读/写） */
 export const PROJECTS_ROUTE_PREFIX = '/api/projects'
@@ -283,8 +290,9 @@ export async function teardownQuietly(
  * 缺省模型来源：按 dataDir 下的 settings.providers 解析（没配 provider → 内置 mock）。
  *
  * 这里没有密钥来源（密钥在 electron 的 safeStorage 里，本模块刻意不 import electron），
- * 所以**配了 provider 时会以"配置不完整：缺 API 密钥"失败**——生产路径由 main/index.ts
- * 注入带 secrets 的 resolveModel；故意的失败好过静默回落 mock（T8 裁决）。
+ * 所以**配了必须密钥的渠道（anthropic）时会以"配置不完整：缺 API 密钥"失败**——生产路径由
+ * main/index.ts 注入带 secrets 的 resolveModel；故意的失败好过静默回落 mock（T8 裁决）。
+ * openai 兼容族不算"必须密钥"（本机服务那类），没有密钥也照发。
  */
 function settingsModelResolver(dataDir: string): ModelResolver {
   return async () => {
@@ -445,6 +453,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     storage,
     memory,
     usage,
+    requestSnapshots,
     sessionProjects,
     sessionPptTemplates,
     sessionPptSources,
@@ -599,6 +608,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
   app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage }))
+
+  // 轨迹数据面（用户反馈 015 / 017）：逐次模型请求的摘要 + 按 id 取正文。
+  // 独立路由、独立表（request_snapshots / request_blobs）：用量那条腿坏掉不牵连轨迹。
+  app.route(TRAJECTORY_ROUTE_PREFIX, createTrajectoryRouter({ snapshots: requestSnapshots }))
 
   const attempts = Math.max(1, options.attempts ?? DEFAULT_PORT_ATTEMPTS)
   let server: NodeServer | undefined

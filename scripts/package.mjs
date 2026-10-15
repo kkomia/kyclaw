@@ -10,11 +10,20 @@
  *      的 name/version）的安装包在不在、asarUnpack 有没有真的把 libsql 的原生绑定
  *      （@libsql/win32-x64-msvc/index.node）与 ?asset 资源解到 app.asar.unpacked（T15①）。
  *
+ * 0.1.1 起还管**发行日志**：`build/release-notes/<版本>.md` 随包进渠道 yml 的 releaseNotes
+ * （更新界面「关于」栏显示的那段更新内容）。两头自检：出包前文件必须在、且写着本版本的号
+ * （换版本号就得另写一份）；出包后渠道 yml 的 releaseNotes 字段必须就是这份原文。
+ * 传法是 electron-builder 的标准配置 `-c.releaseInfo.releaseNotesFile=<build/ 下的相对路径>`
+ * （它自己写进 yml 的 releaseNotes + releaseName + releaseDate，见 app-builder-lib 的
+ * publish/updateInfoBuilder.js）。
+ *
  * 环境照传：pnpm 会把 .npmrc 的镜像写成 npm_config_electron_mirror /
  * npm_config_electron_builder_binaries_mirror，Electron 与 NSIS 的下载靠它走 npmmirror。
  *
- * 纯函数（expectedInstallerName / staleOutputs / cleanStaleOutputs / projectManifest）导出供最小验证：
- * 直接执行才跑打包流程，被 `import()` 时只拿函数（见终审 fix wave 报告的验证记录）。
+ * 纯函数（expectedInstallerName / staleOutputs / cleanStaleOutputs / projectManifest /
+ * releaseNotesPath / releaseNotesRelativePath / releaseNotesProblem / channelReleaseProblem）
+ * 导出供最小验证：直接执行才跑打包流程，被 `import()` 时只拿函数
+ * （见终审 fix wave 报告的验证记录；发行日志那几条同时被 src/main/__tests__/release-notes-scripts.spec.ts 钉住）。
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
@@ -38,6 +47,12 @@ const KIT_CLI_RELATIVE = 'node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js'
  */
 const KIT_ENGINE_RELATIVE = 'node_modules/@deepseek-ai/libreoffice-kit-win32-x64'
 const KIT_ENGINE_FILES = ['bin/libreoffice-kit.exe', 'program', 'sources', 'licenses']
+/**
+ * 发行日志的目录（相对 build/，即 electron-builder 的 buildResources）：**文件名就是版本号**
+ * （`build/release-notes/0.1.1.md`）—— 版本与日志绑死，换了版本号就必须另写一份，不会把上一版的
+ * 日志复用成这一版的发行说明。
+ */
+const RELEASE_NOTES_DIR = 'release-notes'
 
 function fail(message) {
   console.error(`[package] ${message}`)
@@ -123,6 +138,150 @@ export function cleanStaleOutputs(distDir = DIST_DIR) {
   return removed
 }
 
+/**
+ * 本版本发行日志的相对路径（**相对 build/**，也就是 electron-builder 的 buildResources 目录）。
+ * 传给 electron-builder 的就是这个串：它按 buildResources → 项目根依次找，`release-notes/0.1.1.md`
+ * 落在前者下面。
+ */
+export function releaseNotesRelativePath(version) {
+  return `${RELEASE_NOTES_DIR}/${version}.md`
+}
+
+/** 本版本发行日志的绝对路径（不判存在：调用方要能拿它给出"该写哪个文件"） */
+export function releaseNotesPath(version, root = ROOT) {
+  return join(root, 'build', RELEASE_NOTES_DIR, `${version}.md`)
+}
+
+/**
+ * 发行日志的内容自检：空文件、或者**没提到本版本号**的（十有八九是复制上一版忘了改）都拦下。
+ * 版本与日志绑死是这个功能的全部意义——错了会直接显示给用户看。
+ */
+export function releaseNotesProblem(version, text) {
+  const notes = String(text ?? '').trim()
+  if (notes.length === 0) return `本版本的发行日志是空的：${releaseNotesRelativePath(version)}`
+  if (!notes.includes(version)) {
+    return (
+      `本版本的发行日志里没提到版本号 ${version}（版本与日志要绑死，别复用上一版的文件）：` +
+      `${releaseNotesRelativePath(version)}`
+    )
+  }
+  return null
+}
+
+/** 换行归一（CRLF→LF）并去掉尾随换行：块标量的 clip/keep 只管这几个换行，不算内容差异 */
+function sameNotesText(a, b) {
+  const normalize = (value) =>
+    String(value ?? '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\n+$/, '')
+  return normalize(a) === normalize(b)
+}
+
+/** 一段原文（错误文案里带出来，好认实际写进去的是什么） */
+function excerpt(value, limit = 60) {
+  const text = String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
+}
+
+/** 单行标量：双引号（YAML 转义与 JSON 兼容）、单引号（'' 转义）、裸值 */
+function scalarField(head) {
+  const text = head.trim()
+  if (text.length === 0 || text === '~' || text === 'null' || text.startsWith('#')) {
+    return { kind: 'value', value: null }
+  }
+  if (text.startsWith('"')) {
+    if (text.length < 2 || !text.endsWith('"')) return { kind: 'unsupported', detail: '跨行双引号' }
+    try {
+      return { kind: 'value', value: JSON.parse(text) }
+    } catch {
+      return { kind: 'unsupported', detail: '双引号里的转义认不出来' }
+    }
+  }
+  if (text.startsWith("'")) {
+    if (text.length < 2 || !text.endsWith("'")) return { kind: 'unsupported', detail: '跨行单引号' }
+    return { kind: 'value', value: text.slice(1, -1).replace(/''/g, "'") }
+  }
+  return { kind: 'value', value: text }
+}
+
+/**
+ * 块标量（`|`）的正文：缩进按第一行非空内容定（显式缩进指示优先），空行不参与判缩进；
+ * chomping 决定尾随换行——`-` 不留、默认（clip）留一个、`+` 全留。
+ */
+function blockField(lines, at, chomp, explicitIndent) {
+  let indent = explicitIndent === '' ? -1 : Number(explicitIndent)
+  const body = []
+  for (let index = at + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.trim().length === 0) {
+      body.push('')
+      continue
+    }
+    const leading = line.length - line.trimStart().length
+    if (indent === -1) {
+      if (leading === 0) break
+      indent = leading
+    }
+    if (leading < indent) break
+    body.push(line.slice(indent))
+  }
+  let trailing = 0
+  while (body.length > 0 && body[body.length - 1] === '') {
+    body.pop()
+    trailing += 1
+  }
+  if (body.length === 0) return { kind: 'value', value: '' }
+  const kept = chomp === '+' ? body.concat(Array(trailing).fill('')) : body
+  const text = kept.join('\n')
+  return { kind: 'value', value: chomp === '-' ? text : `${text}\n` }
+}
+
+/**
+ * 渠道 yml 里 releaseNotes 的**实际字段值**（顶层键、列 0；同名键按 YAML 的"后者为准"）。
+ * 只认 electron-builder 走的那套写法（js-yaml 的块标量 `|` 与单行标量），其余样式明确报"认不出来"
+ * —— 比"在整份文件里搜这几行"可靠：能看出顺序，也不会被别的字段碰巧包含同一段文字骗过。
+ */
+function releaseNotesField(channelYml) {
+  const lines = String(channelYml ?? '').split('\n')
+  let at = -1
+  for (let index = 0; index < lines.length; index += 1) {
+    if (/^releaseNotes:/.test(lines[index])) at = index
+  }
+  if (at === -1) return { kind: 'missing' }
+  const head = lines[at].slice('releaseNotes:'.length)
+  const indicator = /^\s*([|>])([0-9+-]*)\s*$/.exec(head)
+  if (indicator === null) return scalarField(head)
+  if (indicator[1] === '>') return { kind: 'unsupported', detail: '折叠块（>）' }
+  const marks = indicator[2]
+  const chomp = marks.includes('+') ? '+' : marks.includes('-') ? '-' : ''
+  const digits = /\d/.exec(marks)
+  return blockField(lines, at, chomp, digits === null ? '' : digits[0])
+}
+
+/**
+ * 打包自检：渠道 yml（dist/latest.yml 或 beta.yml）里 releaseNotes 字段真的就是本版本日志的原文，
+ * releaseDate 也由 electron-builder 自己补上了。返回一句人话或 null（没问题）。
+ */
+export function channelReleaseProblem(channelYml, notes) {
+  const text = String(channelYml ?? '')
+  const field = releaseNotesField(text)
+  if (field.kind === 'missing') {
+    return '渠道 yml 里没有 releaseNotes 字段（出包时 -c.releaseInfo.releaseNotesFile 没传进去？）'
+  }
+  if (field.kind === 'unsupported') {
+    return `渠道 yml 里 releaseNotes 的写法认不出来（${field.detail}）——这段要按原文进 releaseNotes`
+  }
+  if (!/^releaseDate:\s*\S/m.test(text)) {
+    return '渠道 yml 里没有 releaseDate（electron-builder 本该自己补上，配置被改坏了？）'
+  }
+  if (!sameNotesText(field.value, notes)) {
+    return `渠道 yml 里的发行日志与本版本的文件不一致（yml 里实际写进去的是「${excerpt(field.value)}」）`
+  }
+  return null
+}
+
 function main() {
   try {
     // 本机嵌入引擎的运行时必须是现成的：缺了它打出来的包"本地模型"一路直接不可用
@@ -143,15 +302,38 @@ function main() {
       )
     }
 
+    // 发行日志（0.1.1）：先确认**本版本**的那份在、且写的就是本版本 —— 缺件在这里就停，
+    // 而且排在"预清上一次的打包输出"之前：缺日志不该先把上一版的产物删掉。
+    const manifest = projectManifest()
+    const notesFile = releaseNotesPath(manifest.version)
+    if (!existsSync(notesFile)) {
+      fail(
+        `缺本版本的发行日志：${notesFile}\n` +
+          `  先写 build/${releaseNotesRelativePath(manifest.version)}（它的内容会进渠道 yml 的 ` +
+          'releaseNotes，就是更新界面「关于」栏显示的那段更新内容）再出包'
+      )
+    }
+    const releaseNotes = readFileSync(notesFile, 'utf8')
+    const notesProblem = releaseNotesProblem(manifest.version, releaseNotes)
+    if (notesProblem !== null) fail(notesProblem)
+
     const cleared = cleanStaleOutputs()
     if (cleared.length > 0) {
       console.log(`[package] 预清上一次的打包输出：${cleared.join('、')}`)
     }
 
     run('electron-vite', ['build'])
-    run('electron-builder', ['--win', '--publish', 'never'])
+    run('electron-builder', [
+      '--win',
+      '--publish',
+      'never',
+      // electron-builder 的标准支持：把这份 md 读进 latest.yml/beta.yml 的 releaseNotes
+      // （releaseDate 它自己补、releaseName 有就给；见 app-builder-lib/publish/updateInfoBuilder.js）。
+      // 路径相对 buildResources（build/）——换版本号就换文件名，不会复用上一版的日志。
+      `-c.releaseInfo.releaseNotesFile=${releaseNotesRelativePath(manifest.version)}`
+    ])
 
-    const expected = expectedInstallerName(projectManifest())
+    const expected = expectedInstallerName(manifest)
     if (!existsSync(join(DIST_DIR, expected))) {
       const found = existsSync(DIST_DIR)
         ? readdirSync(DIST_DIR).filter((name) => name.endsWith('-setup.exe'))
@@ -221,10 +403,17 @@ function main() {
     // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新。
     // 通道文件名跟着版本走：预发布（0.1.0-beta.N）是 beta.yml，正式版才是 latest.yml
     // （electron-builder 的 channel 语义，与包内 app-update.yml 的 `channel: beta` 配对）。
-    const channelFile = String(projectManifest().version).includes('-') ? 'beta.yml' : 'latest.yml'
+    const channelFile = String(manifest.version).includes('-') ? 'beta.yml' : 'latest.yml'
     if (!existsSync(join(DIST_DIR, channelFile))) {
       fail(`dist/ 下没有 ${channelFile}（electron-builder.yml 的 publish 配置被改坏了？）`)
     }
+    // 发行日志的落点自检（0.1.1）：渠道 yml 是客户端唯一读的东西——日志没进去，界面就不会有
+    // 更新内容。这里是"出包成功但用户看不到日志"的那道闸。
+    const channelProblem = channelReleaseProblem(
+      readFileSync(join(DIST_DIR, channelFile), 'utf8'),
+      releaseNotes
+    )
+    if (channelProblem !== null) fail(`${channelFile}：${channelProblem}`)
     if (!existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'app-update.yml'))) {
       fail('resources/app-update.yml 没有进包（publish 配置被改坏了？测试机不会检查更新）')
     }
@@ -241,6 +430,10 @@ function main() {
     )
     console.log(
       `[package] 随包渲染引擎：resources/libreoffice-kit 共 ${(kitBytes / 1024 / 1024).toFixed(1)} MB（未压缩，含许可与源码配方）`
+    )
+    console.log(
+      `[package] 本版本发行日志：build/${releaseNotesRelativePath(manifest.version)}（` +
+        `${releaseNotes.trim().split('\n').length} 行 → ${channelFile} 的 releaseNotes，已核对）`
     )
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error))

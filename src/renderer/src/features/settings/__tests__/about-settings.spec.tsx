@@ -184,6 +184,22 @@ describe('「关于」组：更新源（round 63）', () => {
     expect(useSettingsStore.getState().settings.updateUrl).toBe(
       'https://mine.example.com/releases/'
     )
+    // 012：保存要有结果反馈
+    expect(screen.getByTestId('about-update-url-notice')).toHaveTextContent('已保存')
+  })
+
+  it('012：落盘失败也要有反馈（原因带出来，不静默）', async () => {
+    const bridge = renderAbout(BUNDLED)
+    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    fireEvent.change(screen.getByTestId('about-update-url'), {
+      target: { value: 'https://mine.example.com/releases/' }
+    })
+    fireEvent.click(screen.getByTestId('about-update-url-save'))
+
+    expect(await screen.findByTestId('about-error')).toHaveTextContent('磁盘满了')
+    expect(screen.queryByTestId('about-update-url-notice')).not.toBeInTheDocument()
   })
 
   it('保存成功后主进程的广播自动生效（configured 变了，界面不用自己刷新）', async () => {
@@ -261,5 +277,158 @@ describe('「关于」组：更新源（round 63）', () => {
     await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ updateUrl: '' }))
     await waitFor(() => expect(screen.getByTestId('about-update-url')).toHaveValue(''))
     expect(useSettingsStore.getState().settings.updateUrl).toBe('')
+  })
+})
+
+/** 这一版的更新说明（下面几个用例共用同一段文本） */
+const NOTES = '这一版：\n- 更新内容会显示出来'
+
+describe('「关于」组：更新内容（发行日志，0.1.1）', () => {
+  it('有新版本就显示更新内容：发行名 + 发行日期 + 日志原文', async () => {
+    renderAbout({
+      ...STATUS,
+      status: {
+        phase: 'available',
+        version: '0.1.1',
+        notes: NOTES,
+        releaseName: 'kyclaw 0.1.1',
+        releaseDate: '2026-10-15T02:30:00.000Z'
+      }
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('发现新版本 0.1.1')
+    )
+    expect(screen.getByTestId('about-release-name')).toHaveTextContent('kyclaw 0.1.1')
+    expect(screen.getByTestId('about-release-notes')).toHaveTextContent('更新内容会显示出来')
+    // 发行日期按本地时间显示成"年月日 时分"（源上给的是 ISO 串）
+    expect(screen.getByTestId('about-release-date')).toHaveTextContent(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
+    )
+    // 日志就是一行普通文字，不是对话框、也不是新窗口
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('源上没给发行名：标题退回「更新内容」；日期解析不出来就原样显示', async () => {
+    renderAbout({
+      ...STATUS,
+      status: { phase: 'available', version: '0.1.1', notes: NOTES, releaseDate: '待定' }
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-release-name')).toHaveTextContent('更新内容')
+    )
+    expect(screen.getByTestId('about-release-date')).toHaveTextContent('待定')
+  })
+
+  it('日志按纯文本渲染：HTML / 图片 / 脚本一律当字面量（不插 DOM、不拉远程图片）', async () => {
+    const hostile =
+      '<img src="http://127.0.0.1:9/pixel.png"> <script>window.__pwned = 1</script> [点我](http://x)'
+    renderAbout({ ...STATUS, status: { phase: 'available', version: '0.1.1', notes: hostile } })
+
+    const region = await screen.findByTestId('about-release-notes')
+    expect(region).toHaveTextContent(hostile)
+    expect(region.querySelector('img')).toBeNull()
+    expect(region.querySelector('script')).toBeNull()
+  })
+
+  it('缺说明 = 那一块整块不出现，检查/安装照旧（日志不拦更新）', async () => {
+    const bridge = renderAbout({ ...STATUS, status: { phase: 'available', version: '0.1.1' } })
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('发现新版本 0.1.1')
+    )
+    expect(screen.queryByTestId('about-release')).not.toBeInTheDocument()
+    expect(screen.getByTestId('about-check')).not.toBeDisabled()
+
+    // 换一次检查（换源/换版本同理）：旧日志跟着状态一起消失，不留在界面上
+    bridge.updates.push({
+      ...STATUS,
+      status: { phase: 'available', version: '0.1.1', notes: NOTES }
+    })
+    await waitFor(() => expect(screen.getByTestId('about-release-notes')).toBeInTheDocument())
+
+    bridge.updates.push({ ...STATUS, status: { phase: 'up-to-date' } })
+    await waitFor(() => expect(screen.queryByTestId('about-release')).not.toBeInTheDocument())
+  })
+
+  it('下载中与已下载都留着这一版的日志（状态行换文案，更新内容不消失）', async () => {
+    const bridge = renderAbout(STATUS)
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    bridge.updates.push({
+      ...STATUS,
+      status: { phase: 'downloading', version: '0.1.1', percent: 42, notes: NOTES }
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('正在下载 0.1.1（42%）')
+    )
+    expect(screen.getByTestId('about-release-notes')).toHaveTextContent('更新内容会显示出来')
+
+    bridge.updates.push({
+      ...STATUS,
+      status: { phase: 'downloaded', version: '0.1.1', notes: NOTES }
+    })
+    await waitFor(() => expect(screen.getByTestId('about-install')).toBeInTheDocument())
+    expect(screen.getByTestId('about-release-notes')).toHaveTextContent('更新内容会显示出来')
+
+    fireEvent.click(screen.getByTestId('about-install'))
+    await waitFor(() => expect(bridge.updates.install).toHaveBeenCalledTimes(1))
+  })
+
+  it('长日志先收起，点「展开」后自己滚（再点收起）', async () => {
+    const longNotes = Array.from(
+      { length: 12 },
+      (_, index) => `第 ${index + 1} 行：这一版做了什么`
+    ).join('\n')
+    renderAbout({ ...STATUS, status: { phase: 'available', version: '0.1.1', notes: longNotes } })
+
+    const region = await screen.findByTestId('about-release-notes')
+    expect(region).toHaveTextContent('第 12 行：这一版做了什么')
+    expect(region.className).toContain('max-h-24')
+    expect(screen.getByTestId('about-release-toggle')).toHaveTextContent('展开')
+
+    fireEvent.click(screen.getByTestId('about-release-toggle'))
+    await waitFor(() =>
+      expect(screen.getByTestId('about-release-toggle')).toHaveTextContent('收起')
+    )
+    expect(screen.getByTestId('about-release-notes').className).toContain('overflow-auto')
+
+    fireEvent.click(screen.getByTestId('about-release-toggle'))
+    await waitFor(() =>
+      expect(screen.getByTestId('about-release-toggle')).toHaveTextContent('展开')
+    )
+  })
+
+  it('短日志不给「展开」（阈值以下直接全显）', async () => {
+    renderAbout({ ...STATUS, status: { phase: 'available', version: '0.1.1', notes: NOTES } })
+
+    await screen.findByTestId('about-release-notes')
+    expect(screen.queryByTestId('about-release-toggle')).not.toBeInTheDocument()
+  })
+
+  it('同一版但这次没带说明：那一块整块消失（不复用上一份），版本号照报', async () => {
+    const bridge = renderAbout({
+      ...STATUS,
+      status: { phase: 'available', version: '0.1.1', notes: NOTES }
+    })
+    await screen.findByTestId('about-release-notes')
+
+    bridge.updates.push({ ...STATUS, status: { phase: 'available', version: '0.1.1' } })
+
+    await waitFor(() => expect(screen.queryByTestId('about-release')).not.toBeInTheDocument())
+    expect(screen.getByTestId('about-update-status')).toHaveTextContent('发现新版本 0.1.1')
+  })
+
+  it('换更新源（主进程推 idle）：那一块跟着消失，不留在界面上', async () => {
+    const bridge = renderAbout({
+      ...STATUS,
+      status: { phase: 'available', version: '0.1.1', notes: NOTES }
+    })
+    await screen.findByTestId('about-release-notes')
+
+    bridge.updates.push({ ...STATUS, status: { phase: 'idle' } })
+
+    await waitFor(() => expect(screen.queryByTestId('about-release')).not.toBeInTheDocument())
+    expect(screen.getByTestId('about-update-status')).toHaveTextContent('尚未检查')
   })
 })

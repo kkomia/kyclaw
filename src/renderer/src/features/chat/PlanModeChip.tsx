@@ -1,5 +1,5 @@
 import type { SessionPlan } from '@shared/plan'
-import { planModeLabel } from './plan-ui'
+import { planActiveOf, planModeLabel } from './plan-ui'
 
 export interface PlanModeChipProps {
   /** 计划状态（null = 还没读到） */
@@ -16,7 +16,7 @@ export interface PlanModeChipProps {
  * 什么都不铺 —— 没有正在发生的模式，就没有常驻件。取数错误由页脚那张错误卡（带重试）说，这里不重复。
  */
 export function PlanModeChip({ state }: PlanModeChipProps): React.JSX.Element | null {
-  if (state === null || state.mode === 'normal') return null
+  if (!planActiveOf(state)) return null
   return (
     <div data-testid="plan-mode-chip" className="flex min-w-0 flex-wrap items-center gap-2 text-c1">
       <span

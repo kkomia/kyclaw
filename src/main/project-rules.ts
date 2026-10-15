@@ -76,10 +76,10 @@ function diagnostic(error: unknown, operation: 'read' | 'save'): RulesDiagnostic
     scope: 'project',
     code: unsafe ? 'unsafe-path' : operation === 'read' ? 'read-failed' : 'save-failed',
     message: unsafe
-      ? '项目规矩路径不安全：不允许符号链接、junction 或非预期文件类型。'
+      ? '项目约束路径不安全：不允许符号链接、junction 或非预期文件类型。'
       : operation === 'read'
-        ? '无法读取项目规矩，本轮未加载。'
-        : '无法保存项目规矩。'
+        ? '无法读取项目约束，本轮未加载。'
+        : '无法保存项目约束。'
   }
 }
 
@@ -112,7 +112,7 @@ export async function readProjectRules(project: Project): Promise<RulesReadResul
         return {
           text: '',
           diagnostics: [
-            { scope: 'project', code: 'too-large', message: '项目规矩超过 16 KiB，整份未加载。' }
+            { scope: 'project', code: 'too-large', message: '项目约束超过 16 KiB，整份未加载。' }
           ]
         }
       }
@@ -128,7 +128,7 @@ export async function readProjectRules(project: Project): Promise<RulesReadResul
             {
               scope: 'project',
               code: 'invalid-text',
-              message: '项目规矩不是合法 UTF-8 文本，整份未加载。'
+              message: '项目约束不是合法 UTF-8 文本，整份未加载。'
             }
           ]
         }
@@ -174,7 +174,7 @@ export async function saveProjectRules(
           {
             scope: 'project',
             code: 'project-unavailable',
-            message: '项目已删除或路径已改变，项目规矩未保存。'
+            message: '项目已删除或路径已改变，项目约束未保存。'
           }
         ]
       }
