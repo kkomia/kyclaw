@@ -280,6 +280,13 @@ test.describe('R91 打包态预览（真安装包目录）', () => {
 
   test('终端：真起 PTY，命令回显里出现"执行过才有"的标记', async () => {
     test.setTimeout(120_000)
+    // 上一条用例去过设置页（侧栏换成设置导航，没有会话列表）：先回对话页再取会话 id
+    await page.evaluate(() => {
+      window.location.hash = '#/chat'
+    })
+    await expect(page.locator('[data-testid^="session-item-"]').first()).toBeVisible({
+      timeout: 30_000
+    })
     const sessionTestId = await page
       .locator('[data-testid^="session-item-"]')
       .first()
