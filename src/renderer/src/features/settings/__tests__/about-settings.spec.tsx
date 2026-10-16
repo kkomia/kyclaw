@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import type { UpdateState } from '@shared/ipc'
+import type { BundledReleaseNotes, UpdateState } from '@shared/ipc'
 import { defaultSettings } from '@shared/settings'
 import { AboutSettings } from '../AboutSettings'
 import { updateStatusText } from '../status-text'
@@ -11,12 +11,19 @@ import { updateStatusText } from '../status-text'
  * 设置页「关于」组（T17 / round 63）：当前版本 + 手动检查 + 一行状态 + 更新源（填地址、保存、校验）。
  * 这里盯的是"用户看到的那几件事"：版本、状态文案随推送走、没配源时按钮不可点（不骚扰）、
  * 下载完成后才出现「重启并安装」、更新源填错了挡在保存这一步。
+ * round 88：更新源配置**默认收起**（版本 / 状态 / 更新内容 / 报错仍常显）——要碰地址输入与
+ * 「保存」的用例先 `openConfig()` 点开「配置」；默认收起与“收起只收配置”本身也有用例钉着。
  */
 function renderAbout(initial?: UpdateState): ReturnType<typeof installKyclawBridge> {
   const bridge = installKyclawBridge()
   if (initial) bridge.updates.state.mockResolvedValue(initial)
   render(<AboutSettings />)
   return bridge
+}
+
+/** 点开更新源配置区（round 88 起默认收起）：要动地址输入 / 保存的用例先叫它 */
+function openConfig(): void {
+  fireEvent.click(screen.getByTestId('about-update-config-toggle'))
 }
 
 const STATUS: UpdateState = {
@@ -149,9 +156,79 @@ describe('「关于」组', () => {
   })
 })
 
-describe('「关于」组：更新源（round 63）', () => {
-  it('打包件里带内置源：输入框留空，占位提示就是那个地址', async () => {
+describe('「关于」组：更新源（round 63；round 88 起默认收起）', () => {
+  it('默认收起：页面上只有「配置」入口，地址输入与保存都不在；点开是「收起」', async () => {
     renderAbout(BUNDLED)
+
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    expect(screen.queryByTestId('about-update-url')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('about-update-url-save')).not.toBeInTheDocument()
+
+    const toggle = screen.getByTestId('about-update-config-toggle')
+    expect(toggle).toHaveTextContent('配置')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(screen.getByTestId('about-update-url')).toBeInTheDocument())
+    expect(screen.getByTestId('about-update-config-toggle')).toHaveTextContent('收起')
+    expect(screen.getByTestId('about-update-config-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+
+    fireEvent.click(screen.getByTestId('about-update-config-toggle'))
+
+    await waitFor(() => expect(screen.queryByTestId('about-update-url')).not.toBeInTheDocument())
+    expect(screen.getByTestId('about-update-config-toggle')).toHaveTextContent('配置')
+  })
+
+  it('收起只收配置：版本、状态、更新内容与报错在收起态都看得见', async () => {
+    const bridge = renderAbout({
+      ...BUNDLED,
+      status: { phase: 'available', version: '0.1.1', notes: NOTES }
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('发现新版本 0.1.1')
+    )
+    expect(screen.getByTestId('about-version')).toHaveTextContent('版本 1.0.0')
+    expect(screen.getByTestId('about-release-notes')).toHaveTextContent('更新内容会显示出来')
+    expect(screen.queryByTestId('about-update-url')).not.toBeInTheDocument()
+
+    // 出错（检查失败）也只写一行状态，收起时照样看得见——不用先去展开配置
+    bridge.updates.push({ ...BUNDLED, status: { phase: 'error', message: '连不上更新源' } })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('检查失败：连不上更新源')
+    )
+    expect(screen.queryByTestId('about-update-url')).not.toBeInTheDocument()
+  })
+
+  it('收起再展开：没保存的草稿还在，也没偷偷写盘（写盘只认用户点的那一下）', async () => {
+    const bridge = renderAbout(BUNDLED)
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    openConfig()
+
+    fireEvent.change(screen.getByTestId('about-update-url'), {
+      target: { value: 'https://draft.example.com/releases/' }
+    })
+    fireEvent.click(screen.getByTestId('about-update-config-toggle'))
+    await waitFor(() => expect(screen.queryByTestId('about-update-url')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('about-update-config-toggle'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-url')).toHaveValue(
+        'https://draft.example.com/releases/'
+      )
+    )
+    expect(bridge.update).not.toHaveBeenCalled()
+  })
+
+  it('打包件里带内置源：展开后输入框留空，占位提示就是那个地址', async () => {
+    renderAbout(BUNDLED)
+    openConfig()
 
     await waitFor(() =>
       expect(screen.getByTestId('about-update-url')).toHaveAttribute(
@@ -165,6 +242,7 @@ describe('「关于」组：更新源（round 63）', () => {
   it('填地址 + 保存：写进设置（settings:update），输入框随后以落盘值为准', async () => {
     const bridge = renderAbout(BUNDLED)
     await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    openConfig()
 
     fireEvent.change(screen.getByTestId('about-update-url'), {
       target: { value: '  https://mine.example.com/releases/  ' }
@@ -192,6 +270,7 @@ describe('「关于」组：更新源（round 63）', () => {
     const bridge = renderAbout(BUNDLED)
     bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
     await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    openConfig()
 
     fireEvent.change(screen.getByTestId('about-update-url'), {
       target: { value: 'https://mine.example.com/releases/' }
@@ -207,6 +286,7 @@ describe('「关于」组：更新源（round 63）', () => {
     bridge.updates.state.mockResolvedValue({ ...BUNDLED, configured: false })
     render(<AboutSettings />)
     await waitFor(() => expect(screen.getByTestId('about-check')).toBeDisabled())
+    openConfig()
 
     fireEvent.change(screen.getByTestId('about-update-url'), {
       target: { value: 'https://mine.example.com/releases/' }
@@ -224,6 +304,7 @@ describe('「关于」组：更新源（round 63）', () => {
   it('填的地址不是 http(s)：挡在保存这一步（不写盘），输入框给出错误态，内容留着好改', async () => {
     const bridge = renderAbout(BUNDLED)
     await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    openConfig()
 
     for (const bad of ['ftp://host/releases', '没写全', 'http://']) {
       fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: bad } })
@@ -241,6 +322,7 @@ describe('「关于」组：更新源（round 63）', () => {
   it('改一下就把错误态清掉', async () => {
     renderAbout(BUNDLED)
     await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+    openConfig()
 
     fireEvent.change(screen.getByTestId('about-update-url'), { target: { value: 'nope' } })
     fireEvent.click(screen.getByTestId('about-update-url-save'))
@@ -264,6 +346,7 @@ describe('「关于」组：更新源（round 63）', () => {
     })
     bridge.updates.state.mockResolvedValue(BUNDLED)
     render(<AboutSettings />)
+    openConfig()
 
     await waitFor(() =>
       expect(screen.getByTestId('about-update-url')).toHaveValue(
@@ -430,5 +513,172 @@ describe('「关于」组：更新内容（发行日志，0.1.1）', () => {
 
     await waitFor(() => expect(screen.queryByTestId('about-release')).not.toBeInTheDocument())
     expect(screen.getByTestId('about-update-status')).toHaveTextContent('尚未检查')
+  })
+})
+
+/**
+ * 本版本更新日志（本轮，随包）：入口常驻 —— 断网 / 已是最新 / 没配源都能看"我现在装的这一版
+ * 改了什么"。与上面"源上新版本"那块**各管各的**：版本各自标，谁也不冒用谁的日志。
+ *
+ * 数据只走 `updates:releaseNotes`（主进程按 app.getVersion() 读随包的 md）；这里用桥桩喂三态。
+ */
+describe('「关于」组：更新日志（本版本，随包）', () => {
+  const BUNDLED_VERSION = '1.0.0'
+  const BUNDLED_NOTES = 'kyclaw 1.0.0\n\n本次更新内容：\n- 本版本随包的第一条'
+  const BUNDLED_OK = {
+    state: 'ok' as const,
+    version: BUNDLED_VERSION,
+    notes: BUNDLED_NOTES
+  }
+
+  function renderAboutWithNotes(
+    payload: BundledReleaseNotes,
+    initial: UpdateState = STATUS
+  ): ReturnType<typeof installKyclawBridge> {
+    const bridge = installKyclawBridge()
+    bridge.updates.state.mockResolvedValue(initial)
+    bridge.updates.releaseNotes.mockResolvedValue(payload)
+    render(<AboutSettings />)
+    return bridge
+  }
+
+  /** 点开「更新日志」入口（常驻那一行；与更新源的「配置」是两个入口） */
+  function openNotes(): void {
+    fireEvent.click(screen.getByTestId('about-bundled-notes-toggle'))
+  }
+
+  it('入口常驻且默认收起：已是最新版本时照样能看本版本改了什么', async () => {
+    renderAboutWithNotes(BUNDLED_OK, { ...STATUS, status: { phase: 'up-to-date' } })
+
+    // 常驻：数据还没回来时入口就在（按钮说「查看」，不是「配置」——那是更新源的次级设置）
+    const entry = screen.getByTestId('about-bundled-notes-toggle')
+    expect(entry).toHaveTextContent('查看')
+    expect(entry).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('about-bundled-notes')).not.toBeInTheDocument()
+
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('已是最新版本')
+    )
+    // 源上那份（新版本日志）没有：这块照旧不出现，但入口照旧在
+    expect(screen.queryByTestId('about-release')).not.toBeInTheDocument()
+
+    openNotes()
+
+    expect(screen.getByTestId('about-bundled-notes-title')).toHaveTextContent(
+      `本版本（${BUNDLED_VERSION}）的更新内容`
+    )
+    expect(screen.getByTestId('about-bundled-notes-text')).toHaveTextContent('本版本随包的第一条')
+    expect(entry).toHaveTextContent('收起')
+    expect(entry).toHaveAttribute('aria-expanded', 'true')
+
+    // 再点收起：整块收掉（不是留一半）
+    fireEvent.click(entry)
+    await waitFor(() => expect(screen.queryByTestId('about-bundled-notes')).not.toBeInTheDocument())
+  })
+
+  it('没配更新源（断网同档）：本版本日志照样读得到（不发网络请求、不依赖源）', async () => {
+    const bridge = renderAboutWithNotes(BUNDLED_OK, {
+      currentVersion: BUNDLED_VERSION,
+      configured: false,
+      builtinUrl: null,
+      status: { phase: 'idle' }
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('about-update-status')).toHaveTextContent('未配置更新源')
+    )
+
+    openNotes()
+
+    expect(screen.getByTestId('about-bundled-notes-text')).toHaveTextContent('本版本随包的第一条')
+    // 只读盘：没有触发任何"检查更新"
+    expect(bridge.updates.check).not.toHaveBeenCalled()
+  })
+
+  it('与源上新版本那块分开标版本：两块同时在，谁也不冒用谁的日志', async () => {
+    renderAboutWithNotes(BUNDLED_OK, {
+      ...STATUS,
+      status: {
+        phase: 'available',
+        version: '0.1.2',
+        notes: 'kyclaw 0.1.2\n\n- 源上那条',
+        releaseName: 'kyclaw 0.1.2'
+      }
+    })
+
+    await screen.findByTestId('about-release-notes')
+    openNotes()
+
+    // 源上那块：按它自己的版本（发行名）显示
+    expect(screen.getByTestId('about-release-name')).toHaveTextContent('kyclaw 0.1.2')
+    expect(screen.getByTestId('about-release-notes')).toHaveTextContent('源上那条')
+    // 本版本这块：标的是**本机版本**，正文是随包那份（混了就成"拿新版日志冒充当前版本"）
+    expect(screen.getByTestId('about-bundled-notes-title')).toHaveTextContent(
+      `本版本（${BUNDLED_VERSION}）的更新内容`
+    )
+    expect(screen.getByTestId('about-bundled-notes-text')).toHaveTextContent('本版本随包的第一条')
+    expect(screen.getByTestId('about-bundled-notes-text')).not.toHaveTextContent('源上那条')
+  })
+
+  it('缺文件：说「本版暂无发行说明」，不装作有，也不拦检查/安装', async () => {
+    renderAboutWithNotes({ state: 'missing' })
+    await waitFor(() => expect(screen.getByTestId('about-check')).not.toBeDisabled())
+
+    openNotes()
+
+    expect(screen.getByTestId('about-bundled-notes-empty')).toHaveTextContent('本版暂无发行说明')
+    expect(screen.getByTestId('about-bundled-notes-title')).toBeInTheDocument()
+    expect(screen.queryByTestId('about-bundled-notes-text')).not.toBeInTheDocument()
+    expect(screen.getByTestId('about-check')).not.toBeDisabled()
+  })
+
+  it('读异常与缺失分开说：读不出来时把那句话给出来（不当成"没有说明"）', async () => {
+    renderAboutWithNotes({
+      state: 'unreadable',
+      message: '本版发行说明超过 64 KiB，未显示'
+    })
+
+    openNotes()
+
+    expect(await screen.findByTestId('about-bundled-notes-error')).toHaveTextContent(
+      '本版发行说明超过 64 KiB，未显示'
+    )
+    expect(screen.queryByTestId('about-bundled-notes-empty')).not.toBeInTheDocument()
+  })
+
+  it('正文按纯文本渲染：HTML / 图片 / 脚本一律当字面量（不插 DOM、不执行）', async () => {
+    const hostile =
+      '<img src="http://127.0.0.1:9/pixel.png"> <script>window.__pwned = 1</script> [点我](http://x)'
+    renderAboutWithNotes({ state: 'ok', version: BUNDLED_VERSION, notes: hostile })
+
+    openNotes()
+
+    const region = await screen.findByTestId('about-bundled-notes-text')
+    expect(region).toHaveTextContent(hostile)
+    expect(region.querySelector('img')).toBeNull()
+    expect(region.querySelector('script')).toBeNull()
+  })
+
+  it('长日志在正文区自己滚（内容不藏起来，也不给第二个"展开"入口）', async () => {
+    const long = Array.from(
+      { length: 40 },
+      (_, index) => `第 ${index + 1} 行：这一版做了什么`
+    ).join('\n')
+    renderAboutWithNotes({ state: 'ok', version: BUNDLED_VERSION, notes: long })
+
+    openNotes()
+
+    const region = await screen.findByTestId('about-bundled-notes-text')
+    expect(region).toHaveTextContent('第 40 行：这一版做了什么')
+    expect(region.className).toContain('overflow-auto')
+    expect(region.className).toContain('max-h-96')
+    // 正文已经全文在 DOM 里（滚动看得到），不再多一个「展开」
+    expect(screen.queryByTestId('about-bundled-notes-toggle-expand')).not.toBeInTheDocument()
+  })
+
+  it('两个入口分得开：更新源那颗叫「配置」，更新日志这颗叫「查看」', () => {
+    renderAboutWithNotes(BUNDLED_OK)
+
+    expect(screen.getByTestId('about-update-config-toggle')).toHaveTextContent('配置')
+    expect(screen.getByTestId('about-bundled-notes-toggle')).toHaveTextContent('查看')
   })
 })

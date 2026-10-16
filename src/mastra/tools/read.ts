@@ -1,43 +1,72 @@
 /**
- * read 工具（round 71 起**按类型分派**）：读授权工作区内的文件。
+ * read 工具（round 71 起**按类型分派**，0.1.2 扩到**办公八格式**）：读授权工作区内的文件。
  *
  * 为什么要有分派：用户实测反馈——丢来 PDF / Word / 图片时，模型吃不到原始输入，只能去 bash 里
  * 想办法或先转格式。现在一条 read 调用就能拿到内容，路径也**最省 token**（不必先转成中间格式）：
  *
+ * **支持的格式表（这一轮就这些，不多不少）**：纯文本 / 图片 / `.pdf` / `.docx` / `.xlsx` / `.pptx` /
+ * `.csv` / 旧版 `.doc` / `.xls` / `.ppt`。**启用宏的版本**（`.docm` / `.xlsm` / `.pptm` 这一族）与
+ * **模板·放映变体**（`.dotx` / `.ppsx` 这一族）、`.xlsb` 一律**明确拒绝**（不假读、不宣称支持），
+ * 各自给一句"是什么 / 为什么不读 / 下一步"（见 `UNSUPPORTED_OFFICE_EXTENSION`）。
+ *
  *   - 文本（默认档）：原样 UTF-8，offset/limit 行窗口，>256KB 只读前 256KB 并附提示。
  *     **截断点收在 UTF-8 字符边界上**（StringDecoder 丢弃尾部不完整的多字节序列），不切出半个汉字。
  *   - `.pdf`：主进程的 PDF 文字层抽取（`src/main/pdf.ts`）——与"用户把 PDF 当附件发"那条路
- *     **同一份实现**，所以同一份文档走哪条路进来，模型看到的东西一样。
+ *     **同一份实现**，所以同一份文档走哪条路进来，模型看到的东西一样。**没有 OCR**：抽不到文字层
+ *     就说"没有文字层"，不假装认出了扫描件的字。
  *   - `.docx`：主进程的 Word 抽取（`mammoth` → markdown，`src/main/workbench-office.ts`），
  *     内嵌图片只留"（图片已省略）"占位（不要把 base64 巨图灌进上下文）。
+ *   - `.xlsx`：read 专用的表格抽取（`extractXlsxForRead`）——逐行带**行列定位**（`行 3: …` 从 A 列起）、
+ *     公式写成 `=公式 → 结果`（**缓存的 0 与"没有缓存结果"必须分开**：exceljs 的 `cell.text` 会把两者
+ *     都吞成空串）、日期走 UTC 稳定格式（不随宿主机时区挪一天）、**不吞首尾空格**（带引号显示）、
+ *     合并区域只显示主人那一格。
+ *   - `.pptx`：read 专用的逐页文字抽取（`extractPptxForRead`）——页序按 **presentation 关系**
+ *     （文件名数字序只是多数情况下的巧合），图片 / 图表 / SmartArt **明说"内容没有读"**，
+ *     绝不把图片页当成空白页。
+ *   - `.csv`：表格档。先解编码（BOM → UTF-16LE/BE、严格 UTF-8、"GB18030 回退"且**标明是推测**；
+ *     ICU 不全时给人话不硬猜），再按 RFC4180 解析成行列，行/列各自封顶。
+ *   - 旧版 `.doc` / `.xls` / `.ppt`（OLE 复合文档）：经**随包 LibreOffice** 转成现代格式
+ *     （`src/mastra/tools/office-legacy.ts`）再走上面同一套抽取；**原件一个字节都不动**（转换在临时目录），
+ *     转不出来/没装转换器就给人话（不假装读到了），加密件也不会被当成正常文件读。
  *   - 图片（`.png/.jpg/.jpeg/.webp/.gif`）：**不抽文字**，把**原始字节**作为图片交给模型**看** ——
  *     `toModelOutput` 回 `{type:'file', mediaType, data:{type:'data', data:<base64>}}`，这条形状是
  *     render_ppt 的页图那条**已实测**的路（见 tools/render-ppt.ts 头注），不另造一套。
- *   - 认得出的二进制（OOXML 容器、BMP、改名了的图片…）与旧版 Office（OLE：.doc/.xls/.ppt）：
- *     一句人话说明它**是什么**、下一步能怎么办，**不返回乱码**（旧行为是解成一堆 U+FFFD 与 NUL）。
+ *   - 认得出的二进制（OOXML 容器、BMP、改名了的图片…）：一句人话说明它**是什么**、下一步能怎么办，
+ *     **不返回乱码**（旧行为是解成一堆 U+FFFD 与 NUL）。
  *
  * 判据是**扩展名 + 文件头两道闸**（与工作台那条读路同一套口径，`sniffFormat` 也是同一份实现）：
  * 头与扩展名对不上就不猜、不画，也不硬塞给模型端点（`.png` 里其实是文本 → 说清它其实是什么）。
+ * 办公档在解 zip **之前**先过一遍 `assertOfficeArchiveSafe`（**真解出来逐条核**的有界预检：
+ * 声明 → 解压上限 → 实际长度 → CRC32 → 累计）——"zip 炸弹"那两类形状（声明就超 / 声明撒谎）都拦在
+ * 解析器之前，不改成"只看声明"的廉价检查。
  *
  * 上限一律"如实说 + 给下一步"，绝不返回空串让人以为文件是空的：
- *   - 文本：256KB 截断；PDF：原文件 ≤64MB（`READ_PDF_MAX_BYTES`）、docx：≤32MB；
- *     抽取出来的正文 ≤64000 字符（`READ_DOCUMENT_MAX_CHARS`，与附件那条路同一个数）；
+ *   - 文本：256KB 截断；PDF：原文件 ≤64MB（`READ_PDF_MAX_BYTES`）；办公档（docx/xlsx/pptx/csv
+ *     与旧三格式）：≤32MB（`READ_OFFICE_MAX_BYTES`，与工作台预览同一个数）；
+ *     抽取出来的正文 ≤64000 字符（`READ_DOCUMENT_MAX_CHARS`，与附件那条路同一个数）——
+ *     办公档的截断**切在行 / 页边界上**，写清"共多少、读到哪、还剩多少没读"，不切半行；
+ *     **结构性上限沿用工作台预览那一组**（工作簿 20 张表 / 单表 2000 行 × 100 列 / 演示 100 页），
+ *     read 不再另立一套更宽的数；
  *   - 图片：≤8MB（`READ_IMAGE_MAX_BYTES`，与"随消息发出去的图"同一个数）且 ≤16M 像素
  *     （`READ_IMAGE_MAX_PIXELS`），超了**不发给模型**并把真实尺寸/下一步说清。
  *   - 扫描版 PDF（没有文字层）：如实说抽不到文字层，并给出下一步（本部署没有"PDF → 图片"的通路，
  *     可以让用户把那几页截图或导出成图片，图片 read 能直接看）。
  *
- * **出站面（round 75 起不审）**：文本 / PDF / Word 全在本机抽取；只有**图片**这一支会把原始字节
- * 发给模型端点（走 provider 的视觉通道）。用户口径："读图这种就不该审" —— 所以图片档与文本 / PDF /
- * Word **同一档免审**，不再单独弹卡（在这之前它按"外发档"判过一次）。两件事照旧：
- *   ① **边界不变**：目标仍必须落在授权工作区内（执行层过引擎，越界 fail closed）；
+ * **出站面（round 75 起不审）**：文本 / PDF / Word / 表格 / 演示全在本机抽取；只有**图片**这一支会把
+ * 原始字节发给模型端点（走 provider 的视觉通道）。用户口径："读图这种就不该审" —— 所以图片档与
+ * 文本 / PDF / Word **同一档免审**，不再单独弹卡（在这之前它按"外发档"判过一次）。三件事照旧：
+ *   ① **边界不变**：目标仍必须落在授权工作区内（执行层过引擎，越界 fail closed）；旧版 Office 的
+ *      转换读的是**同一个授权目标**（审批与边界都按原路径算，不为转换另开一道口子）；
  *   ② **能力门**：当前模型读不了图（`visionOf` 那套判定，见 skills/runtime 的本部署事实）就
  *      **一个字节都不发**，回一句人话让模型/用户去换模型（见 readImage 的第一个分支）。
  *
  * 读过的路径按会话记进 ToolState（抽取档与图片档也记）：edit 的"未读先改"靠这份记录。
+ * **`toModelOutput` 只认图片档那一个形状**（`readImageResultSchema.safeParse`）：校验不过的
+ * （字符串档，或哪儿冒出来的错误对象）一律不做映射 —— 以前是"只要不是字符串就当图片"，
+ * 会把错误对象当成图片档去读盘、附字节。
  */
 import { StringDecoder } from 'node:string_decoder'
-import { extname, relative, sep } from 'node:path'
+import { basename, extname, relative, sep } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import {
@@ -48,9 +77,18 @@ import {
 } from '../../shared/attachments'
 import { PREVIEW_OFFICE_MAX_BYTES } from '../../shared/workbench'
 import { extractPdfText } from '../../main/pdf'
-import { extractDocx } from '../../main/workbench-office'
+import { decodeTextBytes, describeEncoding } from '../../main/text-encoding'
 import { sniffFormat } from '../../main/workbench-files'
+import {
+  extractDocx,
+  extractPptxForRead,
+  extractXlsxForRead,
+  readTableForRead,
+  type ReadBlocks
+} from '../../main/workbench-office'
 import { currentSkillRuntimeFacts } from '../skills/runtime'
+import { assertOfficeArchiveSafe } from './artifact-check'
+import { convertLegacyOffice, type LegacyOfficeKind } from './office-legacy'
 import {
   approvalSessionOf,
   needsApproval,
@@ -64,17 +102,41 @@ import {
 export const READ_MAX_BYTES = 256 * 1024
 
 /**
- * 抽取档（PDF / Word）出来的正文上限（字符）：**故意**取成与附件那条路同一个数
+ * 抽取档（PDF / Word / Excel / PPT / 表格）出来的正文上限（字符）：**故意**取成与附件那条路同一个数
  * （shared/attachments 的 PDF_TEXT_MAX_CHARS）—— 同一份文档，当附件发来和用 read 读，
- * 给模型的长度应当一样。
+ * 给模型的长度应当一样。办公档的截断切在行/页边界上，并由抽取器写清"读到哪"。
  */
 export const READ_DOCUMENT_MAX_CHARS = PDF_TEXT_MAX_CHARS
 
 /** PDF 原文件上限：与附件那条路同一个数（整份进内存抽取，是内存护栏不是业务口径） */
 export const READ_PDF_MAX_BYTES = PDF_MAX_BYTES
 
-/** Word 原文件上限：与工作台预览同一个数（mammoth 要整份解包） */
-export const READ_DOCX_MAX_BYTES = PREVIEW_OFFICE_MAX_BYTES
+/**
+ * 办公档（docx/xlsx/pptx/csv 与旧版 .doc/.xls/.ppt）的**原文件**上限：与工作台预览同一个数。
+ * 这些格式都要整份进内存解包/解析（mammoth / exceljs / zip 解析 / LibreOffice 转换），
+ * 是内存护栏不是业务口径；超了给人话，不做"截一半去解析"。
+ */
+export const READ_OFFICE_MAX_BYTES = PREVIEW_OFFICE_MAX_BYTES
+
+/** Word 原文件上限：与办公档同一个数（mammoth 要整份解包） */
+export const READ_DOCX_MAX_BYTES = READ_OFFICE_MAX_BYTES
+
+/** 旧版 Office 转换器的产物：现代格式的字节 + 是哪一种 */
+export interface LegacyConversion {
+  bytes: Buffer
+  format: 'docx' | 'xlsx' | 'pptx'
+}
+
+/**
+ * 旧版 Office 的转换入口形状（真实实现见 `./office-legacy`：随包 LibreOffice，在临时目录里转，
+ * 失败抛中文人话）。这里把形状写下来是给**测试注入**用的：单测不装那份 194MB 的随包引擎，
+ * 注入一个假转换器就能把"旧格式 → 转换 → 复用现代抽取"这条链覆盖到；生产只有真实实现这一条路。
+ */
+export type LegacyConverter = (
+  abs: string,
+  kind: LegacyOfficeKind,
+  signal?: AbortSignal
+) => Promise<LegacyConversion>
 
 /**
  * 单张图片的字节上限：与"随消息真发出去的图"同一个数（IMAGE_MAX_BYTES）—— 两者都是
@@ -154,7 +216,7 @@ const SNIFF_MEDIA_TYPE: Readonly<Record<string, string>> = {
 /** 二进制档在人话里怎么称呼（键 = `sniffFormat` 的结论，外加 OLE） */
 const BINARY_NAME: Readonly<Record<string, string>> = {
   pdf: 'PDF',
-  ooxml: 'OOXML 容器（.xlsx / .pptx / .zip 这类）',
+  ooxml: 'OOXML 容器（.docx / .xlsx / .pptx / .zip 这类）',
   'image-png': 'PNG 图片',
   'image-jpeg': 'JPEG 图片',
   'image-gif': 'GIF 图片',
@@ -166,10 +228,12 @@ const BINARY_NAME: Readonly<Record<string, string>> = {
 /**
  * 旧版 Office 的 OLE 复合文档头：`sniffFormat` 不认它（它的判据只覆盖工作台预览认得的那几档），
  * 而 `.doc` 恰恰是用户最常丢过来的东西之一 —— 少了这一条，它会被当文本解成乱码。
+ * 现代 OOXML **加密**之后也会被包成 OLE 复合文档（`EncryptedPackage` 流），所以同一个头
+ * 在两处用：旧三格式认原件、现代格式认"这份是加密的"。
  */
 const OLE_HEAD = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
 
-/** 认得出 OLE 头（.doc / .xls / .ppt） */
+/** 认得出 OLE 头（.doc / .xls / .ppt / 加密的 OOXML） */
 function isOle(bytes: Buffer): boolean {
   return bytes.length >= OLE_HEAD.length && bytes.subarray(0, OLE_HEAD.length).equals(OLE_HEAD)
 }
@@ -194,14 +258,122 @@ function binaryKindOf(bytes: Buffer): string | null {
   return isOle(bytes) ? 'ole' : null
 }
 
-type ReadKind = 'text' | 'pdf' | 'docx' | 'image'
+/**
+ * read 支持的现代 OOXML —— **只有三件本体**（`.docx` / `.xlsx` / `.pptx`）。
+ * 模板/放映/启用宏的变体（`.dotx` / `.ppsx` / `.xlsm` …）不在本轮格式表里，一律不读（见下表）。
+ */
+const OOXML_EXTENSION: Readonly<Record<string, { base: OfficeBase; label: string }>> = {
+  '.docx': { base: 'docx', label: 'Word 文档' },
+  '.xlsx': { base: 'xlsx', label: 'Excel 工作簿' },
+  '.pptx': { base: 'pptx', label: 'PowerPoint 演示文稿' }
+}
 
-/** 按扩展名分派（大小写不敏感）；认不出就是**文本档** —— 与改动前逐字一致，不改变原有行为 */
+/** read 读得了的现代 OOXML 三种 */
+type OfficeBase = 'docx' | 'xlsx' | 'pptx'
+
+/**
+ * **明确不读**的 Office 家族扩展名 → 人话（是什么 / 为什么不读 / 下一步）。
+ * 两类都走这里，理由不同：
+ *   - **启用宏的版本**（`.docm` / `.xlsm` / `.pptm`…）：本部署不支持宏，读出来只有数据、宏代码拿不到 ——
+ *     与其"读一半装作读全了"，不如**明确拒绝**并让用户另存为不含宏的版本；
+ *   - **模板 / 放映 / 二进制变体**（`.dotx` / `.ppsx` / `.xlsb`…）：不在本轮支持的 8 格式里，
+ *     **不宣称支持**，给一句能照做的下一步。
+ */
+const UNSUPPORTED_OFFICE_EXTENSION: Readonly<
+  Record<string, { what: string; why: string; next: string }>
+> = {
+  '.docm': {
+    what: '启用宏的 Word 文档（.docm）',
+    why: '宏不在这份读取范围里（read 不读宏代码）',
+    next: '让用户在 Word 里另存为 .docx（不含宏）再读'
+  },
+  '.dotm': {
+    what: '启用宏的 Word 模板（.dotm）',
+    why: '宏与模板都不在这份读取范围里',
+    next: '让用户另存为 .docx 再读'
+  },
+  '.dotx': {
+    what: 'Word 模板（.dotx）',
+    why: 'read 只读 .docx 本体，模板变体不在支持的格式里',
+    next: '让用户另存为 .docx 再读'
+  },
+  '.xlsm': {
+    what: '启用宏的 Excel 工作簿（.xlsm）',
+    why: '宏不在这份读取范围里（read 不读宏代码）',
+    next: '让用户在 Excel 里另存为 .xlsx（不含宏）再读'
+  },
+  '.xltm': {
+    what: '启用宏的 Excel 模板（.xltm）',
+    why: '宏与模板都不在这份读取范围里',
+    next: '让用户另存为 .xlsx 再读'
+  },
+  '.xltx': {
+    what: 'Excel 模板（.xltx）',
+    why: 'read 只读 .xlsx 本体，模板变体不在支持的格式里',
+    next: '让用户另存为 .xlsx 再读'
+  },
+  '.xlsb': {
+    what: '二进制工作簿（.xlsb）',
+    why: '它是二进制格式（不是 OOXML zip），read 没有解析它的能力',
+    next: '让用户在 Excel 里另存为 .xlsx 再读'
+  },
+  '.pptm': {
+    what: '启用宏的 PowerPoint 演示文稿（.pptm）',
+    why: '宏不在这份读取范围里（read 不读宏代码）',
+    next: '让用户在 PowerPoint 里另存为 .pptx（不含宏）再读'
+  },
+  '.ppsm': {
+    what: '启用宏的 PowerPoint 放映（.ppsm）',
+    why: '宏与放映变体都不在这份读取范围里',
+    next: '让用户另存为 .pptx 再读'
+  },
+  '.potm': {
+    what: '启用宏的 PowerPoint 模板（.potm）',
+    why: '宏与模板都不在这份读取范围里',
+    next: '让用户另存为 .pptx 再读'
+  },
+  '.ppsx': {
+    what: 'PowerPoint 放映（.ppsx）',
+    why: 'read 只读 .pptx 本体，放映变体不在支持的格式里',
+    next: '让用户另存为 .pptx 再读'
+  },
+  '.potx': {
+    what: 'PowerPoint 模板（.potx）',
+    why: 'read 只读 .pptx 本体，模板变体不在支持的格式里',
+    next: '让用户另存为 .pptx 再读'
+  }
+}
+
+/** 旧版 Office 三件（OLE 复合文档）：经随包 LibreOffice（`./office-legacy`）转换后走现代抽取。
+ *  转换器要的 kind 直接用它的类型，别在两边各写一份（对不上就是编译期的事，不是运行时的事）。 */
+const LEGACY_EXTENSION: Readonly<Record<string, LegacyOfficeKind>> = {
+  '.doc': 'doc',
+  '.xls': 'xls',
+  '.ppt': 'ppt'
+}
+
+/** read 的扩展名分派（大小写不敏感） */
+type ReadKind =
+  | { kind: 'text' }
+  | { kind: 'image' }
+  | { kind: 'pdf' }
+  | { kind: 'csv' }
+  | { kind: 'office'; base: OfficeBase; label: string }
+  | { kind: 'legacy'; legacy: LegacyOfficeKind }
+  | { kind: 'unsupported'; what: string; why: string; next: string }
+
+/** 按扩展名分派（大小写不敏感）；认不出就是**文本档**（与改动前逐字一致，不改变原有行为） */
 function kindOf(target: string): ReadKind {
   const ext = extname(target).toLowerCase()
-  if (ext === '.pdf') return 'pdf'
-  if (ext === '.docx') return 'docx'
-  return IMAGE_MEDIA_TYPE[ext] === undefined ? 'text' : 'image'
+  if (ext === '.pdf') return { kind: 'pdf' }
+  const ooxml = OOXML_EXTENSION[ext]
+  if (ooxml !== undefined) return { kind: 'office', base: ooxml.base, label: ooxml.label }
+  if (ext === '.csv') return { kind: 'csv' }
+  const legacy = LEGACY_EXTENSION[ext]
+  if (legacy !== undefined) return { kind: 'legacy', legacy }
+  const unsupported = UNSUPPORTED_OFFICE_EXTENSION[ext]
+  if (unsupported !== undefined) return { kind: 'unsupported', ...unsupported }
+  return IMAGE_MEDIA_TYPE[ext] === undefined ? { kind: 'text' } : { kind: 'image' }
 }
 
 /**
@@ -370,15 +542,15 @@ function windowText(
 }
 
 /**
- * 认得出的二进制 / 旧版 Office：一句人话说明它**是什么** + 下一步，不返回乱码。
- * （旧行为是把它按 UTF-8 解出来 —— 模型会以为文件坏了，或者内容是空的。）
+ * 认得出的二进制（扩展名对不上、或者本部署读不了的容器）：一句人话说明它**是什么** + 下一步，
+ * 不返回乱码。（旧行为是把它按 UTF-8 解出来 —— 模型会以为文件坏了，或者内容是空的。）
  */
 function binaryMessage(target: string, kind: string): string {
   const what = BINARY_NAME[kind] ?? kind
   const next: Record<string, string> = {
     ooxml:
-      'read 只抽 .docx 的文字（xlsx / pptx / zip 都抽不了）：要表格数据请让用户导出成 CSV 再读，' +
-      '要看 PPT 用 render_ppt（只吃 .pptx）。',
+      '这是一份 OOXML 容器（zip）但扩展名对不上：它多半就是 .docx / .xlsx / .pptx 里的某一种 —— ' +
+      '改对扩展名再读（这三种 read 都能读）；真是 .zip 的话，让用户解开后读里面的文件。',
     pdf: '这其实是 PDF 内容：改成 .pdf 扩展名再读，我就能抽它的文字层。',
     'image-png': '这是图片但扩展名对不上：改对扩展名（或另存一份）再读，图片我能直接看。',
     'image-jpeg': '这是图片但扩展名对不上：改对扩展名（或另存一份）再读，图片我能直接看。',
@@ -387,8 +559,8 @@ function binaryMessage(target: string, kind: string): string {
     'image-bmp':
       'BMP 我看不了：让用户另存成 PNG / JPEG（或别的常见图片格式）再读 —— 那几种我能直接看。',
     ole:
-      '旧版 Office 二进制（.doc / .xls / .ppt）抽不了：让用户在 Office 里另存为 .docx（Word 我能抽），' +
-      '或把要看的几页截图 / 导出成图片再 read（图片我能直接看）。'
+      '这是旧版 Office 二进制（.doc / .xls / .ppt）：把扩展名改对再读，read 会用随包的 ' +
+      'LibreOffice 把它转成现代格式后抽取（原件不会被改动）。'
   }
   return (
     `read 没读这个文件：${target} 是二进制（文件头是 ${what}），按文本解出来只会是乱码。\n` +
@@ -459,30 +631,130 @@ async function readPdf(
   })
 }
 
-/** Word 档：OOXML 两道闸 + mammoth 抽 markdown；抽不动给人话 + 下一步 */
-async function readDocx(
+/**
+ * 办公档的公共闸门：体积 → 文件头（OOXML / OOXML 加密后的 OLE / 对不上）→ **有界预检**。
+ * 三道都过了才轮到抽取器；哪道不过都返回**人话**（不抛、不返回乱码）。
+ */
+type OfficeOpen = { ok: true; bytes: Buffer } | { ok: false; message: string }
+
+/** 办公档体积超限（四类共用一句话） */
+function officeTooLarge(target: string, size: number, what: string): string {
+  return (
+    `read 没读${what}：${target} 有 ${formatSize(size)}，超过单份 ${formatSize(READ_OFFICE_MAX_BYTES)} 的上限。\n` +
+    '下一步：用 bash 在本机处理它（比如只取要用的部分），或让用户另存一份小一点的再读。'
+  )
+}
+/**
+ * 解 zip **之前**的有界预检（`assertOfficeArchiveSafe`）：条目数/解压总量这类"zip 炸弹"形状先拦掉，
+ * 不等 inflate 的时候才发现。预检不通过**不抛**，翻成人话给模型。
+ */
+function precheckOfficeArchive(bytes: Buffer, target: string): string | null {
+  try {
+    assertOfficeArchiveSafe(bytes)
+    return null
+  } catch (cause) {
+    return (
+      `read 没读这个文件：${target} 的压缩包结构没通过安全预检（${messageOf(cause)}）。\n` +
+      '下一步：确认它是从可信来源导出的完整文件；可疑或损坏的，请让用户重新导出、另存一份再读。'
+    )
+  }
+}
+
+/** 现代 OOXML（docx/xlsx/pptx 及其变体）的两道闸 + 预检；过了才把字节交给抽取器 */
+async function openOoxml(
   ctx: ToolContext,
   abs: string,
   target: string,
   size: number,
-  input: ReadInput
-): Promise<string> {
-  if (size > READ_DOCX_MAX_BYTES) {
-    return (
-      `read 没读这份 Word：${target} 有 ${formatSize(size)}，超过单份 ${formatSize(READ_DOCX_MAX_BYTES)} 的上限。\n` +
-      '下一步：用 bash 在本机处理它，或让用户另存一份小一点的再读。'
-    )
+  what: string
+): Promise<OfficeOpen> {
+  if (size > READ_OFFICE_MAX_BYTES) {
+    return { ok: false, message: officeTooLarge(target, size, `这份 ${what}`) }
   }
 
   const bytes = await ctx.fs.readFile(abs)
   if (sniffFormat(bytes) !== 'ooxml') {
+    if (isOle(bytes)) {
+      return {
+        ok: false,
+        message:
+          `read 打不开这份${what}：${target} 的内容是 OLE 复合文档，不是 OOXML（zip）—— ` +
+          '加了密码的 Office 文件正是这个样子（加密后整份被包成 OLE）。\n' +
+          '下一步：请用户先去密码（另存一份不加密的）再读；本部署没有解密能力，不猜密码。'
+      }
+    }
+    return {
+      ok: false,
+      message:
+        `read 没读这个文件：${target} 的文件头不是 OOXML（zip）—— 它多半不是${what}（改过扩展名？）。\n` +
+        '下一步：确认它真实是什么格式；旧版的 .doc / .xls / .ppt 请用对应的扩展名再读（read 会经随包转换器读它们）。'
+    }
+  }
+
+  const precheck = precheckOfficeArchive(bytes, target)
+  if (precheck !== null) return { ok: false, message: precheck }
+  return { ok: true, bytes }
+}
+
+/** 一张工作表 / 一页幻灯片在"还有 N … 没读"里的量词 */
+const BLOCK_UNIT: Readonly<Record<'xlsx' | 'pptx', string>> = { xlsx: '张工作表', pptx: '页' }
+
+/**
+ * xlsx / pptx → 文本（read 专用抽取器 + 上限说明）。块内部的截断（超行/超列/超页）由抽取器
+ * 写在块尾；这里只补**跨块**的账：还有几块没读、正文上限。
+ */
+async function readOfficeBlocks(
+  base: 'xlsx' | 'pptx',
+  bytes: Buffer,
+  target: string,
+  input: ReadInput,
+  notes: readonly string[]
+): Promise<string> {
+  let extracted: ReadBlocks
+  try {
+    extracted =
+      base === 'xlsx'
+        ? await extractXlsxForRead(bytes, { maxChars: READ_DOCUMENT_MAX_CHARS })
+        : extractPptxForRead(bytes, { maxChars: READ_DOCUMENT_MAX_CHARS })
+  } catch (cause) {
     return (
-      `read 没读这个文件：${target} 的扩展名是 .docx，但文件头不是 OOXML（zip）—— ` +
-      '它多半不是 Word 文档（改过扩展名？）。\n' +
-      '下一步：确认它真实是什么格式；旧版 .doc 请在 Office 里另存为 .docx 再读。'
+      `read 读不了这份${base === 'xlsx' ? ' Excel' : ' PPT'}：${messageOf(cause)}\n` +
+      '下一步：文件可能损坏、加密或被改过；请让用户在 Office 里另存一份再读。'
     )
   }
 
+  const body = extracted.blocks.map((block) => `### ${block.title}\n${block.body}`).join('\n\n')
+  if (extracted.blocks.length === 0) {
+    return (
+      `read 没读到内容：${target} 里${base === 'xlsx' ? '一张工作表都没有' : '一页幻灯片都没有'}。\n` +
+      '下一步：确认这份文件不是空壳（新建的空白演示文稿就是这样）。'
+    )
+  }
+  const allNotes = [...notes]
+  if (extracted.note !== undefined) allNotes.push(extracted.note)
+  if (extracted.unread > 0) {
+    allNotes.push(
+      `[还有 ${extracted.unread} ${BLOCK_UNIT[base]}没读（一次读出的内容有上限），` +
+        '要看它们得分几次读或让用户精简；上面每一块都写了自己截到哪]'
+    )
+  }
+  if (extracted.truncated && extracted.unread === 0) {
+    allNotes.push(`[正文有上限（${READ_DOCUMENT_MAX_CHARS} 字符），后面的内容不在这里]`)
+  }
+  return windowText(body, target, input, {
+    notes: allNotes,
+    truncated: extracted.truncated,
+    source: '抽取到的正文'
+  })
+}
+
+/** Word（docx 字节）→ markdown 文本；`.docx` 档与旧 `.doc` 转换后的档共用这一段 */
+async function renderDocxBytes(
+  bytes: Buffer,
+  target: string,
+  input: ReadInput,
+  notes: readonly string[]
+): Promise<string> {
   let markdown: string
   let truncated: boolean
   try {
@@ -495,20 +767,208 @@ async function readDocx(
   }
 
   const clipped = markdown.length > READ_DOCUMENT_MAX_CHARS
-  const notes = ['[这是 Word 文档抽成的 markdown（内嵌图片只留"（图片已省略）"占位）]']
+  const allNotes = [...notes]
   if (truncated || clipped) {
-    notes.push(`[正文有上限（${READ_DOCUMENT_MAX_CHARS} 字符），后面的内容不在这里]`)
+    allNotes.push(`[正文有上限（${READ_DOCUMENT_MAX_CHARS} 字符），后面的内容不在这里]`)
   }
   return windowText(
     clipped ? markdown.slice(0, READ_DOCUMENT_MAX_CHARS) : markdown,
     target,
     input,
-    {
-      notes,
-      truncated: truncated || clipped,
-      source: '抽取到的正文'
-    }
+    { notes: allNotes, truncated: truncated || clipped, source: '抽取到的正文' }
   )
+}
+
+/** Word 档：OOXML 两道闸 + 预检 + mammoth 抽 markdown；抽不动给人话 + 下一步 */
+async function readDocx(
+  ctx: ToolContext,
+  abs: string,
+  target: string,
+  size: number,
+  input: ReadInput,
+  label: string
+): Promise<string> {
+  const opened = await openOoxml(ctx, abs, target, size, label)
+  if (!opened.ok) return opened.message
+
+  const notes = ['[这是 Word 文档抽成的 markdown（内嵌图片只留"（图片已省略）"占位）]']
+  return renderDocxBytes(opened.bytes, target, input, notes)
+}
+
+/** Excel 档：OOXML 两道闸 + 预检 + read 专用表格抽取（行列定位 / 公式缓存 / 稳定日期 / 不吞空格） */
+async function readXlsx(
+  ctx: ToolContext,
+  abs: string,
+  target: string,
+  size: number,
+  input: ReadInput,
+  label: string
+): Promise<string> {
+  const opened = await openOoxml(ctx, abs, target, size, label)
+  if (!opened.ok) return opened.message
+
+  const notes = [
+    '[这是 Excel 工作簿抽出来的表格：逐行带行列号（列从 A 起，空行不写）；公式写成 `=公式 → 结果`，' +
+      '合并区域只显示左上那格]'
+  ]
+  return readOfficeBlocks('xlsx', opened.bytes, target, input, notes)
+}
+
+/** PPT 档：OOXML 两道闸 + 预检 + read 专用逐页抽取（真实页序 / 图片与图表说清没读） */
+async function readPptx(
+  ctx: ToolContext,
+  abs: string,
+  target: string,
+  size: number,
+  input: ReadInput,
+  label: string
+): Promise<string> {
+  const opened = await openOoxml(ctx, abs, target, size, label)
+  if (!opened.ok) return opened.message
+
+  const notes = [
+    '[这是 PowerPoint 抽出来的逐页文字（版式不还原；图片、图表、SmartArt 只报数量，内容没有读）]'
+  ]
+  return readOfficeBlocks('pptx', opened.bytes, target, input, notes)
+}
+
+/**
+ * CSV 档：文件头闸 → **解码**（BOM / 严格 UTF-8 / GB18030 回退，推测的要说出来）→ RFC4180 解析。
+ * 与工作台预览那条路同一套判据（不认二进制、行列封顶），但截断按 read 的口径说清"读到第几行"。
+ */
+async function readCsv(
+  ctx: ToolContext,
+  abs: string,
+  target: string,
+  size: number,
+  input: ReadInput
+): Promise<string> {
+  if (size > READ_OFFICE_MAX_BYTES) return officeTooLarge(target, size, '这份表格')
+
+  const bytes = await ctx.fs.readFile(abs)
+  const binaryKind = binaryKindOf(bytes)
+  if (binaryKind !== null) return binaryMessage(target, binaryKind)
+
+  const decoded = decodeTextBytes(bytes)
+  if (!decoded.ok) return `read 解不出这份表格的文本：${decoded.message}`
+
+  const name = basename(abs).replace(/\.[^.]*$/, '')
+  const table = readTableForRead(decoded.text, name, ',', READ_DOCUMENT_MAX_CHARS)
+  const notes = ['[这是 CSV 抽出来的表格：每行以 `行 N:` 开头，格与格之间是 ` | `]']
+  if (decoded.inferred) {
+    notes.push(
+      `[编码：按内容推测是 ${describeEncoding(decoded.encoding)}（不是 UTF-8）—— ` +
+        '若读出来是乱码，说明猜错了，请让用户把表格另存为 UTF-8 再读]'
+    )
+  } else if (decoded.encoding !== 'utf-8') {
+    notes.push(`[编码：${describeEncoding(decoded.encoding)}（按文件头/BOM 认出来的）]`)
+  }
+  const body = `### ${table.block.title}\n${table.block.body}`
+  return windowText(body, target, input, {
+    notes,
+    truncated: table.truncated,
+    source: '抽取到的正文'
+  })
+}
+
+/** 旧版 Office 三件在回执里的称呼 */
+const LEGACY_LABEL: Readonly<Record<LegacyOfficeKind, string>> = {
+  doc: 'Word 文档（.doc）',
+  xls: 'Excel 工作簿（.xls）',
+  ppt: 'PowerPoint 演示文稿（.ppt）'
+}
+
+/**
+ * 旧版 Office（OLE 复合文档）档：**转换后复用现代抽取**。
+ *
+ * 三件事必须守住：
+ *   ① **原件一个字节都不动** —— 转换走 `convertLegacyOffice`（它自己用临时目录），read 只读原路径；
+ *      审批与边界也仍按**原路径**算（`toolTarget` 只解析过一次），不因为要多一步转换就放开什么；
+ *   ② **不假读** —— 头不是 OLE 的文件（改过扩展名/别的格式）当场说清；转换失败（没装转换器、加密、
+ *      损坏）原样报出原因 + 下一步，绝不假装读到了；
+ *   ③ **宏要说出来** —— 转换只带内容与数据，VBA 宏/修订痕迹这类东西不在结果里，回执里点明。
+ */
+async function readLegacy(
+  ctx: ToolContext,
+  abs: string,
+  target: string,
+  size: number,
+  input: ReadInput,
+  kind: LegacyOfficeKind,
+  signal: AbortSignal | undefined,
+  converter: LegacyConverter
+): Promise<string> {
+  const label = LEGACY_LABEL[kind]
+  if (size > READ_OFFICE_MAX_BYTES) return officeTooLarge(target, size, `这份旧版 ${label}`)
+
+  // 只看文件头（8 字节）：旧版 Office 是 OLE 复合文档，对不上就不往转换器里送
+  const head = await ctx.fs.readFile(abs, OLE_HEAD.length)
+  if (!isOle(head)) {
+    if (sniffFormat(head) === 'ooxml') {
+      return (
+        `read 没读这个文件：${target} 的扩展名是 ${label}，但文件头是 OOXML（zip）—— ` +
+        '它其实是新版格式（.docx / .xlsx / .pptx 之类）。\n' +
+        '下一步：确认真实格式后把扩展名改对（或另存一份）再读，新版格式 read 能直接读。'
+      )
+    }
+    // 两个"其实不是旧版 Office"的高频形状：RTF（带格式的文本）与 HTML/XML（不少系统的"导出 Office"）
+    const latin = head.toString('latin1')
+    if (latin.startsWith('{\\rtf')) {
+      return (
+        `read 没读这个文件：${target} 的扩展名是 ${label}，内容其实是 RTF（带格式的文本）。\n` +
+        '下一步：把扩展名改成 .rtf 再读（按文本读得到），或让用户在 Office 里另存为 .docx。'
+      )
+    }
+    if (latin.startsWith('<')) {
+      return (
+        `read 没读这个文件：${target} 的扩展名是 ${label}，内容看起来是 HTML / XML` +
+        '（不少系统"导出 Excel / Word"给的就是这种）。\n' +
+        '下一步：让用户另存为真正的 .xlsx / .docx（表格也可以是 CSV）再读；' +
+        '把扩展名改成 .html / .xml 也能按文本读。'
+      )
+    }
+    return (
+      `read 没读这个文件：${target} 的扩展名是 ${label}，但文件头不是 OLE 复合文档 —— ` +
+      '它多半不是旧版 Office 文件。\n' +
+      '下一步：确认它真实是什么格式；如果它其实是新格式，把扩展名改对再读。'
+    )
+  }
+
+  let converted: LegacyConversion
+  try {
+    converted = await converter(abs, kind, signal)
+  } catch (cause) {
+    // 用户点了停止：这不是"转不了"（仓库口径：AbortError 要按中止说，别读成失败）
+    if (cause instanceof Error && cause.name === 'AbortError') {
+      return (
+        `已被用户中止：没有读完 ${target}（旧版格式的转换做到一半停了；` +
+        '原件没有被改动，也没有留下任何临时产物）。'
+      )
+    }
+    return (
+      `read 转不了这份 ${label}：${messageOf(cause)}\n` +
+      '下一步：让用户在 Office 里把它另存为 .docx / .xlsx / .pptx 再读；' +
+      '只是想看内容的话，也可以把要看的几页截图 / 导出成图片再 read（图片我能直接看）。原件没有被改动。'
+    )
+  }
+
+  const precheck = precheckOfficeArchive(converted.bytes, target)
+  if (precheck !== null) return precheck
+
+  const origin =
+    `[这是旧版 ${label} 经随包 LibreOffice 转换后抽出来的内容（转换在临时目录做，原件没有被改动；` +
+    '宏、修订记录这类东西不在转换结果里）]'
+  const notes = [origin]
+  switch (converted.format) {
+    case 'docx':
+      return renderDocxBytes(converted.bytes, target, input, notes)
+    case 'xlsx':
+      notes.push('[抽取方式与现代 .xlsx 一样：逐行带行列号，公式写成 `=公式 → 结果`]')
+      return readOfficeBlocks('xlsx', converted.bytes, target, input, notes)
+    case 'pptx':
+      notes.push('[抽取方式与现代 .pptx 一样：逐页文字，图片与图表只报数量]')
+      return readOfficeBlocks('pptx', converted.bytes, target, input, notes)
+  }
 }
 
 /**
@@ -582,19 +1042,83 @@ async function readImage(
   }
 }
 
-export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, ReadResult>> {
+/** 旧版 Office 转换器的注入点（缺省 = 随包 LibreOffice；只给单测用） */
+export interface ReadToolOptions {
+  legacyConverter?: LegacyConverter
+}
+
+/**
+ * 按分派结果读一个文件：写成一张 switch 表（三种办公格式 × 现代/旧版 × 表格/图片/PDF 全在这里），
+ * 而不是一串嵌套三元 —— 分支一多，三元就看不出谁是谁了。
+ */
+async function readByKind(
+  ctx: ToolContext,
+  kind: ReadKind,
+  abs: string,
+  workspacePath: string,
+  input: ReadInput,
+  size: number,
+  signal: AbortSignal | undefined,
+  converter: LegacyConverter
+): Promise<ReadResult> {
+  switch (kind.kind) {
+    case 'image':
+      return await readImage(
+        ctx,
+        abs,
+        relative(workspacePath, abs).split(sep).join('/'),
+        input.path,
+        size
+      )
+    case 'pdf':
+      return await readPdf(ctx, abs, input.path, size, input)
+    case 'csv':
+      return await readCsv(ctx, abs, input.path, size, input)
+    case 'office': {
+      if (kind.base === 'docx') {
+        return await readDocx(ctx, abs, input.path, size, input, kind.label)
+      }
+      if (kind.base === 'xlsx') {
+        return await readXlsx(ctx, abs, input.path, size, input, kind.label)
+      }
+      return await readPptx(ctx, abs, input.path, size, input, kind.label)
+    }
+    case 'legacy':
+      return await readLegacy(ctx, abs, input.path, size, input, kind.legacy, signal, converter)
+    case 'unsupported':
+      // 明确拒绝，不假读：说清"这是什么 / 为什么不读 / 下一步怎么做"
+      return (
+        `read 没读这个文件：${input.path} 是${kind.what} —— ${kind.why}。\n` +
+        `下一步：${kind.next}；本部署的 read 能直接读的是 .docx / .xlsx / .pptx / .csv / .pdf 与旧版 .doc / .xls / .ppt（以及文本与图片）。`
+      )
+    case 'text':
+      return await readPlainText(ctx, abs, input.path, size, input)
+  }
+}
+
+export async function createReadTool(
+  ctx: ToolContext,
+  options: ReadToolOptions = {}
+): Promise<Tool<ReadInput, ReadResult>> {
   const { createTool } = await import('@mastra/core/tools')
+  const legacyConverter = options.legacyConverter ?? convertLegacyOffice
 
   return createTool({
     id: 'read',
     description:
-      'Read a workspace file. Plain text comes back as-is (offset/limit take a line window); .pdf via its text ' +
-      'layer and .docx as markdown come back as extracted text; .png/.jpg/.jpeg/.webp/.gif come back as the image ' +
-      'itself, for you to look at. Caps state the real numbers and never come back as empty output: 256KB of text, ' +
-      '64MB PDF / 32MB Word, 64000 characters of extracted text, 8MB / 16M pixels per image. A scanned PDF with ' +
-      'no text layer, a legacy .doc or any other binary is named, not returned as mojibake. Reading an image ' +
-      "sends its bytes to the model endpoint (no approval step) — if the current model can't see images, " +
-      'the bytes are not sent at all and you get a note saying so.',
+      'Read a workspace file. Plain text comes back as-is (offset/limit take a line window); .pdf comes back as ' +
+      'its text layer and .docx as markdown; .xlsx and .csv come back as tables whose rows carry row numbers and ' +
+      'cell addresses (a formula reads as `=formula → cached result`, and a cached 0 is told apart from no cached ' +
+      "result); .pptx comes back as per-page text in the deck's real order, with pictures and charts reported as " +
+      'counts that were not read. Legacy .doc/.xls/.ppt are converted with the bundled LibreOffice and read the ' +
+      'same way, and the original file is not modified. Macro-enabled and template variants (.docm/.xlsm/.pptm/' +
+      '.dotx/.ppsx/.xlsb) are refused by name with the next step, never read halfway. .png/.jpg/.jpeg/.webp/.gif ' +
+      'come back as the image itself, for you to look at. Caps state the real numbers and never come back as ' +
+      'empty output: 256KB of text, 64MB PDF, 32MB per Office file, 64000 characters of extracted text (cut at ' +
+      'row and page boundaries, saying what was left out), 8MB / 16M pixels per image. A scanned PDF with no ' +
+      'text layer, an encrypted or corrupt file, and any other binary is named, not returned as mojibake. ' +
+      'Reading an image sends its bytes to the model endpoint (no approval step) — if the current model cannot ' +
+      'see images, the bytes are not sent at all and you get a note saying so.',
     inputSchema: readInputSchema,
     outputSchema: readResultSchema,
     requireApproval: (input, approval) =>
@@ -607,21 +1131,16 @@ export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, 
         throw new Error(`read 失败：${input.path} 不存在或不是文件（目录请用 glob 列出）`)
       }
 
-      const kind = kindOf(abs)
-      const result =
-        kind === 'image'
-          ? await readImage(
-              ctx,
-              abs,
-              relative(workspace.path, abs).split(sep).join('/'),
-              input.path,
-              fileStat.size
-            )
-          : kind === 'pdf'
-            ? await readPdf(ctx, abs, input.path, fileStat.size, input)
-            : kind === 'docx'
-              ? await readDocx(ctx, abs, input.path, fileStat.size, input)
-              : await readPlainText(ctx, abs, input.path, fileStat.size, input)
+      const result = await readByKind(
+        ctx,
+        kindOf(abs),
+        abs,
+        workspace.path,
+        input,
+        fileStat.size,
+        context.abortSignal,
+        legacyConverter
+      )
 
       // 读过的路径记进当前会话（edit 的"未读先改"靠它）：抽取档与图片档也记 —— 模型确实"看过"
       // 这份文件的内容（只是经过了抽取 / 视觉）。真去 edit 一个二进制会因 oldText 匹配不上而失败，
@@ -639,19 +1158,24 @@ export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, 
      * 8192 字符的 URL 长度校验拒掉（实测，见 tools/render-ppt.ts 头注）；`data` 里放 base64 字符串
      * 而不是 Uint8Array，是因为这份 modelOutput 会被存进 providerMetadata（过 JSON）。
      *
+     * **先过形状校验**：只有真正的图片档（`readImageResultSchema`）才去读盘、附字节。以前是
+     * "不是字符串就当图片档"，于是一个**错误对象**也会被当成图片档 —— 拿它没有的 `abs` 去读盘、
+     * 或者把错误对象里的字段当成路径。校验不过一律返回 null（= 不做映射，按文本原样走）。
+     *
      * 读不到就退化成人话（不把整次调用判失败）：文件可能在 execute 之后被删/改名了。
      */
     toModelOutput: async (result: ReadResult) => {
-      if (typeof result === 'string') return null
+      const image = readImageResultSchema.safeParse(result)
+      if (!image.success) return null
       try {
-        const bytes = await ctx.fs.readFile(result.abs)
+        const bytes = await ctx.fs.readFile(image.data.abs)
         return {
           type: 'content',
           value: [
-            { type: 'text', text: result.message },
+            { type: 'text', text: image.data.message },
             {
               type: 'file',
-              mediaType: result.mediaType,
+              mediaType: image.data.mediaType,
               data: { type: 'data', data: Buffer.from(bytes).toString('base64') }
             }
           ]
@@ -662,7 +1186,7 @@ export async function createReadTool(ctx: ToolContext): Promise<Tool<ReadInput, 
           value: [
             {
               type: 'text',
-              text: `${result.message}\n（这张图在读取之后取不到了：文件可能刚被删除或改名，这次我没看到图）`
+              text: `${image.data.message}\n（这张图在读取之后取不到了：文件可能刚被删除或改名，这次我没看到图）`
             }
           ]
         }

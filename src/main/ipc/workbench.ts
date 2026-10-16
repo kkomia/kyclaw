@@ -27,6 +27,18 @@ import {
   workbenchThreadArgsSchema
 } from '../../shared/ipc'
 import {
+  officePreviewArgsSchema,
+  officePreviewCancelArgsSchema,
+  type OfficePreviewResult
+} from '../../shared/office-preview'
+import {
+  textPageArgsSchema,
+  textVersionArgsSchema,
+  type TextPageResult,
+  type TextVersionResult
+} from '../../shared/workbench-text'
+import { readTextPage, textVersionOf } from '../workbench-text'
+import {
   WORKBENCH_NO_WORKSPACE,
   WORKBENCH_ROOT_NOT_UNIQUE,
   type FileBytesResult,
@@ -35,6 +47,7 @@ import {
   type GitCommitDetail,
   type GitOverview,
   type ListDirResult,
+  type TableBytesResult,
   type TerminalSession,
   type WorkbenchSearchResult
 } from '../../shared/workbench'
@@ -42,12 +55,15 @@ import { settingsPath } from '../settings'
 import { gitLog, gitOverview, gitShow, type GitRunner } from '../workbench-git'
 import {
   assertOpenable,
+  convertOfficeToPdf,
   listDir,
   readFileBytes,
   readFilePreview,
+  readTableBytes,
   revealTarget,
   searchWorkspace
 } from '../workbench-files'
+import type { OfficePreview } from '../office-preview'
 import {
   createTerminalService,
   type TerminalService,
@@ -65,11 +81,93 @@ export interface WorkbenchDeps {
   terminals?: TerminalService
   /** git 命令的注入面（入参是仓库根；缺省真跑） */
   git?: (root: string) => GitRunner
+  /**
+   * 办公档预览服务（缺省**懒建**真件：第一次真要转的时候才把引擎那坨加载进来）。
+   * 测试注入一个带假引擎的实例，就能把"通道 → 授权 → 有界读 → 队列"整条路真跑过而不起进程。
+   */
+  officePreview?: OfficePreview
 }
 
 export interface WorkbenchHandles {
   /** 应用退出时要 disposeAll 的那个服务（调用方持有） */
   terminals: TerminalService
+  /**
+   * 收掉在途的办公档转换（kit 子进程不随主进程退出）。
+   * **故意不返回 Promise**：取消是同步发起的（`runProcess` 用 unref 过的 `taskkill /T /F` 杀进程树，
+   * 主进程退出后它自己跑完），等收尾记账只会拖住退出流程。懒建的服务没建过就是空操作。
+   */
+  disposeOfficePreview: () => void
+}
+
+/* ── 办公档预览的请求账（requestId ↔ 发起它的 webContents）──────────────── */
+
+/** 一次请求的账目：给 handler 一个 signal，以及"还是我这条才摘账"的 release */
+export interface OfficePreviewRequestHandle {
+  readonly signal: AbortSignal
+  release: () => void
+}
+
+/**
+ * requestId 的账本。三条纪律：
+ *   1. **取消只对本窗口有效**：`cancel(id, owner)` 在别人（另一个 webContents）手上是空操作 ——
+ *      多窗口下不能让一个窗口把另一个窗口正在看的转换掐掉；
+ *   2. **同名 id 不能跨窗口抢**：`begin` 撞上别人的 id 直接抛（这是"跑歪了"，不是常态）；
+ *   3. **同一个窗口重发同一个 id = 新请求顶掉旧的**（旧的按取消收尾），
+ *      所以"重发"本身就是一种取消，不用先 cancel 再 officePdf。
+ *
+ * 不依赖 electron：owner 就是一个数字（webContents.id），单测直接打这张表。
+ */
+export interface OfficePreviewRequests {
+  begin(requestId: string, owner: number): OfficePreviewRequestHandle
+  cancel(requestId: string, owner: number): void
+  /** 这个窗口名下的请求全部取消（窗口销毁/重新加载时调） */
+  disposeByOwner(owner: number): void
+  /** 全部取消（应用退出时调） */
+  disposeAll(): void
+  /** 账上还有哪些 requestId（测试与排障） */
+  ids(): string[]
+}
+
+export function createOfficePreviewRequests(): OfficePreviewRequests {
+  const entries = new Map<string, { owner: number; controller: AbortController }>()
+  const drop = (requestId: string, entry: { controller: AbortController }): void => {
+    entries.delete(requestId)
+    entry.controller.abort()
+  }
+  return {
+    begin: (requestId, owner) => {
+      const existing = entries.get(requestId)
+      if (existing !== undefined) {
+        if (existing.owner !== owner) {
+          throw new Error(`这个 requestId 已被另一个窗口占用：${requestId}`)
+        }
+        drop(requestId, existing)
+      }
+      const controller = new AbortController()
+      entries.set(requestId, { owner, controller })
+      return {
+        signal: controller.signal,
+        release: () => {
+          // 只有"账上还是我这条"才摘：否则会误摘同 id 的新请求
+          if (entries.get(requestId)?.controller === controller) entries.delete(requestId)
+        }
+      }
+    },
+    cancel: (requestId, owner) => {
+      const entry = entries.get(requestId)
+      if (entry === undefined || entry.owner !== owner) return
+      drop(requestId, entry)
+    },
+    disposeByOwner: (owner) => {
+      for (const [requestId, entry] of [...entries]) {
+        if (entry.owner === owner) drop(requestId, entry)
+      }
+    },
+    disposeAll: () => {
+      for (const [requestId, entry] of [...entries]) drop(requestId, entry)
+    },
+    ids: () => [...entries.keys()]
+  }
 }
 
 /**
@@ -107,9 +205,41 @@ export function registerWorkbenchIpc(
   const senders = new Map<string, WebContents>()
   /** 已经挂过"销毁即清算"的 webContents id（重启终端不该重复挂监听） */
   const watched = new Set<number>()
+  /** 办公档预览的请求账（requestId ↔ 发起它的 webContents） */
+  const officeRequests = createOfficePreviewRequests()
+  /** 懒建的办公档服务（真要用时才把引擎那坨加载进来；`null` = 还没建过） */
+  let officePreview: OfficePreview | null = deps.officePreview ?? null
 
   const terminals: TerminalService =
     deps.terminals ?? createTerminalService({ sink: createTerminalSink(senders) })
+
+  /**
+   * 每个 webContents 只挂一次"销毁即清算"（渲染端重新加载 / 窗口关掉时）：终端（node-pty
+   * 不知道宿主没了）与办公档转换（kit 子进程还在跑）共用这一条 —— 只收**它自己发起的**那些，
+   * 别的窗口的照跑。
+   */
+  const watchSender = (sender: WebContents): void => {
+    if (watched.has(sender.id)) return
+    watched.add(sender.id)
+    sender.once('destroyed', () => {
+      watched.delete(sender.id)
+      for (const [key, target] of [...senders]) {
+        if (target.id === sender.id) senders.delete(key)
+      }
+      terminals.disposeByOwner(sender.id)
+      officeRequests.disposeByOwner(sender.id)
+    })
+  }
+
+  /** 办公档预览服务：第一次真要用时才 `import` 引擎那一坨（启动路径上不付这份代价） */
+  const officePreviewOf = async (): Promise<OfficePreview> => {
+    if (officePreview !== null) return officePreview
+    const module = await import('../office-preview')
+    // 等 import 的这段时间里，另一个请求可能已经建好了：先看它，再建
+    const created = officePreview ?? deps.officePreview ?? module.createOfficePreview()
+    officePreview = created
+    return created
+  }
 
   ipcMain.handle(IPC_CHANNELS.workbench.listDir, (_event, ...args) => {
     const [threadId, relative] = parseIpcArgs(
@@ -149,6 +279,34 @@ export function registerWorkbenchIpc(
       IPC_CHANNELS.workbench.search
     )
     const result: WorkbenchSearchResult = searchWorkspace(rootOf(threadId), { query, mode })
+    return result
+  })
+
+  /**
+   * 文本分页（预览里的"加载更多"）。
+   *
+   * **没有跨请求状态**：一次调用开一次文件、读一页、关掉；没有 watcher、没有缓存、不按 sender 记账
+   * —— 所以这里不需要 `watchSender` 那套清算（渲染端卸载时它自己的轮询定时器会停）。
+   * 版本校验（`changed`）在服务里做：渲染端只需把上一页回的 `{ offset, version }` 原样带回来。
+   */
+  ipcMain.handle(IPC_CHANNELS.workbench.readTextPage, async (_event, ...args) => {
+    const [threadId, relative, cursor] = parseIpcArgs(
+      textPageArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.readTextPage
+    )
+    const result: TextPageResult = await readTextPage(rootOf(threadId), relative, cursor)
+    return result
+  })
+
+  /** 只 stat 的版本探询（轮询用）：同样没有跨请求状态。 */
+  ipcMain.handle(IPC_CHANNELS.workbench.textVersion, (_event, ...args) => {
+    const [threadId, relative] = parseIpcArgs(
+      textVersionArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.textVersion
+    )
+    const result: TextVersionResult = textVersionOf(rootOf(threadId), relative)
     return result
   })
 
@@ -233,6 +391,65 @@ export function registerWorkbenchIpc(
     return detail
   })
 
+  /**
+   * 表格（xls / xlsx / csv / tsv）的**原始字节**：与 `read-bytes` 那条"抽结构"的路分开，
+   * 形状与判别口径（missing / too-large / unsupported / changed）都在 `readTableBytes` 里。
+   */
+  ipcMain.handle(IPC_CHANNELS.workbench.tableBytes, async (_event, ...args) => {
+    const [threadId, relative] = parseIpcArgs(
+      workbenchRelativeArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.tableBytes
+    )
+    const result: TableBytesResult = await readTableBytes(rootOf(threadId), relative)
+    return result
+  })
+
+  /**
+   * 办公档（doc / docx / ppt / pptx）→ PDF。顺序是刻意的：
+   *   1. 会话根先解析（判不出直接抛人话，**不留任何账目**）；
+   *   2. 懒建服务（第一次用到才把引擎那坨加载进来）；
+   *   3. 记账 + 挂发布者清算（`requestId` 只对本窗口有效，见 `createOfficePreviewRequests`）；
+   *   4. 转换本体（授权四道闸门 + 有界读都在 `convertOfficeToPdf` 里）。
+   * 收尾一律 `release()`：无论成、败、取消，这条账都要摘掉（release 只摘"还是我这条"）。
+   */
+  ipcMain.handle(IPC_CHANNELS.workbench.officePdf, async (event, ...args) => {
+    const [threadId, relative, priority, requestId] = parseIpcArgs(
+      officePreviewArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.officePdf
+    )
+    const root = rootOf(threadId)
+    const preview = await officePreviewOf()
+    const request = officeRequests.begin(requestId, event.sender.id)
+    watchSender(event.sender)
+    try {
+      const result: OfficePreviewResult = await convertOfficeToPdf(
+        root,
+        relative,
+        priority,
+        preview,
+        request.signal
+      )
+      return result
+    } finally {
+      request.release()
+    }
+  })
+
+  /**
+   * 取消一次办公档转换。**只认本窗口的 requestId**（`cancel(id, owner)` 在别人手上是空操作）——
+   * 多窗口下不能让一个窗口把另一个窗口正在看的转换掐掉。幂等：没这条账就是空操作，不抛。
+   */
+  ipcMain.handle(IPC_CHANNELS.workbench.cancelOfficePdf, (event, ...args) => {
+    const [requestId] = parseIpcArgs(
+      officePreviewCancelArgsSchema,
+      args,
+      IPC_CHANNELS.workbench.cancelOfficePdf
+    )
+    officeRequests.cancel(requestId, event.sender.id)
+  })
+
   ipcMain.handle(IPC_CHANNELS.terminal.start, async (event, ...args) => {
     const [threadId, cols, rows] = parseIpcArgs(
       terminalStartArgsSchema,
@@ -249,18 +466,8 @@ export function registerWorkbenchIpc(
       rows
     )
     senders.set(id, event.sender)
-    // 渲染端重新加载 / 窗口销毁：这个 sender 名下的终端全部清算（node-pty 不知道宿主没了）。
-    // 每个 webContents 只挂一次（重启终端会再走这条 handler，重复挂会攒一堆监听）。
-    if (!watched.has(event.sender.id)) {
-      watched.add(event.sender.id)
-      event.sender.once('destroyed', () => {
-        watched.delete(event.sender.id)
-        for (const [key, target] of [...senders]) {
-          if (target.id === event.sender.id) senders.delete(key)
-        }
-        terminals.disposeByOwner(event.sender.id)
-      })
-    }
+    // 渲染端重新加载 / 窗口销毁：这个 sender 名下的终端与在途转换全部清算
+    watchSender(event.sender)
     return session
   })
 
@@ -284,7 +491,14 @@ export function registerWorkbenchIpc(
     terminals.dispose(id)
   })
 
-  return { terminals }
+  return {
+    terminals,
+    disposeOfficePreview: () => {
+      // 在途的转换先取消（同步发起杀进程树），再让服务自己收尾（不 await：见 handles 的说明）
+      officeRequests.disposeAll()
+      void officePreview?.dispose()
+    }
+  }
 }
 
 /** 终端 id 的自增尾巴 */

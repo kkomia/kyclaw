@@ -10,7 +10,11 @@ import { MemoryPage } from '../MemoryPage'
  * 页面在四页壳里由路由挂载，这里只渲它自己（routes.spec 管壳）。
  *
  * 记忆跟着**当前活动会话**走（round 58）：所以每个用例先把会话 store 摆好——
- * 有活动会话 = 列表里有它；草稿 / 没有会话 = 不发请求、给空态。
+ * 有活动会话 = 列表里有它；草稿 / 没有会话 = 不发请求、给空态（`memory-no-session`，
+ * 与"有会话但还没记东西"的 `memory-empty` 分开说）。
+ *
+ * 本轮（设置页重组）：独立页的标题从「记忆」改成「记忆空间」；设置页「记忆」栏里另有一个
+ * 「记忆空间」入口弹窗（复用同一个 MemoryPanel）——那一段在 settings-page.spec 里钉。
  */
 function json(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -46,7 +50,14 @@ function installFakeMemory(initial: Record<string, string> = {}): FakeMemoryServ
       // 的最后一次调用看方法/入参），也不参与 failNext 的排队——那是给记忆接口准备的一次性失败。
       if (url.pathname === '/api/memory/recall') {
         return json({
-          recall: { state: 'off', active: false, enabled: false, source: 'local', detail: '未开启' }
+          // 形状照 shared/memory 的 recallStatusSchema（source 只有 remote / localEngine 两档）
+          recall: {
+            state: 'off',
+            active: false,
+            enabled: false,
+            source: 'remote',
+            detail: '未开启'
+          }
         })
       }
       const threadId = url.searchParams.get('threadId')
@@ -107,6 +118,13 @@ afterEach(() => {
 })
 
 describe('记忆页：查看', () => {
+  it('标题是「记忆空间」（本轮与设置页那一块统一取名）', () => {
+    installFakeMemory()
+    render(<MemoryPage />)
+
+    expect(screen.getByRole('heading', { level: 1, name: '记忆空间' })).toBeInTheDocument()
+  })
+
   it('有活动会话：按会话拉取（请求带 threadId），回来后显示内容与两个动作', async () => {
     const server = installFakeMemory({ 'thread-1': '# 用户信息\n- 姓名：张三\n- 城市：杭州' })
     render(<MemoryPage />)
@@ -132,12 +150,13 @@ describe('记忆页：查看', () => {
     expect(screen.getByTestId('memory-clear')).toBeDisabled()
   })
 
-  it('没有活动会话 / 草稿：给空态且一次请求都不发', async () => {
+  it('没有活动会话 / 草稿：给"没有会话"空态（不是"还没有记忆"）且一次请求都不发', async () => {
     const server = installFakeMemory({ 'thread-1': '不该被读到的内容' })
     setDraftSession('draft-1')
     render(<MemoryPage />)
 
-    expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
+    expect(await screen.findByTestId('memory-no-session')).toHaveTextContent('当前没有会话')
+    expect(screen.queryByTestId('memory-empty')).not.toBeInTheDocument()
     expect(screen.queryByTestId('memory-edit')).not.toBeInTheDocument()
     expect(server.calls).toHaveLength(0)
   })

@@ -1,0 +1,323 @@
+/**
+ * dsh-media 的版面样式：类名全部自带 `dsh-media-*` / `dsh-html-*` 前缀，只作用在自己那棵树上。
+ *
+ * 适配自 deepseek-harness（MIT，commit 86a4022）的同名 CSS module（视觉值换成 kyclaw 的设计 token）：
+ *   - `image/ImageBody.module.css`          → `.dsh-media-root` / `.dsh-media-frame` / `.dsh-media-surface` / `.dsh-media-image`
+ *   - `markdown/MarkdownBody.module.css`    → `.dsh-media-frontmatter*`
+ *   - `markdown/frontmatter-fields.module.css` → 字段网格（`display: contents` 那一手照抄）
+ *   - `code/CodeBody.module.css`            → 行号与换行那两段（`--dsl-code-block-*` 换成这里的 `--dsh-code-*`）
+ *   - `text/TextPreview.module.css`         → `.dsh-media-text*`（等宽 + 行块）
+ *   - `html/HtmlBody.module.css`            → `.dsh-html-frame`
+ * 缩放视口与浮动控件那两段在 `dsh-document/dsh-document.css`（共用同一份，不在这里复制）。
+ */
+
+/* ── 图片阅读器 ───────────────────────────────────────────────────────── */
+
+.dsh-media-root {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* 一列内容：宽度跟着滚动口走（图按面板宽适应，不会横向滚）；更高的图把它撑高、纵向滚 */
+.dsh-media-frame {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 100%;
+  height: max-content;
+  /* 内联预览（BottomSheet）那侧宿主由内容撑高：给一条下限，免得"适应宽度"把图缩成火柴盒 */
+  min-height: max(100%, min(45vh, 320px));
+  padding: 12px;
+  white-space: normal;
+}
+
+.dsh-media-frame-native {
+  align-items: center;
+  justify-content: center;
+}
+
+.dsh-media-image-native {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-panel);
+}
+
+/* 缩放面：宽度由 dsh-document.css 的两条规则给（适应宽度 = min(原始宽, 100%)；固定倍率 = 原始宽 × 倍率） */
+.dsh-media-surface {
+  display: block;
+  flex: none;
+  margin: auto;
+}
+
+.dsh-media-image {
+  position: absolute;
+  display: block;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  border-radius: var(--radius-panel);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.dsh-media-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: var(--ui-B2-font-size);
+  line-height: 1.6;
+  white-space: normal;
+}
+
+/* 旋转钮（本仓保留的能力，上游没有）：浮在右上角，不跟底部的缩放控件抢位置 */
+.dsh-media-actions {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+}
+
+.dsh-media-action {
+  border-color: var(--border-hairline);
+  background: var(--bg-menu);
+  box-shadow: var(--shadow-popover);
+}
+
+.dsh-media-action:hover {
+  background: var(--fill-hover);
+}
+
+/* ── 代码文档体：行号 + 换行 ─────────────────────────────────────────── */
+
+.dsh-media-code {
+  position: relative;
+  min-width: 0;
+}
+
+.dsh-media-code-bar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 工具条直接压在代码卡上沿（卡的默认上边距在预览里不要） */
+.dsh-media-code .code-block {
+  margin-top: 0;
+}
+
+/*
+ * 换行口径：高亮路每一行是 `<span class="line">`，行内空白由 `--dsh-code-line-white-space` 管；
+ * 没高亮的路是一整块 `<pre>`，直接改它的 `white-space`。
+ */
+.dsh-media-code[data-wrap='true'] {
+  --dsh-code-line-white-space: pre-wrap;
+}
+
+.dsh-media-code[data-wrap='false'] {
+  --dsh-code-line-white-space: pre;
+}
+
+.dsh-media-code[data-wrap='true'] :where(.code-block-body) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dsh-media-code[data-wrap='false'] :where(.code-block-body) {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/*
+ * 行号：只在高亮路画（`data-highlighted="true"` 的那棵树才有行元素）。
+ * 数字是 `::before` 的生成内容 + `user-select: none`：框选不到、也进不了复制按钮的文本
+ * （复制按钮复制的是原始 code，与行号无关）。
+ */
+.dsh-media-code .code-block[data-highlighted='true'] .code-block-body code {
+  display: block;
+  counter-reset: dsh-source-line;
+  /* 行元素之间的换行文本节点在这里被折掉（每行自己有 white-space） */
+  white-space: normal;
+}
+
+.dsh-media-code .code-block[data-highlighted='true'] .code-block-body .line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+  padding-inline-start: calc(var(--dsh-code-line-number-width, 2ch) + 12px);
+  counter-increment: dsh-source-line;
+  white-space: var(--dsh-code-line-white-space, pre-wrap);
+}
+
+.dsh-media-code .code-block[data-highlighted='true'] .code-block-body .line::before {
+  position: absolute;
+  inset-inline-start: 0;
+  width: var(--dsh-code-line-number-width, 2ch);
+  color: var(--text-tertiary);
+  text-align: end;
+  content: counter(dsh-source-line);
+  user-select: none;
+}
+
+/* ── 纯文本文档体 ─────────────────────────────────────────────────────── */
+
+.dsh-media-text {
+  box-sizing: border-box;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--markdown-Codeblocks-font-size);
+  line-height: var(--markdown-Codeblocks-line-height);
+}
+
+.dsh-media-text-page {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dsh-media-text-line {
+  padding: 0 10px;
+}
+
+/* ── HTML 静态预览 ────────────────────────────────────────────────────── */
+
+.dsh-html-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  background: var(--bg-primary);
+}
+
+/* ── markdown 的 frontmatter 框 ───────────────────────────────────────── */
+
+.dsh-media-frontmatter {
+  margin: 0 0 var(--space-3);
+  padding: 10px 12px;
+  border: var(--hairline-width) solid var(--border-hairline);
+  border-radius: var(--radius-panel);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--ui-B2-font-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 空块（`---` 之间什么都没有）不占位 */
+.dsh-media-frontmatter:empty {
+  display: none;
+}
+
+.dsh-media-frontmatter-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px var(--space-3);
+  margin: 0;
+}
+
+.dsh-media-frontmatter-field {
+  display: contents;
+}
+
+.dsh-media-frontmatter-key {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.dsh-media-frontmatter-value,
+.dsh-media-frontmatter-block {
+  margin: 0;
+}
+
+.dsh-media-frontmatter-block {
+  font-family: var(--font-mono);
+}
+
+.dsh-media-frontmatter-source {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--ui-C1-font-size);
+  white-space: inherit;
+}
+
+/* ── 分页文本体（"加载更多" / 版本变了提示 / 重读回位） ───────────────── */
+
+.dsh-paged-text {
+  min-width: 0;
+}
+
+.dsh-paged-text-note {
+  margin: 0;
+  padding: 6px 12px 0;
+  color: var(--text-tertiary);
+  font-size: var(--ui-C1-font-size);
+  line-height: 1.6;
+}
+
+/* "加载更多"那一行：说明在上、按钮在下（按钮不跟正文同宽，点起来省事） */
+.dsh-paged-text-more {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-bottom: var(--space-3);
+}
+
+.dsh-paged-text-more button,
+.dsh-paged-text-notice button {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-height-sm);
+  margin: 0 12px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  font-size: var(--ui-C1-font-size);
+  background: var(--bg-secondary);
+  border: var(--hairline-width) solid var(--border-hairline);
+  border-radius: var(--radius-button-sm);
+  cursor: pointer;
+}
+
+.dsh-paged-text-more button:hover:not(:disabled),
+.dsh-paged-text-notice button:hover:not(:disabled) {
+  background: var(--fill-hover);
+}
+
+.dsh-paged-text-more button:disabled,
+.dsh-paged-text-notice button:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+/* 版本提示：一行说明 + 一个按钮（"重新读取并回到这里"） */
+.dsh-paged-text-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-3) 12px;
+  padding: 6px 0;
+  border-top: var(--hairline-width) solid var(--border-hairline);
+}
+
+.dsh-paged-text-notice-text {
+  padding-left: 12px;
+  color: var(--text-secondary);
+  font-size: var(--ui-C1-font-size);
+  line-height: 1.6;
+}

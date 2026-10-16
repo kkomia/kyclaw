@@ -1,10 +1,17 @@
 import type { ChatTransport, FinishReason, UIMessage, UIMessageChunk } from 'ai'
+import { askUserAcceptedOf } from '@renderer/lib/agent'
 
 /**
  * 单测用的假 transport（不碰网络）：把 sendMessages 的入参存下来，
  * 返回一条"由测试逐段推"的流 —— 文本增量什么时候来、来几段，全由用例决定。
  *
  * 与 `chatRoute` 的真身协议一致（UIMessageChunk：text-start / text-delta / text-end / finish）。
+ *
+ * 0.1.2 / 001：它同时是**真 transport 的"响应到手"边界的替身** —— 请求记下、流交出去的那一瞬
+ * 就相当于真链路里 `fetch` 拿到响应的那一瞬，因此这里按同一份协议（`askUserAcceptedOf`）
+ * 触发 per-request 的「服务端已接收」回调。留意两档的区别，别在用例里混：
+ *   - `failNext(error)` = **响应都没到手**（非 2xx / 断网）：回调不响，调用方拿到 rejection；
+ *   - 流交出去之后才 `disconnect(error)` = **已接收、流中途断**：回调早就响过了。
  */
 export interface MockRequest {
   trigger: 'submit-message' | 'regenerate-message' | 'resume-stream'
@@ -50,6 +57,12 @@ export interface MockTransport {
   disconnect: (error?: Error) => void
   /** 让下一个请求在建立阶段就失败（模拟 401 / 断网） */
   failNext: (error: Error) => void
+  /**
+   * 把**响应**按住（0.1.2 / 001）：请求照常发出、记进 `requests`，但 `sendMessages` 先不 resolve、
+   * 「已接收」回执也不响 —— 就是真链路里"请求发了、响应还没回来"那一段。`releaseResponse()` 放行。
+   */
+  holdResponse: () => void
+  releaseResponse: () => void
 }
 
 function snapshot(messages: UIMessage[]): UIMessage[] {
@@ -65,6 +78,8 @@ export function createMockTransport(): MockTransport {
   let reasoningStarted = false
   let reasoningSeq = 0
   let nextFailure: Error | null = null
+  let responseGate: Promise<void> | null = null
+  let openResponse: (() => void) | null = null
 
   /** 思考段收尾（真 SSE 里 reasoning-end 先于随后的工具/正文到达）：一段思考 = 一个 reasoning part */
   const endReasoning = (): void => {
@@ -103,6 +118,12 @@ export function createMockTransport(): MockTransport {
         nextFailure = null
         throw failure
       }
+
+      // 响应还没到手（holdResponse 期间）：真链路里 fetch 就停在这一步
+      if (responseGate !== null) await responseGate
+
+      // 响应到手（= 真链路里 fetch 拿到 2xx 响应、body 流建立）：按请求把回执回调响一次
+      askUserAcceptedOf(options.metadata)?.()
 
       activeTextId = `text-${requests.length}`
       textStarted = false
@@ -180,6 +201,17 @@ export function createMockTransport(): MockTransport {
     },
     failNext(error) {
       nextFailure = error
+    },
+    holdResponse() {
+      responseGate = new Promise<void>((resolve) => {
+        openResponse = resolve
+      })
+    },
+    releaseResponse() {
+      const open = openResponse
+      openResponse = null
+      responseGate = null
+      open?.()
     }
   }
 }

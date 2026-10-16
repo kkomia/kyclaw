@@ -39,6 +39,7 @@ interface PackageScriptExports {
   releaseNotesPath(version: string, root?: string): string
   releaseNotesProblem(version: string, text: string): string | null
   channelReleaseProblem(channelYml: string, notes: string): string | null
+  bundledNotesProblem(unpackedResourcesDir: string, version: string, notes: string): string | null
 }
 
 const packageScript = (await import(
@@ -257,6 +258,41 @@ describe('scripts/package.mjs：版本与发行日志绑定 + 渠道落点自检
     // `|+`：尾随空行留着（内容照样对得上）
     const keep = `version: 0.1.1\nreleaseNotes: |+\n  kyclaw 0.1.1\n  - 一条\n\n${date}\n`
     expect(packageScript.channelReleaseProblem(keep, 'kyclaw 0.1.1\n- 一条\n')).toBeNull()
+  })
+
+  it('本轮·随包自检：解包目录里的 release-notes/<版本>.md 与 build 那份逐字一致才过', () => {
+    dir = mkdtempSync(join(tmpdir(), 'kyclaw-unpacked-'))
+    const resources = join(dir, 'resources')
+    const notes = 'kyclaw 0.1.1\n\n- 一条\n- 另一条'
+    mkdirSync(join(resources, 'release-notes'), { recursive: true })
+    writeFileSync(join(resources, 'release-notes', '0.1.1.md'), notes, 'utf8')
+
+    expect(packageScript.bundledNotesProblem(resources, '0.1.1', notes)).toBeNull()
+    // 尾随换行 / CRLF 不算差异（与渠道自检同一口径：块标量与文件末尾本来就差一个换行）
+    expect(packageScript.bundledNotesProblem(resources, '0.1.1', `${notes}\n`)).toBeNull()
+    expect(
+      packageScript.bundledNotesProblem(resources, '0.1.1', notes.replace(/\n/g, '\r\n'))
+    ).toBeNull()
+  })
+
+  it('本轮·随包自检：没拷进去 / 内容不一致 / 只有别的版本 —— 三种都拦下并指路', () => {
+    dir = mkdtempSync(join(tmpdir(), 'kyclaw-unpacked-'))
+    const resources = join(dir, 'resources')
+    const notes = 'kyclaw 0.1.1\n\n- 一条'
+
+    // 整个目录都没有（extraResources 漏了/写错落点）——报的是"该在哪"，不是"读了没"
+    const missing = packageScript.bundledNotesProblem(resources, '0.1.1', notes)
+    expect(missing).toContain('release-notes')
+    expect(missing).toContain('0.1.1.md')
+
+    // 只有别的版本：不算数（客户端的「更新日志」只认 app.getVersion() 那一个文件名）
+    mkdirSync(join(resources, 'release-notes'), { recursive: true })
+    writeFileSync(join(resources, 'release-notes', '0.1.2.md'), notes, 'utf8')
+    expect(packageScript.bundledNotesProblem(resources, '0.1.1', notes)).toContain('0.1.1.md')
+
+    // 拷了但内容不一样（拷的还是旧文件）
+    writeFileSync(join(resources, 'release-notes', '0.1.1.md'), 'kyclaw 0.1.1\n\n- 别的', 'utf8')
+    expect(packageScript.bundledNotesProblem(resources, '0.1.1', notes)).toContain('不一致')
   })
 
   it('仓库里已备的发行日志：文件名就是版本号，内容里也写着那个版本号', () => {

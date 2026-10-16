@@ -87,10 +87,27 @@ describe('PreviewTool：按格式分流（与内联预览同一套口径）', ()
 
   it('二进制 / 太大：给人话，不吐乱码（也不去拉字节）', async () => {
     bed.bridge.workbench.readFile.mockResolvedValue({ kind: 'binary', size: 2048 })
+    render(<PreviewTool root={rootOf()} relative="blob.bin" />)
+
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent('二进制')
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('svg / ico 走字节通道（预览要画它们；模型附件白名单是另一回事）', async () => {
+    bed.bridge.workbench.readBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'image-ico',
+      bytes: new Uint8Array([1, 2, 3]),
+      size: 3
+    })
     render(<PreviewTool root={rootOf()} relative="logo.ico" />)
 
-    expect(await screen.findByTestId('file-preview-binary')).toHaveTextContent('二进制')
-    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+    const root = await screen.findByTestId('file-preview-image')
+    expect(root).toHaveAttribute('data-format', 'image-ico')
+    const image = root.querySelector('img')
+    expect(image?.getAttribute('src')).toBe('data:image/x-icon;base64,AQID')
+    expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', 'logo.ico')
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
   })
 
   it('读不了：把主进程的人话露在预览区里', async () => {

@@ -389,8 +389,6 @@ describe('语义层（semantic.css）', () => {
     ['--bg-menu', 'var(--Bg-Tertiary)'],
     ['--text-primary', 'var(--Labels-Primary)'],
     ['--text-secondary', 'var(--Labels-Secondary)'],
-    ['--border-hairline', 'var(--Separators-S1)'],
-    ['--border-surface', 'var(--Separators-S1-active)'],
     ['--fill-hover', 'var(--Fills-F1)'],
     ['--fill-selected', 'var(--Fills-F2)'],
     ['--fill-active', 'var(--Fills-F3)'],
@@ -416,7 +414,7 @@ describe('语义层（semantic.css）', () => {
     ['--selection', 'var(--Others-TextSelected)'],
     ['--mask', 'var(--MaskBg-Base)'],
     ['--blur-glass', '15px'],
-    ['--hairline-width', 'var(--border-width-hairline)'],
+    ['--hairline-width', 'var(--border-width-base)'],
     ['--scrollbar-size', '6px'],
     ['--scrollbar-thumb', 'var(--Fills-F2)'],
     ['--scrollbar-thumb-hover', 'var(--Fills-F3)']
@@ -426,9 +424,13 @@ describe('语义层（semantic.css）', () => {
     expectDecl(root, name, value, 'semantic :root')
   })
 
-  it('自然表面边框独立于分隔线与字段边框', () => {
-    expectDecl(root, '--border-surface', 'var(--Separators-S1-active)', 'semantic :root')
-    expectDecl(root, '--border-field', 'var(--Fills-F1)', 'semantic :root')
+  it('三档边框色是「比原样层深一档」的刻意偏离（2026-10-16 用户实拍：边框太浅）', () => {
+    expectDecl(root, '--border-hairline', '#00000033', 'semantic :root')
+    expectDecl(root, '--border-surface', '#00000042', 'semantic :root')
+    expectDecl(root, '--border-field', '#00000024', 'semantic :root')
+    expectDecl(darkSemantic, '--border-hairline', '#ffffff2e', "semantic :root[data-theme='dark']")
+    expectDecl(darkSemantic, '--border-surface', '#ffffff42', "semantic :root[data-theme='dark']")
+    expectDecl(darkSemantic, '--border-field', '#ffffff21', "semantic :root[data-theme='dark']")
     expect(root.get('--border-surface')).not.toBe(root.get('--border-hairline'))
   })
 
@@ -492,7 +494,7 @@ describe('T3 控件尺寸与组件级 token（UI 验收表数值）', () => {
     ['--text-disabled', 'var(--Labels-Quaternary)'],
     ['--fill-disabled', 'var(--Fills-F3)'],
     // 输入框（§4.7 .kimi-select）、菜单（§7）、弹层（§4.5）
-    ['--border-field', 'var(--Fills-F1)'],
+    ['--border-field', '#00000024'],
     ['--field-bg', 'var(--Bg-Primary)'],
     ['--menu-item-height', '36px'],
     ['--menu-pad', 'var(--space-2)'],

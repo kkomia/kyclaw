@@ -12,7 +12,7 @@
  * （见 `resolveContextItem`）——于是附件口径仍然只有 composer-attachments.ts 那一处，
  * 文件树不需要知道图片 / PDF / 二进制各自怎么收。摘选的那一路没有文件可读，直接在这里成形。
  */
-import { IMAGE_MIME, previewModeOf } from '@renderer/features/workbench/preview/modes'
+import { extensionOf, previewModeOf } from '@renderer/features/workbench/preview/modes'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import type { PdfExtractResult } from '@shared/attachments'
 import type { FileByteFormat, FileBytesResult, FilePreview } from '@shared/workbench'
@@ -116,6 +116,23 @@ export type ContextItemResult =
 /** 认不出的格式（二进制 / 后缀与文件头对不上）时的固定人话 */
 export const CONTEXT_UNSUPPORTED = '这个格式暂不支持加入上下文'
 
+/**
+ * **能进模型请求体**的图片格式（字节通道的格式枚举 → MIME）。这是**模型附件白名单**，
+ * 与工作台预览那张 `IMAGE_MIME` 表是两回事，刻意不共用：
+ *   - 预览表会加 `image-svg` / `image-ico`（渲染端要能画它们），但矢量图多数视觉端点不收；
+ *   - 白名单只列**光栅**五种，**新增格式要显式加这一行**（不跟前缀、不跟预览表漂）。
+ *
+ * 取值与 `@shared/attachments` 的 `IMAGE_MEDIA_TYPES`（＋ 上传那条路）同一组格式；
+ * 那边按 mime 串认、这边按格式枚举认，谁改都要记得对齐。
+ */
+export const VISION_ATTACHMENT_FORMATS: Readonly<Partial<Record<FileByteFormat, string>>> = {
+  'image-png': 'image/png',
+  'image-jpeg': 'image/jpeg',
+  'image-gif': 'image/gif',
+  'image-webp': 'image/webp',
+  'image-bmp': 'image/bmp'
+}
+
 /** 文件不在磁盘上了（与主进程 workbench 的同口径说法） */
 const FILE_GONE = '这个文件不在磁盘上了（可能刚被删除或改名）'
 
@@ -136,10 +153,19 @@ export async function resolveContextItem(
   if (item.source === 'selection') return selectionAttachment(item, options.id)
   if (options.channel === null) return { problem: '工作台通道不可用（window.kyclaw 缺失）' }
   const mode = previewModeOf(item.relative)
+  // 矢量图（svg/ico）：预览要能画它们，但**不发进模型请求**（见 VISION_ATTACHMENT_FORMATS）。
+  // 退回文本那条路：svg 是文本格式，装得下就内联源码（模型读得到）；ico 这类二进制拿到的是
+  // **路径引用**（与 round 53 起"二进制 / 超限 → 相对路径"完全同一条既有路，chip 照常进附件条）。
+  if (mode === 'image' && VECTOR_IMAGE_EXTENSIONS.includes(extensionOf(item.relative))) {
+    return textAttachment(item, options, options.channel)
+  }
   if (mode === 'image') return imageAttachment(item, options, options.channel)
   if (mode === 'pdf') return pdfAttachment(item, options, options.channel)
   return textAttachment(item, options, options.channel)
 }
+
+/** 矢量图后缀：预览要能画它们（渲染器接得住），但**不发进模型请求**（多数视觉端点不收矢量图） */
+const VECTOR_IMAGE_EXTENSIONS: readonly string[] = ['svg', 'ico']
 
 /** 摘选：文字已在事件里；超上限按**字节**截断（与 ＋ 上传的 16KB 同一把尺），不整段拒收 */
 function selectionAttachment(
@@ -216,8 +242,14 @@ async function imageAttachment(
   if (!options.vision) return { problem: NO_VISION_MESSAGE }
   const read = await readBytesOf(item, channel)
   if (!read.ok) return { problem: read.problem }
-  if (!read.format.startsWith('image-')) return { problem: CONTEXT_UNSUPPORTED }
-  const mediaType = IMAGE_MIME[read.format] ?? 'application/octet-stream'
+  /**
+   * 只认**模型附件白名单**（`VISION_ATTACHMENT_FORMATS`，光栅五种），不用 `format.startsWith('image-')`
+   * 放行、也不借预览那张 MIME 表：预览把 svg / ico 收进"图片"是工作台要画它们，而按前缀放行会以
+   * `image/svg+xml`（或回落 `application/octet-stream`）发进模型请求，多数视觉端点直接 400。
+   * 白名单外的一律按"不支持"拒收，由调用方退回路径引用那条路。
+   */
+  const mediaType = VISION_ATTACHMENT_FORMATS[read.format]
+  if (mediaType === undefined) return { problem: CONTEXT_UNSUPPORTED }
   return {
     attachment: {
       id: options.id,

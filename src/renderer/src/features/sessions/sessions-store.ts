@@ -44,6 +44,14 @@ export interface SessionsState {
   threads: ThreadSummary[]
   /** 当前会话：草稿 id（还没发过消息）或已存在的线程 id */
   activeId: string | null
+  /**
+   * R92：**系统初始化落位选出的那个会话 id**（volatile，不落盘）——
+   * 会话列表载入（或失败兜底）把 `activeId` **从无到有**地定下来时，这里记的就是它；
+   * 任何**用户主动**的改挂（选中某条 / 新建 / 删除引起的）都会清掉它。
+   * 输入卡的草稿过桥只在 `activeId === initLandedId` 这一次放行
+   * （见 ChatPage 的 `carryoverAllowed`）：用户主动的改挂不许把上一挂的草稿带过去。
+   */
+  initLandedId: string | null
   /** 初次加载是否结束（成功或失败都算结束，UI 据此从"载入中"出来） */
   loaded: boolean
   /** 最近一次失败的文案（侧栏显示 + 重试；成功后清空） */
@@ -104,6 +112,7 @@ let loadPromise: Promise<void> | null = null
 export const useSessionsStore = create<SessionsState>()((set, get) => ({
   threads: [],
   activeId: null,
+  initLandedId: null,
   loaded: false,
   error: null,
   notices: {},
@@ -115,23 +124,32 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     loadPromise ??= (async () => {
       try {
         const threads = await fetchThreads()
-        set((state) => ({
-          threads,
-          loaded: true,
-          error: null,
-          // 首屏选中最近一条；没有就开草稿
-          activeId: state.activeId ?? threads[0]?.id ?? newThreadId()
-        }))
+        set((state) => {
+          // R92：只有"从无到有"这一次落位才算系统初始化（草稿过桥只认它）；用户先开的草稿
+          // （列表回来前点过"新建"）不算 —— 落位保持用户的选择、initLandedId 清掉。
+          const landed = state.activeId ?? threads[0]?.id ?? newThreadId()
+          return {
+            threads,
+            loaded: true,
+            error: null,
+            activeId: landed,
+            initLandedId: state.activeId === null ? landed : null
+          }
+        })
       } catch (error) {
         // 列表没载入也要能继续：开草稿对话（服务通不通由对话页的错误卡说）。
         // 界面上只说"会话列表加载失败"（雷点 2.2：不把后端原文写给用户看），
         // 原始 error 落控制台 —— 生产排障（DevTools / 日志）要有落点。
         console.error('[kyclaw] 会话列表加载失败', error)
-        set((state) => ({
-          loaded: true,
-          error: messageOf(error),
-          activeId: state.activeId ?? newThreadId()
-        }))
+        set((state) => {
+          const landed = state.activeId ?? newThreadId()
+          return {
+            loaded: true,
+            error: messageOf(error),
+            activeId: landed,
+            initLandedId: state.activeId === null ? landed : null
+          }
+        })
       } finally {
         loadPromise = null
         // round 73：冷启动打点 —— 会话列表有结果了（成功失败都算；首屏就此从"载入中"出来）
@@ -154,13 +172,14 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
   select: (threadId) => {
     set((state) => ({
       activeId: threadId,
+      initLandedId: null,
       notices: withoutKey(state.notices, threadId)
     }))
   },
 
   startNew: (projectId = null) => {
     const threadId = newThreadId()
-    set({ activeId: threadId })
+    set({ activeId: threadId, initLandedId: null })
     // 归属记在服务端（映射表）：新建会话的那一刻就写，第一轮工具调用读到的是它。
     // 失败由 projects-store 回滚 + 落 error（这个会话就按"没有项目"跑，不会悄悄用错根）。
     if (projectId !== null) void useProjectsStore.getState().assignSession(threadId, projectId)
@@ -233,7 +252,10 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
       notices: withoutKey(state.notices, threadId),
       // round 62：会话没了，它的排队内容也一起丢掉（不会再有人去补发它）
       queues: withoutKey(state.queues, threadId),
-      activeId: state.activeId === threadId ? (remaining[0]?.id ?? newThreadId()) : state.activeId
+      // R92：删掉的是当前会话 = 用户主动改挂（草稿过桥不许把删掉那一挂的草稿带进下一条）
+      ...(state.activeId === threadId
+        ? { activeId: remaining[0]?.id ?? newThreadId(), initLandedId: null }
+        : {})
     }))
     // 与服务端对齐排序/时间（草稿没有服务端那一半，不用刷）
     if (listed) void get().refresh()
@@ -310,6 +332,7 @@ export function resetSessionsStore(): void {
   useSessionsStore.setState({
     threads: [],
     activeId: null,
+    initLandedId: null,
     loaded: false,
     error: null,
     notices: {},

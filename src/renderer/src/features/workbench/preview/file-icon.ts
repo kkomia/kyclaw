@@ -9,10 +9,10 @@
  *     哪类文件"的口径）与 **档 → 组件的静态表**（`FILE_ICONS`，表项是模块级常量，引用稳定）。
  *
  * 判据与 `modes.ts` 的 `previewModeOf` 同一套（那边是"用哪条通道渲染"，这边是"画哪个图标"）：
- * 先查直映射表，查不到再按预览分组回退（pdf / image / table / pptx / docx / markdown / code），
+ * 先查直映射表，查不到再按预览分组回退（pdf / image / table / office / markdown / code / html / text），
  * 最后落到 `generic`（认不出的后缀、没有后缀）。旧版 Office 三件（.doc/.xls/.ppt）在直映射表里
- * 就按各家的文档细分 —— 它们与 .docx/.xlsx/.pptx 是同一类东西，只是预览方式不同
- * （见 modes.ts 的 office-legacy）。
+ * 就按各家的文档细分 —— 它们与 .docx/.xlsx/.pptx 是同一类东西（预览方式也同一档了：
+ * 办公四件走页式预览、表格四种走原始字节，见 modes.ts）。
  *
  * 零 emoji（UI 雷点 1，见 docs/reference/UI-设计雷点-v1.md）。
  */
@@ -169,19 +169,21 @@ const EXTENSION_KINDS: Readonly<Record<string, FileIconKind>> = {
 }
 
 /**
- * 直映射表认不出时按预览分组回退：能走到这里的后缀都还没分档（`.doc/.xls/.ppt` 在直映射表里，
- * `office-legacy` 这一档够不着，留着只是让映射逐档齐全）。
+ * 直映射表认不出时按预览分组回退：能走到这里的后缀都还没分档
+ * （`.doc/.docx/.xls/.xlsx/.ppt/.pptx` 都在直映射表里，`office` 这一档是为"以后新增的办公后缀"留的，
+ * 按最像的那一档给图标）。
+ * `html` 是本轮新开的预览分组（`.html/.htm` 有真渲染器了）—— 它的直映射表项本来就在（→ 'html'），
+ * 这一档是为"以后新增的 HTML 家族后缀"留的。
  */
 const FALLBACK_KINDS: Readonly<Record<PreviewMode, FileIconKind>> = {
   text: 'generic',
   markdown: 'markdown',
   code: 'code',
+  html: 'html',
   image: 'image',
   pdf: 'pdf',
   table: 'excel',
-  docx: 'word',
-  pptx: 'ppt',
-  'office-legacy': 'generic'
+  office: 'word'
 }
 
 /**

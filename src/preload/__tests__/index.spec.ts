@@ -490,15 +490,53 @@ describe('preload：window.kyclaw.updates（T17）', () => {
     status: { phase: 'idle' }
   }
 
-  it('暴露 updates 一族（读 / 检查 / 安装 / 订阅）', async () => {
+  it('暴露 updates 一族（读 / 检查 / 安装 / 订阅 / 本版发行说明）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.updates).sort()).toEqual([
       'check',
       'install',
       'onStateChanged',
+      'releaseNotes',
       'state'
     ])
+  })
+
+  it('releaseNotes：打 updates:release-notes（**无入参**），回包按 schema 解析后交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      state: 'ok',
+      version: '1.0.0',
+      notes: 'kyclaw 1.0.0\n\n- 一条'
+    })
+    await expect(kyclawApi.updates.releaseNotes()).resolves.toEqual({
+      state: 'ok',
+      version: '1.0.0',
+      notes: 'kyclaw 1.0.0\n\n- 一条'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('updates:release-notes')
+
+    // 三态里的另外两档也照原样回（missing 不带正文、unreadable 带主进程那句人话）
+    mocks.invoke.mockResolvedValueOnce({ state: 'missing' })
+    await expect(kyclawApi.updates.releaseNotes()).resolves.toEqual({ state: 'missing' })
+    mocks.invoke.mockResolvedValueOnce({ state: 'unreadable', message: '本版发行说明读取失败' })
+    await expect(kyclawApi.updates.releaseNotes()).resolves.toEqual({
+      state: 'unreadable',
+      message: '本版发行说明读取失败'
+    })
+
+    // 脏回包（形状不对 / 多带键）一律抛：这条回包是"用户看到的日志"，编不得
+    for (const bad of [
+      null,
+      {},
+      { state: 'ok', notes: '缺版本号' },
+      { state: 'missing', version: '1.0.0' },
+      { state: 'unreadable' }
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(bad)
+      await expect(kyclawApi.updates.releaseNotes()).rejects.toThrow()
+    }
   })
 
   it('state / check 打约定通道，返回值按 schema 解析后交给上层', async () => {
@@ -685,19 +723,24 @@ describe('preload：window.kyclaw.translate（思考翻译，round 32）', () =>
 })
 
 describe('preload：window.kyclaw.workbench / terminal（工作台四工具）', () => {
-  it('暴露 workbench 一族（listDir / readFile / readBytes / search / reveal / gitOverview / gitLog / gitShow）', async () => {
+  it('暴露 workbench 一族（含办公档预览、表格字节与文本分页；readTextPage / textVersion 是本轮新增）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.workbench).sort()).toEqual([
+      'cancelOfficePdf',
       'gitLog',
       'gitOverview',
       'gitShow',
       'listDir',
+      'officePdf',
       'open',
       'readBytes',
       'readFile',
+      'readTextPage',
       'reveal',
-      'search'
+      'search',
+      'tableBytes',
+      'textVersion'
     ])
     expect(Object.keys(kyclawApi.terminal).sort()).toEqual([
       'dispose',
@@ -731,6 +774,44 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
     })
     expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:read-file', 't1', 'a.txt')
 
+    // 文本分页（第一页 cursor = null；回包过 schema）
+    mocks.invoke.mockResolvedValueOnce({
+      kind: 'page',
+      text: 'a\n',
+      offset: 0,
+      nextOffset: 2,
+      size: 2,
+      version: '2:1',
+      eof: true,
+      overlongLine: false
+    })
+    await expect(kyclawApi.workbench.readTextPage('t1', 'a.txt', null)).resolves.toEqual({
+      kind: 'page',
+      text: 'a\n',
+      offset: 0,
+      nextOffset: 2,
+      size: 2,
+      version: '2:1',
+      eof: true,
+      overlongLine: false
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:read-text-page', 't1', 'a.txt', null)
+
+    // 文本版本探询（轮询用；只 stat）
+    mocks.invoke.mockResolvedValueOnce({ kind: 'version', version: '2:1', size: 2 })
+    await expect(kyclawApi.workbench.textVersion('t1', 'a.txt')).resolves.toEqual({
+      kind: 'version',
+      version: '2:1',
+      size: 2
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:text-version', 't1', 'a.txt')
+
+    // 结构不对就抛（半截分页没法显示）
+    mocks.invoke.mockResolvedValueOnce({ kind: 'page', text: 'a' })
+    await expect(kyclawApi.workbench.readTextPage('t1', 'a.txt', null)).rejects.toThrow(
+      /结构不合法/
+    )
+
     mocks.invoke.mockResolvedValueOnce({ path: 'D:\\项目\\a.txt' })
     await expect(kyclawApi.workbench.reveal('t1', 'a.txt')).resolves.toEqual({
       path: 'D:\\项目\\a.txt'
@@ -750,6 +831,75 @@ describe('preload：window.kyclaw.workbench / terminal（工作台四工具）',
     // 结构不对就抛（路径是打开动作的凭据，不交半截对象）
     mocks.invoke.mockResolvedValueOnce({ path: '' })
     await expect(kyclawApi.workbench.open('t1', '方案.docx')).rejects.toThrow(/结构不合法/)
+  })
+
+  it('办公档预览：officePdf 发四个入参（含 requestId），失败也照原样回；cancelOfficePdf 只发 requestId', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      kind: 'pdf',
+      path: '方案.docx',
+      version: '1024:1712345',
+      pdf: new Uint8Array([37, 80, 68, 70]),
+      size: 4,
+      missingFonts: ['字体A'],
+      generation: 'gen-1'
+    })
+    const result = await kyclawApi.workbench.officePdf('t1', '方案.docx', 'foreground', 'req-1')
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      'workbench:office-pdf',
+      't1',
+      '方案.docx',
+      'foreground',
+      'req-1'
+    )
+    expect(result).toMatchObject({ kind: 'pdf', missingFonts: ['字体A'] })
+
+    // 分类失败**不是** reject（取消也是这一支）
+    mocks.invoke.mockResolvedValueOnce({
+      kind: 'failed',
+      path: '方案.docx',
+      code: 'cancelled',
+      message: '这次预览转换已取消'
+    })
+    await expect(
+      kyclawApi.workbench.officePdf('t1', '方案.docx', 'foreground', 'req-2')
+    ).resolves.toMatchObject({ code: 'cancelled' })
+
+    // 结构不对就抛（半截 PDF 画不出来，也别让上层以为是空的）
+    mocks.invoke.mockResolvedValueOnce({ kind: 'pdf', path: '方案.docx' })
+    await expect(
+      kyclawApi.workbench.officePdf('t1', '方案.docx', 'foreground', 'req-3')
+    ).rejects.toThrow(/结构不合法/)
+
+    mocks.invoke.mockResolvedValueOnce(undefined)
+    await expect(kyclawApi.workbench.cancelOfficePdf('req-1')).resolves.toBeUndefined()
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:cancel-office-pdf', 'req-1')
+  })
+
+  it('表格原始字节：tableBytes 走 workbench:table-bytes，五支判别联合都认', async () => {
+    const { kyclawApi } = await loadPreload()
+
+    mocks.invoke.mockResolvedValueOnce({
+      kind: 'bytes',
+      format: 'xls',
+      bytes: new Uint8Array([0xd0, 0xcf]),
+      size: 2
+    })
+    await expect(kyclawApi.workbench.tableBytes('t1', '旧台账.xls')).resolves.toMatchObject({
+      kind: 'bytes',
+      format: 'xls'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('workbench:table-bytes', 't1', '旧台账.xls')
+
+    mocks.invoke.mockResolvedValueOnce({ kind: 'changed' })
+    await expect(kyclawApi.workbench.tableBytes('t1', '名单.csv')).resolves.toEqual({
+      kind: 'changed'
+    })
+
+    // 格式枚举之外的格式 / 字节不是 Uint8Array：结构不合法
+    mocks.invoke.mockResolvedValueOnce({ kind: 'bytes', format: 'ods', bytes: [], size: 0 })
+    await expect(kyclawApi.workbench.tableBytes('t1', '名单.csv')).rejects.toThrow(/结构不合法/)
   })
 
   it('文件预览是按 kind 判别的联合：判别字段不对/多带字段都当结构不合法', async () => {

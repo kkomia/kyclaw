@@ -228,8 +228,9 @@
    随卡片圆角（outline 跟 border-radius，且不占用 box-shadow —— 卡片的投影还在）。
 
    颜色口径（R2 修复轮 round 2，用户实拍）：**灰色档**——取分隔线灰 --border-hairline
-   （= Separators-S1，浅 13% 黑 ≈ #dedede / 深 12% 白，两档都是灰）。Kimi 的输入卡边框本来
-   就是这条灰（`.chat-editor` = 1px Separators-S1；实况取样：Kimi 会话页输入卡左缘 222 =
+   （原来是 Separators-S1：浅 13% 黑 / 深 12% 白；2026-10-16 边框可见度轮各加深一档，
+   见 semantic.css 那三条的注释）。Kimi 的输入卡边框本来就是这条灰
+   （`.chat-editor` = 1px Separators-S1；实况取样：Kimi 会话页输入卡左缘 222 =
    13% 黑压白，实时网页未聚焦态 240 = 更浅的填充灰），聚焦只是把边缘提一档，
    选中/未聚焦差距极小。此前用墨色 --text-primary：暗色下近白、浅色下近黑，对比过重。
 

@@ -95,8 +95,13 @@ describe('待审批：默认展开但可收，且块内没有审批按钮（roun
   })
 })
 
-describe('思考可见（round 29：工具调用前不许"工具挨工具"裸奔）', () => {
-  it('流式期间：思考段后面跟了工具行也保持展开（思考段自己已不是"最后一条"）', () => {
+describe('思考可见（round 29 + round 88：工具调用前不许"工具挨工具"裸奔）', () => {
+  /**
+   * round 88 起，这一段思考**写完就不再占版面**：它后面来了工具行（别的内容上屏）就自己收起，
+   * 后面的内容（工具行）接着可见 —— 不是"整轮跑完才收"，也不是"工具挨工具裸奔"。
+   * 收起来之后用户点开仍然看得到全文（容器级折叠，不做条件渲染）。
+   */
+  it('流式期间：思考段后面跟了工具行 → 思考段自己收起，工具行照旧可见', () => {
     render(
       <Message
         message={assistantMessage([
@@ -114,13 +119,20 @@ describe('思考可见（round 29：工具调用前不许"工具挨工具"裸奔
     )
 
     const reasoning = screen.getByTestId('reasoning-toggle')
+    expect(reasoning).toHaveAttribute('aria-expanded', 'false')
+    // 标签仍是"思考过程"而不是"思考中…"——正在写的已经不是它了
+    expect(reasoning).toHaveTextContent('思考过程')
+    // 过程块本身还开着（工具行看得见），思考段是块内那一段自己收的
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
+    expect(screen.getByTestId('tool-card')).toBeInTheDocument()
+
+    // 点开还能看全文（收起来只是不占版面，内容没丢）
+    fireEvent.click(reasoning)
     expect(reasoning).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看目录结构')
-    // 标签仍是"思考过程"而不是"思考中…"——正在写的已经不是它了，只是这一轮还没跑完
-    expect(reasoning).toHaveTextContent('思考过程')
   })
 
-  it('多步：第二段思考到达即展开（同一块内两段都在）', () => {
+  it('多步：每一段思考后面一有内容就收（两段后面都跟着工具行）', () => {
     render(
       <Message
         message={assistantMessage([
@@ -139,13 +151,40 @@ describe('思考可见（round 29：工具调用前不许"工具挨工具"裸奔
       />
     )
 
+    // 两段后面都已有内容（第一段后面是工具行 + 第二段；第二段后面是工具行）→ 都收起来让版面
     expect(
       screen.getAllByTestId('reasoning-toggle').map((node) => node.getAttribute('aria-expanded'))
-    ).toEqual(['true', 'true'])
-    expect(screen.getAllByTestId('reasoning-text').map((node) => node.textContent)).toEqual([
-      '第一段',
-      '第二段'
-    ])
+    ).toEqual(['false', 'false'])
+    // 过程块开着：两条工具行都看得见
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
+    expect(screen.getAllByTestId('tool-card')).toHaveLength(2)
+
+    // 收起来的那一段（开都没开过，内容不上 DOM）点开仍看得到全文
+    fireEvent.click(screen.getAllByTestId('reasoning-toggle')[0])
+    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('第一段')
+  })
+
+  it('正在写的那一段（它后面还没有任何内容）不自动收：三段里只有它开着', () => {
+    render(
+      <Message
+        message={assistantMessage([
+          { type: 'reasoning', text: '第一段' },
+          {
+            type: 'tool-read',
+            toolCallId: 'c1',
+            state: 'output-available',
+            input: {},
+            output: 'ok'
+          },
+          { type: 'reasoning', text: '第二段（还在写）' }
+        ])}
+        streaming
+      />
+    )
+
+    expect(
+      screen.getAllByTestId('reasoning-toggle').map((node) => node.getAttribute('aria-expanded'))
+    ).toEqual(['false', 'true'])
   })
 
   it('这一轮跑完：块收起（思考段随之不可见，点开仍看得到）', () => {

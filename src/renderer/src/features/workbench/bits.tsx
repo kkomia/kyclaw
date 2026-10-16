@@ -95,22 +95,33 @@ export function RefreshButton({
 /**
  * 底部详情层（单击提交 / 单击文件后的预览）：贴在工具面板底部，只留一条上沿分隔线。
  * 高度走 .trace-fold 的 grid-template-rows 配方（全局的折叠过渡，双向，不硬切）。
+ *
+ * `sized`（页式 / 表格预览那两档）：**这一层自己就是确定高度**（视口相对的 55vh），正文
+ * 直接铺满、由预览**自己的**滚动口滚（页式阅读器 / 表格都有自己的滚动口）。
+ * 不这么钉的话高度链会断在这一层（auto + max-height 撑高），框架按内容长到一千多像素，
+ * 浮动缩放控件的"露头区"落到可视区外——R90 探针在 1280×800 的窗口上实测撞到过。
  */
 export function BottomSheet({
   testId,
   title,
   onClose,
-  children
+  children,
+  sized = false
 }: {
   testId: string
   title: ReactNode
   onClose: () => void
   children: ReactNode
+  /** 正文是不是"内部自带滚动口"的预览（见上）。默认 false = 内容撑高、上限 70%。 */
+  sized?: boolean
 }): React.JSX.Element {
   return (
     <section
       data-testid={testId}
-      className="animate-message-in flex max-h-[70%] min-h-0 shrink-0 flex-col border-t border-hairline"
+      className={cn(
+        'animate-message-in flex min-h-0 shrink-0 flex-col border-t border-hairline',
+        sized ? 'h-[55vh]' : 'max-h-[70%]'
+      )}
     >
       <ToolBar className="justify-between">
         <span className="min-w-0 truncate px-1 text-b2 text-ink">{title}</span>
@@ -121,7 +132,14 @@ export function BottomSheet({
           className="border-transparent hover:bg-hover"
         />
       </ToolBar>
-      <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+      <div
+        className={cn(
+          'min-h-0 flex-1',
+          sized ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'
+        )}
+      >
+        {children}
+      </div>
     </section>
   )
 }

@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import type { ServerResponse } from 'node:http'
 import type { UIMessage, UIMessageChunk } from 'ai'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
-import { getTransport, resolveAgentEndpoint, threadRequestOptions } from '@renderer/lib/agent'
+import {
+  askUserAcceptedMetadata,
+  getTransport,
+  resolveAgentEndpoint,
+  threadRequestOptions,
+  transportFor
+} from '@renderer/lib/agent'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
 
@@ -105,6 +114,124 @@ describe('getTransport', () => {
     expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toEqual([
       { type: 'text-delta', id: 't1', delta: '你好' }
     ])
+  })
+})
+
+describe('transportFor：提问续跑请求的「服务端已接收」边界（0.1.2 / 001）', () => {
+  /**
+   * 受控 HTTP 服务（真 TCP + 真 fetch，不是 stub）：请求体收齐后交给用例，**响应头由用例决定
+   * 什么时候写、body 什么时候交付** —— 钉的就是这两个时刻之间的区别：
+   * "服务端收下了这次恢复请求"（响应到手）与"这一轮跑完了"（body 读完）。
+   */
+  async function serve(
+    respond: (res: ServerResponse, request: { url: string; body: string }) => void
+  ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = createServer((request, res) => {
+      let body = ''
+      request.on('data', (piece: Buffer) => {
+        body += piece.toString('utf8')
+      })
+      request.on('end', () => respond(res, { url: request.url ?? '', body }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    return {
+      baseUrl: `http://127.0.0.1:${port}`,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }
+
+  const resumeBody = { threadId: 't', runId: 'r', toolCallId: 'c' }
+
+  it('响应到手就回调「已接收」：body 一个字节都还没写，更没等流结束', async () => {
+    const accepted: string[] = []
+    const seen: Array<{ url: string; body: string }> = []
+    let sent = false
+    let deliver!: () => void
+    const server = await serve((res, request) => {
+      seen.push(request)
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      // 头立刻出去、body 挂着：真链路里 fetch 就是在这一刻 resolve 的
+      res.flushHeaders()
+      deliver = () => {
+        sent = true
+        res.end(
+          [
+            'data: {"type":"text-start","id":"t1"}',
+            '',
+            'data: {"type":"text-delta","id":"t1","delta":"好"}',
+            '',
+            'data: [DONE]',
+            '',
+            ''
+          ].join('\n')
+        )
+      }
+    })
+    try {
+      const transport = transportFor({ baseUrl: server.baseUrl, token: 'tok-3' })
+      const stream = await transport.sendMessages({
+        chatId: 'chat-1',
+        messages: [],
+        abortSignal: undefined,
+        trigger: 'submit-message',
+        messageId: undefined,
+        body: { askUserResume: resumeBody },
+        metadata: askUserAcceptedMetadata(() => accepted.push('accepted'))
+      })
+
+      // 一：回调已经响过，而服务端连一个 body 字节都还没交出来
+      expect(accepted).toEqual(['accepted'])
+      expect(sent).toBe(false)
+
+      // 二：路由与请求体仍是既有协议 —— resume 那一路打到 /ask-user/resume，body 整份就是它，
+      // metadata（回执通道）不上线
+      expect(seen).toHaveLength(1)
+      expect(seen[0].url).toBe('/ask-user/resume')
+      expect(JSON.parse(seen[0].body)).toEqual(resumeBody)
+
+      // 三：流还没被消费 —— 现在交付 body，照常解出 chunk（没有 tee / 没有丢帧）
+      deliver()
+      const chunks = await drain(stream)
+      expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toEqual([
+        { type: 'text-delta', id: 't1', delta: '好' }
+      ])
+      // 四：一次请求只响一次（流结束不会再补响一遍）
+      expect(accepted).toEqual(['accepted'])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('非 2xx（409 stale-run）不回调：rejection 如实上抛，不拿"点击即成功"糊过去', async () => {
+    const accepted: string[] = []
+    const server = await serve((res) => {
+      res.writeHead(409, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: '409 stale-run' }))
+    })
+    try {
+      const transport = transportFor({ baseUrl: server.baseUrl, token: 'tok-4' })
+      const failure = await transport
+        .sendMessages({
+          chatId: 'chat-1',
+          messages: [],
+          abortSignal: undefined,
+          trigger: 'submit-message',
+          messageId: undefined,
+          body: { askUserResume: resumeBody },
+          metadata: askUserAcceptedMetadata(() => accepted.push('accepted'))
+        })
+        .then(
+          () => null,
+          (error: unknown) => error as { statusCode?: number; message?: string }
+        )
+
+      expect(failure?.statusCode).toBe(409)
+      expect(failure?.message).toContain('409 stale-run')
+      expect(accepted).toEqual([])
+    } finally {
+      await server.close()
+    }
   })
 })
 

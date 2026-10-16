@@ -28,6 +28,11 @@
  *   - 打开有代价：**有些兼容端点不接受数组形态的 tool content**（回 400）。所以这里同时套一层
  *     回落：这一轮 prompt 里真有媒体块、第一次调用又失败了，就去掉媒体块**重试一次**并打日志，
  *     不让"一张模型本该看到的图"把整轮对话打成失败。细节见 withToolMediaFallback。
+ *
+ * 兼容层的"system 只有一条且在最前"（round 88 补）：用户内网网关实报
+ * `400 System message must be at the beginning.`（那台网关的**确切规则未取证**）；本机实测
+ * 发出去的正文是**3 条连续的 system**（agent 指令 + 工作记忆 + 规矩），故在**模型边界**把它们
+ * 归并成唯一首条 —— 见 mergeSystemFirstPrompt / withSystemFirstPrompt、逃生门 SYSTEM_FIRST_ENV。
  */
 import type { LanguageModel } from 'ai'
 /** 类型专用：mock 的流 part 形状从这里取（import type 会被编译擦掉，不会把 ESM 带进 CJS 产物） */
@@ -316,6 +321,77 @@ export function withToolMediaFallback(model: KyclawModel): KyclawModel {
 }
 
 /**
+ * system-first 归并的逃生门：值 `0` / `off` / `false` 关掉，其余（含没设）都当**开着**
+ * （与 TOOL_MEDIA_ENV 同一口径：默认必须是"这条端点能跑通"）。只有某台兼容端点确实不接受
+ * "归并成一条 system"时才需要它。
+ */
+export const SYSTEM_FIRST_ENV = 'KYCLAW_SYSTEM_FIRST'
+
+/** 归并多条 system 时的连接符：原消息之间的**段边界**（不是新加的话） */
+const SYSTEM_JOIN = '\n\n'
+
+/** 通用兼容层是否做 system-first 归并（默认做）。只认**关**的几个写法：'0' / 'off' / 'false'。 */
+export function systemFirstEnabled(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): boolean {
+  const value = env[SYSTEM_FIRST_ENV]?.trim().toLowerCase()
+  return !(value === '0' || value === 'off' || value === 'false')
+}
+
+/**
+ * 把 prompt 里的 system 消息**归并成唯一一条、放在第一条**。
+ *
+ * 放在模型边界（而不是 `processInput`）的原因只有一条：决定"发出去长什么样"的是 provider 收到
+ * prompt 之后那一步（`@ai-sdk/openai-compatible` 把每条 `role:'system'` 照搬进 `messages[]`），
+ * 而 `processInput` 读的 `messageList.get.all.db()` 里**没有** system（MessageList 把 system 放在
+ * 自己的桶里）—— 在那里改是改不到 wire 的。
+ *
+ * 契约：
+ *   - 只在"有 system 且不是唯一首条"时重建数组；其余情况**原样返回**（同一引用，零开销）；
+ *   - 归并正文 = 各 system 的 content 按**原相对顺序**用空行连接；
+ *   - 其余消息（user / assistant / tool）**顺序、条数、对象身份都不变**；
+ *   - `providerOptions` **只保留第一条** system 的，后续 system 的**丢弃**（不做无损声明）。
+ *     该层的事实（源码 + 实测）：provider 只序列化 `providerOptions.openaiCompatible` 这一个键
+ *     （`getOpenAIMetadata` 写死），provider 名那个键它不看；而本应用从不给 system 设
+ *     providerOptions（实抓的请求体里 system 只有 role/content）。所以当前实际不丢东西，但
+ *     "归并会丢后续 providerOptions"这条限制由 `__tests__/system-first-wire.spec.ts` 的
+ *     providerOptions 用例钉住；
+ *   - 纯函数：不改输入数组、不改输入消息对象，也不碰 MessageList / 数据库 / 消息来源。
+ */
+export function mergeSystemFirstPrompt(
+  prompt: ModelCallOptions['prompt']
+): ModelCallOptions['prompt'] {
+  const systems = prompt.filter((message) => message.role === 'system')
+  const first = systems[0]
+  if (first === undefined) return prompt
+  if (systems.length === 1 && prompt[0]?.role === 'system') return prompt
+
+  const content = systems
+    .map((message) => message.content)
+    .filter((text) => text !== '')
+    .join(SYSTEM_JOIN)
+
+  return [{ ...first, content }, ...prompt.filter((message) => message.role !== 'system')]
+}
+
+/** 给兼容层的模型套一层 system-first：doGenerate / doStream 前先把 prompt 归一。 */
+export function withSystemFirstPrompt(model: KyclawModel): KyclawModel {
+  const normalize = (options: ModelCallOptions): ModelCallOptions => {
+    const prompt = mergeSystemFirstPrompt(options.prompt)
+    return prompt === options.prompt ? options : { ...options, prompt }
+  }
+
+  return {
+    specificationVersion: 'v4',
+    provider: model.provider,
+    modelId: model.modelId,
+    supportedUrls: model.supportedUrls,
+    doGenerate: (options) => model.doGenerate(normalize(options)),
+    doStream: (options) => model.doStream(normalize(options))
+  }
+}
+
+/**
  * 按配置造模型（resolveModel 与"测试连接"共用同一条装配路径）。
  * 调用前配置已被 `providerConfigProblems` 验过（openai-compatible 的 baseUrl 非空；anthropic 已给密钥）。
  *
@@ -325,7 +401,10 @@ export function withToolMediaFallback(model: KyclawModel): KyclawModel {
  *   - DeepSeek 官方包：`loadApiKey` 只认**字符串**（空串照收）→ 会发一个空的 `Bearer `，还会把
  *     `DEEPSEEK_API_KEY` 环境变量挡在外面。缺省传才会回落到环境变量；两者都没有则在请求前抛
  *     `LoadAPIKeyError`（一句人话，连接测试会翻出来）。
- * `env` 只影响通用兼容层的"工具结果里带图"开关（见 TOOL_MEDIA_ENV）。
+ * `env` 只影响通用兼容层的两个开关：TOOL_MEDIA_ENV（工具结果里带图）与 SYSTEM_FIRST_ENV
+ * （system-first 归并）。**两个都只在通用兼容层这条分支上套**：anthropic 的 system 由官方包收进
+ * 顶层 `system` 参数、且逐条带自己的 `providerOptions.anthropic`（cache_control 等），在边界归并
+ * 会抹掉这些元数据；DeepSeek 官方端点自带归并口径，本次故障端点也不是它 —— 都不动。
  */
 export async function buildLanguageModel(
   config: ProviderConfig,
@@ -346,8 +425,9 @@ export async function buildLanguageModel(
   }
 
   const toolMedia = toolMediaEnabled(env)
+  const systemFirst = systemFirstEnabled(env)
   const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
-  const model = createOpenAICompatible({
+  const providerModel = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: baseUrl,
     ...keyOption,
@@ -355,6 +435,9 @@ export async function buildLanguageModel(
     supportsMultiPartToolContent: toolMedia
   }).chatModel(config.model)
 
+  // 两个包装各管一件事，互不依赖：system-first 归一 prompt（见 SYSTEM_FIRST_ENV），
+  // 工具图片回落只在开多段式工具结果时才需要（见 TOOL_MEDIA_ENV）
+  const model = systemFirst ? withSystemFirstPrompt(providerModel) : providerModel
   return toolMedia ? withToolMediaFallback(model) : model
 }
 

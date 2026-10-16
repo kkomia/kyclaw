@@ -62,6 +62,7 @@ import { useShellStore } from '@renderer/lib/shell-store'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
 import { ContextMenu, type ContextMenuState } from './ContextMenu'
 import { PreviewBody } from './preview/PreviewBody'
+import { previewNeedsFixedHeight } from './preview/host-size'
 import { baseNameOf, readPreviewState, sourceTextOf, type PreviewState } from './preview/fetch'
 import { fileIconOf } from './preview/file-icon'
 import { SelectionContextMenu } from './preview/SelectionContextMenu'
@@ -144,12 +145,9 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
   const chooseFile = useCallback(
     (relative: string): void => {
       if (workbench === null || threadId === null) return
+      // 分流口径见 preview/modes.ts。旧版 Office（.doc/.ppt）现在也走办公档页式预览、
+      // 旧版 .xls 走表格原始字节通道 —— 都不在这里短路，统一由 readPreviewState 取内容。
       const mode = previewModeOf(relative)
-      // 旧版 Office（.doc/.xls/.ppt）：不读文件，直接给人话（"另存为 .docx/.xlsx/.pptx"）
-      if (mode === 'office-legacy') {
-        setPreview({ threadId, relative, mode, status: 'ready' })
-        return
-      }
       setPreview({ threadId, relative, mode, status: 'loading' })
       // 取内容的那一段与预览标签共用（分流口径见 preview/fetch.ts）。响应带上"这是哪个会话的
       // 哪份文件"的记账：预览标签那边要靠它判晚到，这边则让 `sourceTextOf`（摘选取行号）拿得到源文。
@@ -452,8 +450,17 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
             testId="file-preview"
             title={baseNameOf(preview.relative)}
             onClose={() => setPreview(null)}
+            // 页式 / 表格预览内部自带滚动口：这一层必须是**确定高度**（55vh），否则高度链断在
+            // "内容撑高 + 70% 上限"上——框架会长到一千多像素，浮动缩放控件的露头区落到可视区外
+            // （R90 探针在 1280×800 的窗口上实测撞到过）
+            sized={previewNeedsFixedHeight(preview.mode)}
           >
-            <div ref={previewBodyRef} data-testid="file-preview-body">
+            <div
+              ref={previewBodyRef}
+              data-testid="file-preview-body"
+              // 高度透传链上的一环：不 flex-1 就断了（子层的 h-full 会退化成 auto）
+              className={previewNeedsFixedHeight(preview.mode) ? 'min-h-0 flex-1' : undefined}
+            >
               <PreviewBody relative={preview.relative} state={preview} mode={preview.mode} />
             </div>
           </BottomSheet>

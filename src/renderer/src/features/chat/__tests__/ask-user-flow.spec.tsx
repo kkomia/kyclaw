@@ -82,7 +82,7 @@ function mount(messages = history): ReturnType<typeof createMockTransport> {
   return control
 }
 describe('AskUser ChatPage integration', () => {
-  it('恢复卡片后同一 Chat resume，不追加用户消息，服务失败保留问题', async () => {
+  it('恢复卡片后同一 Chat resume，不追加用户消息；响应到手即收卡（整流还没跑完）', async () => {
     const control = mount()
     await screen.findByRole('radio', { name: '格式 A' })
     fireEvent.click(screen.getByRole('radio', { name: '格式 A' }))
@@ -102,11 +102,102 @@ describe('AskUser ChatPage integration', () => {
         }
       }
     })
-    act(() => control.disconnect(new Error('resume 失败')))
-    await waitFor(() =>
-      expect(useAskUserStore.getState().threads.get('thread')?.error).toBe('resume 失败')
-    )
+    // 0.1.2 / 001：请求已受理（流还开着，没有 finish）—— 卡当场收起，提交等待不再挂在卡上
+    await waitFor(() => expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument())
+    expect(useAskUserStore.getState().threads.get('thread')).toMatchObject({
+      pending: [],
+      submitting: false,
+      error: null
+    })
+    // 这一轮还在跑：模型照常继续生成，文本进消息（"模型生成"由聊天自己的忙态表示）
+    act(() => control.push('已收到你的选择。'))
+    expect(await screen.findByText('已收到你的选择。')).toBeInTheDocument()
+    act(() => control.finish())
+  })
+  it('响应没到手就不收卡：请求发出、卡与选择都留着，响应一到才收起', async () => {
+    const control = mount()
+    await screen.findByRole('radio', { name: '格式 A' })
+    fireEvent.click(screen.getByRole('radio', { name: '格式 A' }))
+    control.holdResponse()
+    fireEvent.click(screen.getByRole('button', { name: '提交全部回答' }))
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    // 请求在途、响应没回来：这张卡与这次提交的视觉等待都还在（没"点击即成功"）
     expect(screen.getByTestId('ask-user-card')).toBeInTheDocument()
+    expect(useAskUserStore.getState().threads.get('thread')).toMatchObject({
+      pending: [pending],
+      submitting: true,
+      error: null
+    })
+    control.releaseResponse()
+    await waitFor(() => expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument())
+    // 这一轮照旧在跑：输入卡那枚按钮切成停止（模型生成的忙态由聊天自己表示）
+    expect(screen.getByRole('button', { name: '停止生成' })).toBeInTheDocument()
+    act(() => control.disconnect(new Error('测试收尾')))
+  })
+  it('响应没到手就失败：卡与选择都留着，错误可见，重试仍能提交', async () => {
+    const control = mount()
+    await screen.findByRole('radio', { name: '格式 A' })
+    fireEvent.click(screen.getByRole('radio', { name: '格式 A' }))
+    control.failNext(new Error('Failed to fetch'))
+    fireEvent.click(screen.getByRole('button', { name: '提交全部回答' }))
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    await screen.findAllByText(/Failed to fetch/)
+    expect(screen.getByTestId('ask-user-card')).toBeInTheDocument()
+    // 选过的项还在（重试不用重选）
+    expect(screen.getByRole('radio', { name: '格式 A' })).toBeChecked()
+    expect(useAskUserStore.getState().threads.get('thread')?.error).toMatch(/Failed to fetch/)
+    fireEvent.click(screen.getByRole('button', { name: '提交全部回答' }))
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    await waitFor(() => expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument())
+    act(() => control.disconnect(new Error('测试收尾')))
+  })
+  it('确认之后流断掉：错误落在对话层，提问卡不复辟、也不重复提交', async () => {
+    const control = mount()
+    await screen.findByRole('radio', { name: '格式 A' })
+    fireEvent.click(screen.getByRole('radio', { name: '格式 A' }))
+    fireEvent.click(screen.getByRole('button', { name: '提交全部回答' }))
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    await waitFor(() => expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument())
+    act(() => control.disconnect(new Error('resume 失败')))
+    await screen.findAllByText(/resume 失败/)
+    // 卡不回来：这一次提问服务端已经消费掉了，复辟只会让用户对着空气再答一遍
+    expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument()
+    expect(useAskUserStore.getState().threads.get('thread')).toMatchObject({
+      pending: [],
+      submitting: false,
+      error: null
+    })
+    expect(control.requests).toHaveLength(1)
+  })
+  it('确认之后的旧 pending 快照不复活已答卡，新一轮提问照常出现', async () => {
+    const control = mount()
+    await screen.findByRole('radio', { name: '格式 A' })
+    fireEvent.click(screen.getByRole('radio', { name: '格式 A' }))
+    fireEvent.click(screen.getByRole('button', { name: '提交全部回答' }))
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    await waitFor(() => expect(screen.queryByTestId('ask-user-card')).not.toBeInTheDocument())
+    const sibling = {
+      ...pending,
+      toolCallId: 'ask-two',
+      input: {
+        questions: [
+          {
+            ...input.questions[0],
+            header: '范围',
+            options: [
+              { id: 'a', label: '范围 A' },
+              { id: 'b', label: '范围 B' }
+            ]
+          }
+        ]
+      }
+    }
+    // 服务端这一瞬仍列着已答的那条（挂起要被这一轮真消费掉才消失）+ 一条新提问
+    api.pending.mockResolvedValue([pending, sibling])
+    fireEvent.focus(window)
+    expect(await screen.findByRole('radio', { name: '范围 A' })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: '格式 A' })).not.toBeInTheDocument()
+    act(() => control.disconnect(new Error('测试收尾')))
   })
   it('混合审批决策不能绕过未回答问题自动续跑', async () => {
     const control = mount([

@@ -13,6 +13,10 @@
  * 0.1.1 起还管**发行日志**：`build/release-notes/<版本>.md` 随包进渠道 yml 的 releaseNotes
  * （更新界面「关于」栏显示的那段更新内容）。两头自检：出包前文件必须在、且写着本版本的号
  * （换版本号就得另写一份）；出包后渠道 yml 的 releaseNotes 字段必须就是这份原文。
+ *
+ * 本轮再加一道**随包自检**：同一份 md 由 electron-builder.yml 的 extraResources 拷进安装目录的
+ * `resources/release-notes/`（客户端「关于 → 更新日志」在断网 / 已是最新时读它），出包后要比对
+ * 解包目录里那一份与 build/ 下的原文逐字一致（漏拷 / 拷了旧文件都当场停，见 bundledNotesProblem）。
  * 传法是 electron-builder 的标准配置 `-c.releaseInfo.releaseNotesFile=<build/ 下的相对路径>`
  * （它自己写进 yml 的 releaseNotes + releaseName + releaseDate，见 app-builder-lib 的
  * publish/updateInfoBuilder.js）。
@@ -21,8 +25,8 @@
  * npm_config_electron_builder_binaries_mirror，Electron 与 NSIS 的下载靠它走 npmmirror。
  *
  * 纯函数（expectedInstallerName / staleOutputs / cleanStaleOutputs / projectManifest /
- * releaseNotesPath / releaseNotesRelativePath / releaseNotesProblem / channelReleaseProblem）
- * 导出供最小验证：直接执行才跑打包流程，被 `import()` 时只拿函数
+ * releaseNotesPath / releaseNotesRelativePath / releaseNotesProblem / channelReleaseProblem /
+ * bundledNotesProblem）导出供最小验证：直接执行才跑打包流程，被 `import()` 时只拿函数
  * （见终审 fix wave 报告的验证记录；发行日志那几条同时被 src/main/__tests__/release-notes-scripts.spec.ts 钉住）。
  */
 import { spawnSync } from 'node:child_process'
@@ -282,6 +286,35 @@ export function channelReleaseProblem(channelYml, notes) {
   return null
 }
 
+/**
+ * 打包自检（本轮）：本版本发行说明**真的随包**了 —— 解包目录里
+ * `resources/release-notes/<版本>.md` 在，且与 `build/release-notes/<版本>.md` 逐字一致。
+ *
+ * 为什么单独一道：渠道 yml 的 releaseNotes 只管"源上给别人的日志"，客户端的常驻「更新日志」
+ * 入口（断网 / 已是最新时唯一能看的东西）读的是**随包这一份**。extraResources 漏拷时渠道自检
+ * 照样全绿，界面却只能说"本版暂无发行说明"——那正是这条闸门要挡的。
+ * 与渠道自检同一口径：比的就是本版本那一个文件名（别的版本的文件不算数），换行归一后逐字比。
+ */
+export function bundledNotesProblem(unpackedResourcesDir, version, notes) {
+  const file = join(unpackedResourcesDir, RELEASE_NOTES_DIR, `${version}.md`)
+  if (!existsSync(file)) {
+    return (
+      `解包目录里没有本版本发行说明：${file}\n` +
+      '  （electron-builder.yml 的 extraResources 是不是漏了 build/release-notes → release-notes？）'
+    )
+  }
+  let text
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    return `读不到解包后的本版本发行说明：${error instanceof Error ? error.message : String(error)}`
+  }
+  if (!sameNotesText(text, notes)) {
+    return `解包后的发行说明与 build/${RELEASE_NOTES_DIR}/${version}.md 不一致：${file}`
+  }
+  return null
+}
+
 function main() {
   try {
     // 本机嵌入引擎的运行时必须是现成的：缺了它打出来的包"本地模型"一路直接不可用
@@ -400,6 +433,15 @@ function main() {
     if (kitBytes < 150 * 1024 * 1024) {
       fail(`resources/libreoffice-kit 只有 ${(kitBytes / 1024 / 1024).toFixed(1)} MB——引擎没进包？`)
     }
+    // 随包的第三方许可声明（`resources/skills/THIRD_PARTY_NOTICES.md`）：技能目录走 extraResources，
+    // 那份声明是**内联进产物那些包的许可文本唯一承载**（见该文件第 5 节）——漏拷就是合规缺口。
+    if (
+      !existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'skills', 'THIRD_PARTY_NOTICES.md'))
+    ) {
+      fail(
+        'resources/skills/THIRD_PARTY_NOTICES.md 没有进包（extraResources 的 skills 那条被改坏了？）'
+      )
+    }
     // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新。
     // 通道文件名跟着版本走：预发布（0.1.0-beta.N）是 beta.yml，正式版才是 latest.yml
     // （electron-builder 的 channel 语义，与包内 app-update.yml 的 `channel: beta` 配对）。
@@ -417,6 +459,14 @@ function main() {
     if (!existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'app-update.yml'))) {
       fail('resources/app-update.yml 没有进包（publish 配置被改坏了？测试机不会检查更新）')
     }
+    // 本版本发行说明随包（本轮）：渠道 yml 那份是给"源上的别人"看的，客户端「关于 → 更新日志」
+    // 读的是解包目录里这一份（断网 / 已是最新时唯一能看的东西）——漏拷了界面只能装没有
+    const bundledProblem = bundledNotesProblem(
+      join(DIST_DIR, 'win-unpacked', 'resources'),
+      manifest.version,
+      releaseNotes
+    )
+    if (bundledProblem !== null) fail(bundledProblem)
 
     console.log('[package] 产物：')
     for (const name of installers) {

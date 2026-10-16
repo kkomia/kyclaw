@@ -71,9 +71,15 @@ export const openResultSchema = z.strictObject({ path: z.string().min(1) })
 
 /**
  * 带类型字节通道认得的格式：扩展名与文件头**双重**判定，两者对不上就按不支持处理。
- * 只列渲染端真能画出来的**字节**格式（图片走 data URL、PDF 走 pdfjs）；
- * 办公三件（docx/xlsx/pptx）与 csv 也走这条通道，但回的是主进程抽好的结构
+ * 只列渲染端真能画出来/能安全展示的**字节**格式（图片走 data URL、PDF 走 pdfjs、HTML 走清洗后的
+ * 静态 srcdoc）；办公三件（docx/xlsx/pptx）与 csv/tsv 也走这条通道，但回的是主进程抽好的结构
  * （见下面 `fileBytesResultSchema` 的 `docx` / `xlsx` / `pptx`）。
+ *
+ * 两条**只能在渲染端守**的安全口径（主进程只保证字节是真的；这里是合同，改渲染端前先读）：
+ *   - `image-svg`：**只作为 `<img>` 的资源**用（`data:image/svg+xml`）。SVG 是 XML，放进 DOM 就等于
+ *     放行里面的 `<script>` / `onload` / 外链；`<img>` 引用是**不执行脚本**的那个上下文。
+ *   - `html`：原字节交给**清洗器（DOMPurify）**，再进 `sandbox=""` 的 iframe（srcdoc）静态展示 ——
+ *     **不启用脚本、不读相对资源、不放行联网**。这条通道给的是"文档"，不是"可运行的页面"。
  */
 export const fileByteFormatSchema = z.enum([
   'image-png',
@@ -81,7 +87,10 @@ export const fileByteFormatSchema = z.enum([
   'image-gif',
   'image-webp',
   'image-bmp',
-  'pdf'
+  'image-svg',
+  'image-ico',
+  'pdf',
+  'html'
 ])
 export type FileByteFormat = z.infer<typeof fileByteFormatSchema>
 
@@ -94,6 +103,15 @@ export type FileByteFormat = z.infer<typeof fileByteFormatSchema>
  * 别把这两个数再合并回去。
  */
 export const PREVIEW_IMAGE_MAX_BYTES = 30 * 1024 * 1024
+
+/**
+ * HTML 预览上限（byte）：**8MB**，比图片/PDF 那一档紧得多。
+ *
+ * 为什么单独一档、且取 8MB：这条路的成本不在"传字节"而在**清洗**（DOMPurify 要把整份文档解析成
+ * DOM 再逐个节点过一遍）。静态预览不需要更大的文档；再大就该用「用本地应用打开」而不是在预览里洗。
+ * 与"文本通道 64KB"是两回事：那边是给人看的纯文本，这边是可渲染的文档。
+ */
+export const PREVIEW_HTML_MAX_BYTES = 8 * 1024 * 1024
 
 /**
  * PDF 预览上限（自定）：文本档的 5MB 对带图 PDF 偏紧，这里放宽到 32MB
@@ -170,6 +188,51 @@ export const fileBytesResultSchema = z.discriminatedUnion('kind', [
   })
 ])
 export type FileBytesResult = z.infer<typeof fileBytesResultSchema>
+
+/* ── 表格原始字节通道（xls / xlsx / csv / tsv）───────────────────────────── */
+
+/**
+ * 表格原始字节通道认得的格式。
+ *
+ * **为什么另开一条通道而不是扩 `read-bytes`**：那条通道的合同是**主进程抽好结构**
+ * （xlsx → 表矩阵、csv/tsv → 一张表、docx → markdown），现有消费者（表格预览、二进制占位）
+ * 都按那个形状读；把 xls / 原始 xlsx 塞进去要么改形状（破坏既有消费者），要么让"结构"与
+ * "字节"两种语义在同一条通道里打架。所以这里**独立一条**：只回答"给我这个文件的原始字节"，
+ * 认四种后缀、按文件头对暗号，别的什么都不做。
+ */
+export const tableByteFormatSchema = z.enum(['xls', 'xlsx', 'csv', 'tsv'])
+export type TableByteFormat = z.infer<typeof tableByteFormatSchema>
+
+/**
+ * 表格原始字节上限（字节）：与办公档同档 32MB。
+ * 为什么和 `PREVIEW_OFFICE_MAX_BYTES` 一样大：这份字节要**整份过 IPC** 再交给渲染端解析，
+ * 上限是内存与 IPC 载荷的护栏，不是业务口径 —— 超了就如实说"过大"，不做"截一半去解析"
+ * （半截的 zip 在渲染端只会解析失败，那比"说过大"更难懂）。
+ */
+export const PREVIEW_TABLE_MAX_BYTES = 32 * 1024 * 1024
+
+/**
+ * workbench:table-bytes 的回包（判别联合）：
+ *   - `bytes`：原始字节（Uint8Array 过结构化克隆）+ 认出来的格式 + 字节数；
+ *   - `too-large`：超过 `PREVIEW_TABLE_MAX_BYTES`（`limit` 就是那个上限）；
+ *   - `unsupported`：后缀不在四种里，或**文件头与后缀对不上**（改名的可执行/图片一律不进）；
+ *   - `missing`：文件不在磁盘上了；
+ *   - `changed`：读的时候文件正在被改（读到的不保证是一份完整快照）——
+ *     **不给半截数据**，界面重试一次即可。
+ */
+export const tableBytesResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('bytes'),
+    format: tableByteFormatSchema,
+    bytes: z.instanceof(Uint8Array),
+    size: z.number()
+  }),
+  z.strictObject({ kind: z.literal('too-large'), size: z.number(), limit: z.number() }),
+  z.strictObject({ kind: z.literal('unsupported'), size: z.number() }),
+  z.strictObject({ kind: z.literal('missing') }),
+  z.strictObject({ kind: z.literal('changed') })
+])
+export type TableBytesResult = z.infer<typeof tableBytesResultSchema>
 
 /* ── 文件搜索（round 44） ───────────────────────────────────────────────── */
 

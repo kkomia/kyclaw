@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import {
   CONTEXT_UNSUPPORTED,
+  VISION_ATTACHMENT_FORMATS,
   linesOfSelection,
   publishContextItem,
   resolveContextItem,
@@ -14,8 +15,9 @@ import type {
   ContextItemResult
 } from '@renderer/features/chat/composer-inbox'
 import { NO_VISION_MESSAGE } from '@renderer/features/chat/composer-attachments'
+import { IMAGE_MIME } from '@renderer/features/workbench/preview/modes'
 import type { PdfExtractor } from '@renderer/features/chat/composer-attachments'
-import { ATTACHMENT_MAX_BYTES, IMAGE_MAX_BYTES } from '@shared/attachments'
+import { ATTACHMENT_MAX_BYTES, IMAGE_MAX_BYTES, IMAGE_MEDIA_TYPES } from '@shared/attachments'
 import type { FileBytesResult } from '@shared/workbench'
 
 /**
@@ -334,6 +336,97 @@ describe('round 42 · 解析：图片', () => {
       })
     })
     expect(result).toEqual({ problem: CONTEXT_UNSUPPORTED })
+  })
+
+  it('白名单就是光栅五种（与预览那张 MIME 表解耦：矢量图不在里面）', () => {
+    const allowed = Object.keys(VISION_ATTACHMENT_FORMATS)
+    expect(allowed.sort()).toEqual([
+      'image-bmp',
+      'image-gif',
+      'image-jpeg',
+      'image-png',
+      'image-webp'
+    ])
+    // 预览表怎么加都与这里无关：svg / ico 不许出现在模型附件白名单里
+    expect(allowed).not.toContain('image-svg')
+    expect(allowed).not.toContain('image-ico')
+    // 取值写死在这一处，不许悄悄加格式
+    expect(Object.values(VISION_ATTACHMENT_FORMATS).sort()).toEqual(
+      ['image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp'].sort()
+    )
+    /**
+     * 与 ＋ 上传那条路（`IMAGE_MEDIA_TYPES`）的**分工**：共同覆盖光栅四种；
+     * 两条路各有自己的边界 —— ＋ 上传认 `image/jpg` 这个别名（且**不认 bmp**），
+     * 字节通道这边认 `image-bmp`。不是"同一组"，别按 `contains` 硬套。
+     */
+    const upload = IMAGE_MEDIA_TYPES as readonly string[]
+    for (const mime of ['image/png', 'image/jpeg', 'image/gif', 'image/webp']) {
+      expect(upload).toContain(mime)
+    }
+    expect(upload).toContain('image/jpg')
+    expect(upload).not.toContain('image/bmp')
+  })
+
+  it('矢量图（svg/ico）不发模型图片：退回文本路 —— svg 内联源码、ico 路径引用', async () => {
+    // 预览已经把它们当图片画了（modes.ts 的 IMAGE_EXTENSIONS 含 svg/ico），但模型附件白名单不含：
+    // 走 readBytes（图片通道）就会以 image/svg+xml 发进请求 —— 这里验证它**根本不走图片通道**。
+    const svgChannel = channel({
+      readFile: async () => ({ kind: 'text', text: '<svg/>', size: 6, truncated: false })
+    })
+    const svg = await resolve(
+      { ...item, relative: '矢量图.svg', name: '矢量图.svg' },
+      {
+        channel: svgChannel
+      }
+    )
+    expect(svg).toEqual({
+      attachment: {
+        id: 'a1',
+        name: '矢量图.svg',
+        size: 6,
+        text: '<svg/>',
+        relative: '矢量图.svg'
+      }
+    })
+    expect(svgChannel.readBytes).not.toHaveBeenCalled()
+
+    // ico 是二进制：退回**路径引用**（round 53 起既有行为，chip 照常进附件条）
+    const icoChannel = channel({
+      readFile: async () => ({ kind: 'binary', size: 2048 })
+    })
+    const ico = await resolve(
+      { ...item, relative: 'logo.ico', name: 'logo.ico' },
+      {
+        channel: icoChannel
+      }
+    )
+    expect(ico).toEqual({
+      attachment: { id: 'a1', name: 'logo.ico', size: 2048, path: 'logo.ico' }
+    })
+    expect(icoChannel.readBytes).not.toHaveBeenCalled()
+  })
+
+  it('白名单外的**字节格式**仍然不发图 —— 判据只认白名单，预览表有什么都不改变它', async () => {
+    // 预览表已含 svg/ico 两份映射（只用来证明"预览表的内容与附件判据无关"）
+    const previewTable = {
+      ...IMAGE_MIME,
+      'image-svg': 'image/svg+xml',
+      'image-ico': 'image/x-icon'
+    }
+    expect(previewTable['image-svg']).toBe('image/svg+xml')
+
+    // 后缀是光栅（png → 走图片支），但字节通道回了个白名单外的格式：按"不支持"拒收，
+    // 不回落 application/octet-stream 硬发
+    for (const format of ['image-svg', 'image-ico'] as const) {
+      const readBytes: ContextChannel['readBytes'] = async () => ({
+        kind: 'bytes',
+        format,
+        bytes: PNG,
+        size: 4
+      })
+      const result = await resolve(item, { channel: channel({ readBytes }) })
+      expect(result, format).toEqual({ problem: CONTEXT_UNSUPPORTED })
+    }
   })
 })
 

@@ -35,10 +35,14 @@ export function rulesTextProblem(text: string, scope: RulesScope): RulesDiagnost
     text.includes('\0') ||
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(text)
   ) {
-    return { scope, code: 'invalid-text', message: '约束必须是合法 UTF-8 文本，且不能包含 NUL。' }
+    return {
+      scope,
+      code: 'invalid-text',
+      message: '记忆指令必须是合法 UTF-8 文本，且不能包含 NUL。'
+    }
   }
   if (rulesByteLength(text) > RULES_SCOPE_MAX_BYTES) {
-    return { scope, code: 'too-large', message: '每份约束最多 16 KiB（UTF-8）。' }
+    return { scope, code: 'too-large', message: '每份记忆指令最多 16 KiB（UTF-8）。' }
   }
   return null
 }
@@ -67,7 +71,7 @@ export function combineRules(global: RulesReadResult, project: RulesReadResult):
     diagnostics.push({
       scope: 'project',
       code: 'combined-too-large',
-      message: '全局与项目约束合计超过 24 KiB，已保留全局约束，本轮未加载项目约束。'
+      message: '全局与项目记忆指令合计超过 24 KiB，已保留全局记忆指令，本轮未加载项目记忆指令。'
     })
   }
   return { global: globalText, project: projectText, diagnostics }

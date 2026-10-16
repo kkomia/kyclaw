@@ -10,6 +10,7 @@ import { _electron as electron, expect, test } from '@playwright/test'
  * 起**打包件**（默认 dist-alt/win-unpacked/kyclaw.exe，可用 KYCLAW_R63_EXE 覆盖），
  * 在 设置 → 关于 里**只填一个 URL（不带任何密钥）**，验证整条更新链路：
  *
+ *   0. 更新源配置**默认收起**（页面上没有地址输入框）→ 点「配置」展开（round 88）；
  *   1. 指向 beta.yml 齐全的本地源 → 保存 → 检查更新 → 发现新版本 → 自动下载 → 已下载；
  *   2. 清空地址保存 → 再检查 → 回到打包内置源（MinIO）：可达 =「已是最新版本」、
  *      不在那个局域网 =「检查失败」——都证明源已切回内置（反断言不许再出现本机源的 beta.4）；
@@ -115,7 +116,15 @@ test.describe('R63 更新源（打包件 + 设置里只填 URL）', () => {
       await expect(page.getByTestId('about-version')).toContainText('0.1.0-beta.3', {
         timeout: 30_000
       })
-      // 没填之前：输入框的占位提示 = 打包内置源的地址（MinIO）
+      // round 88：更新源配置默认收起 —— 先钉住"页面上没有地址输入（内置源提示也一并藏起）"，
+      // 再从「配置」入口展开；展开后这一路要用的输入框 / 保存都在这块里，后面不再收起
+      const configToggle = page.getByTestId('about-update-config-toggle')
+      await expect(configToggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(page.getByTestId('about-update-url')).toHaveCount(0)
+      await configToggle.click()
+      await expect(configToggle).toHaveAttribute('aria-expanded', 'true')
+
+      // 展开后：输入框的占位提示 = 打包内置源的地址（MinIO）
       await expect(page.getByTestId('about-update-url')).toHaveAttribute(
         'placeholder',
         /192\.168\.31\.18/,

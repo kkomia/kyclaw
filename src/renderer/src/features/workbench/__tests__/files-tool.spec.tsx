@@ -9,6 +9,44 @@ import { FilesTool } from '../FilesTool'
 import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
 
 /**
+ * 表格那一支：真组件会懒加载 FortuneSheet（jsdom 里不是这套测试要验的东西）——
+ * 这里只验"接线接到了没、参数对不对"（C 的组件自己有规格）。
+ * 注意路径是从**本文件**算的：`preview/dsh-table/ExcelPreview`。
+ */
+vi.mock('../preview/dsh-table/ExcelPreview', () => ({
+  ExcelPreview: ({ bytes, filename }: { bytes: Uint8Array; filename: string }) => (
+    <div
+      data-testid="excel-preview-stub"
+      data-filename={filename}
+      data-size={String(bytes.byteLength)}
+    />
+  )
+}))
+
+/**
+ * 办公档那一支里嵌着新版页式阅读器，而它要 pdfjs 的两个模块（与 dsh-document 的 spec 同路数）：
+ * 不真起 pdfjs、也不真画（jsdom 没有 2D 上下文），只验接线与调用参数。
+ */
+const pdfjs = vi.hoisted(() => ({ getDocument: vi.fn() }))
+
+vi.mock('pdfjs-dist', () => ({
+  GlobalWorkerOptions: { workerSrc: '' },
+  getDocument: (...args: unknown[]) => pdfjs.getDocument(...args)
+}))
+
+vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => ({
+  TextLayerBuilder: class {
+    readonly div = document.createElement('div')
+    render(): Promise<void> {
+      return Promise.resolve()
+    }
+    cancel(): void {
+      this.div.replaceChildren()
+    }
+  }
+}))
+
+/**
  * 文件工具：懒加载目录树（点开才列子层）、单击预览、自绘右键菜单（打开 / 复制路径）。
  * 主进程通道用桥的桩顶掉：这里只验渲染端的行为与调用参数（containment 在主进程侧已单测）。
  *
@@ -43,6 +81,36 @@ beforeEach(() => {
     ],
     truncated: false
   })
+  // 办公档：默认给一份"转好了"的回包（用例要失败态自己 mockResolvedValue 覆盖）
+  pdfjs.getDocument.mockReset()
+  pdfjs.getDocument.mockReturnValue({
+    promise: Promise.resolve({
+      numPages: 1,
+      getPage: async () => ({
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 800 * scale,
+          height: 1000 * scale,
+          scale,
+          userUnit: 1
+        }),
+        render: () => ({ promise: Promise.resolve(), cancel: () => undefined }),
+        cleanup: () => undefined
+      })
+    }),
+    destroy: async () => undefined
+  })
+  bed.bridge.workbench.officePdf.mockResolvedValue({
+    kind: 'pdf',
+    path: '方案.docx',
+    version: 'v1',
+    pdf: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    size: 4,
+    missingFonts: [],
+    generation: 'g1'
+  })
+  // jsdom 没有 2D 上下文：显式钉成 null（既有 PdfPreview 据此跳过真画、仍记账页数；
+  // 新版阅读器会按"这一页画不出来"收场 —— 两边的断言都只看接线，不看像素）
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   published = []
   unsubscribe = subscribeContextItems((item) => published.push(item))
 })
@@ -50,6 +118,7 @@ beforeEach(() => {
 afterEach(() => {
   unsubscribe?.()
   unsubscribe = null
+  vi.restoreAllMocks()
   teardownWorkbench()
 })
 
@@ -147,21 +216,22 @@ describe('FilesTool：单击预览', () => {
   it('二进制 / 超大文件给人话，不吐乱码', async () => {
     bed.bridge.workbench.listDir.mockResolvedValue({
       entries: [
-        { name: 'logo.ico', kind: 'file', size: 2048 },
+        { name: 'blob.bin', kind: 'file', size: 2048 },
         { name: 'huge.bin', kind: 'file', size: 104857600 }
       ],
       truncated: false
     })
     render(<FilesTool root={rootOf()} />)
-    await waitFor(() => expect(screen.getByText('logo.ico')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('blob.bin')).toBeInTheDocument())
 
     bed.bridge.workbench.readFile.mockResolvedValueOnce({ kind: 'binary', size: 2048 })
-    fireEvent.click(screen.getByText('logo.ico'))
-    expect(await screen.findByTestId('file-preview-binary')).toHaveTextContent('二进制')
+    fireEvent.click(screen.getByText('blob.bin'))
+    // 文本分页通道把"二进制"翻成人话走错误落点（与表格那条同一口径）
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent('二进制')
 
     bed.bridge.workbench.readFile.mockResolvedValueOnce({ kind: 'too-large', size: 104857600 })
     fireEvent.click(screen.getByText('huge.bin'))
-    expect(await screen.findByTestId('file-preview-large')).toHaveTextContent('文件太大')
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent('文件太大')
   })
 
   it('读不了的文件：把错误露在预览层里', async () => {
@@ -363,100 +433,79 @@ describe('round 43 · 办公与代码场景的路由', () => {
     expect(screen.queryByTestId('file-preview-code')).toBeNull()
   })
 
-  it('docx 走字节通道，回来的 markdown 直接复用 markdown 渲染器（含截断提示）', async () => {
-    bed.bridge.workbench.readBytes.mockResolvedValue({
-      kind: 'docx',
-      markdown: '# 一级标题\n\n- 第一项\n',
-      truncated: true
-    })
+  it('docx 走办公档页式预览（主进程转 PDF，不再抽 markdown）', async () => {
     await openOnly('方案.docx')
 
-    await waitFor(() =>
-      expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '方案.docx')
-    )
-    const body = await screen.findByTestId('file-preview-markdown')
-    expect(body.querySelector('h1')?.textContent).toBe('一级标题')
-    expect(body.querySelectorAll('li')).toHaveLength(1)
-    expect(screen.getByTestId('file-preview-docx-truncated')).toHaveTextContent(
-      '只显示了前面一部分'
-    )
+    await waitFor(() => expect(bed.bridge.workbench.officePdf).toHaveBeenCalledTimes(1))
+    const [threadId, relative, priority, requestId] =
+      bed.bridge.workbench.officePdf.mock.calls[0] ?? []
+    expect([threadId, relative, priority]).toEqual(['thread-1', '方案.docx', 'foreground'])
+    expect(typeof requestId).toBe('string')
+
+    expect(await screen.findByTestId('dsh-office-viewer')).toBeInTheDocument()
+    expect(await screen.findByTestId('dsh-pdf-viewer')).toBeInTheDocument()
+    // 老那两条通道都不该被碰，markdown 结构档也不该再出现
     expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('file-preview-markdown')).toBeNull()
   })
 
-  it('xlsx 画成多表（切换控件）+ 表张数超上限另有标注', async () => {
-    bed.bridge.workbench.readBytes.mockResolvedValue({
-      kind: 'xlsx',
-      sheets: [
-        {
-          name: '汇总',
-          rows: [
-            ['项目', '金额'],
-            ['房租', '1200']
-          ],
-          truncated: false
-        },
-        { name: '明细', rows: [['备注'], ['第二张']], truncated: true }
-      ],
-      truncated: true
+  it('xlsx：整份原始字节交给渲染端的 ExcelPreview（不走办公档 PDF 管线）', async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x05])
+    bed.bridge.workbench.tableBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'xlsx',
+      bytes,
+      size: bytes.byteLength
     })
     await openOnly('台账.xlsx')
 
-    const table = await screen.findByTestId('file-preview-table')
-    expect(within(table).getAllByTestId('table-sheet-tab')).toHaveLength(2)
-    expect(within(table).getByText('房租')).toBeInTheDocument()
-    expect(screen.getByTestId('file-preview-table-sheets-truncated')).toHaveTextContent(
-      '工作表太多'
-    )
+    const host = await screen.findByTestId('file-preview-table')
+    expect(host).toHaveClass('h-full')
+
+    const stub = within(host).getByTestId('excel-preview-stub')
+    expect(stub).toHaveAttribute('data-filename', '台账.xlsx')
+    expect(stub).toHaveAttribute('data-size', '5')
+    expect(bed.bridge.workbench.tableBytes).toHaveBeenCalledWith('thread-1', '台账.xlsx')
+    expect(bed.bridge.workbench.officePdf).not.toHaveBeenCalled()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
   })
 
-  it('csv 走同一个表格组件，单表不摆切换控件（表名来自主进程）', async () => {
-    bed.bridge.workbench.readBytes.mockResolvedValue({
-      kind: 'xlsx',
-      sheets: [
-        {
-          name: '名单',
-          rows: [
-            ['姓名', '年龄'],
-            ['张三', '28']
-          ],
-          truncated: false
-        }
-      ],
-      truncated: false
+  it('csv 走同一条表格通道（格式由主进程按文件头认定）', async () => {
+    const bytes = new Uint8Array([0x61, 0x2c, 0x62])
+    bed.bridge.workbench.tableBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'csv',
+      bytes,
+      size: bytes.byteLength
     })
     await openOnly('名单.csv')
 
-    const table = await screen.findByTestId('file-preview-table')
-    expect(within(table).queryAllByTestId('table-sheet-tab')).toHaveLength(0)
-    expect(within(table).getByText('张三')).toBeInTheDocument()
-    expect(within(table).getByText('28')).toHaveAttribute('data-numeric', 'true')
-    expect(bed.bridge.workbench.readBytes).toHaveBeenCalledWith('thread-1', '名单.csv')
+    const stub = await screen.findByTestId('excel-preview-stub')
+    expect(stub).toHaveAttribute('data-filename', '名单.csv')
+    expect(bed.bridge.workbench.tableBytes).toHaveBeenCalledWith('thread-1', '名单.csv')
   })
 
-  it('pptx 画成逐页文字卡（含"仅文字提要"的如实说明）', async () => {
-    bed.bridge.workbench.readBytes.mockResolvedValue({
-      kind: 'pptx',
-      slides: [
-        { index: 1, lines: ['汇报'] },
-        { index: 2, title: '进展', lines: ['第一条'] }
-      ],
-      truncated: true
+  it('pptx 也走办公档页式预览（不再只给逐页文字提要）', async () => {
+    bed.bridge.workbench.officePdf.mockResolvedValue({
+      kind: 'pdf',
+      path: '汇报.pptx',
+      version: 'v2',
+      pdf: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      size: 4,
+      missingFonts: ['方正兰亭黑'],
+      generation: 'g1'
     })
     await openOnly('汇报.pptx')
 
-    const body = await screen.findByTestId('file-preview-pptx')
-    expect(within(body).getAllByTestId('pptx-slide')).toHaveLength(2)
-    expect(screen.getByTestId('file-preview-pptx-notice')).toHaveTextContent('版式不还原')
-    expect(screen.getByTestId('file-preview-pptx-truncated')).toBeInTheDocument()
+    expect(await screen.findByTestId('dsh-office-viewer')).toBeInTheDocument()
+    // 缺字体如实提示一句（不假装和原稿一致）
+    expect(await screen.findByTestId('dsh-office-font-notice')).toHaveTextContent('方正兰亭黑')
+    expect(screen.queryByTestId('file-preview-pptx')).toBeNull()
   })
 
-  it('旧版 Office（.doc/.xls/.ppt）：不读文件，直接给"另存为"的人话', async () => {
-    const cases: Array<[string, string]> = [
-      ['旧方案.doc', '旧版 Word（.doc）暂不支持预览，可用 Word 另存为 .docx'],
-      ['旧台账.xls', '旧版 Excel（.xls）暂不支持预览，可用 Excel 另存为 .xlsx'],
-      ['旧汇报.ppt', '旧版 PowerPoint（.ppt）暂不支持预览，可用 PowerPoint 另存为 .pptx']
-    ]
-    for (const [name, notice] of cases) {
+  it('旧版 .doc / .ppt 也走办公档（不再给"另存为"的人话）；旧版 .xls 走表格通道', async () => {
+    for (const name of ['旧方案.doc', '旧汇报.ppt']) {
       bed.bridge.workbench.listDir.mockResolvedValue({
         entries: [{ name, kind: 'file', size: 4096 }],
         truncated: false
@@ -464,12 +513,25 @@ describe('round 43 · 办公与代码场景的路由', () => {
       const { unmount } = render(<FilesTool root={rootOf()} />)
       await waitFor(() => expect(screen.getByText(name)).toBeInTheDocument())
       fireEvent.click(screen.getByText(name))
-      expect(await screen.findByTestId('file-preview-legacy')).toHaveTextContent(notice)
+
+      expect(await screen.findByTestId('dsh-office-viewer')).toBeInTheDocument()
+      expect(screen.queryByTestId('file-preview-legacy')).toBeNull()
+      expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
       unmount()
     }
-    // 两条通道都不该被碰（旧格式连读都不读）
-    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
-    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+
+    bed.bridge.workbench.tableBytes.mockResolvedValue({
+      kind: 'bytes',
+      format: 'xls',
+      bytes: new Uint8Array([0xd0, 0xcf, 0x11, 0xe0]),
+      size: 4
+    })
+    await openOnly('旧台账.xls')
+    expect(await screen.findByTestId('excel-preview-stub')).toHaveAttribute(
+      'data-filename',
+      '旧台账.xls'
+    )
+    expect(bed.bridge.workbench.tableBytes).toHaveBeenCalledWith('thread-1', '旧台账.xls')
   })
 })
 
@@ -828,19 +890,19 @@ describe('round 42 · 右键「添加到上下文」', () => {
 
     // 同一个文件换成二进制：round 53 起不拒收——载荷退回**相对路径引用**（chip 照常进附件条，无 notice）
     bed.bridge.workbench.listDir.mockResolvedValue({
-      entries: [{ name: 'logo.ico', kind: 'file', size: 2048 }],
+      entries: [{ name: 'blob.bin', kind: 'file', size: 2048 }],
       truncated: false
     })
     bed.bridge.workbench.readFile.mockResolvedValue({ kind: 'binary', size: 2048 })
     fireEvent.click(screen.getByTestId('files-refresh'))
-    await waitFor(() => expect(screen.getByText('logo.ico')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('blob.bin')).toBeInTheDocument())
 
-    fireEvent.contextMenu(screen.getByText('logo.ico'))
+    fireEvent.contextMenu(screen.getByText('blob.bin'))
     fireEvent.click(screen.getByText('添加到上下文'))
 
-    const binaryChip = await screen.findByTestId('composer-attachment-logo.ico')
+    const binaryChip = await screen.findByTestId('composer-attachment-blob.bin')
     expect(binaryChip).toHaveTextContent('2.0 KB')
-    expect(binaryChip).toHaveAttribute('title', 'logo.ico')
+    expect(binaryChip).toHaveAttribute('title', 'blob.bin')
     expect(screen.queryByTestId('composer-notice')).not.toBeInTheDocument()
   })
 })

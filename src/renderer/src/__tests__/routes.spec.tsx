@@ -9,6 +9,9 @@ import { AppRoutes } from '@renderer/App'
  *
  * round 5 后的导航口径：二级菜单只剩「设置」（设置为唯一导航源）；记忆/用量在设置左列里切
  * （/settings/memory、/settings/usage）；插件走侧栏「插件」入口（/plugins）。
+ *
+ * 本轮（设置页重组）：单独「约束」栏撤掉、并进「记忆」栏（左列不再有那一项）——
+ * 老深链 /settings/rules 走 sections.ts 的别名仍落到「记忆」栏（E2E 也在用这个地址）。
  */
 function renderAt(path: string): void {
   render(
@@ -139,6 +142,27 @@ describe('路由与页面骨架', () => {
 
     expect(screen.queryByTestId('settings-nav-tools')).not.toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-tools')).not.toBeInTheDocument()
+  })
+
+  it('设置左列没有单独的「约束」（本轮合栏：并进「记忆」栏，不在菜单里再占一项）', () => {
+    renderAt('/settings')
+
+    expect(screen.queryByTestId('settings-nav-rules')).not.toBeInTheDocument()
+    // 默认栏是「外观」：没切到记忆栏时，规矩那块不该出现在页面上
+    expect(screen.queryByTestId('settings-group-rules')).not.toBeInTheDocument()
+  })
+
+  it('旧的 /settings/rules 深链落在「记忆」栏（合栏后老地址不掉到默认栏）', () => {
+    renderAt('/settings/rules')
+
+    expect(screen.getByTestId('settings-group-memory')).toBeInTheDocument()
+    // 定位到「记忆指令」入口那一行（编辑器收在二级弹窗里：深链不偷偷弹窗）
+    expect(screen.getByTestId('rules-entry')).toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-rules')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-group-appearance')).not.toBeInTheDocument()
+    // 左列选中态也跟着别名走（老地址 = 记忆栏）
+    expect(screen.getByTestId('settings-nav-memory')).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByTestId('settings-nav-rules')).not.toBeInTheDocument()
   })
 
   it('设置页脏栏目回落默认栏（URL 手改坏了也不空着）', () => {

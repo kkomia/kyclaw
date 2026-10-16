@@ -8,9 +8,13 @@ import type { PendingAttachment } from './composer-attachments'
  * 用户可能已经在冷启动那一段（几百毫秒到一两秒）里敲了半句、甚至拖进一个文件，不能让他白敲：
  * 这一包就是那一段的过桥。取用一次即清，不会流到别处。
  *
- * 边界（刻意收得很窄）：**只在"会话还没就绪"的那一挂上留**（Composer 的 `pending` 非空）——
- * 那一挂注定会因为 activeId 到位而重挂。普通换会话（真 id → 另一个真 id）不经过这里：
- * 那种情况的草稿该跟着那一挂一起消失（既有口径：换会话清草稿），不会被带进新会话。
+ * 边界（R92 复核后收窄，2026-10-16）：
+ *   - **留**：只在"会话还没就绪"的那一挂上留（Composer 的 `pending` 非空）——那一挂正是
+ *     "冷启动落位"要重挂的那一段；
+ *   - **收**：**接不接由落位方说了算** —— `takeComposerCarryover` 的调用方只在
+ *     "系统初始化落位"（activeId 从无到有、且不是用户点出来的）时才放行；用户主动
+ *     切会话 / 新建 / 删除 触发的重挂一律走 `discardComposerCarryover` **丢弃**，
+ *     草稿不许跨会话泄露。普通换会话（真 id → 另一个真 id）本就不经过这里。
  */
 export interface ComposerCarryover {
   /** 重挂前输入框里的草稿 */
@@ -33,6 +37,11 @@ export function takeComposerCarryover(): ComposerCarryover | null {
   const value = carryover
   carryover = null
   return value
+}
+
+/** 取用被拒（这一挂不许过桥）：把残留的那一包丢掉，绝不带进后面的挂 */
+export function discardComposerCarryover(): void {
+  carryover = null
 }
 
 /** 测试用：清掉过桥的那一包（模块级状态不随 render 重置） */

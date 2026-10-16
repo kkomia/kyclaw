@@ -19,6 +19,9 @@
  *
  * 分层（测试直接构造/篡改 `Map<string, Buffer>` 走纯检查层，不必造 zip）：
  *   - `readZipEntries`：字节 → 条目表（EOCD 扫描 + 中央目录 + 局部头核对 + inflateRaw + CRC32），失败一律中文；
+ *     可选第二参 `limits`：**给了才设上限**（声明先校验 → `maxOutputLength` 真卡 → 实际长度/累计/CRC → 同名拒）；
+ *   - `assertOfficeArchiveSafe`：**外来**文件交给第三方解析器（JSZip 系）之前的预检——固定 20000 条 /
+ *     单条 64MiB / 合计 256MiB，解一条校验一条、不保留内容（见 `OFFICE_ARCHIVE_LIMITS`）；
  *   - `checkEntries`：条目表 → `{ checks, ok, note }`（纯函数，逐项独立）；
  *   - `checkPackage`：字节 → 读包（读不通给 `fatal`）→ `checkEntries`；
  *   - `checkPdf`：PDF 没有包结构，只认 `%PDF-` 头与末尾 `%%EOF`。
@@ -134,12 +137,107 @@ export function assertPackage(check: PackageCheck): void {
 }
 
 /**
+ * **解包上限**（`readZipEntries` 的可选第二参）：不给就是不设限（产出侧自检走的就是这条老路，
+ * 自己写出来的包不该被自家的护栏挡回去）。给了之后只在抛错侧变严，返回值形状不变（仍是 `Map`）。
+ */
+export interface ZipLimits {
+  /** 条目数上限 */
+  maxEntries?: number
+  /** 单条**解压后**字节上限 */
+  maxEntryBytes?: number
+  /** 所有条目**解压后**累计字节上限 */
+  maxTotalBytes?: number
+}
+
+/**
+ * 读**外来** Office 容器时的固定上限（`assertOfficeArchiveSafe` 用这一份）：20000 条 / 单条 64MiB /
+ * 合计 256MiB。三个数的口径：
+ *   - 条目数：正经的 docx/xlsx/pptx 是几十到几百条（页最多的 pptx 也不过每页两三条 + 母版/主题/媒体），
+ *     两万条已经不是人写出来的包；
+ *   - 单条 64MiB：媒体件（图片/音视频）是大头，单个部件到 64MiB 在 Office 文档里已是极值；
+ *   - 合计 256MiB：挡住"每条都刚好不超、条数也不超，但解出来是几个 G"的形状。
+ * 与输入文件的 32MB 上限（`PREVIEW_OFFICE_MAX_BYTES`，见 shared/workbench.ts）不是一回事：那个数卡的是
+ * **文件本身**多大，这里卡的是**解压后**多少——zip 的膨胀比可以上千倍，32MB 的输入解出 4GB 是现实的。
+ */
+export const OFFICE_ARCHIVE_LIMITS: Required<ZipLimits> = {
+  maxEntries: 20_000,
+  maxEntryBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 256 * 1024 * 1024
+}
+
+/** 上限解析后的形态：没给的那一维按"永不触发"处理（`Infinity` 照样过 `Math.min` 与比较） */
+type ResolvedZipLimits = Required<ZipLimits>
+
+function resolveLimits(limits: ZipLimits | undefined): ResolvedZipLimits | null {
+  if (limits === undefined) return null
+  return {
+    maxEntries: limits.maxEntries ?? Number.POSITIVE_INFINITY,
+    maxEntryBytes: limits.maxEntryBytes ?? Number.POSITIVE_INFINITY,
+    maxTotalBytes: limits.maxTotalBytes ?? Number.POSITIVE_INFINITY
+  }
+}
+
+/** 中央目录里一条的**声明**（inflate 之前能看到的全部信息；`declaredSize` 是声明，不是事实） */
+interface ZipEntryRef {
+  name: string
+  method: number
+  declaredCrc: number
+  compressedSize: number
+  declaredSize: number
+  /** 条目数据的起点（已核对局部头签名、名字、压缩方式） */
+  dataStart: number
+}
+
+/**
  * 解包成 `条目名 → 解压后的字节`（顺序即中央目录顺序）。
  * 每一步都对不上就抛中文错：没有 EOCD / 中央目录签名不对 / 局部头签名不对 / 数据越界 /
  * 不支持的压缩方式 / 解压失败 / CRC32 不符。
+ *
+ * `limits` 是可选的：**不给就是老口径**（不设上限、同名条目后者覆盖前者，调用方一字不用改）；
+ * 给了就多这几道（校验口径见 `assertOfficeArchiveSafe`）。
  */
-export function readZipEntries(bytes: Uint8Array): Map<string, Buffer> {
+export function readZipEntries(bytes: Uint8Array, limits?: ZipLimits): Map<string, Buffer> {
   const zip = Buffer.from(bytes)
+  const caps = resolveLimits(limits)
+  const entries = new Map<string, Buffer>()
+  let total = 0
+
+  for (const ref of readCentralDirectory(zip, caps)) {
+    const data = decodeEntry(zip, ref, caps, total)
+    if (caps !== null) total += data.length
+    entries.set(ref.name, data)
+  }
+  return entries
+}
+
+/**
+ * **外来容器的安全预检**：把别人给的 Office 文件交给第三方解析器（JSZip 系——mammoth 读 docx、
+ * pptxgenjs 读 pptx 都走它）**之前**先过这一道；过不去的包不进解析器。跑的是完整的解包校验
+ * （声明 → 解压上限 → 实际长度 → CRC32 → 累计），但**不保留任何条目内容**：解一条校验一条、
+ * 当场丢掉，峰值内存是"输入字节 + 一条"（≤64MiB），不是"输入字节 + 一整包解压结果"。
+ *
+ * 为什么必须有：那些解析器把整包解到内存里，而输入是别人给的——32MB 的输入靠 zip 的膨胀比可以
+ * 变成几个 G 的解压结果；它们又只看中央目录的声明，声明撒谎（写 1KB、实际 4GB）时连"提前发现"
+ * 的机会都没有。这里把**声明与事实都核一遍**再说。
+ *
+ * 抛错一律中文（调用方据此回人话）；过则无声返回。
+ */
+export function assertOfficeArchiveSafe(bytes: Uint8Array): void {
+  const zip = Buffer.from(bytes)
+  let total = 0
+  for (const ref of readCentralDirectory(zip, OFFICE_ARCHIVE_LIMITS)) {
+    total += decodeEntry(zip, ref, OFFICE_ARCHIVE_LIMITS, total).length
+  }
+}
+
+/**
+ * 中央目录 → 条目声明表（**不 inflate**）。
+ *
+ * 逐条核对签名/局部头/边界；给了上限再逐条核对声明（单条声明大小、累计声明大小、名字、压缩方式）
+ * ——**所有声明校验都发生在这一次遍历里，也就是发生在任何一次 inflate 之前**：炸弹包最省事的
+ * 那一半（中央目录里老实写着"我解压后 4GiB"）必须在这里被挡下来，而不是先花内存解出来再看。
+ */
+function readCentralDirectory(zip: Buffer, limits: ResolvedZipLimits | null): ZipEntryRef[] {
   const eocd = findEndOfCentralDirectory(zip)
 
   const count = zip.readUInt16LE(eocd + 10)
@@ -147,9 +245,16 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Buffer> {
   if (count === ZIP64_COUNT_SENTINEL || centralOffset === ZIP64_OFFSET_SENTINEL) {
     throw new Error('这是 zip64 容器（暂不支持）：请用常规 zip 重新导出')
   }
+  if (limits !== null && count > limits.maxEntries) {
+    throw new Error(
+      `zip 条目数（${count}）超过上限（${limits.maxEntries}）：不是常规 Office 文档的形状`
+    )
+  }
 
-  const entries = new Map<string, Buffer>()
+  const refs: ZipEntryRef[] = []
+  const seenNames = new Set<string>()
   let offset = centralOffset
+  let declaredTotal = 0
 
   for (let index = 0; index < count; index++) {
     if (offset + 46 > zip.length || zip.readUInt32LE(offset) !== ZIP_CENTRAL_ENTRY) {
@@ -157,8 +262,9 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Buffer> {
     }
     const flags = zip.readUInt16LE(offset + 8)
     const method = zip.readUInt16LE(offset + 10)
-    const expectedCrc = zip.readUInt32LE(offset + 16)
+    const declaredCrc = zip.readUInt32LE(offset + 16)
     const compressedSize = zip.readUInt32LE(offset + 20)
+    const declaredSize = zip.readUInt32LE(offset + 24)
     const nameLength = zip.readUInt16LE(offset + 28)
     const extraLength = zip.readUInt16LE(offset + 30)
     const commentLength = zip.readUInt16LE(offset + 32)
@@ -166,43 +272,214 @@ export function readZipEntries(bytes: Uint8Array): Map<string, Buffer> {
     const name = zip.toString('utf8', offset + 46, offset + 46 + nameLength)
 
     if ((flags & 0x0001) !== 0) throw new Error(`条目 ${name} 是加密的（暂不支持加密 zip）`)
-
-    if (localOffset + 30 > zip.length || zip.readUInt32LE(localOffset) !== ZIP_LOCAL_HEADER) {
-      throw new Error(`条目 ${name} 的局部头签名不对（offset=${localOffset}）`)
+    if (limits !== null && offset + 46 + nameLength > zip.length) {
+      throw new Error(`zip 中央目录第 ${index + 1} 条的名字越界（zip 被截断或损坏）`)
     }
-    // 局部头里的 name/extra 长度可能和中央目录不同（尤其 extra），必须重新读
-    const localNameLength = zip.readUInt16LE(localOffset + 26)
-    const localExtraLength = zip.readUInt16LE(localOffset + 28)
-    const dataStart = localOffset + 30 + localNameLength + localExtraLength
-    if (dataStart + compressedSize > zip.length) {
-      throw new Error(`条目 ${name} 的数据越界（zip 被截断或损坏）`)
-    }
-    const raw = zip.subarray(dataStart, dataStart + compressedSize)
-
-    let data: Buffer
-    if (method === 0) {
-      data = raw
-    } else if (method === 8) {
-      try {
-        data = inflateRawSync(raw)
-      } catch {
-        throw new Error(`条目 ${name} 解压失败（压缩数据损坏）`)
-      }
-    } else {
+    if (method !== 0 && method !== 8) {
       throw new Error(`条目 ${name} 用了不支持的压缩方式（method=${method}）`)
     }
 
-    const actualCrc = crc32(data)
-    if (actualCrc !== expectedCrc) {
-      throw new Error(
-        `条目 ${name} 的 CRC32 校验失败（目录记 ${hex32(expectedCrc)}，实际 ${hex32(actualCrc)}）：内容被改过或已损坏`
-      )
+    const dataStart = localDataStart(zip, name, localOffset, method, limits)
+    if (dataStart + compressedSize > zip.length) {
+      throw new Error(`条目 ${name} 的数据越界（zip 被截断或损坏）`)
     }
-    entries.set(name, data)
 
+    if (limits !== null) {
+      checkEntryName(name, seenNames)
+      if (declaredSize > limits.maxEntryBytes) {
+        throw entryOverLimit(name, declaredSize, limits.maxEntryBytes)
+      }
+      if (declaredTotal + declaredSize > limits.maxTotalBytes) {
+        throw totalOverLimit(name, declaredTotal + declaredSize, limits.maxTotalBytes)
+      }
+      declaredTotal += declaredSize
+    }
+
+    refs.push({ name, method, declaredCrc, compressedSize, declaredSize, dataStart })
     offset += 46 + nameLength + extraLength + commentLength
   }
-  return entries
+
+  // 条数撒谎的形状：EOCD 说 N 条、中央目录里其实还有第 N+1 条（"校验的那几条"与"真读到的那几条"
+  // 就不是同一份了）。紧跟中央目录的只能是数字签名/注释，不可能又是个条目头。
+  if (
+    limits !== null &&
+    offset + 4 <= zip.length &&
+    zip.readUInt32LE(offset) === ZIP_CENTRAL_ENTRY
+  ) {
+    throw new Error(`zip 中央目录条数与实际不符（EOCD 记 ${count} 条，后面还有第 ${count + 1} 条）`)
+  }
+  return refs
+}
+
+/**
+ * 局部头 → 条目数据起点（`局部头 30 + 名字 + extra`）。
+ * 老口径只核签名；给了上限就把局部头与中央目录**对上**再放行：局部头标了加密、压缩方式不一致、
+ * 名字不一致，都拒。
+ *
+ * 为什么要对两份声明：读侧的第三方库与"按局部头流式解"的实现可能各取一侧——中央目录说
+ * "没加密、stored"，局部头写"加密、deflate"，只看一侧的检查就会被另一侧绕过。
+ */
+function localDataStart(
+  zip: Buffer,
+  name: string,
+  localOffset: number,
+  method: number,
+  limits: ResolvedZipLimits | null
+): number {
+  if (localOffset + 30 > zip.length || zip.readUInt32LE(localOffset) !== ZIP_LOCAL_HEADER) {
+    throw new Error(`条目 ${name} 的局部头签名不对（offset=${localOffset}）`)
+  }
+  // 局部头里的 name/extra 长度可能和中央目录不同（尤其 extra），必须重新读
+  const localNameLength = zip.readUInt16LE(localOffset + 26)
+  const localExtraLength = zip.readUInt16LE(localOffset + 28)
+  const dataStart = localOffset + 30 + localNameLength + localExtraLength
+
+  if (limits !== null) {
+    if (localOffset + 30 + localNameLength > zip.length) {
+      throw new Error(`条目 ${name} 的局部头名字越界（zip 被截断或损坏）`)
+    }
+    if ((zip.readUInt16LE(localOffset + 6) & 0x0001) !== 0) {
+      throw new Error(`条目 ${name} 在局部头里标了加密（暂不支持加密 zip）`)
+    }
+    if (zip.readUInt16LE(localOffset + 8) !== method) {
+      throw new Error(`条目 ${name} 的局部头压缩方式与中央目录不一致：两处声明对不上，拒绝读入`)
+    }
+    const localName = zip.toString('utf8', localOffset + 30, localOffset + 30 + localNameLength)
+    if (localName !== name) {
+      throw new Error(`条目 ${name} 的局部头名字与中央目录不一致：两处声明对不上，拒绝读入`)
+    }
+  }
+  return dataStart
+}
+
+/**
+ * 条目名三道闸（只有给了上限才跑）：
+ *   - **空名**：没有名字的条目读出来也没法用；
+ *   - **重复名**（按归一化后的包内路径查重）：这是"防重复条目绕过"的正解——同一路径两条记录、
+ *     内容不同时，校验的一方与真正读内容的一方可能各取一条（一个看先写的、一个看后写的），
+ *     于是"校验过的包"与"用到的包"不是同一份；归一化把前导斜杠、`./`、`//`、`\` 这些落到同一处、
+ *     写法不同的名字并到一起（落到文件系统上它们本来就是同一个名字）；
+ *   - **越出包根**（归一化后还有 `..` 段）：正经 OOXML 部件名永远在包内，出现 `..` 只可能是想把
+ *     内容写到包外（zip-slip 的原料），读之前就拒。
+ */
+function checkEntryName(name: string, seen: Set<string>): void {
+  if (name === '') throw new Error('zip 里有没名字的条目：拒绝读入')
+
+  const parts: string[] = []
+  for (const segment of name.replace(/\\/g, '/').split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') throw new Error(`条目 ${name} 的名字越出包根（含 .. 段）：拒绝读入`)
+    parts.push(segment)
+  }
+
+  const normalized = parts.join('/')
+  if (normalized === '') throw new Error(`条目 ${name} 的名字不合法（没有有效路径段）：拒绝读入`)
+  if (seen.has(normalized)) {
+    throw new Error(
+      `zip 里有重复条目名（${normalized}）：同名两条内容可以不同，校验与读取会各取一条`
+    )
+  }
+  seen.add(normalized)
+}
+
+/**
+ * 一条条目的**实际**字节：解压 → 实际长度 → CRC32 → 累计（声明在这一层只当参考）。
+ *
+ * 给了上限时 `inflateRawSync` 带 `maxOutputLength`（超了由 zlib 直接抛 `ERR_BUFFER_TOO_LARGE`，
+ * 不会先解出来再判）：这是"声明撒谎"那一半的兜底——中央目录写 1KB、实际解出 4GB 的那种，
+ * 只有这个参数拦得住，所以它取的是"单条上限"与"累计还剩多少"里更紧的那个。
+ */
+function decodeEntry(
+  zip: Buffer,
+  ref: ZipEntryRef,
+  limits: ResolvedZipLimits | null,
+  totalSoFar: number
+): Buffer {
+  const raw = zip.subarray(ref.dataStart, ref.dataStart + ref.compressedSize)
+  let data: Buffer
+
+  if (ref.method === 0) {
+    data = raw
+  } else if (limits === null) {
+    try {
+      data = inflateRawSync(raw)
+    } catch {
+      throw new Error(`条目 ${ref.name} 解压失败（压缩数据损坏）`)
+    }
+  } else {
+    const cap = Math.min(limits.maxEntryBytes, limits.maxTotalBytes - totalSoFar)
+    if (cap <= 0) {
+      throw new Error(
+        `zip 解压后累计大小已到上限（${limits.maxTotalBytes} 字节）：条目 ${ref.name} 还有内容，拒绝读入`
+      )
+    }
+    try {
+      data = Number.isFinite(cap)
+        ? inflateRawSync(raw, { maxOutputLength: cap })
+        : inflateRawSync(raw)
+    } catch (cause) {
+      if (!isTooLarge(cause)) throw new Error(`条目 ${ref.name} 解压失败（压缩数据损坏）`)
+      throw cap === limits.maxEntryBytes
+        ? entryOverLimitActual(ref.name, limits.maxEntryBytes, ref.declaredSize)
+        : totalOverLimitActual(ref.name, limits.maxTotalBytes, ref.declaredSize)
+    }
+  }
+
+  if (limits !== null) {
+    if (data.length !== ref.declaredSize) {
+      throw new Error(
+        `条目 ${ref.name} 的解压后大小与声明对不上（声明 ${ref.declaredSize} 字节，实际 ${data.length} 字节）：拒绝读入`
+      )
+    }
+    if (totalSoFar + data.length > limits.maxTotalBytes) {
+      throw totalOverLimit(ref.name, totalSoFar + data.length, limits.maxTotalBytes)
+    }
+  }
+
+  const actualCrc = crc32(data)
+  if (actualCrc !== ref.declaredCrc) {
+    throw new Error(
+      `条目 ${ref.name} 的 CRC32 校验失败（目录记 ${hex32(ref.declaredCrc)}，实际 ${hex32(actualCrc)}）：内容被改过或已损坏`
+    )
+  }
+  return data
+}
+
+/** 声明就超单条上限：inflate 之前就拒（这类包连"试着解一下"都不该做） */
+function entryOverLimit(name: string, size: number, limit: number): Error {
+  return new Error(
+    `条目 ${name} 声明的解压后大小（${size} 字节）超过单条上限（${limit} 字节）：拒绝读入`
+  )
+}
+
+/** 实际解压超单条上限（声明撒谎那一半）：别拿声明的数字当事实回显，把"声明不可信"说出来 */
+function entryOverLimitActual(name: string, limit: number, declared: number): Error {
+  return new Error(
+    `条目 ${name} 解压后实际大小超过单条上限（${limit} 字节）：中央目录里的声明（${declared} 字节）不可信，拒绝读入`
+  )
+}
+
+/** 累计超上限（声明与实际的触发点共用）：`size` 是"读到这条为止会到多少" */
+function totalOverLimit(name: string, size: number, limit: number): Error {
+  return new Error(
+    `zip 解压后累计大小（${size} 字节）超过上限（${limit} 字节）：读到条目 ${name} 就超了`
+  )
+}
+
+/** 实际解压会让累计超上限（声明撒谎那一半）：同上，声明只作参考 */
+function totalOverLimitActual(name: string, limit: number, declared: number): Error {
+  return new Error(
+    `条目 ${name} 解压后会让累计大小超过上限（${limit} 字节）：中央目录里的声明（${declared} 字节）不可信，拒绝读入`
+  )
+}
+
+/** zlib 的"输出顶到 `maxOutputLength`"信号（`RangeError: ERR_BUFFER_TOO_LARGE`） */
+function isTooLarge(cause: unknown): boolean {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    (cause as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE'
+  )
 }
 
 /** 纯检查层：条目表 → 逐项 verdict（测试可以直接造/篡改这张表） */

@@ -40,9 +40,49 @@ export async function resolveAgentEndpoint(): Promise<AgentEndpoint> {
   return window.kyclaw.agent.endpoint()
 }
 
-/** 用一份已解析的端点拼对话传输（URL 与 Bearer 头只在这一处拼） */
+/**
+ * 提问续跑请求的「服务端已接收」回执（0.1.2 / 001）。
+ *
+ * `Chat.sendMessage` 的 Promise 要等**整条模型流消费完**才 resolve（`makeRequestImpl` 里
+ * `await consumeStream(...)` 之后才收尾），拿它当"提交成功"的边界，提问卡就会一直挂到整轮跑完。
+ * 真边界是 `HttpChatTransport.sendMessages` 里 `await fetch(...)` 拿到响应那一刻 —— 2xx、body 流
+ * 建立就 return，**不读 body**：与"这一轮跑完"不是同一个量级（请求级 vs 可能几十秒的模型轮）。
+ *
+ * 回执借 `ChatRequestOptions.metadata` 按请求带一枚回调：AI SDK 只把它交给 transport
+ * （`prepareSendMessagesRequest` 的 `requestMetadata`），**不进请求体、不上线**；`transportFor`
+ * 在 `inner.sendMessages()` resolve 之后、把流交还 SDK 之前触发一次。
+ *
+ * 非 2xx / 网络失败时 `inner.sendMessages` 直接抛，回调不响 —— "确认前失败"与"已确认"因此天然
+ * 分得开（不靠"点击即成功"含糊）。反过来，回调响了也只说明**请求被接收**：之后的流失败照旧在
+ * 聊天层报错，提问卡不因此复辟（服务端已消费掉那次挂起）。
+ */
+export type AskUserAccepted = () => void
+
+/** 附在 `ChatRequestOptions.metadata` 上的那一格（形状只在这里定义） */
+export interface AskUserAcceptedMetadata {
+  askUserAccepted: AskUserAccepted
+}
+
+/** 组一次请求的 metadata（调用方拿不到形状细节） */
+export function askUserAcceptedMetadata(accepted: AskUserAccepted): AskUserAcceptedMetadata {
+  return { askUserAccepted: accepted }
+}
+
+/** 从 per-request metadata 里取回执回调（真 transport 与测试用的假 transport 共用这一份协议） */
+export function askUserAcceptedOf(metadata: unknown): AskUserAccepted | null {
+  if (typeof metadata !== 'object' || metadata === null) return null
+  const accepted = (metadata as Partial<AskUserAcceptedMetadata>).askUserAccepted
+  return typeof accepted === 'function' ? accepted : null
+}
+
+/**
+ * 用一份已解析的端点拼对话传输（URL 与 Bearer 头只在这一处拼）。
+ *
+ * 外面这层只做一件事：把 `DefaultChatTransport` 的**响应到手**那一刻暴露给请求自己
+ * （见 `AskUserAccepted`）—— 解析、URL、请求体一个字没动，也不 tee / 不复读流。
+ */
 export function transportFor(endpoint: AgentEndpoint): ChatTransport<UIMessage> {
-  return new DefaultChatTransport({
+  const inner = new DefaultChatTransport({
     api: agentChatUrl(endpoint.baseUrl),
     headers: { Authorization: `Bearer ${endpoint.token}` },
     prepareSendMessagesRequest: ({ body, id, messages, trigger, messageId }) => {
@@ -57,6 +97,16 @@ export function transportFor(endpoint: AgentEndpoint): ChatTransport<UIMessage> 
       return { body: { ...body, id, messages, trigger, messageId } }
     }
   })
+  return {
+    async sendMessages(options) {
+      const accepted = askUserAcceptedOf(options.metadata)
+      const stream = await inner.sendMessages(options)
+      // 到手的流还没被读一个 chunk：这一刻只是"服务端已接收并开始响应"
+      accepted?.()
+      return stream
+    },
+    reconnectToStream: (options) => inner.reconnectToStream(options)
+  }
 }
 
 export async function getTransport(): Promise<ChatTransport<UIMessage>> {

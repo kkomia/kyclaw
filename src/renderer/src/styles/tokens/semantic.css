@@ -9,6 +9,8 @@
  *      没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
  *      （--focus-ring 原也是这类的墨色字面值，R2 round 5 被用户实拍证伪 → 改成分隔线灰，
  *      出处见其定义处的注释。）
+ *      2026-10-16 起三档边框色（--border-hairline / -surface / -field）与 --hairline-width 也进这一类：
+ *      用户实拍"圆角边框太浅"，按"比原样层深一档"重取值，理由写在各自定义处。
  *   3. 控件尺寸与状态——§4.7 控件高度阶梯、§4.8 图标尺度与不透明度、§7 点名的按钮/菜单/弹层值。
  *      Kimi 侧是组件级字面量（没有原样 token），在这里各起一个工程名；
  *   4. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
@@ -33,12 +35,24 @@
   --text-quaternary: #00000070;
   --text-disabled: var(--Labels-Quaternary);
 
-  /* 分隔、自然表面边缘与填充 */
-  --border-hairline: var(--Separators-S1);
+  /* 分隔、自然表面边缘与填充。
+     边框可见度（2026-10-16 用户口径：**整套圆角边框太浅、快看不出边框轮廓**；对照 Kimi 页面
+     认为那边的边框更明显）：原样层的 Separators-S1 / S1-active / Fills-F1 是设计稿里的值
+     （13% / 17% / 3%，见 kimi-tokens.css §2.4/§2.5）——但**卡片边缘不是分隔线**：13% 黑压在
+     白卡上只有 #dedede，用户对着 Kimi 那句"更明显"说的就是它。三档各往深里挪一档
+     （浅 20% / 26% / 14%，深 18% / 26% / 13%），阶梯仍是 field < hairline < surface，
+     口径与 --text-tertiary 那类刻意偏离一致（原样层数值一个字不改，改的是我们用的这一档）。
+     逐像素前后读数见 e2e/_r92-border-probe.spec.ts。 */
+  --border-hairline: #00000033;
   /* 圆角面板/卡片的自然边缘：比分隔线略强，避免在背景上消失；不用于输入框、分隔线或焦点环。 */
-  --border-surface: var(--Separators-S1-active);
-  --border-field: var(--Fills-F1);
-  --hairline-width: var(--border-width-hairline);
+  --border-surface: #00000042;
+  --border-field: #00000024;
+  /* 组件边框宽度：设计稿的 hairline 是 0.5px（原样层不动 —— markdown 表格 / 预览里那些真·分隔线
+     照旧 0.5px），但 0.5px 在高分屏上只占**一个设备像素**：探针实测（e2e/_r92-border-probe）
+     2.25x 下这条边框就是 1 设备像素宽的线，看着比 Kimi 实况的 1 CSS px 细一半。
+     组件的圆角边框改吃 base（1px）；1x 屏上 0.5px 本来就被抬到 1 设备像素 = 1 CSS px，
+     那一档等于零变化。 */
+  --hairline-width: var(--border-width-base);
   --fill-hover: var(--Fills-F1);
   --fill-selected: var(--Fills-F2);
   --fill-active: var(--Fills-F3);
@@ -189,6 +203,10 @@
   --accent-text: #3194ff;
   --text-tertiary: #ffffff85;
   --text-quaternary: #ffffff5c;
+  /* 深色档的边框同样加深一档（白 alpha；浅色档那三条的理由与阶梯见上） */
+  --border-hairline: #ffffff2e;
+  --border-surface: #ffffff42;
+  --border-field: #ffffff21;
   --field-bg: var(--Bg-Secondary);
   --skeleton-highlight: var(--Always-TransparencyWhite15);
 }

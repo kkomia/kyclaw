@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { UIMessage } from 'ai'
 import { Check, Copy, Pencil, Paperclip, RefreshCw, Undo2 } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
@@ -7,6 +7,13 @@ import { Dialog } from '@renderer/components/ui/dialog'
 import { DeliverableCard } from './DeliverableCard'
 import { deliverableOf, type Deliverable } from './deliverable'
 import { ReasoningPart } from './parts/ReasoningPart'
+import {
+  lookupReasoningChoice,
+  reasoningOrdinalsOf,
+  reasoningTextOf,
+  withReasoningChoice,
+  type ReasoningOverrides
+} from './reasoning-overrides'
 import { TextPart } from './parts/TextPart'
 import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
 import { isToolPart, toToolCardPart } from './parts/tool-part'
@@ -136,6 +143,23 @@ function lastRenderableIndex(parts: UIMessage['parts']): number {
 }
 
 /**
+ * 这个 part 是不是**看得见的内容**（用来判"这一段后面已经有内容上屏了"）。
+ *
+ * 与 `lastRenderableIndex` 的区别只有空正文这一处，但这一处会咬人：SSE 的 `text-start` 会先落一个
+ * **空 text part**（`TextPart` 那时只画一枚流式光标、没有一个字，见 TextPart 的 `text === ''` 分支），
+ * 拿它当"内容出现了"会把思考块在正文还没开始时就被收掉 —— 用户口径是"下一个工具或**其他内容**显示时"。
+ * 所以这里要求正文真有字（空白也算没字）；工具 part 直接算（工具卡一出现就有名字与状态行）；
+ * reasoning part 也算（它自己就是"内容"，只是会在自己的 `settled` 里再判一次）。
+ */
+function hasVisibleContent(part: UIMessage['parts'][number]): boolean {
+  if (part.type === 'text') {
+    const text: unknown = part.text
+    return typeof text === 'string' && text.trim() !== ''
+  }
+  return part.type === 'reasoning' || isToolPart(part)
+}
+
+/**
  * 助手消息的渲染块：文本一节，连续的过程 part 并成一个过程块，**交付卡单出**。
  *
  * 交付卡为什么要从过程块里摘出来（round 50）：过程块这一轮跑完会自动收起，交付物埋在
@@ -149,6 +173,11 @@ type RenderChunk =
 
 function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[] {
   const lastIndex = lastRenderableIndex(parts)
+  // "后面已经有内容上屏"的分界：**空正文不算**（见 hasVisibleContent）
+  let lastVisibleIndex = -1
+  parts.forEach((part, index) => {
+    if (hasVisibleContent(part)) lastVisibleIndex = index
+  })
   const chunks: RenderChunk[] = []
   parts.forEach((part, index) => {
     if (part.type === 'text') {
@@ -162,7 +191,14 @@ function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[
         chunks.push({ kind: 'deliverable', deliverable, index })
         return
       }
-      const entry: TraceBlockEntry = { part, streaming: streaming && index === lastIndex }
+      const entry: TraceBlockEntry = {
+        part,
+        index,
+        streaming: streaming && index === lastIndex,
+        // 这一段后面已经有别的内容上屏了（工具行 / 正文 / 下一段思考）→ 思考框收起来让版面。
+        // 判据用 lastVisibleIndex 而不是 lastIndex：只有一枚流式光标的空正文不算"内容"
+        settled: index < lastVisibleIndex
+      }
       const previous = chunks[chunks.length - 1]
       if (previous?.kind === 'process') previous.entries.push(entry)
       else chunks.push({ kind: 'process', entries: [entry] })
@@ -186,6 +222,39 @@ export function Message({
   /** 助手正文刚被复制（图标短暂转对勾、名字短暂转「已复制」，到点退回） */
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 思考段的手动开合：消息的渲染形态会变（纯思考 → 加进来一条工具行就换成过程块），
+   * **组件类型一变整棵重挂**，思考块自己的 state 会丢。用户手动点开过的那一段，
+   * 在工具到达后不能被自动折叠再压回去 —— 所以这份选择存在这一层。
+   * 段身份 = **消息内 reasoning 序号**（工具插入不改它；两段同样正文也各算一段），见 `reasoning-overrides`。
+   */
+  const [reasoningOverrides, setReasoningOverrides] = useState<ReasoningOverrides>(() => new Map())
+  const [overridesOwner, setOverridesOwner] = useState(message.id)
+  // 同一个组件实例换成另一条消息（列表复用 / 列表被顶掉）：上一条的手动开合不许跟过去。
+  // 渲染期按 props 调整 state（同 TraceFold 的写法）：提交前就带上新值，不会多画一帧旧状态。
+  if (overridesOwner !== message.id) {
+    setOverridesOwner(message.id)
+    setReasoningOverrides(new Map())
+  }
+  /** 每个 part 下标 → 它是第几段思考（这一轮渲染的段身份） */
+  const reasoningOrdinals = useMemo(() => reasoningOrdinalsOf(message.parts), [message.parts])
+
+  /** 某一段思考的手动选择（没选过 = undefined → 思考块自己按自动档走） */
+  const reasoningOverrideAt = useCallback(
+    (ordinal: number, text: string): boolean | null | undefined =>
+      lookupReasoningChoice(reasoningOverrides, ordinal, text)?.open,
+    [reasoningOverrides]
+  )
+
+  /** 记一段思考的手动开合（顺手清掉已经换了一段的旧记录，见 withReasoningChoice） */
+  const rememberReasoningChoice = useCallback(
+    (ordinal: number, text: string, open: boolean): void => {
+      setReasoningOverrides((current) =>
+        withReasoningChoice(current, message.parts, reasoningOrdinals, ordinal, { open, text })
+      )
+    },
+    [message.parts, reasoningOrdinals]
+  )
 
   useEffect(() => {
     return () => {
@@ -392,19 +461,38 @@ export function Message({
         }
         const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
         if (toolCount === 0) {
-          // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块
-          return chunk.entries.map((entry, index) =>
-            entry.part.type === 'reasoning' ? (
+          // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块。
+          // `live` 传的是"这一轮还在跑"而不是这一条自己的 `streaming`：正文刚开个头（SSE 先落一枚
+          // 空 text part）时最后可渲染的已经不是这段思考了，`streaming` 早就翻假 —— 光看它会在
+          // 正文还没写出一个字的时候就把思考收掉。真收的时机由 `settled`（后面有**看得见的内容**）管。
+          // 手动开合走受控（overrides/onToggle）：工具到达把这一块换成过程块时整棵重挂，
+          // 本地 state 会丢，选择得存在这一层才不会被自动折叠再压回去。
+          return chunk.entries.map((entry) => {
+            const text = reasoningTextOf(entry.part)
+            const ordinal = reasoningOrdinals.get(entry.index)
+            if (text === null || ordinal === undefined) return null
+            return (
               <ReasoningPart
-                key={`reasoning-${index}`}
-                text={entry.part.text}
+                key={`reasoning-${entry.index}`}
+                text={text}
                 streaming={entry.streaming}
+                live={streaming}
+                settled={entry.settled}
+                override={reasoningOverrideAt(ordinal, text)}
+                onToggle={(nextOpen) => rememberReasoningChoice(ordinal, text, nextOpen)}
               />
-            ) : null
-          )
+            )
+          })
         }
         return (
-          <TraceBlock key={`process-${chunkIndex}`} entries={chunk.entries} running={streaming} />
+          <TraceBlock
+            key={`process-${chunkIndex}`}
+            entries={chunk.entries}
+            running={streaming}
+            overrides={reasoningOverrides}
+            reasoningOrdinals={reasoningOrdinals}
+            onReasoningToggle={rememberReasoningChoice}
+          />
         )
       })}
       {showActions ? (

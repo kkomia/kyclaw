@@ -9,3 +9,9 @@ ignoredOptionalDependencies:
   - '@napi-rs/canvas'
 overrides:
   'app-builder-lib>@electron/get': 5.1.0
+# 表格预览（dsh-table）的两份 FortuneSheet 只读态补丁，逐字节取自 DeepSeek Harness（MIT）。
+# 出处、哈希与"改了哪几行"见 src/renderer/src/features/workbench/preview/dsh-table/NOTICE.md。
+# 两份都是本仓新引入的包（别处没人用），所以对既有功能没有影响面。
+patchedDependencies:
+  '@fortune-sheet/core@1.0.4': patches/@fortune-sheet__core@1.0.4.patch
+  '@fortune-sheet/react@1.0.4': patches/@fortune-sheet__react@1.0.4.patch

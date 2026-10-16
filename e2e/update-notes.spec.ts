@@ -11,6 +11,8 @@ import { defaultSettings } from '../src/shared/settings'
  * 可用 KYCLAW_UPDATE_NOTES_EXE 覆盖），**真 electron-updater** 走真 HTTP 静态源（无 mock），
  * 串起"检查更新 → 显示这一版的更新日志"整条链路：
  *
+ *   0. 先钉住更新源配置**默认收起**（页面上没有地址输入）；第 1、2 步读的都是收起态的结论，
+ *      到要换源时才点「配置」展开（后面用的输入框与保存都在这块里）——round 88；
  *   1. 启动前把 feed A 写进设置 → 启动那次检查就报 A 的版本，「更新内容」显示 A 那段（日志里
  *      刻意混着 HTML/图片/脚本：按字面量显示，页面上没有 img/script 元素、也不去取远程图片），
  *      下载完成后这一块仍在；
@@ -200,7 +202,17 @@ test.describe('0.1.1 更新内容（打包件 + 本地 generic 源）', () => {
       })
       const status = page.getByTestId('about-update-status')
       const notes = page.getByTestId('about-release-notes')
+      // round 88：更新源配置默认收起 —— 页面上没有地址输入（版本 / 状态 / 更新日志不受影响：
+      // 第 1、2 步读到的都是收起态的结论）
+      await expect(page.getByTestId('about-update-config-toggle')).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      )
+      await expect(page.getByTestId('about-update-url')).toHaveCount(0)
       const setSource = async (port: number): Promise<void> => {
+        // 换源要用地址输入了（第一次调用时点开「配置」，之后一直开着）
+        const toggle = page.getByTestId('about-update-config-toggle')
+        if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
         await page.getByTestId('about-update-url').fill(`http://127.0.0.1:${port}/`)
         await page.getByTestId('about-update-url-save').click()
         await expectSavedUpdateUrl(settingsFile, `http://127.0.0.1:${port}/`)

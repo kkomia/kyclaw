@@ -6,14 +6,18 @@
 文件、取的哪个版本、以及我们做了哪些修改。
 
 本文件本身不是技能（技能加载器只认 `<名字>/SKILL.md` 这种形态的一级子目录），它是随包分发的许可声明。
-它同时覆盖**随包分发的大件**：第 3 节是 `render_ppt` 用的 LibreOffice 渲染引擎（不在技能目录里，
-但与技能一同装进安装包，用户装到机器上就带着它）。
+它同时覆盖**随包分发的东西**：第 3 节是 `render_ppt` / 办公档页式预览用的 LibreOffice 渲染引擎；
+第 4 节是我们移植的 DeepSeek Harness 代码（MIT）；第 5 节是随包与内联进产物的第三方包（表格预览那一组、
+数学排版与净化新增的一组、两份 FortuneSheet 补丁）—— 最后一组尤其要看，它们的 npm 包**不随包**
+（代码在构建时被内联进渲染端 bundle），所以许可文本只能由本文件承载。
 
-| 节  | 对象                                                   | 许可       | 随包位置                                                              |
-| --- | ------------------------------------------------------ | ---------- | --------------------------------------------------------------------- |
-| 1   | MiniMax-AI/skills 的排版与写作规范                     | MIT        | 内容并入 `resources/skills/*/SKILL.md`                                |
-| 2   | anthropics/skills 的 `skill-creator` 写作口径          | Apache-2.0 | 内容并入 `resources/skills/skill-author/SKILL.md`                     |
-| 3   | `@deepseek-ai/libreoffice-kit`（含预编译 LibreOffice） | MPL-2.0    | `resources/libreoffice-kit/`（安装目录 `resources/libreoffice-kit/`） |
+| 节  | 对象                                                                                                                                                 | 许可           | 随包位置                                                                |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------- |
+| 1   | MiniMax-AI/skills 的排版与写作规范                                                                                                                   | MIT            | 内容并入 `resources/skills/*/SKILL.md`                                  |
+| 2   | anthropics/skills 的 `skill-creator` 写作口径                                                                                                        | Apache-2.0     | 内容并入 `resources/skills/skill-author/SKILL.md`                       |
+| 3   | `@deepseek-ai/libreoffice-kit`（含预编译 LibreOffice）                                                                                               | MPL-2.0        | `resources/libreoffice-kit/`（安装目录 `resources/libreoffice-kit/`）   |
+| 4   | DeepSeek Harness 的代码（office 页式预览 / 表格预览的移植来源）                                                                                      | MIT            | 编译进主进程与渲染端产物（app.asar 内）                                 |
+| 5   | 随包依赖与内联进产物的第三方包（FortuneSheet 两补丁 / SheetJS / papaparse / fflate / fast-xml-parser / pdfjs 与其字体 / katex 等数学排版与净化一组） | 各自见 5.1–5.5 | `dependencies` 进 app.asar；`devDependencies` 构建时内联进渲染端 bundle |
 
 ---
 
@@ -728,4 +732,1706 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+```
+
+---
+
+## 4. DeepSeek Harness 的代码（MIT）—— 办公档与表格预览的移植来源
+
+办公档的两条预览链（主进程的**页式预览**与渲染端的**表格预览**）都是把 DeepSeek Harness（DSH）的
+现成实现移植过来的；这一节是那份 MIT 代码的归属与原文。
+
+- 上游仓库：`deepseek-harness`（本地研究快照在 `.superpowers/research/deepseek-harness`）
+- 上游 commit：`86a402200d95fecef4529d969836f1fe13c6cb0d`
+- 上游许可：MIT（Copyright © 2026 DeepSeek）
+
+| 我们这边                                                                   | 上游路径                                                             | 移植方式                                                                                         |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `src/main/office-preview.ts`（页式预览后端）                               | `packages/document/office-to-pdf/src/{queue,output,errors,index}.ts` | 队列准入、内容寻址缓存、源一致性、取消语义、产出校验照搬；**引擎那一段改成子进程跑随包 kit CLI** |
+| `src/renderer/src/features/workbench/preview/dsh-table/**`（表格预览界面） | `packages/client/ui-sidebar-documentpreview/src/client/excel/**`     | 见该目录自己的 `NOTICE.md`（文件对照、口径差异、补丁说明）；`patches/**` 的两份补丁见 §5.3       |
+
+**注意**：`src/renderer/.../dsh-table/NOTICE.md` 在 `src/` 下，打包配置排除了 `src/**`，所以那份文件
+**不随包**；随包的是本文件 —— 这就是把要点在这里再写一遍的原因。
+
+MIT 许可原文（上游 `LICENSE`，逐字）：
+
+```
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## 5. 随包分发与内联进产物的第三方依赖
+
+分两种形态，许可义务的落点不同：
+
+| 形态                                                   | 谁属这一档                                                                                                                                                   | 包内有没有许可文件                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| **随包（`dependencies`）**：包目录整份进 app.asar      | `pdfjs-dist`、`exceljs`、`mammoth`、`docx`、`pptxgenjs`、`node-pty` 等                                                                                       | 有：各自 `LICENSE` 随包（0.1.1 包实测，见 §5.2）                                      |
+| **内联（`devDependencies`，构建时打进渲染端 bundle）** | `@fortune-sheet/core`、`@fortune-sheet/react`、`xlsx`、`papaparse`、`fflate`、`fast-xml-parser`、`katex`、`remark-math`、`rehype-katex`、`dompurify`、`yaml` | **没有**：包本身不进安装包，只有编译后的代码进 bundle —— **许可文本必须由本文件给出** |
+
+### 5.1 表格预览用的一组（构建期内联）
+
+| 包                              | 版本   | 许可       | 用在哪                                                     |
+| ------------------------------- | ------ | ---------- | ---------------------------------------------------------- |
+| `@fortune-sheet/core`           | 1.0.4  | MIT        | 展示数据结构与数字格式、缩放常量（附 §5.3 的只读态补丁）   |
+| `@fortune-sheet/react`          | 1.0.4  | MIT        | 只读表格画布（`Workbook`）与样式表（附 §5.3 的只读态补丁） |
+| `@fortune-sheet/formula-parser` | 0.2.13 | MIT        | 公式解析（`@fortune-sheet/core` 的依赖）                   |
+| `xlsx`（SheetJS 社区版）        | 0.20.3 | Apache-2.0 | 老版 `.xls`（BIFF）解析与代码页表                          |
+| `papaparse`                     | 5.7.0  | MIT        | CSV / TSV 切分                                             |
+| `fflate`                        | 0.8.3  | MIT        | XLSX 包的读 / 写                                           |
+| `fast-xml-parser`               | 5.11.1 | MIT        | 关系部件与工作表 XML 的扫描                                |
+| `@types/papaparse`              | 5.5.2  | MIT        | TypeScript 类型（**只在构建期用，不进产物**）              |
+
+`@fortune-sheet/core` 与 `@fortune-sheet/react` 的 npm tarball **没有附带许可文本**
+（`package.json` 的 `license` 字段写的是 MIT），下面用的是上游仓库
+`https://github.com/ruilisi/fortune-sheet` 的 `LICENSE` 原文。
+
+`xlsx`（0.20.3）的许可是 **Apache-2.0**（不是 MIT）：它自带的 `LICENSE` 就是 Apache-2.0 全文，
+**全文见本文件第 2 节**（同一份标准文本，不重复贴一遍）。
+
+MIT 原文（**逐份照抄，版权行各不相同**）：
+
+**papaparse**
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Matthew Holt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**fflate**
+
+```
+MIT License
+
+Copyright (c) 2026 Arjun Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**fast-xml-parser**
+
+```
+MIT License
+
+Copyright (c) 2017 Amit Kumar Gupta
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**@fortune-sheet/core、@fortune-sheet/react**
+
+```
+MIT License
+
+Copyright (c) 2022 Suzhou Ruilisi Technology Co., Ltd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+`@fortune-sheet/formula-parser` 是上面那两份的依赖，同为 MIT；它的 tarball 里同样没有许可文本。
+
+### 5.1.1 这些包自己带上来的 MIT 传递依赖（同样内联进渲染端 bundle）
+
+下表是表格预览那条链**新带进来**的传递依赖（每个都随上面的包一起被内联进渲染端产物）；
+许可原文逐份照抄（版权行各不相同）。
+
+| 包                              | 版本                                      | 许可 | 谁的依赖                      |
+| ------------------------------- | ----------------------------------------- | ---- | ----------------------------- |
+| `@fortune-sheet/formula-parser` | 0.2.13                                    | MIT  | @fortune-sheet/core           |
+| `@formulajs/formulajs`          | 2.9.3                                     | MIT  | @fortune-sheet/formula-parser |
+| `tiny-emitter`                  | 2.1.0                                     | MIT  | @fortune-sheet/formula-parser |
+| `dayjs`                         | 1.11.23                                   | MIT  | @fortune-sheet/core           |
+| `immer`                         | 9.0.12                                    | MIT  | @fortune-sheet/core / react   |
+| `lodash`                        | 4.18.1                                    | MIT  | @fortune-sheet/core / react   |
+| `numeral`                       | 2.0.6                                     | MIT  | @fortune-sheet/core           |
+| `uuid`                          | 8.3.2（`@fortune-sheet/core` 的嵌套依赖） | MIT  | `@fortune-sheet/core`         |
+| `regenerator-runtime`           | 0.14.1                                    | MIT  | @fortune-sheet/react          |
+| `strnum`                        | 2.5.1                                     | MIT  | fast-xml-parser               |
+
+**`@fortune-sheet/formula-parser`**（`LICENSE`）
+
+```
+(The MIT License)
+
+Copyright (c) Handsoncode sp. z o.o. <hello@handsoncode.net>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**`@formulajs/formulajs`**（`LICENSE`）
+
+```
+Copyright (c) 2014 Sutoiku, Inc.
+
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Other libraries included:
+
+BESSELI, BESSELJ, BESSELK, BESSELY functions:
+
+Copyright (c) 2013 SheetJS
+
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+jStat - JavaScript Statistical Library:
+
+Copyright (c) 2013 jStat
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+**`tiny-emitter`**（`LICENSE`）
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2017 Scott Corgan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**`dayjs`**（`LICENSE`）
+
+```
+MIT License
+
+Copyright (c) 2018-present, iamkun
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**`immer`**（`LICENSE`）
+
+```
+MIT License
+
+Copyright (c) 2017 Michel Weststrate
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**`lodash`**（`LICENSE`）
+
+```
+Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
+
+Based on Underscore.js, copyright Jeremy Ashkenas,
+DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
+
+This software consists of voluntary contributions made by many
+individuals. For exact contribution history, see the revision history
+available at https://github.com/lodash/lodash
+
+The following license applies to all parts of this software except as
+documented below:
+
+====
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+====
+
+Copyright and related rights for sample code are waived via CC0. Sample
+code is defined as all source code displayed within the prose of the
+documentation.
+
+CC0: http://creativecommons.org/publicdomain/zero/1.0/
+
+====
+
+Files located in the node_modules and vendor directories are externally
+maintained libraries used by this software which have their own
+licenses; we recommend you read them, as their terms may differ from the
+terms above.
+```
+
+**`numeral`**（`LICENSE`）
+
+```
+Copyright (c) 2016 Adam Draper
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**`uuid`**（`LICENSE.md`）
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2010-2020 Robert Kieffer and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**`regenerator-runtime`**（`LICENSE`）
+
+```
+MIT License
+
+Copyright (c) 2014-present, Facebook, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**`strnum`**（`LICENSE`）
+
+```
+MIT License
+
+Copyright (c) 2021 Natural Intelligence
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### 5.2 PDF 预览：pdfjs-dist 与它随包的字体（Apache-2.0 + 两份字体许可）
+
+`pdfjs-dist@6.4.299` 是 `dependencies`，**包目录整份进 app.asar**。0.1.1 安装包实测（用
+`@electron/asar` 列包内条目）：
+
+- `node_modules/pdfjs-dist/LICENSE`（Apache-2.0 全文）—— **在包里**（全文另见本文件第 2 节）
+- `node_modules/pdfjs-dist/cmaps/LICENSE`、`node_modules/pdfjs-dist/iccs/LICENSE` —— 在包里
+- `node_modules/pdfjs-dist/standard_fonts/LICENSE_FOXIT`、`LICENSE_LIBERATION` —— 在包里，
+  内容与下面的原文一致
+
+两份字体许可**都不是 MIT / Apache**，照实写：
+
+- **Foxit 系列 `.pfb`（standard_fonts/FoxitDingbats/Fixed/Serif/Symbol）**：BSD 三条款风格的
+  PDFium 许可（`Copyright 2014 PDFium Authors. All rights reserved.`），原文：
+- **Liberation 系列 `.ttf`（LiberationSans-\*）**：Red Hat 的最终用户许可协议 —— **GPLv2 加字体例外**
+  （嵌入文档不因此被 GPL 覆盖），并含商标与担保条款（`Copyright © 2007-2011 Red Hat, Inc.`）。
+  这份**不是**宽松许可（勿混称 MIT/Apache）。原文（逐字，与包内
+  `node_modules/pdfjs-dist/standard_fonts/LICENSE_LIBERATION` 同一份）：
+
+```
+LICENSE AGREEMENT AND LIMITED PRODUCT WARRANTY
+LIBERATION FONT SOFTWARE
+
+This agreement governs the use of the Software and any updates to the Software, regardless of the delivery mechanism. Subject to the following terms, Red Hat, Inc. ("Red Hat") grants to the user ("Client") a license to this work pursuant to the GNU General Public License v.2 with the exceptions set forth below and such other terms as are set forth in this End User License Agreement.
+
+ 1. The Software and License Exception. LIBERATION font software  (the "Software") consists of TrueType-OpenType formatted font software for rendering LIBERATION typefaces in sans-serif, serif, and monospaced character styles. You are licensed to use, modify, copy, and distribute the Software pursuant to the GNU General Public License v.2 with the following exceptions:
+
+  (a) As a special exception, if you create a document which uses this font, and embed this font or unaltered portions of this font into the document, this font does not by itself cause the resulting document to be covered by the GNU General Public License. This exception does not however invalidate any other reasons why the document might be covered by the GNU General Public License. If you modify this font, you may extend this exception to your version of the font, but you are not obligated to do so. If you do not wish to do so, delete this exception statement from your version.
+
+  (b) As a further exception, any distribution of the object code of the Software in a physical product must provide you the right to access and modify the source code for the Software and to reinstall that modified version of the Software in object code form on the same physical product on which you received it.
+
+ 2. Intellectual Property Rights. The Software and each of its components, including the source code, documentation, appearance, structure and organization are owned by Red Hat and others and are protected under copyright and other laws. Title to the Software and any component, or to any copy, modification, or merged portion shall remain with the aforementioned, subject to the applicable license. The "LIBERATION" trademark is a trademark of Red Hat, Inc. in the U.S. and other countries. This agreement does not permit Client to distribute modified versions of the Software using Red Hat's trademarks. If Client makes a redistribution of a modified version of the Software, then Client must modify the files names to remove any reference to the Red Hat trademarks and must not use the Red Hat trademarks in any way to reference or promote the modified Software.
+
+ 3. Limited Warranty. To the maximum extent permitted under applicable law, the Software is provided and licensed "as is" without warranty of any kind, expressed or implied, including the implied warranties of merchantability, non-infringement or fitness for a particular purpose. Red Hat does not warrant that the functions contained in the Software will meet Client's requirements or that the operation of the Software will be entirely error free or appear precisely as described in the accompanying documentation.
+
+ 4. Limitation of Remedies and Liability. To the maximum extent permitted by applicable law, Red Hat or any Red Hat authorized dealer will not be liable to Client for any incidental or consequential damages, including lost profits or lost savings arising out of the use or inability to use the Software, even if Red Hat or such dealer has been advised of the possibility of such damages.
+
+ 5. General. If any provision of this agreement is held to be unenforceable, that shall not affect the enforceability of the remaining provisions. This agreement shall be governed by the laws of the State of North Carolina and of the United States, without regard to any conflict of laws provisions, except that the United Nations Convention on the International Sale of Goods shall not apply.
+Copyright © 2007-2011 Red Hat, Inc. All rights reserved. LIBERATION is a trademark of Red Hat, Inc.
+
+------------------------------------------------------------------------------
+
+The text of the GNU General Public License, version 2, referenced above:
+
+		    GNU GENERAL PUBLIC LICENSE
+		       Version 2, June 1991
+
+ Copyright (C) 1989, 1991 Free Software Foundation, Inc.,
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+			    Preamble
+
+  The licenses for most software are designed to take away your
+freedom to share and change it.  By contrast, the GNU General Public
+License is intended to guarantee your freedom to share and change free
+software--to make sure the software is free for all its users.  This
+General Public License applies to most of the Free Software
+Foundation's software and to any other program whose authors commit to
+using it.  (Some other Free Software Foundation software is covered by
+the GNU Lesser General Public License instead.)  You can apply it to
+your programs, too.
+
+  When we speak of free software, we are referring to freedom, not
+price.  Our General Public Licenses are designed to make sure that you
+have the freedom to distribute copies of free software (and charge for
+this service if you wish), that you receive source code or can get it
+if you want it, that you can change the software or use pieces of it
+in new free programs; and that you know you can do these things.
+
+  To protect your rights, we need to make restrictions that forbid
+anyone to deny you these rights or to ask you to surrender the rights.
+These restrictions translate to certain responsibilities for you if you
+distribute copies of the software, or if you modify it.
+
+  For example, if you distribute copies of such a program, whether
+gratis or for a fee, you must give the recipients all the rights that
+you have.  You must make sure that they, too, receive or can get the
+source code.  And you must show them these terms so they know their
+rights.
+
+  We protect your rights with two steps: (1) copyright the software, and
+(2) offer you this license which gives you legal permission to copy,
+distribute and/or modify the software.
+
+  Also, for each author's protection and ours, we want to make certain
+that everyone understands that there is no warranty for this free
+software.  If the software is modified by someone else and passed on, we
+want its recipients to know that what they have is not the original, so
+that any problems introduced by others will not reflect on the original
+authors' reputations.
+
+  Finally, any free program is threatened constantly by software
+patents.  We wish to avoid the danger that redistributors of a free
+program will individually obtain patent licenses, in effect making the
+program proprietary.  To prevent this, we have made it clear that any
+patent must be licensed for everyone's free use or not licensed at all.
+
+  The precise terms and conditions for copying, distribution and
+modification follow.
+
+		    GNU GENERAL PUBLIC LICENSE
+   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+  0. This License applies to any program or other work which contains
+a notice placed by the copyright holder saying it may be distributed
+under the terms of this General Public License.  The "Program", below,
+refers to any such program or work, and a "work based on the Program"
+means either the Program or any derivative work under copyright law:
+that is to say, a work containing the Program or a portion of it,
+either verbatim or with modifications and/or translated into another
+language.  (Hereinafter, translation is included without limitation in
+the term "modification".)  Each licensee is addressed as "you".
+
+Activities other than copying, distribution and modification are not
+covered by this License; they are outside its scope.  The act of
+running the Program is not restricted, and the output from the Program
+is covered only if its contents constitute a work based on the
+Program (independent of having been made by running the Program).
+Whether that is true depends on what the Program does.
+
+  1. You may copy and distribute verbatim copies of the Program's
+source code as you receive it, in any medium, provided that you
+conspicuously and appropriately publish on each copy an appropriate
+copyright notice and disclaimer of warranty; keep intact all the
+notices that refer to this License and to the absence of any warranty;
+and give any other recipients of the Program a copy of this License
+along with the Program.
+
+You may charge a fee for the physical act of transferring a copy, and
+you may at your option offer warranty protection in exchange for a fee.
+
+  2. You may modify your copy or copies of the Program or any portion
+of it, thus forming a work based on the Program, and copy and
+distribute such modifications or work under the terms of Section 1
+above, provided that you also meet all of these conditions:
+
+    a) You must cause the modified files to carry prominent notices
+    stating that you changed the files and the date of any change.
+
+    b) You must cause any work that you distribute or publish, that in
+    whole or in part contains or is derived from the Program or any
+    part thereof, to be licensed as a whole at no charge to all third
+    parties under the terms of this License.
+
+    c) If the modified program normally reads commands interactively
+    when run, you must cause it, when started running for such
+    interactive use in the most ordinary way, to print or display an
+    announcement including an appropriate copyright notice and a
+    notice that there is no warranty (or else, saying that you provide
+    a warranty) and that users may redistribute the program under
+    these conditions, and telling the user how to view a copy of this
+    License.  (Exception: if the Program itself is interactive but
+    does not normally print such an announcement, your work based on
+    the Program is not required to print an announcement.)
+
+These requirements apply to the modified work as a whole.  If
+identifiable sections of that work are not derived from the Program,
+and can be reasonably considered independent and separate works in
+themselves, then this License, and its terms, do not apply to those
+sections when you distribute them as separate works.  But when you
+distribute the same sections as part of a whole which is a work based
+on the Program, the distribution of the whole must be on the terms of
+this License, whose permissions for other licensees extend to the
+entire whole, and thus to each and every part regardless of who wrote it.
+
+Thus, it is not the intent of this section to claim rights or contest
+your rights to work written entirely by you; rather, the intent is to
+exercise the right to control the distribution of derivative or
+collective works based on the Program.
+
+In addition, mere aggregation of another work not based on the Program
+with the Program (or with a work based on the Program) on a volume of
+a storage or distribution medium does not bring the other work under
+the scope of this License.
+
+  3. You may copy and distribute the Program (or a work based on it,
+under Section 2) in object code or executable form under the terms of
+Sections 1 and 2 above provided that you also do one of the following:
+
+    a) Accompany it with the complete corresponding machine-readable
+    source code, which must be distributed under the terms of Sections
+    1 and 2 above on a medium customarily used for software interchange; or,
+
+    b) Accompany it with a written offer, valid for at least three
+    years, to give any third party, for a charge no more than your
+    cost of physically performing source distribution, a complete
+    machine-readable copy of the corresponding source code, to be
+    distributed under the terms of Sections 1 and 2 above on a medium
+    customarily used for software interchange; or,
+
+    c) Accompany it with the information you received as to the offer
+    to distribute corresponding source code.  (This alternative is
+    allowed only for noncommercial distribution and only if you
+    received the program in object code or executable form with such
+    an offer, in accord with Subsection b above.)
+
+The source code for a work means the preferred form of the work for
+making modifications to it.  For an executable work, complete source
+code means all the source code for all modules it contains, plus any
+associated interface definition files, plus the scripts used to
+control compilation and installation of the executable.  However, as a
+special exception, the source code distributed need not include
+anything that is normally distributed (in either source or binary
+form) with the major components (compiler, kernel, and so on) of the
+operating system on which the executable runs, unless that component
+itself accompanies the executable.
+
+If distribution of executable or object code is made by offering
+access to copy from a designated place, then offering equivalent
+access to copy the source code from the same place counts as
+distribution of the source code, even though third parties are not
+compelled to copy the source along with the object code.
+
+  4. You may not copy, modify, sublicense, or distribute the Program
+except as expressly provided under this License.  Any attempt
+otherwise to copy, modify, sublicense or distribute the Program is
+void, and will automatically terminate your rights under this License.
+However, parties who have received copies, or rights, from you under
+this License will not have their licenses terminated so long as such
+parties remain in full compliance.
+
+  5. You are not required to accept this License, since you have not
+signed it.  However, nothing else grants you permission to modify or
+distribute the Program or its derivative works.  These actions are
+prohibited by law if you do not accept this License.  Therefore, by
+modifying or distributing the Program (or any work based on the
+Program), you indicate your acceptance of this License to do so, and
+all its terms and conditions for copying, distributing or modifying
+the Program or works based on it.
+
+  6. Each time you redistribute the Program (or any work based on the
+Program), the recipient automatically receives a license from the
+original licensor to copy, distribute or modify the Program subject to
+these terms and conditions.  You may not impose any further
+restrictions on the recipients' exercise of the rights granted herein.
+You are not responsible for enforcing compliance by third parties to
+this License.
+
+  7. If, as a consequence of a court judgment or allegation of patent
+infringement or for any other reason (not limited to patent issues),
+conditions are imposed on you (whether by court order, agreement or
+otherwise) that contradict the conditions of this License, they do not
+excuse you from the conditions of this License.  If you cannot
+distribute so as to satisfy simultaneously your obligations under this
+License and any other pertinent obligations, then as a consequence you
+may not distribute the Program at all.  For example, if a patent
+license would not permit royalty-free redistribution of the Program by
+all those who receive copies directly or indirectly through you, then
+the only way you could satisfy both it and this License would be to
+refrain entirely from distribution of the Program.
+
+If any portion of this section is held invalid or unenforceable under
+any particular circumstance, the balance of the section is intended to
+apply and the section as a whole is intended to apply in other
+circumstances.
+
+It is not the purpose of this section to induce you to infringe any
+patents or other property right claims or to contest validity of any
+such claims; this section has the sole purpose of protecting the
+integrity of the free software distribution system, which is
+implemented by public license practices.  Many people have made
+generous contributions to the wide range of software distributed
+through that system in reliance on consistent application of that
+system; it is up to the author/donor to decide if he or she is willing
+to distribute software through any other system and a licensee cannot
+impose that choice.
+
+This section is intended to make thoroughly clear what is believed to
+be a consequence of the rest of this License.
+
+  8. If the distribution and/or use of the Program is restricted in
+certain countries either by patents or by copyrighted interfaces, the
+original copyright holder who places the Program under this License
+may add an explicit geographical distribution limitation excluding
+those countries, so that distribution is permitted only in or among
+countries not thus excluded.  In such case, this License incorporates
+the limitation as if written in the body of this License.
+
+  9. The Free Software Foundation may publish revised and/or new versions
+of the General Public License from time to time.  Such new versions will
+be similar in spirit to the present version, but may differ in detail to
+address new problems or concerns.
+
+Each version is given a distinguishing version number.  If the Program
+specifies a version number of this License which applies to it and "any
+later version", you have the option of following the terms and conditions
+either of that version or of any later version published by the Free
+Software Foundation.  If the Program does not specify a version number of
+this License, you may choose any version ever published by the Free Software
+Foundation.
+
+  10. If you wish to incorporate parts of the Program into other free
+programs whose distribution conditions are different, write to the author
+to ask for permission.  For software which is copyrighted by the Free
+Software Foundation, write to the Free Software Foundation; we sometimes
+make exceptions for this.  Our decision will be guided by the two goals
+of preserving the free status of all derivatives of our free software and
+of promoting the sharing and reuse of software generally.
+
+			    NO WARRANTY
+
+  11. BECAUSE THE PROGRAM IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT WHEN
+OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
+PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED
+OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.  THE ENTIRE RISK AS
+TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU.  SHOULD THE
+PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING,
+REPAIR OR CORRECTION.
+
+  12. IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
+REDISTRIBUTE THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES,
+INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING
+OUT OF THE USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED
+TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY
+YOU OR THIRD PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER
+PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGES.
+
+		     END OF TERMS AND CONDITIONS
+
+	    How to Apply These Terms to Your New Programs
+
+  If you develop a new program, and you want it to be of the greatest
+possible use to the public, the best way to achieve this is to make it
+free software which everyone can redistribute and change under these terms.
+
+  To do so, attach the following notices to the program.  It is safest
+to attach them to the start of each source file to most effectively
+convey the exclusion of warranty; and each file should have at least
+the "copyright" line and a pointer to where the full notice is found.
+
+    <one line to give the program's name and a brief idea of what it does.>
+    Copyright (C) <year>  <name of author>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with this program; if not, write to the Free Software Foundation, Inc.,
+    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+Also add information on how to contact you by electronic and paper mail.
+
+If the program is interactive, make it output a short notice like this
+when it starts in an interactive mode:
+
+    Gnomovision version 69, Copyright (C) year name of author
+    Gnomovision comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+    This is free software, and you are welcome to redistribute it
+    under certain conditions; type `show c' for details.
+
+The hypothetical commands `show w' and `show c' should show the appropriate
+parts of the General Public License.  Of course, the commands you use may
+be called something other than `show w' and `show c'; they could even be
+mouse-clicks or menu items--whatever suits your program.
+
+You should also get your employer (if you work as a programmer) or your
+school, if any, to sign a "copyright disclaimer" for the program, if
+necessary.  Here is a sample; alter the names:
+
+  Yoyodyne, Inc., hereby disclaims all copyright interest in the program
+  `Gnomovision' (which makes passes at compilers) written by James Hacker.
+
+  <signature of Ty Coon>, 1 April 1989
+  Ty Coon, President of Vice
+
+This General Public License does not permit incorporating your program into
+proprietary programs.  If your program is a subroutine library, you may
+consider it more useful to permit linking proprietary applications with the
+library.  If this is what you want to do, use the GNU Lesser General
+Public License instead of this License.
+```
+
+```
+// Copyright 2014 PDFium Authors. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//    * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//    * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//    * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### 5.3 表格预览的两份 FortuneSheet 补丁（逐字节取自上游 DSH）
+
+`patches/` 下两份补丁在 `pnpm-workspace.yaml` 的 `patchedDependencies` 里正式登记（安装时由 pnpm 自动套用），
+**逐字节取自上游 DSH 的 `patches/**`**（SHA256 与上游 `pnpm-lock.yaml` 的 `patch_hash` 相同）：
+
+| 补丁                                        | 改了哪几处                                                                                                    | 效果                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `patches/@fortune-sheet__core@1.0.4.patch`  | `rangeValueToHtml` 改用 `_.escape`；`drawFreezeLine` 在只读态直接返回；`handleGlobalWheel` 加只读态像素级平移 | 复制成 HTML 不再漏转义；只读态不画冻结线手柄；触控板两轴平移 |
+| `patches/@fortune-sheet__react@1.0.4.patch` | 编辑栏只读时显示公式原文并改用 `textContent`；切表恢复该表自己的选区；工作表标签滚动按钮宽度算法              | 编辑栏无 HTML 注入面；切表保住选区；标签多时不误判           |
+
+补丁只改这两个包（仓库里只有表格预览用它们），对既有功能没有影响面。
+
+### 5.4 这一节没做到的（边界，别当"已穷尽"）
+
+- 表格预览那条链**已经补到传递依赖**（§5.1 + §5.1.1，逐份原文）。**还没补的是另一档**：
+  `dependencies` 里那些随包进 app.asar 的包（`exceljs`、`mammoth`、`docx`、`pptxgenjs`、`node-pty`、
+  AI-SDK 全家等）**没有逐包清单** —— 它们各自的 `LICENSE` 确实随包在 asar 内，但没有落到这份文件上。
+  要穷尽得单开一轮依赖清点。
+- 本轮**没有跑构建**，所以"某个包确实被内联进产物"这件事没有在产物上实测（依据是渲染端 import
+  关系 + vite 的打包口径）；`pdfjs-dist` 那几条之所以写"在包里"，是因为用 `@electron/asar`
+  列过 0.1.1 的实际安装包（真凭据），两者不是一回事。
+- **§5.5 / §5.5.1 那一组（katex / remark-math / rehype-katex / dompurify / yaml 及其传递依赖）**：
+  直接依赖与传递闭包都已逐份列出（包内没有许可文件的那 16 个改读同版本的上游 tag，来源逐条写明）。
+  **仍待做的**：在**构建产物**上逐包核对"是否真被内联"——`pnpm build` 现在被另一处 import 报错挡着
+  （`src/renderer/src/features/workbench/preview/dsh-media/math-compatibility.ts` 里
+  `import { factorySpace } from 'micromark-factory-space'` 解析不到：该包在 `.pnpm` 里装了 2.1.0，
+  但没 hoist 到 `node_modules` 根），等那份接线落定后再回来把这条边界收掉。
+
+### 5.5 数学排版与净化新增的一组（构建期内联）
+
+版本按仓库 `save-exact` 习惯**钉死**（`package.json` 里不带 `^`）；`katex` 钉在 0.16 线是刻意的——
+`rehype-katex@7` 的依赖是 `katex@^0.16.0`，钉 0.19 会踩出两份 katex（样式与 JS 版本也会对不上）。
+
+| 包             | 版本    | 许可                    | 是什么                                               |
+| -------------- | ------- | ----------------------- | ---------------------------------------------------- |
+| `katex`        | 0.16.47 | MIT                     | 数学公式排版（KaTeX 本体：样式 + DOM 结构）          |
+| `remark-math`  | 6.0.0   | MIT                     | react-markdown 那条链上的 remark 数学插件            |
+| `rehype-katex` | 7.0.1   | MIT                     | 同一条链上的 rehype 渲染插件（把数学节点交给 KaTeX） |
+| `dompurify`    | 3.4.17  | (MPL-2.0 OR Apache-2.0) | HTML 净化；我们按 **Apache-2.0** 这一支依赖（见下）  |
+| `yaml`         | 2.9.1   | ISC                     | YAML 文本解析                                        |
+
+**katex**（npm 包内 `LICENSE` 原文）：
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2013-2020 Khan Academy and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**remark-math 与 rehype-katex**：两份 npm tarball 都**没有**附带许可文件（`package.json` 的 `license`
+字段写的都是 MIT）。两者出自同一个单仓 `remarkjs/remark-math`（`rehype-katex` 是它的子包，
+`repository` 字段指向 `.../tree/main/packages/rehype-katex`），下面用的是该仓库根 `license` 的原文
+（实测 tag `6.0.0` 可取；`rehype-katex-7.0.1` / `7.0.1` 这类 tag 取不到，故不引）：
+
+```text
+(The MIT License)
+
+Copyright (c) 2017 Junyoung Choi <fluke8259@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**dompurify** 是**双许可**（`package.json` 写 `(MPL-2.0 OR Apache-2.0)`）：包内的 `LICENSE` 是
+**Apache-2.0 全文**，`LICENSE-MPL` 是 MPL-2.0 全文。我们按 **Apache-2.0** 依赖（内联进 bundle 的形态下
+这一支最干净），因此**Apache-2.0 全文见本文件第 2 节**（同一份标准文本，不重复贴一遍）；
+包内没有 `NOTICE` 文件，无需额外携带。
+
+**yaml**（npm 包内 `LICENSE` 原文，ISC）：
+
+```text
+Copyright Eemeli Aro <eemeli@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
+**KaTeX 的字体**（`dist/fonts/` 下 60 个文件，CSS 通过 `url(fonts/…)` 引用）：**本包内没有单独的字体许可文件**
+——tarball 里只有一份 `LICENSE`（MIT 全文，即上面那份），README 的 License 一节也只写
+"KaTeX is licensed under the MIT License"。所以按**包自身的口径**记为 MIT，本文件不做额外假定；
+若将来需要更严格的字体来源核对，要另开一轮去查上游仓库的字体来源声明（本包里没有承载）。
+
+这一组只补到**直接依赖**：传递依赖（`mdast-util-math`、`micromark-extension-math`、`hast-util-*`、
+`unified`、`vfile`、`@types/*`、katex 自带的 `commander` 等）见 §5.5.1；那节的"会被内联"是按依赖边推的，
+构建产物上的逐包核对在 §5.4 里标注为待办。
+
+### 5.5.1 这一组带上来的传递依赖（会被内联的那些）
+
+下表是 `katex` / `remark-math` / `rehype-katex` / `dompurify` / `yaml` **新带进来**的传递闭包（版本取自安装后的 `pnpm-lock.yaml`；许可字段与许可原文都读**已安装**的包，包内没有许可文件的那几个改读同版本的上游 tag，来源逐条列出）。
+只有类型声明的 `@types/*` 与 katex 的 CLI 依赖 `commander` 不进产物（后者已核对：`katex` 的浏览器入口 `dist/katex.mjs` 里 0 次引用），所以它们不列原文；其余逐份照抄。另外提醒：本节的"会被内联"是按 `pnpm-lock.yaml` 的依赖边推的，**没有**在构建产物上逐包核对（`pnpm build` 现在被另一处 import 报错挡着，见 §5.4）。
+
+| 包                                                  | 版本   | 许可         | 谁的依赖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 备注                                                       |
+| --------------------------------------------------- | ------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| `@types/debug`                                      | 4.1.13 | MIT          | micromark                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 只有类型，不进产物                                         |
+| `@types/hast`                                       | 3.0.5  | MIT          | hast-util-from-dom / hast-util-from-html / hast-util-from-html-isomorphic / hast-util-from-parse5 / hast-util-is-element / hast-util-parse-selector / hast-util-to-text / hastscript / mdast-util-math / rehype-katex                                                                                                                                                                                                                                                                      | 只有类型，不进产物                                         |
+| `@types/katex`                                      | 0.16.8 | MIT          | micromark-extension-math / rehype-katex                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 只有类型，不进产物                                         |
+| `@types/mdast`                                      | 4.0.4  | MIT          | mdast-util-from-markdown / mdast-util-math / mdast-util-phrasing / mdast-util-to-markdown / mdast-util-to-string / remark-math                                                                                                                                                                                                                                                                                                                                                             | 只有类型，不进产物                                         |
+| `@types/ms`                                         | 2.1.0  | MIT          | @types/debug                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 只有类型，不进产物                                         |
+| `@types/unist`                                      | 3.0.3  | MIT          | @types/hast / @types/mdast / hast-util-from-parse5 / hast-util-to-text / mdast-util-from-markdown / mdast-util-to-markdown / unified / unist-util-find-after / unist-util-is / unist-util-remove-position / unist-util-stringify-position / unist-util-visit / unist-util-visit-parents / vfile / vfile-location / vfile-message                                                                                                                                                           | 只有类型，不进产物                                         |
+| `bail`                                              | 2.0.2  | MIT          | unified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                            |
+| `character-entities`                                | 2.0.2  | MIT          | decode-named-character-reference                                                                                                                                                                                                                                                                                                                                                                                                                                                           |                                                            |
+| `comma-separated-tokens`                            | 2.0.3  | MIT          | hastscript                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                                                            |
+| `commander`                                         | 8.3.0  | MIT          | katex                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | katex 的 CLI 依赖；`dist/katex.mjs` 里 0 次引用 → 不进产物 |
+| `debug`                                             | 4.4.3  | MIT          | micromark                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `decode-named-character-reference`                  | 1.3.0  | MIT          | mdast-util-from-markdown / micromark / micromark-core-commonmark / micromark-util-decode-string                                                                                                                                                                                                                                                                                                                                                                                            |                                                            |
+| `dequal`                                            | 2.0.3  | MIT          | devlop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                                            |
+| `devlop`                                            | 1.1.0  | MIT          | hast-util-from-html / hast-util-from-parse5 / mdast-util-from-markdown / mdast-util-math / micromark / micromark-core-commonmark / micromark-extension-math / micromark-factory-label / micromark-util-subtokenize / unified                                                                                                                                                                                                                                                               |                                                            |
+| `entities`                                          | 4.3.0  | BSD-2-Clause | parse5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                                            |
+| `extend`                                            | 3.0.2  | MIT          | unified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                            |
+| `hast-util-from-dom`                                | 5.0.1  | ISC          | hast-util-from-html-isomorphic                                                                                                                                                                                                                                                                                                                                                                                                                                                             |                                                            |
+| `hast-util-from-html-isomorphic`                    | 2.0.0  | MIT          | rehype-katex                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |                                                            |
+| `hast-util-from-html`                               | 2.0.3  | MIT          | hast-util-from-html-isomorphic                                                                                                                                                                                                                                                                                                                                                                                                                                                             |                                                            |
+| `hast-util-from-parse5`                             | 8.0.3  | MIT          | hast-util-from-html                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                            |
+| `hast-util-is-element`                              | 3.0.0  | MIT          | hast-util-to-text                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                            |
+| `hast-util-parse-selector`                          | 4.0.0  | MIT          | hastscript                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                                                            |
+| `hast-util-to-text`                                 | 4.0.2  | MIT          | rehype-katex                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |                                                            |
+| `hastscript`                                        | 9.0.1  | MIT          | hast-util-from-dom / hast-util-from-parse5                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                                                            |
+| `is-plain-obj`                                      | 4.1.0  | MIT          | unified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                            |
+| `longest-streak`                                    | 3.1.0  | MIT          | mdast-util-math / mdast-util-to-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                                   |                                                            |
+| `mdast-util-from-markdown`                          | 2.1.0  | MIT          | mdast-util-math                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |                                                            |
+| `mdast-util-math`                                   | 3.0.0  | MIT          | remark-math                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                            |
+| `mdast-util-phrasing`                               | 4.1.0  | MIT          | mdast-util-to-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                                            |
+| `mdast-util-to-markdown`                            | 2.2.0  | MIT          | mdast-util-math                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |                                                            |
+| `mdast-util-to-string`                              | 4.0.0  | MIT          | mdast-util-from-markdown / mdast-util-to-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                            |
+| `micromark-core-commonmark`                         | 2.0.4  | MIT          | micromark                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-extension-math`                          | 3.1.0  | MIT          | remark-math                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                            |
+| `micromark-factory-destination`                     | 2.0.0  | MIT          | micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-factory-label`                           | 2.0.0  | MIT          | micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-factory-space`                           | 2.1.0  | MIT          | micromark / micromark-core-commonmark / micromark-extension-math / micromark-factory-title / micromark-factory-whitespace                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-factory-title`                           | 2.0.0  | MIT          | micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-factory-whitespace`                      | 2.0.0  | MIT          | micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-util-character`                          | 2.0.0  | MIT          | mdast-util-to-markdown / micromark / micromark-core-commonmark / micromark-extension-math / micromark-factory-destination / micromark-factory-label / micromark-factory-space / micromark-factory-title / micromark-factory-whitespace / micromark-util-classify-character / micromark-util-decode-string / micromark-util-sanitize-uri                                                                                                                                                    |                                                            |
+| `micromark-util-chunked`                            | 2.0.0  | MIT          | micromark / micromark-core-commonmark / micromark-util-combine-extensions / micromark-util-subtokenize                                                                                                                                                                                                                                                                                                                                                                                     |                                                            |
+| `micromark-util-classify-character`                 | 2.0.0  | MIT          | mdast-util-to-markdown / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                         |                                                            |
+| `micromark-util-combine-extensions`                 | 2.0.0  | MIT          | micromark                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-util-decode-numeric-character-reference` | 2.0.0  | MIT          | mdast-util-from-markdown / micromark / micromark-util-decode-string                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                            |
+| `micromark-util-decode-string`                      | 2.0.1  | MIT          | mdast-util-from-markdown / mdast-util-to-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                            |
+| `micromark-util-edit-map`                           | 1.0.0  | MIT          | micromark / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `micromark-util-encode`                             | 2.0.0  | MIT          | micromark / micromark-util-sanitize-uri                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                            |
+| `micromark-util-html-tag-name`                      | 2.0.0  | MIT          | mdast-util-to-markdown / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                         |                                                            |
+| `micromark-util-normalize-identifier`               | 2.0.0  | MIT          | mdast-util-from-markdown / micromark / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                           |                                                            |
+| `micromark-util-resolve-all`                        | 2.0.0  | MIT          | micromark / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `micromark-util-sanitize-uri`                       | 2.0.0  | MIT          | micromark                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `micromark-util-subtokenize`                        | 2.0.0  | MIT          | micromark / micromark-core-commonmark                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `micromark-util-symbol`                             | 2.0.0  | MIT          | mdast-util-from-markdown / micromark / micromark-core-commonmark / micromark-extension-math / micromark-factory-destination / micromark-factory-label / micromark-factory-title / micromark-factory-whitespace / micromark-util-character / micromark-util-chunked / micromark-util-classify-character / micromark-util-decode-numeric-character-reference / micromark-util-decode-string / micromark-util-normalize-identifier / micromark-util-sanitize-uri / micromark-util-subtokenize |                                                            |
+| `micromark-util-types`                              | 2.0.3  | MIT          | mdast-util-from-markdown / micromark / micromark-core-commonmark / micromark-extension-math / micromark-factory-destination / micromark-factory-label / micromark-factory-space / micromark-factory-title / micromark-factory-whitespace / micromark-util-character / micromark-util-classify-character / micromark-util-combine-extensions / micromark-util-edit-map / micromark-util-resolve-all / micromark-util-subtokenize                                                            |                                                            |
+| `micromark`                                         | 4.0.3  | MIT          | mdast-util-from-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |                                                            |
+| `ms`                                                | 2.1.3  | MIT          | debug                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `parse5`                                            | 7.0.0  | MIT          | hast-util-from-html                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                            |
+| `property-information`                              | 7.2.0  | MIT          | hast-util-from-parse5 / hastscript                                                                                                                                                                                                                                                                                                                                                                                                                                                         |                                                            |
+| `space-separated-tokens`                            | 2.0.2  | MIT          | hastscript                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                                                            |
+| `trough`                                            | 2.2.0  | MIT          | unified                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                                                            |
+| `unified`                                           | 11.0.5 | MIT          | remark-math                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                            |
+| `unist-util-find-after`                             | 5.0.0  | MIT          | hast-util-to-text                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                            |
+| `unist-util-is`                                     | 6.0.1  | MIT          | mdast-util-phrasing / unist-util-find-after / unist-util-visit / unist-util-visit-parents                                                                                                                                                                                                                                                                                                                                                                                                  |                                                            |
+| `unist-util-remove-position`                        | 5.0.0  | MIT          | hast-util-from-html-isomorphic / mdast-util-math                                                                                                                                                                                                                                                                                                                                                                                                                                           |                                                            |
+| `unist-util-stringify-position`                     | 4.0.0  | MIT          | mdast-util-from-markdown / vfile-message                                                                                                                                                                                                                                                                                                                                                                                                                                                   |                                                            |
+| `unist-util-visit-parents`                          | 6.0.2  | MIT          | rehype-katex / unist-util-visit                                                                                                                                                                                                                                                                                                                                                                                                                                                            |                                                            |
+| `unist-util-visit`                                  | 5.1.0  | MIT          | mdast-util-to-markdown / unist-util-remove-position                                                                                                                                                                                                                                                                                                                                                                                                                                        |                                                            |
+| `vfile-location`                                    | 5.0.3  | MIT          | hast-util-from-parse5                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `vfile-message`                                     | 4.0.3  | MIT          | hast-util-from-html / vfile                                                                                                                                                                                                                                                                                                                                                                                                                                                                |                                                            |
+| `vfile`                                             | 6.0.3  | MIT          | hast-util-from-html / hast-util-from-parse5 / rehype-katex / unified / vfile-location                                                                                                                                                                                                                                                                                                                                                                                                      |                                                            |
+| `web-namespaces`                                    | 2.0.1  | MIT          | hast-util-from-dom / hast-util-from-parse5                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                                                            |
+| `zwitch`                                            | 2.0.4  | MIT          | mdast-util-to-markdown                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                                            |
+
+**文本 1**（`bail@2.0.2`、`character-entities@2.0.2`、`mdast-util-to-string@4.0.0`、`unist-util-find-after@5.0.0`、`unist-util-visit@5.1.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 2**（`comma-separated-tokens@2.0.3`、`hast-util-is-element@3.0.0`、`hast-util-parse-selector@4.0.0`、`space-separated-tokens@2.0.2`、`unist-util-remove-position@5.0.0`、`unist-util-stringify-position@4.0.0`、`unist-util-visit-parents@6.0.2`、`vfile-location@5.0.3`、`web-namespaces@2.0.1`、`zwitch@2.0.4`）
+
+```
+(The MIT License)
+
+Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 3**（`debug@4.4.3`）
+
+```
+(The MIT License)
+
+Copyright (c) 2014-2017 TJ Holowaychuk <tj@vision-media.ca>
+Copyright (c) 2018-2021 Josh Junon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+and associated documentation files (the 'Software'), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 4**（`decode-named-character-reference@1.3.0`、`hast-util-from-parse5@8.0.3`、`hastscript@9.0.1`、`mdast-util-from-markdown@2.1.0`、`mdast-util-to-markdown@2.2.0`、`micromark-core-commonmark@2.0.4`、`micromark-factory-space@2.1.0`、`micromark-util-decode-string@2.0.1`、`micromark-util-edit-map@1.0.0`、`micromark-util-types@2.0.3`、`micromark@4.0.3`、`vfile-message@4.0.3`）
+
+```
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 5**（`dequal@2.0.3`）
+
+```
+The MIT License (MIT)
+
+Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+**文本 6**（`devlop@1.1.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2023 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 7**（`entities@4.3.0`）
+
+```
+Copyright (c) Felix Böhm
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+**文本 8**（`extend@3.0.2`）
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2014 Stefan Thomas
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 9**（`hast-util-from-dom@5.0.1`）
+
+```
+(ISC License)
+
+Copyright (c) Keith McKnight <keith@mcknig.ht>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
+**文本 10**（`hast-util-from-html-isomorphic@2.0.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2023 Remco Haszing <remcohaszing@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 11**（`hast-util-from-html@2.0.3`）
+
+```
+(The MIT License)
+
+Copyright (c) 2022 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 12**（`hast-util-to-text@4.0.2`）
+
+```
+(The MIT License)
+
+Copyright (c) 2019 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 13**（`is-plain-obj@4.1.0`）
+
+```
+MIT License
+
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 14**（`longest-streak@3.1.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2015 Titus Wormer <mailto:tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 15**（`mdast-util-math@3.0.0`、`micromark-extension-math@3.1.0`、`micromark-factory-destination@2.0.0`、`micromark-factory-label@2.0.0`、`micromark-factory-title@2.0.0`、`micromark-factory-whitespace@2.0.0`、`micromark-util-character@2.0.0`、`micromark-util-chunked@2.0.0`、`micromark-util-classify-character@2.0.0`、`micromark-util-combine-extensions@2.0.0`、`micromark-util-decode-numeric-character-reference@2.0.0`、`micromark-util-encode@2.0.0`、`micromark-util-html-tag-name@2.0.0`、`micromark-util-normalize-identifier@2.0.0`、`micromark-util-resolve-all@2.0.0`、`micromark-util-sanitize-uri@2.0.0`、`micromark-util-subtokenize@2.0.0`、`micromark-util-symbol@2.0.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2020 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+上面这份文本有 16 个包是**从上游仓库取的**（npm tarball 里没有许可文件），来源：
+
+- `micromark-factory-destination@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-factory-destination@2.0.0/license
+- `micromark-factory-label@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-factory-label@2.0.0/license
+- `micromark-factory-title@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-factory-title@2.0.0/license
+- `micromark-factory-whitespace@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-factory-whitespace@2.0.0/license
+- `micromark-util-character@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-character@2.0.0/license
+- `micromark-util-chunked@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-chunked@2.0.0/license
+- `micromark-util-classify-character@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-classify-character@2.0.0/license
+- `micromark-util-combine-extensions@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-combine-extensions@2.0.0/license
+- `micromark-util-decode-numeric-character-reference@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-decode-numeric-character-reference@2.0.0/license
+- `micromark-util-encode@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-encode@2.0.0/license
+- `micromark-util-html-tag-name@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-html-tag-name@2.0.0/license
+- `micromark-util-normalize-identifier@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-normalize-identifier@2.0.0/license
+- `micromark-util-resolve-all@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-resolve-all@2.0.0/license
+- `micromark-util-sanitize-uri@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-sanitize-uri@2.0.0/license
+- `micromark-util-subtokenize@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-subtokenize@2.0.0/license
+- `micromark-util-symbol@2.0.0` — https://cdn.jsdelivr.net/gh/micromark/micromark@micromark-util-symbol@2.0.0/license
+
+**文本 16**（`mdast-util-phrasing@4.1.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2017 Titus Wormer <tituswormer@gmail.com>
+Copyright (c) 2017 Victor Felder <victor@draft.li>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 17**（`ms@2.1.3`）
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2020 Vercel, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+**文本 18**（`parse5@7.0.0`）
+
+```
+Copyright (c) 2013-2019 Ivan Nikulin (ifaaan@gmail.com, https://github.com/inikulin)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+**文本 19**（`property-information@7.2.0`）
+
+```
+(The MIT License)
+
+Copyright (c) Titus Wormer <mailto:tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+**文本 20**（`trough@2.2.0`）
+
+```
+(The MIT License)
+
+Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+**文本 21**（`unified@11.0.5`、`vfile@6.0.3`）
+
+```
+(The MIT License)
+
+Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+**文本 22**（`unist-util-is@6.0.1`）
+
+```
+(The MIT license)
+
+Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```

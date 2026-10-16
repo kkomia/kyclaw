@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {
   agentEndpointSchema,
+  bundledReleaseNotesSchema,
   CONNECTION_TEST_SCOPE_NOTE,
   connectionTestResultSchema,
   IPC_CHANNELS,
@@ -34,6 +35,19 @@ import {
 } from '../ipc'
 import { emptyOverview, localModelsOverviewSchema } from '../local-models'
 import { DEFAULT_SETTINGS } from '../settings'
+import {
+  OFFICE_PREVIEW_REQUEST_ID_MAX,
+  officePreviewArgsSchema,
+  officePreviewCancelArgsSchema,
+  officePreviewResultSchema
+} from '../office-preview'
+import { tableBytesResultSchema } from '../workbench'
+import {
+  textPageArgsSchema,
+  textPageResultSchema,
+  textVersionArgsSchema,
+  textVersionResultSchema
+} from '../workbench-text'
 
 describe('IPC 契约：window 通道', () => {
   it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
@@ -442,7 +456,8 @@ describe('IPC 契约：updates 通道（T17）', () => {
       state: 'updates:state',
       check: 'updates:check',
       install: 'updates:install',
-      stateChanged: 'updates:state-changed'
+      stateChanged: 'updates:state-changed',
+      releaseNotes: 'updates:release-notes'
     })
   })
 
@@ -491,6 +506,32 @@ describe('IPC 契约：updates 通道（T17）', () => {
     expect(updateStatusSchema.safeParse({ phase: 'up-to-date', notes: 'x' }).success).toBe(false)
     expect(updateStatusSchema.safeParse({ phase: 'idle', notes: 'x' }).success).toBe(false)
     expect(updateStatusSchema.safeParse({ phase: 'available', notes: 1 }).success).toBe(false)
+  })
+
+  it('本轮：本版本随包发行说明是三态联合（ok / missing / unreadable，缺与读异常分开）', () => {
+    expect(
+      bundledReleaseNotesSchema.safeParse({
+        state: 'ok',
+        version: '0.1.1',
+        notes: 'kyclaw 0.1.1\n\n本次更新内容：\n- 一条'
+      }).success
+    ).toBe(true)
+    expect(bundledReleaseNotesSchema.safeParse({ state: 'missing' }).success).toBe(true)
+    expect(
+      bundledReleaseNotesSchema.safeParse({ state: 'unreadable', message: '本版发行说明读取失败' })
+        .success
+    ).toBe(true)
+
+    for (const bad of [
+      {},
+      { state: 'ok', notes: '缺版本号' },
+      { state: 'ok', version: '0.1.1', notes: 1 },
+      { state: 'missing', version: '0.1.1' },
+      { state: 'unreadable' },
+      { state: 'error', message: 'x' }
+    ]) {
+      expect(bundledReleaseNotesSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
   })
 
   it('整态：当前版本 + 有没有配源 + 打包内源地址 + 状态（四者齐，别的键不收）', () => {
@@ -616,5 +657,235 @@ describe('IPC 契约：localModels 通道（模块 3B）', () => {
     ]) {
       expect(localModelsOverviewSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
     }
+  })
+})
+
+describe('IPC 契约：工作台的办公档预览（office-pdf / cancel-office-pdf）', () => {
+  it('通道名是固定字面量（主进程 handler 与 preload 靠它对齐，改名即破坏）', () => {
+    expect(IPC_CHANNELS.workbench.officePdf).toBe('workbench:office-pdf')
+    expect(IPC_CHANNELS.workbench.cancelOfficePdf).toBe('workbench:cancel-office-pdf')
+  })
+
+  it('office-pdf 的入参是四个位置参数：threadId / 相对路径 / 调度意图 / requestId', () => {
+    expect(
+      parseIpcArgs(
+        officePreviewArgsSchema,
+        ['t1', '方案.docx', 'foreground', 'req-1'],
+        'workbench:office-pdf'
+      )
+    ).toEqual(['t1', '方案.docx', 'foreground', 'req-1'])
+    expect(
+      parseIpcArgs(
+        officePreviewArgsSchema,
+        ['t1', '旧稿.doc', 'background', 'req-2'],
+        'workbench:office-pdf'
+      )
+    ).toEqual(['t1', '旧稿.doc', 'background', 'req-2'])
+
+    for (const bad of [
+      [],
+      ['t1'],
+      ['t1', '方案.docx'],
+      ['t1', '方案.docx', 'foreground'],
+      ['', '方案.docx', 'foreground', 'req'],
+      ['t1', '', 'foreground', 'req'],
+      ['t1', '方案.docx', 'foreground!', 'req'],
+      ['t1', '方案.docx', 'foreground', ''],
+      ['t1', '方案.docx', 'foreground', 'x'.repeat(OFFICE_PREVIEW_REQUEST_ID_MAX + 1)],
+      ['t1', '方案.docx', 'foreground', 'req', '第五个'],
+      ['t1', '方案.docx', 'foreground', 42]
+    ]) {
+      expect(
+        () => parseIpcArgs(officePreviewArgsSchema, bad as unknown[], 'workbench:office-pdf'),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('cancel-office-pdf 的入参只有一个非空 requestId（幂等靠主进程那张表，不靠形状）', () => {
+    expect(
+      parseIpcArgs(officePreviewCancelArgsSchema, ['req-1'], 'workbench:cancel-office-pdf')
+    ).toEqual(['req-1'])
+    for (const bad of [
+      [],
+      [''],
+      [1],
+      ['a', 'b'],
+      ['x'.repeat(OFFICE_PREVIEW_REQUEST_ID_MAX + 1)]
+    ]) {
+      expect(
+        () =>
+          parseIpcArgs(
+            officePreviewCancelArgsSchema,
+            bad as unknown[],
+            'workbench:cancel-office-pdf'
+          ),
+        JSON.stringify(bad)
+      ).toThrow(IpcInputError)
+    }
+  })
+
+  it('office-pdf 的回包：pdf 支要真字节与缺字体；failed 支带分类，cancelled 是其中一种', () => {
+    const pdf = {
+      kind: 'pdf',
+      path: '方案.docx',
+      version: '1024:1712345',
+      pdf: new Uint8Array([37, 80, 68, 70]),
+      size: 4,
+      missingFonts: ['思源黑体'],
+      generation: 'gen-1'
+    }
+    expect(officePreviewResultSchema.safeParse(pdf).success).toBe(true)
+    // 缺字体可以为空（二进制格式查不了 —— 空数组是"引擎没声明"，不是"不缺字"）
+    expect(officePreviewResultSchema.safeParse({ ...pdf, missingFonts: [] }).success).toBe(true)
+
+    for (const bad of [
+      // 字节必须真是 Uint8Array（普通数组过结构化克隆会变成数组，这里就要拦住）
+      { ...pdf, pdf: [37, 80, 68, 70] },
+      { ...pdf, path: '' },
+      { ...pdf, version: '' },
+      { ...pdf, generation: '' },
+      { ...pdf, extra: 1 }
+    ]) {
+      expect(officePreviewResultSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+
+    expect(
+      officePreviewResultSchema.safeParse({
+        kind: 'failed',
+        path: '方案.docx',
+        code: 'cancelled',
+        message: '这次预览转换已取消'
+      }).success
+    ).toBe(true)
+    expect(
+      officePreviewResultSchema.safeParse({
+        kind: 'failed',
+        path: '方案.docx',
+        code: '没这个分类',
+        message: 'x'
+      }).success
+    ).toBe(false)
+  })
+})
+
+describe('IPC 契约：工作台的表格原始字节通道（table-bytes）', () => {
+  it('通道名是固定字面量', () => {
+    expect(IPC_CHANNELS.workbench.tableBytes).toBe('workbench:table-bytes')
+  })
+
+  it('回包是五支判别联合：bytes / too-large / unsupported / missing / changed', () => {
+    expect(
+      tableBytesResultSchema.safeParse({
+        kind: 'bytes',
+        format: 'xls',
+        bytes: new Uint8Array([0xd0, 0xcf]),
+        size: 2
+      }).success
+    ).toBe(true)
+    expect(tableBytesResultSchema.safeParse({ kind: 'too-large', size: 9, limit: 8 }).success).toBe(
+      true
+    )
+    expect(tableBytesResultSchema.safeParse({ kind: 'unsupported', size: 9 }).success).toBe(true)
+    expect(tableBytesResultSchema.safeParse({ kind: 'missing' }).success).toBe(true)
+    expect(tableBytesResultSchema.safeParse({ kind: 'changed' }).success).toBe(true)
+
+    for (const bad of [
+      { kind: 'bytes', format: 'ods', bytes: new Uint8Array(), size: 0 },
+      { kind: 'bytes', format: 'csv', bytes: [1], size: 1 },
+      { kind: 'bytes', format: 'csv', bytes: new Uint8Array(), size: 0, extra: 1 },
+      { kind: 'changed', size: 1 },
+      { kind: 'nope' }
+    ]) {
+      expect(tableBytesResultSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+})
+
+describe('IPC 契约：工作台的文本分页通道（read-text-page / text-version）', () => {
+  it('通道名是固定字面量', () => {
+    expect(IPC_CHANNELS.workbench.readTextPage).toBe('workbench:read-text-page')
+    expect(IPC_CHANNELS.workbench.textVersion).toBe('workbench:text-version')
+  })
+
+  it('入参：[threadId, relative, cursor|null]；cursor 必须带 offset 与 version', () => {
+    expect(textPageArgsSchema.safeParse(['t1', 'a.txt', null]).success).toBe(true)
+    expect(
+      textPageArgsSchema.safeParse(['t1', 'a.txt', { offset: 256, version: '2:1' }]).success
+    ).toBe(true)
+
+    for (const bad of [
+      ['t1', 'a.txt'],
+      ['t1', 'a.txt', { offset: -1, version: '2:1' }],
+      ['t1', 'a.txt', { offset: 0 }],
+      ['t1', 'a.txt', { cursor: 0 }],
+      ['', 'a.txt', null]
+    ]) {
+      expect(textPageArgsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+    expect(textVersionArgsSchema.safeParse(['t1', 'a.txt']).success).toBe(true)
+    expect(textVersionArgsSchema.safeParse(['t1']).success).toBe(false)
+  })
+
+  it('回包是五支判别联合：page / binary / missing / too-large / changed', () => {
+    expect(
+      textPageResultSchema.safeParse({
+        kind: 'page',
+        text: 'a\n',
+        offset: 0,
+        nextOffset: 2,
+        size: 2,
+        version: '2:1',
+        eof: true,
+        overlongLine: false
+      }).success
+    ).toBe(true)
+    expect(textPageResultSchema.safeParse({ kind: 'binary', size: 2 }).success).toBe(true)
+    expect(textPageResultSchema.safeParse({ kind: 'missing' }).success).toBe(true)
+    expect(textPageResultSchema.safeParse({ kind: 'too-large', size: 9, limit: 8 }).success).toBe(
+      true
+    )
+    expect(textPageResultSchema.safeParse({ kind: 'changed' }).success).toBe(true)
+
+    for (const bad of [
+      { kind: 'page', text: 'a' },
+      {
+        kind: 'page',
+        text: 'a',
+        offset: 0,
+        nextOffset: 1,
+        size: 1,
+        version: '',
+        eof: true,
+        overlongLine: false
+      },
+      {
+        kind: 'page',
+        text: 'a',
+        offset: 0,
+        nextOffset: 1,
+        size: 1,
+        version: '1:1',
+        eof: true,
+        overlongLine: false,
+        extra: 1
+      },
+      { kind: 'nope' }
+    ]) {
+      expect(textPageResultSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+    }
+  })
+
+  it('版本探询回包：两支判别联合（还是 uuid 那种自由串都收，只要求非空）', () => {
+    expect(
+      textVersionResultSchema.safeParse({ kind: 'version', version: '2:1', size: 2 }).success
+    ).toBe(true)
+    expect(textVersionResultSchema.safeParse({ kind: 'missing' }).success).toBe(true)
+    expect(
+      textVersionResultSchema.safeParse({ kind: 'version', version: '', size: 0 }).success
+    ).toBe(false)
+    expect(textVersionResultSchema.safeParse({ kind: 'version', version: '2:1' }).success).toBe(
+      false
+    )
   })
 })

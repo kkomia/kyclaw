@@ -57,7 +57,8 @@ describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
     expect(utility).toContain('outline: 1px solid var(--border-hairline);')
     expect(utility).toContain('outline-offset: -1px;')
     // round 2 用户实拍：不能再用墨色（暗近白 / 浅近黑，对比过重），也不能是品牌蓝。
-    // --border-hairline = Separators-S1（浅 13% 黑 / 深 12% 白），两档都是灰，值锁在 tokens.spec。
+    // --border-hairline = 比 Separators-S1 深一档的灰（2026-10-16 边框可见度轮：浅 20% 黑 / 深 18% 白），
+    // 两档都是灰，值锁在 tokens.spec。
     expect(utility).not.toContain('var(--text-primary)')
     expect(utility).not.toContain('--accent')
   })

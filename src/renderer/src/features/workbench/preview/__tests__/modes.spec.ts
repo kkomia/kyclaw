@@ -12,30 +12,45 @@ describe('previewModeOf：后缀决定渲染方式', () => {
     expect(previewModeOf('docs/说明.MARKDOWN')).toBe('markdown')
   })
 
-  it('认得图片六种后缀（大小写不敏感）', () => {
+  it('认得图片八种后缀（大小写不敏感；svg / ico 是本轮新收的两种）', () => {
     expect(previewModeOf('a.png')).toBe('image')
     expect(previewModeOf('a.JPG')).toBe('image')
     expect(previewModeOf('a.jpeg')).toBe('image')
     expect(previewModeOf('a.GIF')).toBe('image')
     expect(previewModeOf('a.webp')).toBe('image')
     expect(previewModeOf('a.BMP')).toBe('image')
+    expect(previewModeOf('icon.SVG')).toBe('image')
+    expect(previewModeOf('favicon.ico')).toBe('image')
   })
 
-  it('pdf / 办公三件 / 表格各走各的', () => {
+  it('html / htm 走静态隔离预览（压过 code：这两个后缀本来按源码高亮看）', () => {
+    expect(previewModeOf('index.html')).toBe('html')
+    expect(previewModeOf('页面.HTM')).toBe('html')
+    // 语言映射还在：谁要按代码看谁自己问（路由这一层按"有真渲染器就用真的"说话）
+    expect(codeLanguageOf('index.html')).toBe('html')
+    // xml 不在 html 那一档（它仍是代码高亮）
+    expect(previewModeOf('数据.xml')).toBe('code')
+  })
+
+  it('pdf / 办公档 / 表格各走各的', () => {
     expect(previewModeOf('报告.PDF')).toBe('pdf')
-    expect(previewModeOf('方案.docx')).toBe('docx')
+    // 办公四件（含旧版 .doc / .ppt）：页式预览（主进程转 PDF，渲染端新阅读器按页看）
+    expect(previewModeOf('方案.docx')).toBe('office')
+    expect(previewModeOf('旧方案.doc')).toBe('office')
+    expect(previewModeOf('汇报.pptx')).toBe('office')
+    expect(previewModeOf('旧汇报.ppt')).toBe('office')
+    // 表格四种（含旧版 .xls）：原始字节通道，交给渲染端 ExcelPreview
     expect(previewModeOf('台账.xlsx')).toBe('table')
-    expect(previewModeOf('汇报.pptx')).toBe('pptx')
+    expect(previewModeOf('旧台账.xls')).toBe('table')
     expect(previewModeOf('名单.csv')).toBe('table')
     expect(previewModeOf('名单.TSV')).toBe('table')
   })
 
-  it('旧版 Office（.doc/.xls/.ppt）走人话那条（不读文件）', () => {
-    expect(previewModeOf('旧方案.doc')).toBe('office-legacy')
-    expect(previewModeOf('旧台账.xls')).toBe('office-legacy')
-    expect(previewModeOf('旧汇报.ppt')).toBe('office-legacy')
-    // 新格式不在这一档
-    expect(previewModeOf('方案.docx')).not.toBe('office-legacy')
+  it('办公档与表格不串线：xlsx 不当办公档（不进 PDF 管线），docx 不当表格', () => {
+    expect(previewModeOf('台账.xlsx')).not.toBe('office')
+    expect(previewModeOf('旧台账.xls')).not.toBe('office')
+    expect(previewModeOf('方案.docx')).not.toBe('table')
+    expect(previewModeOf('旧方案.doc')).not.toBe('table')
   })
 
   it('代码扩展名走高亮那条（语言由 codeLanguageOf 定）', () => {
@@ -56,7 +71,6 @@ describe('previewModeOf：后缀决定渲染方式', () => {
     expect(previewModeOf('desktop.ini')).toBe('text')
     expect(previewModeOf('start.ps1')).toBe('text')
     expect(previewModeOf('run.bat')).toBe('text')
-    expect(previewModeOf('image.ico')).toBe('text')
   })
 
   it('反斜杠路径也认（Windows 上复制出来的写法）', () => {

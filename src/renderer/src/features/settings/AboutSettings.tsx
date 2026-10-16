@@ -4,12 +4,12 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Input } from '@renderer/components/ui/input'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import type { UpdateState } from '@shared/ipc'
+import type { BundledReleaseNotes, UpdateState } from '@shared/ipc'
 import { updateStatusText } from './status-text'
 
 /**
  * 设置页「关于」组（T17；round 63 起可以在这里换更新源；0.1.1 起显示这一版的更新内容）：
- * 当前版本 + 手动"检查更新" + 一行状态 + 更新内容 + 更新源。
+ * 当前版本 + 手动"检查更新" + 一行状态 + 更新内容 + 更新源（round 88 起收在「配置」后面）。
  *
  * 分工：
  *   - 状态由主进程推（`updates:onStateChanged`），挂载时先拉一次（推送只对已在听的渲染端有效）；
@@ -24,6 +24,17 @@ import { updateStatusText } from './status-text'
  *   - 0.1.1：新版本的**更新内容**（源上渠道 yml 的 releaseNotes/releaseName/releaseDate）显示在
  *     状态行下面，只显示当前这一版的那一份，缺了整块不出现（更新照旧）。纯文本渲染：源上给的
  *     HTML/脚本按字面量显示，不插 DOM、不拉远程图片。
+ *   - round 88（用户口径）：更新源是"配一次就不动"的**次级设置**——默认收起，页面只留一行
+ *     「更新源 + 配置」；地址输入、保存与内置源提示（输入框的占位）都在展开区里，展开后
+ *     读/写/校验一字不变（草稿也留着：收起再展开还是那份没保存的内容）。
+ *     版本、状态、更新内容与报错**常显**（收起时也看得见），也不新增"要不要检查更新"的总开关。
+ *   - 本轮（用户反馈：关于页看不到更新日志）：多一个**常驻的「更新日志」入口**（按钮说「查看」，
+ *     与更新源那颗「配置」分得开）——读的是**本版本随包**的那份发行说明（`updates:releaseNotes`，
+ *     主进程按 `app.getVersion()` 读 `resources/release-notes/<版本>.md`），所以**断网 / 已是最新 /
+ *     没配更新源**都能看"我现在装的这一版改了什么"。与上面那份**源上新版本**的日志是两件事：
+ *     版本各自标（这份永远标本机版本），谁也不冒用谁的正文；同一段文字不会显示两遍。
+ *     正文按纯文本渲染（文本子节点，不插 DOM、不执行 HTML），长了自己在正文区滚（不藏内容）。
+ *     读不到时按主进程给的三态说话：ok / 本版暂无发行说明 / 读不出来的原因 —— 不拿"没有"糊弄"读不到"。
  *
  * 全部文案零 emoji、不写后端实现、不用黑描边（状态就是一行普通文字，见雷点 v1）；
  * 文案规则在 status-text.ts（独立文件，顺带过 react-refresh 的"只导出组件"口径）。
@@ -105,6 +116,23 @@ export function AboutSettings(): React.JSX.Element {
   const [problem, setProblem] = useState<string | undefined>(undefined)
   /** 收起态用**内容本身**当标记：新版本推来时内容不一样，自然回到收起态（不必另写一个效应） */
   const [expandedNotes, setExpandedNotes] = useState<string | undefined>(undefined)
+  /** 更新源配置区的展开状态：默认收起（round 88 —— 默认只露版本 / 状态 / 更新内容 / 报错） */
+  const [configOpen, setConfigOpen] = useState(false)
+  /**
+   * 本版本随包发行说明（本轮）：null = 还没读到（读一次就够，它跟着应用版本走、运行期不变）。
+   * 桥缺失（只有测试环境会这样）在**首帧就定成 unreadable** —— 不能静默成"本版没有说明"
+   * （那是两件事）；也不为此进一遍 effect（effect 里同步 setState 会多一轮渲染）。
+   */
+  const [bundledNotes, setBundledNotes] = useState<BundledReleaseNotes | null>(() =>
+    window.kyclaw?.updates?.releaseNotes === undefined
+      ? {
+          state: 'unreadable',
+          message: '更新通道不可用（window.kyclaw 缺失），读不到本版发行说明'
+        }
+      : null
+  )
+  /** 「更新日志」入口的展开状态：默认收起（常驻入口，点开才展开正文） */
+  const [notesOpen, setNotesOpen] = useState(false)
 
   useEffect(() => {
     const api = window.kyclaw?.updates
@@ -122,6 +150,24 @@ export function AboutSettings(): React.JSX.Element {
     return () => {
       alive = false
       unsubscribe()
+    }
+  }, [])
+
+  // 本版本随包发行说明（本轮）：挂载读一次（纯读盘、不发网络请求；桥缺失那种已在首帧定掉）
+  useEffect(() => {
+    const api = window.kyclaw?.updates
+    if (api === undefined || api.releaseNotes === undefined) return
+    let alive = true
+    void api.releaseNotes().then(
+      (next) => {
+        if (alive) setBundledNotes(next)
+      },
+      (caught: unknown) => {
+        if (alive) setBundledNotes({ state: 'unreadable', message: messageOf(caught) })
+      }
+    )
+    return () => {
+      alive = false
     }
   }, [])
 
@@ -255,50 +301,117 @@ export function AboutSettings(): React.JSX.Element {
         </div>
       )}
 
-      <div className="flex flex-col gap-2">
-        <label className="flex flex-col gap-1">
-          <span className="text-b2 text-ink-secondary">更新源</span>
-          <Input
-            data-testid="about-update-url"
-            value={urlValue}
-            placeholder={state?.builtinUrl ?? ''}
-            aria-invalid={problem !== undefined || undefined}
-            disabled={saving}
-            className={cn(problem !== undefined && 'border-danger')}
-            onChange={(event) => {
-              setDraft(event.target.value)
-              setProblem(undefined)
-              setNotice('')
-            }}
-          />
-        </label>
+      {/* 本版本更新日志（本轮）：**常驻入口** —— 已是最新 / 断网 / 没配源时，用户都能看
+          "我现在装的这一版改了什么"。入口这颗按钮说「查看」（不是「配置」：那是更新源的次级设置），
+          与上面"源上新版本"那块各标各的版本（这份标本机版本，正文只来自随包那份文件）。 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-b2 text-ink-secondary">更新日志</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="about-bundled-notes-toggle"
+          aria-expanded={notesOpen}
+          onClick={() => setNotesOpen((value) => !value)}
+        >
+          {notesOpen ? '收起' : '查看'}
+        </Button>
+      </div>
 
-        {problem === undefined ? null : (
-          <p data-testid="about-update-url-error" className="text-c1 text-danger">
-            {problem}
-          </p>
-        )}
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            size="sm"
-            data-testid="about-update-url-save"
-            loading={saving}
-            onClick={() => void saveUrl()}
-          >
-            保存
-          </Button>
-          {notice === '' ? null : (
-            <span
-              data-testid="about-update-url-notice"
-              role="status"
-              className="text-c1 text-ink-secondary"
+      {notesOpen ? (
+        <div data-testid="about-bundled-notes" className="flex flex-col gap-2">
+          <span data-testid="about-bundled-notes-title" className="text-b2 text-ink">
+            {bundledNotes?.state === 'ok'
+              ? `本版本（${bundledNotes.version}）的更新内容`
+              : '本版本的更新内容'}
+          </span>
+          {bundledNotes === null ? (
+            <p data-testid="about-bundled-notes-loading" className="text-c1 text-ink-secondary">
+              正在读取本版发行说明…
+            </p>
+          ) : bundledNotes.state === 'ok' ? (
+            // 纯文本（文本子节点，不是 innerHTML）：md 原样显示（标题/短横线就是字面量），
+            // 里面的 HTML / 脚本也不会被执行。长的在正文区自己滚 —— 内容不藏起来
+            <p
+              data-testid="about-bundled-notes-text"
+              className="rounded-control bg-surface px-2 py-1.5 text-c1 whitespace-pre-wrap text-ink-secondary max-h-96 overflow-auto [overflow-wrap:anywhere]"
             >
-              {notice}
-            </span>
+              {bundledNotes.notes}
+            </p>
+          ) : bundledNotes.state === 'missing' ? (
+            // 这一版没随发行说明（老包/开发态）：照实说，不拿别的版本的日志顶上
+            <p data-testid="about-bundled-notes-empty" className="text-c1 text-ink-secondary">
+              本版暂无发行说明。
+            </p>
+          ) : (
+            // 有文件但读不出来：把原因给出来（与"没有说明"分开说）
+            <p data-testid="about-bundled-notes-error" className="text-c1 text-danger">
+              {bundledNotes.message}
+            </p>
           )}
         </div>
+      ) : null}
+
+      {/* round 88：更新源是次级设置——默认只露这一行入口，地址 / 保存 / 内置源提示都在展开区里
+          （「追踪」栏的「配置」同一套：ghost 按钮 + aria-expanded，不收任何状态行） */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-b2 text-ink-secondary">更新源</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-testid="about-update-config-toggle"
+          aria-expanded={configOpen}
+          onClick={() => setConfigOpen((value) => !value)}
+        >
+          {configOpen ? '收起' : '配置'}
+        </Button>
       </div>
+
+      {configOpen ? (
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-b2 text-ink-secondary">更新源地址</span>
+            <Input
+              data-testid="about-update-url"
+              value={urlValue}
+              placeholder={state?.builtinUrl ?? ''}
+              aria-invalid={problem !== undefined || undefined}
+              disabled={saving}
+              className={cn(problem !== undefined && 'border-danger')}
+              onChange={(event) => {
+                setDraft(event.target.value)
+                setProblem(undefined)
+                setNotice('')
+              }}
+            />
+          </label>
+
+          {problem === undefined ? null : (
+            <p data-testid="about-update-url-error" className="text-c1 text-danger">
+              {problem}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              size="sm"
+              data-testid="about-update-url-save"
+              loading={saving}
+              onClick={() => void saveUrl()}
+            >
+              保存
+            </Button>
+            {notice === '' ? null : (
+              <span
+                data-testid="about-update-url-notice"
+                role="status"
+                className="text-c1 text-ink-secondary"
+              >
+                {notice}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {error === undefined ? null : (
         <p data-testid="about-error" className="text-c1 text-danger">

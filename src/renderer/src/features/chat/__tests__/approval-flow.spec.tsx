@@ -792,15 +792,16 @@ describe('审批条停靠（round 29：输入框上方，不在消息流里）',
       expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
     )
 
-    // 工具行到达（这一轮还在流）：思考段保持展开 —— 不是"工具挨工具"裸奔
+    // 工具行到达（这一轮还在流）：思考段自己收起让版面 —— 工具行看得见，不是"工具挨工具"裸奔；
+    // 过程块因为还有待审批仍开着，审批条也照旧
     act(() => {
       control.requestApproval(APPROVAL_A)
     })
     await waitFor(() =>
       expect(screen.getByTestId('tool-card')).toHaveAttribute('data-state', 'approval-requested')
     )
-    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先看看工作区里有什么')
+    expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
     expect(screen.getByTestId('approval-dock')).toHaveAttribute('data-open', 'true')
 
     // 挂起轮收尾（流停）：思考段按老口径收起，过程块因为还有待审批仍开着（只读状态行看得见）

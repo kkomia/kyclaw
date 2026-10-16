@@ -28,6 +28,7 @@ import { createLocalModelService, type LocalModelService } from './llama/service
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
 import { printPdf } from './print-pdf'
+import { readBundledReleaseNotes } from './release-notes'
 import { getProviderKey, secretsPath } from './secrets'
 import { initializeDefaultWorkspace, readSettings, settingsPath } from './settings'
 import { readLangfuseConfig } from './telemetry'
@@ -182,6 +183,8 @@ if (!app.requestSingleInstanceLock()) {
     app.on('will-quit', () => {
       // 一个终端都不留（node-pty 不随主进程退出自动收：前台 shell 死了，它拉起的子进程还在）
       workbench.terminals.disposeAll()
+      // 在途的办公档转换同样不留：kit 子进程不随主进程退出（杀法是同步发起的，见 handles 的说明）
+      workbench.disposeOfficePreview()
       // round 72：在途的 bash 命令同样不留 —— Windows 上子进程不随父进程退出而终止，
       // 一个正在跑的 `sleep 600` / 构建 / 长下载会变成孤儿。账本只记我们自己拉起的那些
       // （见 exec.ts 的 running），用户自己在终端里跑的进程不在里面。
@@ -251,7 +254,18 @@ if (!app.requestSingleInstanceLock()) {
     // 打包内 app-update.yml > 没配），所以设置里改完当场生效、不用重启（见上面 registerSettingsIpc
     // 的 onUpdateUrlSaved）；没配源的路径就是个"什么都不做"的实例：不检查、不报错、不发网络请求。
     let updater = createInertUpdater(app.getVersion())
-    registerUpdatesIpc(() => updater)
+    // 本版本随包发行说明（本轮）：按 app.getVersion() 读那一个文件（打包态 resources/release-notes/、
+    // 开发态仓库 build/release-notes/）——「关于」栏的「更新日志」入口用它，断网/已是最新也能看
+    registerUpdatesIpc(
+      () => updater,
+      () =>
+        readBundledReleaseNotes({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath(),
+          version: app.getVersion()
+        })
+    )
     // 打包内源的地址：只有两个用处——界面占位提示、切回内置源时把 feed 显式设回去（见 main/updater.ts）
     const builtinUrl = readBundledUpdateUrl(process.resourcesPath)
     void createKyclawUpdater({

@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ImagePreview } from '../ImagePreview'
 import { MarkdownPreview } from '../MarkdownPreview'
 
-/** markdown 预览：直接复用聊天区那套渲染器（react-markdown + remark-gfm） */
+/** markdown 预览：同一套聊天区口径的渲染器（react-markdown + remark-gfm），另加数学与 frontmatter */
 describe('MarkdownPreview', () => {
   it('标题 / 列表 / 表格都真渲染出来（不是 <pre> 纯文本）', () => {
     render(
@@ -25,9 +25,26 @@ describe('MarkdownPreview', () => {
     expect(body.querySelector('script')).toBeNull()
     expect(body.textContent).toContain('正常文字')
   })
+
+  it('数学与 frontmatter 是新加的层（$...$ → KaTeX；`---` 块 → 字段框），正文照常', () => {
+    render(<MarkdownPreview text={'---\ntitle: 标题\n---\n\n公式 $a^2$ 在行内\n'} />)
+    const body = screen.getByTestId('file-preview-markdown')
+    // frontmatter：整块不再落进正文（框是同步挂出来的，字段表在懒分块里、加载期间显示原文）
+    expect(screen.getByTestId('file-preview-frontmatter')).toBeInTheDocument()
+    // 数学：`$...$` 被 KaTeX 接管（`.katex` 是它输出的根类），正文其余照常
+    expect(body.querySelector('.katex')).not.toBeNull()
+    expect(body.textContent).toContain('在行内')
+  })
 })
 
-/** 图片预览：原字节 → data URL → <img>；坏图解不开给人话 */
+/**
+ * 图片预览：原字节 → data URL → `<img>`；坏图解不开给人话。
+ *
+ * round 52 那套自绘看图器（工具条四钮 / 10%–800% / ×1.25 步进 / 舞台与图片的像素尺寸）的断言
+ * 随实现一起作废：缩放改由共用的 `dsh-document/ZoomViewport` 承担（档位口径 25%–400%、0.25 栅格，
+ * 由 `dsh-document/__tests__/zoom.spec.ts` 覆盖），SVG/ICO、统一缩放、旋转与双击回位、
+ * "无内在尺寸 SVG"的降级路都按新 DOM 在 `dsh-media/__tests__/image.spec.tsx` 里钉住。
+ */
 describe('ImagePreview', () => {
   it('png 字节编成 data URL（CSP img-src 已放行 data:）', () => {
     render(<ImagePreview format="image-png" bytes={new Uint8Array([0x89, 0x50, 0x4e, 0x47])} />)
@@ -56,191 +73,6 @@ describe('ImagePreview', () => {
     fireEvent.error(image as HTMLElement)
 
     expect(screen.getByTestId('file-preview-image-error')).toHaveTextContent('打不开')
-  })
-})
-
-/**
- * round 52 的看图器（缩放 / 旋转 / 居中 / 工具条）。
- * jsdom 不排版，所以几何靠 `stubBox` 显式铺给舞台、像素尺寸铺给 `<img>`；
- * 断言打在三处可断言的落点：百分比文本、`data-*`、`style` 变换。
- */
-function stubBox(element: HTMLElement, size: { w: number; h: number }): void {
-  Object.defineProperty(element, 'clientWidth', { value: size.w, configurable: true })
-  Object.defineProperty(element, 'clientHeight', { value: size.h, configurable: true })
-}
-
-/** 铺一张"已经解码好"的图：舞台 632×332、原图 1000×400 → 适应窗口 = 60% */
-function renderFitted(): {
-  root: HTMLElement
-  stage: HTMLElement
-  image: HTMLImageElement
-  value: HTMLElement
-} {
-  render(<ImagePreview format="image-png" bytes={new Uint8Array([1])} />)
-  const root = screen.getByTestId('file-preview-image')
-  const stage = screen.getByTestId('image-stage')
-  const image = root.querySelector('img') as HTMLImageElement
-  stubBox(stage, { w: 632, h: 332 })
-  Object.defineProperty(image, 'naturalWidth', { value: 1000, configurable: true })
-  Object.defineProperty(image, 'naturalHeight', { value: 400, configurable: true })
-  fireEvent(window, new Event('resize')) // jsdom 没有 ResizeObserver：靠这条兜底重量
-  fireEvent.load(image)
-  return { root, stage, image, value: screen.getByTestId('image-zoom-value') }
-}
-
-describe('ImagePreview：缩放 / 旋转 / 工具条', () => {
-  it('工具条：四个图标钮带无障碍名，百分比落在中间（放大镜里带 +/-，零 emoji）', () => {
-    render(<ImagePreview format="image-png" bytes={new Uint8Array([1])} />)
-    const toolbar = screen.getByTestId('image-toolbar')
-
-    expect(
-      within(toolbar)
-        .getAllByRole('button')
-        .map((b) => b.getAttribute('aria-label'))
-    ).toEqual(['缩小', '放大', '逆时针旋转', '顺时针旋转'])
-    // 文本节点只有百分比这一处（没有解释小字）
-    expect(toolbar.textContent).toBe('100%')
-    expect(screen.getByTestId('image-zoom-value')).toBe(toolbar.children[1])
-  })
-
-  it('按钮缩放：一档 ×1.25、等比累乘，两头都夹住（10% / 800%）', () => {
-    const { root, value } = renderFitted()
-    // 适应窗口已经算出来了，百分比就是它（不是 100%）
-    expect(value).toHaveTextContent('60%')
-
-    fireEvent.click(screen.getByTestId('image-zoom-in'))
-    expect(value).toHaveTextContent('75%')
-    expect(root).toHaveAttribute('data-zoom', '0.75')
-
-    fireEvent.click(screen.getByTestId('image-zoom-in'))
-    expect(value).toHaveTextContent('94%') // 0.9375
-
-    fireEvent.click(screen.getByTestId('image-zoom-out'))
-    fireEvent.click(screen.getByTestId('image-zoom-out'))
-    expect(value).toHaveTextContent('60%') // 回到适应窗口那一档的数值（此时是显式倍率）
-
-    for (let step = 0; step < 20; step += 1) fireEvent.click(screen.getByTestId('image-zoom-in'))
-    expect(value).toHaveTextContent('800%')
-
-    for (let step = 0; step < 30; step += 1) fireEvent.click(screen.getByTestId('image-zoom-out'))
-    expect(value).toHaveTextContent('10%')
-  })
-
-  it('缩放改的是布局尺寸（100% = 一图一 CSS px），旋转只叠 transform', () => {
-    const { image } = renderFitted()
-    // 适应窗口 60%：1000×400 的原图 → 600×240
-    expect(image.style.width).toBe('600px')
-    expect(image.style.height).toBe('240px')
-    expect(image.style.transform).toBe('translate(-50%, -50%) rotate(0deg)')
-    expect(screen.getByTestId('image-frame').style.width).toBe('600px')
-
-    fireEvent.click(screen.getByTestId('image-zoom-in')) // 75%
-    expect(image.style.width).toBe('750px')
-    expect(image.style.height).toBe('300px')
-
-    // 转 90°：图片的布局尺寸不变，外框（滚动范围）宽高对调
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    expect(image.style.width).toBe('750px')
-    expect(image.style.transform).toBe('translate(-50%, -50%) rotate(90deg)')
-    expect(screen.getByTestId('image-frame').style.width).toBe('300px')
-    expect(screen.getByTestId('image-frame').style.height).toBe('750px')
-  })
-
-  it('Ctrl+滚轮缩放；普通滚轮不接管（不拦、也不改倍率）', () => {
-    const { stage, value } = renderFitted()
-
-    // 没按 Ctrl：默认行为照旧（页面/容器照滚），倍率一点不动
-    const plain = new WheelEvent('wheel', { deltaY: -120, cancelable: true })
-    expect(fireEvent(stage, plain)).toBe(true)
-    expect(plain.defaultPrevented).toBe(false)
-    expect(value).toHaveTextContent('60%')
-
-    // 按住 Ctrl：拦掉默认行为 + 进一档
-    const zoomIn = new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, cancelable: true })
-    expect(fireEvent(stage, zoomIn)).toBe(false)
-    expect(zoomIn.defaultPrevented).toBe(true)
-    expect(value).toHaveTextContent('75%')
-
-    const zoomOut = new WheelEvent('wheel', { deltaY: 120, ctrlKey: true, cancelable: true })
-    fireEvent(stage, zoomOut)
-    expect(value).toHaveTextContent('60%')
-  })
-
-  it('Ctrl+滚轮锚在光标下的点：滚动位置按 k 重算（内容宽变 k 倍、中心不动）', () => {
-    const { stage } = renderFitted()
-    let left = 100
-    let top = 50
-    Object.defineProperty(stage, 'scrollLeft', {
-      get: () => left,
-      set: (value: number) => {
-        left = value
-      },
-      configurable: true
-    })
-    Object.defineProperty(stage, 'scrollTop', {
-      get: () => top,
-      set: (value: number) => {
-        top = value
-      },
-      configurable: true
-    })
-
-    // k = 1.25、光标离滚动口左缘 300 / 上缘 100 → left' = 1.25·100 + 0.25·300 = 200
-    fireEvent(
-      stage,
-      new WheelEvent('wheel', {
-        deltaY: -120,
-        ctrlKey: true,
-        cancelable: true,
-        clientX: 300,
-        clientY: 100
-      })
-    )
-
-    expect(left).toBe(200)
-    expect(top).toBe(87.5)
-  })
-
-  it('旋转：左右各 90° 步进、取模回正，百分比不跟着变', () => {
-    const { root, image, value } = renderFitted()
-
-    fireEvent.click(screen.getByTestId('image-rotate-left'))
-    expect(root).toHaveAttribute('data-rotation', '270')
-    expect(image.style.transform).toContain('rotate(270deg)')
-
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    expect(root).toHaveAttribute('data-rotation', '90')
-
-    // 转满一圈回正（不是四张不同的图，是同一个角度的取模）
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    fireEvent.click(screen.getByTestId('image-rotate-right'))
-    expect(root).toHaveAttribute('data-rotation', '0')
-
-    expect(value).toHaveTextContent('60%')
-  })
-
-  it('双击：适应窗口 ↔ 100%（图比容器小时居中显示的那一档）', () => {
-    const { image, value } = renderFitted()
-    expect(value).toHaveTextContent('60%')
-
-    fireEvent.doubleClick(image)
-    expect(value).toHaveTextContent('100%')
-
-    fireEvent.doubleClick(image)
-    expect(value).toHaveTextContent('60%')
-  })
-
-  it('尺寸量不出来时不硬缩：按 100%（等真量到了再收）', () => {
-    render(<ImagePreview format="image-png" bytes={new Uint8Array([1])} />)
-    const image = screen.getByTestId('file-preview-image').querySelector('img') as HTMLImageElement
-    Object.defineProperty(image, 'naturalWidth', { value: 1000, configurable: true })
-    Object.defineProperty(image, 'naturalHeight', { value: 400, configurable: true })
-    fireEvent.load(image)
-
-    expect(screen.getByTestId('file-preview-image')).toHaveAttribute('data-loaded', 'true')
-    expect(screen.getByTestId('image-zoom-value')).toHaveTextContent('100%')
   })
 })
 

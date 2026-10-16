@@ -46,6 +46,7 @@ import { EMPTY_ASK_USER_THREAD, useAskUserStore } from './ask-user-store'
 import { askUserCallKey } from './ask-user-ui'
 import { hasPendingAskUser, chatStreamActive } from './ask-user'
 import { askUserResumeBody } from '@renderer/lib/ask-user-api'
+import { askUserAcceptedMetadata } from '@renderer/lib/agent'
 import { mapStoredMessages } from '@renderer/lib/message-map'
 import { CapabilityRow } from './CapabilityRow'
 import { ChatHeader } from './ChatHeader'
@@ -185,8 +186,18 @@ export function ChatPage(): React.JSX.Element {
   const [endpointError, setEndpointError] = useState<Error | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const activeId = useSessionsStore((state) => state.activeId)
+  const initLandedId = useSessionsStore((state) => state.initLandedId)
   const ensureLoaded = useSessionsStore((state) => state.ensureLoaded)
   const ensureProjectsLoaded = useProjectsStore((state) => state.ensureLoaded)
+
+  /**
+   * R92：草稿过桥（composer-carryover）**只放行"系统初始化落位"这一次** —— `activeId` 就是
+   * 载入（或失败兜底）那次"从无到有"选出来的会话（`activeId === initLandedId`）。其余的重挂
+   * （用户切会话 / 新建 / 删除）都会清掉 `initLandedId`（见 sessions-store），因此一律不放行 ——
+   * 用户主动换会话时输入卡上的字属于那个会话，不能跨会话泄露；发送物化/就绪本身不换 key，
+   * 不经过这里。
+   */
+  const carryoverAllowed = activeId !== null && activeId === initLandedId
 
   useEffect(() => {
     void ensureLoaded()
@@ -248,6 +259,7 @@ export function ChatPage(): React.JSX.Element {
       threadId={activeId}
       endpointError={endpointError}
       onRetryEndpoint={retryEndpoint}
+      carryoverAllowed={carryoverAllowed}
     />
   )
 }
@@ -262,6 +274,12 @@ export interface ChatSessionProps {
   /** 端点解析失败（这一屏取数链的第一环）：消息区给错误卡 + 重试 */
   endpointError?: Error | null
   onRetryEndpoint?: () => void
+  /**
+   * R92：允许这一挂接"上一挂的草稿过桥"吗（默认 true —— 直接使用 ChatSession 的既有口径，
+   * 只有"未就绪挂 → 同一次初始化落位"这一条路会真的留下过桥）。ChatPage 只在
+   * "系统初始化落位"那一次传真值：用户主动换会话 / 新建 / 删除 触发的重挂一律拒绝。
+   */
+  carryoverAllowed?: boolean
 }
 
 export function ChatSession({
@@ -269,7 +287,8 @@ export function ChatSession({
   threadId,
   runtime,
   endpointError = null,
-  onRetryEndpoint
+  onRetryEndpoint,
+  carryoverAllowed = true
 }: ChatSessionProps): React.JSX.Element {
   const [reloadToken, setReloadToken] = useState(0)
   /**
@@ -456,6 +475,7 @@ export function ChatSession({
           pending={pending}
           turnNotice={turnNotice}
           onClearTurnNotice={clearTurnNotice}
+          carryoverAllowed={carryoverAllowed}
         />
       </div>
     </ChatFrame>
@@ -483,6 +503,8 @@ interface ActiveChatProps {
   turnNotice: string | null
   /** 新一轮开始（发送 / 重试 / 编辑重发 / 审批续跑）时清掉上一轮的提示 */
   onClearTurnNotice: () => void
+  /** R92：草稿过桥的放行位（见 ChatSessionProps.carryoverAllowed） */
+  carryoverAllowed: boolean
 }
 
 /**
@@ -525,7 +547,8 @@ function ActiveChat({
   interactionsEnabled,
   pending,
   turnNotice,
-  onClearTurnNotice
+  onClearTurnNotice,
+  carryoverAllowed
 }: ActiveChatProps): React.JSX.Element {
   /** 实例就绪（round 76）：没就绪时不发不发、也不去服务端动历史，消息区画占位 */
   const ready = pending === null
@@ -1504,14 +1527,20 @@ function ActiveChat({
                   stopping: askState.stopping,
                   error: askState.error,
                   onDraftChange: (draft) => useAskUserStore.getState().changeDraft(key, draft),
+                  /* 0.1.2 / 001：把"服务端已接收"回执随请求带上（transport 在响应到手时响它，
+                     见 lib/agent 的 `AskUserAccepted`）—— 收卡挂在"请求被受理"上，不挂在"整轮跑完"上。
+                     但**这一轮到底成没成**必须如实往上抛：AI SDK 把失败吞进 `chat.error`
+                     （`sendMessage` 照样 resolve），不回抛 store 就分不清"响应没到手"与"跑完了"。 */
                   onSubmit: (answer) => {
                     if (busy) return
-                    void useAskUserStore.getState().submit(threadId, request, answer, async () => {
-                      await sendMessage(undefined, {
-                        body: { askUserResume: askUserResumeBody(threadId, request, answer) }
+                    void useAskUserStore.getState().submit(threadId, request, answer, (accepted) =>
+                      sendMessage(undefined, {
+                        body: { askUserResume: askUserResumeBody(threadId, request, answer) },
+                        metadata: askUserAcceptedMetadata(accepted)
+                      }).then(() => {
+                        if (chat.error) throw chat.error
                       })
-                      if (chat.error) throw chat.error
-                    })
+                    )
                   },
                   onStop: stopInteraction
                 }
@@ -1557,6 +1586,8 @@ function ActiveChat({
             compactDisabled={locked || !ready}
             externalNotice={compactNotice}
             usageVersion={usageVersion}
+            // R92：草稿过桥放行位（只有"系统初始化落位"那一次为 true，见 ChatPage 的判定）
+            allowCarryover={carryoverAllowed}
           />
           {/* round 65：输入卡正下方这一行（与卡片同列宽、左缘对齐），**只在初始页**（空会话）出现；
               已经有对话在跑时整行收合。

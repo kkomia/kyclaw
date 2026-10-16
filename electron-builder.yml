@@ -1,9 +1,8 @@
 # 打包配置（T15）：NSIS 用户级安装包 → dist/。
 # 没有代码签名证书：产物未签名，装的时候 SmartScreen 会拦一下（选"仍要运行"），见 task-15-report。
-# 更新通道（T17）：**仍然不写 publish** —— 没有真 Gitee 仓库可发，写了只会往包里塞一份指向不存在
-# 地址的 app-update.yml（一启动就报错）。试点期的更新地址由 env `KYCLAW_UPDATE_URL` 现给
-# （本机模拟源 / 内测切通道，见 src/main/updater.ts）；真发布时再加
-# publish: { provider: generic, url: <Gitee Release 直链> }，代码里那条"打包内 app-update.yml"的路会自动接上。
+# 更新通道（T17；round 62 起接内测源）：publish 指向**内测的局域网 generic 源**（见文件末
+# publish 段与它上面的说明）——打包时自动生成 latest.yml，并把指向该源的 app-update.yml 写进
+# resources/。单机模拟源 / 临时切通道仍可用 env `KYCLAW_UPDATE_URL` 覆盖（见 src/main/updater.ts）。
 appId: com.kkomia.kyclaw
 productName: kyclaw
 directories:
@@ -18,7 +17,20 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,vitest.config.ts,pnpm-workspace.yaml}'
   # 过程性材料不进包：docs 是设计与走查、.superpowers 是任务书/复核 diff、fixtures/scripts 只给测试与出包用
   - '!{docs,fixtures,scripts,.superpowers}/**'
+  # e2e 探针（Playwright 那一套）与它的入口/配置是纯开发材料，同样不进包：e2e 源码、跑它的
+  # playwright.config.ts 与 tsconfig.e2e.json、vitest 分组用的 vitest.native-specs.ts、以及
+  # 给协作方看的 AGENTS.md（旧包实测 asar 顶层混着这几样 —— 2026-10-16 逐项收掉）。
+  - '!e2e/**'
+  - '!playwright.config.ts'
+  - '!tsconfig.e2e.json'
+  - '!vitest.native-specs.ts'
+  - '!AGENTS.md'
   - '!build/**'
+  # 根 patches/**（pnpm 的补丁输入）同样是**过程文件**：安装时由 pnpm 套用，产物里已经是打好补丁的
+  # dist（随渲染端 bundle 走），.patch 原文本身不该进包。随包该有的两份**不走 files**：
+  # 许可声明走下面 extraResources 的 `resources/skills → skills`（含 THIRD_PARTY_NOTICES.md），
+  # 发行说明走 `build/release-notes → release-notes`。
+  - '!patches/**'
   # node-pty 的调试符号（每个 6MB，只在 Windows 上有）：运行时用不到，不进包
   - '!**/node-pty/prebuilds/**/*.pdb'
   # 本机嵌入引擎的运行时（模块 3B）**不进 asar**：它由下面的 extraResources 原样放到
@@ -57,6 +69,16 @@ extraResources:
     to: skills
     filter:
       - '**/*'
+  # 本版本发行说明（本轮）：`build/release-notes/<版本>.md` 原样拷到安装目录的
+  # resources/release-notes/ —— 「设置 → 关于」的常驻「更新日志」入口读这一份（断网 / 已是最新 /
+  # 没配更新源时唯一能看的日志）。**整目录拷、不写版本号**：换版本不用改这里，主进程只按
+  # `app.getVersion()` 找 `<版本>.md` 那一个文件名（找不到就说"本版暂无发行说明"，绝不借用别的版本）。
+  # 上面 files 里的 `!build/**` 只影响 app 文件集，extraResources 是另一条路（与 llama/skills 同）。
+  # 落点由 `pnpm package` 出包后自检（bundledNotesProblem）：漏拷 / 内容不一致都会当场停。
+  - from: build/release-notes
+    to: release-notes
+    filter:
+      - '**/*.md'
   # render_ppt 的随包 LibreOffice 渲染引擎（round 68）：`pnpm fetch:libreoffice-kit` 落的
   # npm 平铺目录（194MB 未压缩）原样拷到安装目录的 resources/libreoffice-kit/，
   # 主进程按 process.resourcesPath/libreoffice-kit 找它的 cli.js（开发态用仓库那份，见 render-ppt.ts

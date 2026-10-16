@@ -1,0 +1,245 @@
+/**
+ * dsh-document 的版面样式：类名全部自带 `dsh-` 前缀，只作用在自己那棵树上，不外泄到全局。
+ *
+ * 适配自 deepseek-harness（MIT，commit 86a4022）的同名 CSS module（视觉值换成 kyclaw 的设计 token）：
+ *   - `.../zoom/ZoomViewport.module.css` → .dsh-zoom-frame / -scrollport / -surface / -reveal-zone
+ *   - `.../zoom/ZoomControls.module.css` → .dsh-zoom-controls（含露头/收起两条过渡）
+ *   - `.../pdf/PdfBody.module.css`       → .dsh-pdf-pages / -page / -placeholder / -canvas / -surface / -text
+ * 文字层那一段另按 pdfjs-dist 6.4.299 的 `web/pdf_viewer.css`（Apache-2.0，Mozilla Foundation）
+ * 逐条核过：定位、字号口径（--total-scale-factor × --font-height）、选区与 endOfContent 的机制。
+ * 没有搬过来的：旋转页的 CSS 变换（本组件用的 viewport 已经把页面旋转算进宽高）、
+ * 高亮编辑器与注释层（那是 PDF 编辑器的能力，阅读器用不到）。
+ */
+
+/* ── 缩放视口 ─────────────────────────────────────────────────────────── */
+
+.dsh-zoom-frame {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dsh-zoom-scrollport {
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.dsh-zoom-surface {
+  max-width: none;
+}
+
+/* 适应宽度：宽度取"量到的原始宽"与容器宽里的小者 —— 容器变宽会自动跟着重排 */
+.dsh-zoom-frame[data-dsh-zoom-mode='fit-width'] .dsh-zoom-surface {
+  width: min(var(--dsh-zoom-width, 0px), 100%);
+}
+
+/* 固定倍率：宽度 = 原始宽 × 倍率（手势期间只改 --dsh-zoom 这一个变量，不动 React 树） */
+.dsh-zoom-frame[data-dsh-zoom-mode='fixed'] .dsh-zoom-surface {
+  width: calc(var(--dsh-zoom-width, 0px) * var(--dsh-zoom, 1));
+}
+
+.dsh-zoom-surface[hidden] {
+  display: none;
+}
+
+/* 底部 72px 的"露头区"：鼠标摸到这儿就把控件请出来（触屏见下面的常驻分支） */
+.dsh-zoom-reveal-zone {
+  position: absolute;
+  inset: auto 0 0;
+  height: var(--dsh-zoom-reveal-height, 72px);
+  pointer-events: none;
+}
+
+/* ── 浮动缩放控件 ─────────────────────────────────────────────────────── */
+
+.dsh-zoom-controls {
+  position: absolute;
+  z-index: 2;
+  inset-inline-start: 50%;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: var(--hairline-width) solid var(--border-hairline);
+  border-radius: var(--radius-button-lg);
+  color: var(--text-primary);
+  background: var(--bg-menu);
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px) scale(0.98);
+  transition:
+    opacity 160ms ease-in,
+    transform 160ms cubic-bezier(0.4, 0, 1, 1);
+  will-change: opacity, transform;
+}
+
+.dsh-zoom-controls[data-dsh-zoom-visible] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+  transition:
+    opacity 140ms ease-out,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 键盘走到控件里就一直露着：DSH 只在触屏上强制常驻，桌面这条是本仓的一条无障碍补充 */
+.dsh-zoom-controls:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .dsh-zoom-controls {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dsh-zoom-controls,
+  .dsh-zoom-controls[data-dsh-zoom-visible] {
+    transition-duration: 0.01ms;
+  }
+}
+
+.dsh-zoom-percent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding-inline: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 页列 ─────────────────────────────────────────────────────────────── */
+
+.dsh-pdf-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 100%;
+  padding: 12px;
+  overflow: visible;
+  white-space: normal;
+}
+
+/* 固定倍率下页面会比容器宽：整列改成 max-content，横向滚动条才铺得开 */
+.dsh-zoom-frame[data-dsh-zoom-mode='fixed'] .dsh-pdf-pages {
+  width: max-content;
+}
+
+.dsh-pdf-page {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow-x: visible;
+}
+
+/* 还没轮到画的页：按 3:4 占位 —— 滚动条与页数当场准确，这一块本身就是"还没画"的反馈 */
+.dsh-pdf-placeholder {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--bg-secondary);
+}
+
+.dsh-pdf-canvas {
+  display: block;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  margin-inline: auto;
+}
+
+.dsh-pdf-surface {
+  position: relative;
+  max-width: none;
+  margin-inline: auto;
+  box-shadow: var(--shadow-input);
+}
+
+/* ── 文字层（可选中 / 可复制） ────────────────────────────────────────── */
+
+.dsh-pdf-text {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+}
+
+.dsh-pdf-text .textLayer {
+  position: absolute;
+  inset: 0;
+  text-align: initial;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+
+  :is(span, br) {
+    position: absolute;
+    color: transparent;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+    user-select: text;
+  }
+
+  > :not(.markedContent),
+  .markedContent span:not(.markedContent) {
+    z-index: 1;
+    --font-height: 0;
+    --scale-x: 1;
+    --rotate: 0deg;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+
+  .markedContent {
+    display: contents;
+  }
+
+  span[role='img'] {
+    cursor: default;
+    user-select: none;
+  }
+
+  ::selection {
+    background: var(--selection);
+    color: transparent;
+  }
+
+  br::selection {
+    background: transparent;
+  }
+
+  /* "从某处选到页尾"那条路：endOfContent 平时在页面下沿之外，进入选择态时铺满整页 */
+  .endOfContent {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    z-index: 0;
+    cursor: default;
+    user-select: none;
+  }
+
+  &.selecting .endOfContent {
+    top: 0;
+  }
+}

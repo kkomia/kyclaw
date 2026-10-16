@@ -920,7 +920,7 @@ describe('round 7 · 权限 chip（ask|full 两档，full 先确认）', () => {
     )
   })
 
-  it('判不出会话工作区（多处并列）时不渲染权限入口', () => {
+  it('判不出会话工作区（多处并列）时入口照旧在：下拉里说明原因 + 一条去设置的真动作', () => {
     const ambiguous = {
       ...defaultSettings(),
       workspaces: [
@@ -932,7 +932,35 @@ describe('round 7 · 权限 chip（ask|full 两档，full 先确认）', () => {
     useSettingsStore.setState({ settings: ambiguous, loaded: true })
     setup({ threadId: 't1' })
 
-    expect(screen.queryByTestId('composer-permission')).not.toBeInTheDocument()
+    // 入口不消失（用户实报"聊天页面里 composer 的权限模式选择按钮不见了"）：还是同一枚 chip
+    const chip = screen.getByTestId('composer-permission')
+    expect(chip).toHaveTextContent('权限模式')
+    expect(chip).toHaveClass('h-8')
+
+    // 下拉里：一句为什么 + 一条去设置的实动作；**不摆**可点的档位（目标都没定下来，切了也不知道切谁）
+    fireEvent.keyDown(chip, { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-permission-reason')).toHaveTextContent(
+      '会话的工作区还没定下来'
+    )
+    expect(screen.getByTestId('composer-workspace-settings')).toHaveTextContent('打开工作区设置')
+    expect(screen.queryByTestId('composer-permission-ask')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-permission-full')).not.toBeInTheDocument()
+
+    // 那一条是真动作：点了就去工作区设置（与旧链接同一个去处）
+    fireEvent.click(screen.getByTestId('composer-workspace-settings'))
+    expect(window.location.hash).toBe('#/settings/workspaces')
+    window.location.hash = ''
+  })
+
+  it('一个工作区都没授权时：原因换成「还没有授权工作区」，入口照旧在', () => {
+    installKyclawBridge()
+    useSettingsStore.setState({ settings: defaultSettings(), loaded: true })
+    setup({ threadId: 't1' })
+
+    const chip = screen.getByTestId('composer-permission')
+    expect(chip).toHaveTextContent('权限模式')
+    fireEvent.keyDown(chip, { key: 'ArrowDown' })
+    expect(screen.getByTestId('composer-permission-reason')).toHaveTextContent('还没有授权工作区')
   })
 })
 

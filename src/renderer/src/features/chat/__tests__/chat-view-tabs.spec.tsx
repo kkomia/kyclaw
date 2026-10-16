@@ -111,6 +111,19 @@ describe('对话 / 轨迹 页签', () => {
     expect(vi.mocked(fetchThreadMessages)).not.toHaveBeenCalled()
   })
 
+  it('页签固定在头部右端（右上角）、标题占剩余空间 —— 不回标题旁边（用户口径：切换键要在右上）', async () => {
+    await mountSession()
+
+    const header = screen.getByTestId('chat-header')
+    const tabs = screen.getByRole('tablist', { name: '对话视图' })
+    // 右端 = 头部最后一个子元素；标题那一格 flex-1 占剩余宽度并让出右上角
+    expect(tabs.parentElement).toBe(header)
+    expect(header.lastElementChild).toBe(tabs)
+    expect(screen.getByTestId('chat-title').parentElement).toHaveClass('flex-1')
+    // pr-14：右上角那条走廊留给工作台开关（页签不钻到按钮底下）
+    expect(header).toHaveClass('pr-14')
+  })
+
   it('点「轨迹」：轨迹层激活并取数，对话层让位（两块都留在文档里、带透明度过渡，不硬切）', async () => {
     await mountSession()
 

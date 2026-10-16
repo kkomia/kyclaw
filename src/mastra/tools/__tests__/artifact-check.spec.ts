@@ -8,14 +8,25 @@
  *   - **声明与关系**：每个 `.rels` 的 Target 都要落在包内；`[Content_Types].xml` 要覆盖所有部件
  *     （声明了却没落进包的只记 info，见用例）；
  *   - zip 损坏（截断丢 EOCD / 改中央目录 CRC / 改条目数据字节）→ `fatal` 或抛 CRC 错；
+ *   - **外来容器的预检**：`readZipEntries(bytes, limits)` 给了上限才设限（不给就是老口径）；
+ *     `assertOfficeArchiveSafe` 是固定 20000 条 / 单条 64MiB / 合计 256MiB 的那一份——声明先于解压
+ *     校验、`maxOutputLength` 真卡住撒谎的声明、实际长度与累计都要对得上、重复条目名与越出包根拒。
+ *     这组用例自己造 zip（`buildZip`，声明与事实可以分开指定），好写产出库造不出的坏形状；
  *   - PDF 只认 `%PDF-` 头与末尾 `%%EOF`。
+ *
+ * `assertOfficeArchiveSafe` 的"不保留内容"（解一条丢一条、不建条目表）是**结构性质**：它不返回
+ * 条目，用例侧没法直接断言堆里没留东西，所以那条靠代码结构（`decodeEntry` 的结果只取 `.length`）
+ * 保证，不在下面的用例里声称验过。
  */
+import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import {
+  assertOfficeArchiveSafe,
   assertPackage,
   checkEntries,
   checkPackage,
   checkPdf,
+  OFFICE_ARCHIVE_LIMITS,
   readZipEntries,
   type CheckItem,
   type PackageCheck
@@ -94,6 +105,104 @@ function firstEntryLayout(zip: Buffer): {
     compressedSize: zip.readUInt32LE(centralOffset + 20),
     name: zip.toString('utf8', centralOffset + 46, centralOffset + 46 + nameLength)
   }
+}
+
+/** 写进包里的一个部件：`payload` 是事实，`declared*` / `local*` 是两份声明里的说法（默认按事实给） */
+interface ZipPart {
+  name: string
+  /** 写进包里的字节（stored = 原文；deflate = 压缩后的字节） */
+  payload: Buffer
+  /** 解压后的原文（deflate 时给；默认的声明值按它算） */
+  original?: Buffer
+  method: 0 | 8
+  /** 中央目录里的标志位（局部头默认同值） */
+  flags?: number
+  /** 局部头单独的标志位（另给 = 造"两侧各说一套"的样本） */
+  localFlags?: number
+  /** 局部头单独的压缩方式 / 名字（另给 = 造两侧不一致） */
+  localMethod?: number
+  localName?: string
+  /** 中央目录里的声明（另给 = 造"声明撒谎"的样本） */
+  declaredSize?: number
+  declaredCrc?: number
+  declaredCompressedSize?: number
+}
+
+/** stored 部件（不压缩）：`text` 就是包里的字节 */
+function stored(name: string, text: string, extra: Partial<ZipPart> = {}): ZipPart {
+  return { name, method: 0, payload: Buffer.from(text, 'utf8'), ...extra }
+}
+
+/** deflated 部件（压缩）：声明默认按原文算 */
+function deflated(name: string, original: Buffer, extra: Partial<ZipPart> = {}): ZipPart {
+  return { name, method: 8, payload: deflateRawSync(original), original, ...extra }
+}
+
+/**
+ * 造一份 zip：声明与事实分开填，所以"中央目录写 1KB / 实际 8MiB"、"EOCD 条数撒谎"、
+ * "局部头与中央目录不一致"这些形状都能手写出来（产出库造不出这些，也不该造）。
+ */
+function buildZip(parts: readonly ZipPart[], declaredCount?: number): Buffer {
+  const local: Buffer[] = []
+  const central: Buffer[] = []
+  let offset = 0
+
+  for (const part of parts) {
+    const source = part.original ?? part.payload
+    const nameBytes = Buffer.from(part.name, 'utf8')
+    const localNameBytes = Buffer.from(part.localName ?? part.name, 'utf8')
+
+    const header = Buffer.alloc(30)
+    header.writeUInt32LE(0x04034b50, 0)
+    header.writeUInt16LE(20, 4) // 需要的版本
+    header.writeUInt16LE(part.localFlags ?? part.flags ?? 0, 6) // 标志位
+    header.writeUInt16LE(part.localMethod ?? part.method, 8) // 压缩方式
+    header.writeUInt32LE(part.declaredCrc ?? crc32(source), 14)
+    header.writeUInt32LE(part.payload.length, 18) // 压缩后大小
+    header.writeUInt32LE(part.declaredSize ?? source.length, 22) // 原始大小
+    header.writeUInt16LE(localNameBytes.length, 26)
+    local.push(header, localNameBytes, part.payload)
+
+    const entry = Buffer.alloc(46)
+    entry.writeUInt32LE(0x02014b50, 0)
+    entry.writeUInt16LE(20, 4) // 产出方版本
+    entry.writeUInt16LE(20, 6) // 需要的版本
+    entry.writeUInt16LE(part.flags ?? 0, 8) // 标志位
+    entry.writeUInt16LE(part.method, 10) // 压缩方式
+    entry.writeUInt32LE(part.declaredCrc ?? crc32(source), 16)
+    entry.writeUInt32LE(part.declaredCompressedSize ?? part.payload.length, 20)
+    entry.writeUInt32LE(part.declaredSize ?? source.length, 24)
+    entry.writeUInt16LE(nameBytes.length, 28)
+    entry.writeUInt32LE(offset, 42) // 本地头偏移
+    central.push(entry, nameBytes)
+
+    offset += header.length + localNameBytes.length + part.payload.length
+  }
+
+  const centralSize = central.reduce((sum, chunk) => sum + chunk.length, 0)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(declaredCount ?? parts.length, 8)
+  eocd.writeUInt16LE(declaredCount ?? parts.length, 10)
+  eocd.writeUInt32LE(centralSize, 12)
+  eocd.writeUInt32LE(offset, 16) // 中央目录起点
+  return Buffer.concat([...local, ...central, eocd])
+}
+
+/** CRC32（IEEE，表驱动）——与产品侧校验用的同一套算法（夹具写入器不能自己算错） */
+const CRC_TABLE = new Uint32Array(256)
+for (let index = 0; index < 256; index++) {
+  let value = index
+  for (let bit = 0; bit < 8; bit++) {
+    value = (value & 1) !== 0 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
+  }
+  CRC_TABLE[index] = value >>> 0
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+  return (crc ^ 0xffffffff) >>> 0
 }
 
 describe('checkPackage：三种真实产出物全过', () => {
@@ -498,6 +607,195 @@ describe('readZipEntries：损坏的 zip 一律中文报错', () => {
     bytes[layout.dataStart + Math.floor(layout.compressedSize / 2)] ^= 0xff
 
     expect(() => readZipEntries(bytes)).toThrow(/解压失败|CRC32 校验失败/)
+  })
+})
+
+describe('readZipEntries(bytes, limits)：给了上限才设限（不给就是老口径）', () => {
+  const LIMITS = { maxEntries: 100, maxEntryBytes: 1024 * 1024, maxTotalBytes: 4 * 1024 * 1024 }
+
+  it('真实产出物：不给 limits 与给 OFFICE_ARCHIVE_LIMITS 读到的是同一份条目（预检不误报）', async () => {
+    const bytes = await renderXlsx(XLSX_SHEETS)
+    const legacy = readZipEntries(bytes)
+    const bounded = readZipEntries(bytes, OFFICE_ARCHIVE_LIMITS)
+
+    expect([...bounded.keys()]).toEqual([...legacy.keys()])
+    for (const [name, data] of legacy) expect(bounded.get(name)?.equals(data)).toBe(true)
+  })
+
+  it('单条上限：声明超了就在解压前拒（压缩数据是垃圾也不该走到"解压失败"）', () => {
+    const bytes = buildZip([
+      { name: 'a.bin', method: 8, payload: Buffer.from([1, 2, 3]), declaredSize: 2 * 1024 * 1024 }
+    ])
+
+    expect(() => readZipEntries(bytes, LIMITS)).toThrow(/单条上限/)
+    expect(() => readZipEntries(bytes, LIMITS)).not.toThrow(/解压失败/)
+  })
+
+  it('单条上限：声明撒谎（写 1KB、实际 8MiB）→ maxOutputLength 真卡住', () => {
+    const bytes = buildZip([
+      deflated('boom.bin', Buffer.alloc(8 * 1024 * 1024), { declaredSize: 1024 })
+    ])
+
+    expect(() => readZipEntries(bytes, LIMITS)).toThrow(/单条上限/)
+  })
+
+  it('累计上限：单条都不超、加起来超了 → 拒；边界内则过', () => {
+    const parts = ['a', 'b', 'c'].map((name) => stored(`${name}.txt`, 'x'.repeat(1024)))
+    const bytes = buildZip(parts)
+
+    expect(() => readZipEntries(bytes, { maxEntryBytes: 2048, maxTotalBytes: 3000 })).toThrow(
+      /累计/
+    )
+    expect([...readZipEntries(bytes, { maxEntryBytes: 2048, maxTotalBytes: 4000 }).keys()]).toEqual(
+      ['a.txt', 'b.txt', 'c.txt']
+    )
+  })
+
+  it('累计比单条更紧时按累计卡（maxOutputLength 取两个上限里更紧的那个）', () => {
+    const bytes = buildZip([deflated('grow.bin', Buffer.alloc(4096), { declaredSize: 512 })])
+
+    expect(() =>
+      readZipEntries(bytes, { maxEntryBytes: 64 * 1024 * 1024, maxTotalBytes: 1024 })
+    ).toThrow(/累计/)
+  })
+
+  it('实际长度与声明对不上：有上限就拒，没上限照旧不查（向后兼容）', () => {
+    const bytes = buildZip([
+      { name: 'short.bin', method: 0, payload: Buffer.from('abc', 'utf8'), declaredSize: 10 }
+    ])
+
+    expect(readZipEntries(bytes).get('short.bin')?.toString('utf8')).toBe('abc')
+    expect(() => readZipEntries(bytes, LIMITS)).toThrow(/与声明对不上/)
+  })
+
+  it('重复条目名：有上限就拒（老口径是后者覆盖前者——正是要防的绕过形状）', () => {
+    const bytes = buildZip([stored('xl/a.xml', '先写的'), stored('xl/a.xml', '后写的')])
+
+    expect(readZipEntries(bytes).get('xl/a.xml')?.toString('utf8')).toBe('后写的')
+    expect(() => readZipEntries(bytes, LIMITS)).toThrow(/重复条目名/)
+  })
+
+  it('同一路径的不同写法（./xl/a.xml 与 xl/a.xml）也算重复', () => {
+    const bytes = buildZip([stored('xl/a.xml', 'one'), stored('./xl/a.xml', 'two')])
+
+    expect(readZipEntries(bytes).size).toBe(2)
+    expect(() => readZipEntries(bytes, LIMITS)).toThrow(/重复条目名/)
+  })
+
+  it('越出包根（../x）与空名：拒', () => {
+    expect(() => readZipEntries(buildZip([stored('../x.txt', 'x')]), LIMITS)).toThrow(/越出包根/)
+    expect(() => readZipEntries(buildZip([stored('', 'x')]), LIMITS)).toThrow(/没名字/)
+  })
+
+  it('加密：中央目录标了就拒（老口径也拒）；只标在局部头的，有上限才拒', () => {
+    expect(() => readZipEntries(buildZip([stored('a.txt', 'x', { flags: 1 })]))).toThrow(/加密/)
+
+    const localOnly = buildZip([stored('a.txt', 'x', { localFlags: 1 })])
+    expect(readZipEntries(localOnly).has('a.txt')).toBe(true)
+    expect(() => readZipEntries(localOnly, LIMITS)).toThrow(/加密/)
+  })
+
+  it('两侧声明不一致（局部头的名字 / 压缩方式）：有上限就拒', () => {
+    expect(() =>
+      readZipEntries(buildZip([stored('a.txt', 'x', { localName: 'b.txt' })]), LIMITS)
+    ).toThrow(/局部头名字/)
+    expect(() =>
+      readZipEntries(buildZip([stored('a.txt', 'x', { localMethod: 8 })]), LIMITS)
+    ).toThrow(/压缩方式/)
+  })
+
+  it('条数撒谎（EOCD 记 1 条、中央目录里 2 条）：有上限就拒，老口径只读 1 条', () => {
+    const two = [stored('a.txt', 'x'), stored('b.txt', 'y')]
+
+    expect(readZipEntries(buildZip(two, 1)).size).toBe(1)
+    expect(() => readZipEntries(buildZip(two, 1), LIMITS)).toThrow(/条数与实际不符/)
+  })
+})
+
+describe('assertOfficeArchiveSafe：外来文件的固定口径（20000 条 / 64MiB / 256MiB）', () => {
+  it('三个固定上限就是拍板的那个数', () => {
+    expect(OFFICE_ARCHIVE_LIMITS).toEqual({
+      maxEntries: 20_000,
+      maxEntryBytes: 64 * 1024 * 1024,
+      maxTotalBytes: 256 * 1024 * 1024
+    })
+  })
+
+  it('真实产出物与手写 zip 都过：预检不拦正经文件', async () => {
+    const files = [
+      await renderXlsx(XLSX_SHEETS),
+      (await renderPptx(PPT_INPUT)).data,
+      await renderDocx(DOCX_INPUT),
+      buildZip([
+        stored('[Content_Types].xml', '<Types/>'),
+        deflated('word/document.xml', Buffer.from('<w:document/>', 'utf8'))
+      ])
+    ]
+
+    for (const bytes of files) expect(() => assertOfficeArchiveSafe(bytes)).not.toThrow()
+  })
+
+  it('声明解压后 70MiB（超 64MiB 单条）：拒，且是解压之前就拒（压缩数据是垃圾也只报上限）', () => {
+    const bytes = buildZip([
+      {
+        name: 'huge.bin',
+        method: 8,
+        payload: Buffer.from([9, 9, 9]),
+        declaredSize: 70 * 1024 * 1024
+      }
+    ])
+
+    expect(() => assertOfficeArchiveSafe(bytes)).toThrow(/单条上限/)
+    expect(() => assertOfficeArchiveSafe(bytes)).not.toThrow(/解压失败/)
+  })
+
+  it('累计声明超 256MiB：拒（前四条各 60MiB 都合法，第五条把总和推到 300MiB），且是解压之前就拒', () => {
+    // 算术：head.txt(1) + 4×60MiB = 240MiB+1 **还没到** 256MiB —— 只造四条永远进不了累计那一支，
+    // 会掉到解压后的"声明对不上"（旧夹具就是这么红的：那条断言其实测不到累计）。**五条** 60MiB
+    // 才把总和推到 300MiB+1。载荷一律 2 字节（声明 60MiB）：真去解压会立刻报"对不上"，
+    // 所以下面第二条断言正是"整目录声明先查完、再 inflate"的证据。
+    const parts: ZipPart[] = [stored('head.txt', 'x')]
+    for (let index = 0; index < 5; index++) {
+      parts.push({
+        name: `big${index}.bin`,
+        method: 0,
+        payload: Buffer.from('xx', 'utf8'),
+        declaredSize: 60 * 1024 * 1024
+      })
+    }
+
+    expect(() => assertOfficeArchiveSafe(buildZip(parts))).toThrow(/累计/)
+    expect(() => assertOfficeArchiveSafe(buildZip(parts))).not.toThrow(/对不上/)
+  })
+
+  it('条目数：20000 条放行、20001 条拒（固定上限的边界）', () => {
+    const many = (count: number): ZipPart[] =>
+      Array.from({ length: count }, (_, index) => stored(`f${index}.txt`, ''))
+
+    expect(() => assertOfficeArchiveSafe(buildZip(many(20_000)))).not.toThrow()
+    expect(() => assertOfficeArchiveSafe(buildZip(many(20_001)))).toThrow(/条目数/)
+  })
+
+  it('损坏的包（截断 / 改中央目录 CRC / 改条目数据字节）：拒', async () => {
+    const bytes = Buffer.from(await renderXlsx(XLSX_SHEETS))
+
+    expect(() => assertOfficeArchiveSafe(bytes.subarray(0, bytes.length - 64))).toThrow()
+
+    const badCrc = Buffer.from(bytes)
+    badCrc[firstEntryLayout(badCrc).crcOffset] ^= 0xff
+    expect(() => assertOfficeArchiveSafe(badCrc)).toThrow(/CRC32 校验失败/)
+
+    const badData = Buffer.from(bytes)
+    const layout = firstEntryLayout(badData)
+    badData[layout.dataStart + Math.floor(layout.compressedSize / 2)] ^= 0xff
+    expect(() => assertOfficeArchiveSafe(badData)).toThrow(/解压失败|CRC32 校验失败|与声明对不上/)
+  })
+
+  it('zip64 哨兵：拒（继承老口径）', () => {
+    const bytes = Buffer.from(buildZip([stored('a.txt', 'x')]))
+    bytes.writeUInt16LE(0xffff, eocdOffset(bytes) + 10)
+
+    expect(() => assertOfficeArchiveSafe(bytes)).toThrow(/zip64/)
   })
 })
 

@@ -53,6 +53,8 @@ import type { ReferenceKind } from './reference-markers'
  *   - `PermissionChip`：权限两档（每次询问 / 完全访问）——**只走引擎既有两档**，
  *     放开方向（full）沿用设置页那套确认框语义；写走 `workspace:set-mode` 通道（不弱化 T13）；
  *     round 13：无描边（hover / 展开只铺灰底），「完全访问」用时警示色 + ShieldAlert（不走对勾图标）；
+ *     用户实报（"聊天页面 composer 的权限模式选择按钮不见了"）：**入口永远在** —— 判不出工作区时
+ *     不再整块换成另一个链接，而是同一枚 chip + 同一个下拉（菜单里说明 + 一条去设置的真动作）；
  *   - `ContextChip`：上下文环（round 42 二轮从 ModelChip 里拆出来的**独立组件**）——环自己点了开明细卡、
  *     hover 也出同一张卡；与模型名只是相邻，不共用按钮；round 57 起用量 ≥ 80% 时环左边多一枚
  *     「压缩上下文」胶囊（同层兄弟，点即压缩，不用在输入框里打 `/`）；
@@ -216,8 +218,13 @@ export function PlusMenu({
 }
 
 export interface PermissionChipProps {
-  /** 当前会话的工作区根（判不出时调用方不渲染本 chip） */
-  workspace: Workspace
+  /**
+   * 当前会话的工作区条目（授权列表里那条）。**null = 判不出**（没有授权工作区 / 多个并列且没
+   * 指认默认 / 会话项目的文件夹不在列表里）。
+   */
+  workspace: Workspace | null
+  /** `workspace` 为 null 时下拉里那句原因（为什么现在切不了；去哪儿看菜单里那条动作） */
+  reason?: string
   onNotice: (notice: ComposerNotice | null) => void
 }
 
@@ -226,7 +233,86 @@ const MODE_LABELS: Record<WorkspaceMode, string> = {
   full: '完全访问'
 }
 
-export function PermissionChip({ workspace, onNotice }: PermissionChipProps): React.JSX.Element {
+/**
+ * chip 触发器（两档 chip 与"判不出"那一档**同一个妆**）：h-8、无描边、hover / 展开只铺灰底、
+ * 「完全访问」用警示色。两处共用一份，免得"判不出"那档长得像另一个东西。
+ */
+function permissionTriggerClass(full: boolean): string {
+  return cn(
+    'inline-flex h-8 max-w-40 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 transition-colors duration-(--motion-fast) ease-main hover:bg-hover data-[state=open]:bg-hover disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
+    full ? 'text-warning' : 'text-ink-secondary hover:text-ink data-[state=open]:text-ink'
+  )
+}
+
+/**
+ * 判不出工作区的那一档（用户实报"权限模式选择按钮不见了"）：入口**不再整块换成别的链接**，
+ * 还是同一枚 chip + 同一个下拉。但菜单里不摆可点的档位 —— 目标都没定下来，"切换"无从谈起
+ * （切了也不知道在切谁，这正是原实现把入口藏起来的理由）。这里改成**说明 + 指路**：
+ * 一句为什么，加一条去设置里指认工作区的真动作 —— 不造假档位，也不让入口静默消失。
+ */
+function UndecidedPermissionChip({ reason }: { reason: string }): React.JSX.Element {
+  return (
+    <Menu
+      trigger={
+        <button
+          type="button"
+          data-testid="composer-permission"
+          className={permissionTriggerClass(false)}
+        >
+          <Shield aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">权限模式</span>
+        </button>
+      }
+      items={[
+        {
+          id: 'undecided',
+          type: 'custom',
+          content: (
+            <p
+              data-testid="composer-permission-reason"
+              className="max-w-52 px-1 text-c1 text-ink-secondary"
+            >
+              {reason}
+            </p>
+          )
+        },
+        { id: 'sep', type: 'separator' },
+        {
+          id: 'workspace-settings',
+          label: '打开工作区设置',
+          testId: 'composer-workspace-settings',
+          onSelect: () => {
+            window.location.hash = '#/settings/workspaces'
+          }
+        }
+      ]}
+      side="top"
+      align="start"
+      tooltip="切换权限模式"
+    />
+  )
+}
+
+/**
+ * 权限入口（**永远在**）：判得出工作区 = 两档 chip（每次询问 / 完全访问，写走 `workspace:set-mode`）；
+ * 判不出 = 同一枚妆的「权限模式」chip，下拉里只说明 + 指路（见 `UndecidedPermissionChip`）。
+ */
+export function PermissionChip({
+  workspace,
+  reason = '会话的工作区还没定下来',
+  onNotice
+}: PermissionChipProps): React.JSX.Element {
+  if (workspace === null) return <UndecidedPermissionChip reason={reason} />
+  return <DecidedPermissionChip workspace={workspace} onNotice={onNotice} />
+}
+
+function DecidedPermissionChip({
+  workspace,
+  onNotice
+}: {
+  workspace: Workspace
+  onNotice: (notice: ComposerNotice | null) => void
+}): React.JSX.Element {
   const setWorkspaceMode = useSettingsStore((state) => state.setWorkspaceMode)
   const [pending, setPending] = useState(false)
   /** 等确认切到「完全访问」（null = 没有确认框） */
@@ -280,10 +366,7 @@ export function PermissionChip({ workspace, onNotice }: PermissionChipProps): Re
             type="button"
             data-testid="composer-permission"
             disabled={pending}
-            className={cn(
-              'inline-flex h-8 max-w-40 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 transition-colors duration-(--motion-fast) ease-main hover:bg-hover data-[state=open]:bg-hover disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
-              full ? 'text-warning' : 'text-ink-secondary hover:text-ink data-[state=open]:text-ink'
-            )}
+            className={permissionTriggerClass(full)}
           >
             <Icon aria-hidden="true" className="size-3.5 shrink-0" />
             <span className="truncate">{MODE_LABELS[workspace.mode]}</span>

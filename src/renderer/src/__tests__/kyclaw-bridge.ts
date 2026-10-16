@@ -1,6 +1,7 @@
 import { vi, type Mock } from 'vitest'
 import {
   CONNECTION_TEST_SCOPE_NOTE,
+  type BundledReleaseNotes,
   type ConnectionTestResult,
   type KyclawAgentApi,
   type KyclawApi,
@@ -31,11 +32,14 @@ import type {
   GitCommitDetail,
   GitOverview,
   ListDirResult,
+  TableBytesResult,
   TerminalExit,
   TerminalSession,
   WorkbenchSearchMode,
   WorkbenchSearchResult
 } from '@shared/workbench'
+import type { OfficePreviewPriority, OfficePreviewResult } from '@shared/office-preview'
+import type { TextPageCursor, TextPageResult, TextVersionResult } from '@shared/workbench-text'
 
 /**
  * jsdom 里没有真的 preload，`window.kyclaw` 默认不存在。
@@ -123,6 +127,8 @@ export interface UpdatesApiStub {
   check: Mock<() => Promise<UpdateState>>
   install: Mock<() => Promise<void>>
   onStateChanged: Mock<(listener: (state: UpdateState) => void) => () => void>
+  /** 本版本随包发行说明（本轮）：默认"这一版没随说明"，用例按需喂 ok / unreadable */
+  releaseNotes: Mock<() => Promise<BundledReleaseNotes>>
   push: (state: UpdateState) => void
 }
 
@@ -363,7 +369,8 @@ export function updatesApiStub(
     configured: false,
     builtinUrl: null,
     status: { phase: 'idle' }
-  }
+  },
+  notes: BundledReleaseNotes = { state: 'missing' }
 ): UpdatesApiStub {
   const listeners = new Set<(state: UpdateState) => void>()
   let current = initial
@@ -371,6 +378,7 @@ export function updatesApiStub(
     state: vi.fn(async () => current),
     check: vi.fn(async () => current),
     install: vi.fn(async () => {}),
+    releaseNotes: vi.fn(async () => notes),
     onStateChanged: vi.fn((listener: (state: UpdateState) => void) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -414,8 +422,32 @@ export function telemetryApiStub(endpointOf: () => string = () => ''): Telemetry
 export interface WorkbenchApiStub {
   listDir: Mock<(threadId: string, relative: string) => Promise<ListDirResult>>
   readFile: Mock<(threadId: string, relative: string) => Promise<FilePreview>>
+  /**
+   * 文本分页（`workbench:read-text-page`）：**默认实现把 `readFile` 的桩转成一页** ——
+   * 老用例那些 `readFile.mockResolvedValue({ kind: 'text', … })` 的夹具因此不用重写
+   * （分页真行为由 `dsh-media/__tests__/paged-text.spec.tsx` 直接喂取数口覆盖）。
+   * 要测分页本身（游标 / 续读 / changed）就自己 `mockResolvedValueOnce` 覆盖这一条。
+   */
+  readTextPage: Mock<
+    (threadId: string, relative: string, cursor: TextPageCursor | null) => Promise<TextPageResult>
+  >
+  /** 文本版本探询（轮询用）：默认稳定不变（版本 'test:0'），老用例不会被"文件已更新"打扰 */
+  textVersion: Mock<(threadId: string, relative: string) => Promise<TextVersionResult>>
   /** round 40：字节通道（图片 / PDF 的按格式预览）；默认回"不支持" */
   readBytes: Mock<(threadId: string, relative: string) => Promise<FileBytesResult>>
+  /** 表格原始字节通道（xls / xlsx / csv / tsv）；默认回"认不出" */
+  tableBytes: Mock<(threadId: string, relative: string) => Promise<TableBytesResult>>
+  /** 办公档页式预览（主进程转 PDF）；默认回"这台机器没有引擎"，用例自己喂成功回包 */
+  officePdf: Mock<
+    (
+      threadId: string,
+      relative: string,
+      priority: OfficePreviewPriority,
+      requestId: string
+    ) => Promise<OfficePreviewResult>
+  >
+  /** 取消一次办公档转换（幂等、无回包） */
+  cancelOfficePdf: Mock<(requestId: string) => Promise<void>>
   /** round 44：搜索（默认空结果；用例自己 mockResolvedValue 喂命中） */
   search: Mock<
     (threadId: string, query: string, mode: WorkbenchSearchMode) => Promise<WorkbenchSearchResult>
@@ -429,10 +461,20 @@ export interface WorkbenchApiStub {
 }
 
 export function workbenchApiStub(): WorkbenchApiStub {
-  return {
+  const stub: WorkbenchApiStub = {
     listDir: vi.fn(async () => ({ entries: [], truncated: false })),
     readFile: vi.fn(async () => ({ kind: 'text' as const, text: '', size: 0, truncated: false })),
+    readTextPage: vi.fn(async () => ({ kind: 'missing' as const })),
+    textVersion: vi.fn(async () => ({ kind: 'version' as const, version: 'test:0', size: 0 })),
     readBytes: vi.fn(async () => ({ kind: 'unsupported' as const, size: 0 })),
+    tableBytes: vi.fn(async () => ({ kind: 'unsupported' as const, size: 0 })),
+    officePdf: vi.fn(async (_threadId: string, relative: string): Promise<OfficePreviewResult> => ({
+      kind: 'failed',
+      path: relative,
+      code: 'unavailable',
+      message: '测试桩：没有可用的转换引擎'
+    })),
+    cancelOfficePdf: vi.fn(async () => undefined),
     search: vi.fn(async () => ({ results: [], truncated: false, scanned: 0 })),
     reveal: vi.fn(async () => ({ path: '' })),
     open: vi.fn(async () => ({ path: '' })),
@@ -448,6 +490,30 @@ export function workbenchApiStub(): WorkbenchApiStub {
       files: []
     }))
   }
+
+  /**
+   * 文本分页的默认实现：**把 `readFile` 的桩转成一页**（老用例的文本夹具因此照旧管用）。
+   * `truncated: true` 的桩对应 `eof: false`（界面出现"加载更多"），其它原样带过来；
+   * 二进制 / 过大照旧直通（分页通道与旧文本通道在这两种结果上同形）。
+   */
+  stub.readTextPage.mockImplementation(async (threadId, relative) => {
+    const preview = await stub.readFile(threadId, relative)
+    if (preview.kind === 'binary') return { kind: 'binary', size: preview.size }
+    if (preview.kind === 'too-large') {
+      return { kind: 'too-large', size: preview.size, limit: preview.size }
+    }
+    return {
+      kind: 'page',
+      text: preview.text,
+      offset: 0,
+      nextOffset: preview.truncated ? preview.text.length : preview.size,
+      size: preview.size,
+      version: 'test:0',
+      eof: !preview.truncated,
+      overlongLine: false
+    }
+  })
+  return stub
 }
 
 /** 终端面：默认起一个固定 id 的会话；`push` / `exit` 模拟主进程的两条推送 */

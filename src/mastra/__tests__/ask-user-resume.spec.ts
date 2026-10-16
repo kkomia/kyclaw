@@ -102,6 +102,27 @@ let server: AgentServerHandle
 let promptHistory: unknown[][] = []
 let scripts: Array<() => StreamPart[]> = []
 let streamDelay = 0
+/**
+ * 受控慢流（0.1.2 / 001 的探针用）：非 null 时，模型那一轮的 stream **一个 chunk 都不产**，
+ * 一直等到用例放闸 —— 于是"响应头什么时候出去的"与"模型什么时候开始说话"这两件事分得开，
+ * 不需要靠 sleep 猜时间。闸门开着时行为同 `simulateReadableStream`（可叠加 streamDelay）。
+ */
+let firstChunkGate: Promise<void> | null = null
+let onModelEntered: (() => void) | null = null
+
+function gatedStream(chunks: StreamPart[], gate: Promise<void>): ReadableStream<StreamPart> {
+  return new ReadableStream<StreamPart>({
+    async start(controller) {
+      onModelEntered?.()
+      await gate
+      for (const chunk of chunks) {
+        controller.enqueue(chunk)
+        if (streamDelay > 0) await new Promise((resolve) => setTimeout(resolve, streamDelay))
+      }
+      controller.close()
+    }
+  })
+}
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'kyclaw-ask-user-'))
@@ -112,6 +133,7 @@ beforeAll(async () => {
       promptHistory.push(options.prompt as unknown[])
       const script = scripts.shift()
       if (!script) throw new Error('mock 脚本用完了')
+      if (firstChunkGate !== null) return { stream: gatedStream(script(), firstChunkGate) }
       return { stream: simulateReadableStream({ chunks: script(), chunkDelayInMs: streamDelay }) }
     }
   })
@@ -510,6 +532,90 @@ describe('ask_user suspend/resume: real server + Chat', () => {
       expect(retry.status, await retry.text()).toBe(200)
     } finally {
       streamDelay = 0
+    }
+  }, 60_000)
+
+  /**
+   * 0.1.2 / 001 的服务端事实核查：客户端的"响应到手"到底对等于什么时刻 —— 路由返回那条流之前，
+   * 服务端**还等不等模型的首个 chunk**？等的话，客户端那一响只能等效于"模型开始说话"。
+   *
+   * 不靠 sleep 猜：闸门关着时模型一个 chunk 都不产（`gatedStream`），于是响应在闸门关着时到手
+   * 就等于"服务端没等首块"；非得放闸才到手就是等了首块（那种情况这里会红，按"要不要服务端明确
+   * ack"单独决策，不静默降级）。
+   */
+  it('resume 的响应建立在模型首块之前（受控慢流实测，不等整流结束）', async () => {
+    scripts = [toolCall, text]
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${server.token}` }
+    const threadId = 'thread-resume-timing'
+    const chat = new Chat<UIMessage>({
+      transport: new DefaultChatTransport({
+        api: `${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`,
+        headers
+      })
+    })
+    await chat.sendMessage({ text: 'timing' }, { body: threadMemoryBody(threadId) })
+    await waitUntil(() => chat.status === 'ready')
+    const pendingResponse = await fetch(`${server.baseUrl}/ask-user/pending?threadId=${threadId}`, {
+      headers
+    })
+    const { pending } = (await pendingResponse.json()) as {
+      pending: Array<{ runId: string; toolCallId: string }>
+    }
+
+    let openGate!: () => void
+    firstChunkGate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+    let enterModel!: () => void
+    const modelEntered = new Promise<void>((resolve) => {
+      enterModel = resolve
+    })
+    onModelEntered = enterModel
+    try {
+      const started = Date.now()
+      const response = fetch(`${server.baseUrl}/ask-user/resume`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          threadId,
+          ...pending[0],
+          resumeData: {
+            status: 'answered',
+            answers: [{ questionId: 'format', selectedOptionIds: ['pdf'] }]
+          }
+        })
+      })
+      let headersAt: number | null = null
+      void response.then(() => {
+        headersAt = Date.now()
+      })
+      // 这一轮已经真的进了模型（prompt 在手上），但闸门关着：模型一个 chunk 都还没产
+      await modelEntered
+      const deadline = Date.now() + 1500
+      while (headersAt === null && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      // 闸门一直没开，响应却到手了 = 路由**没有**等模型首块
+      expect(
+        headersAt,
+        '闸门关着时响应就该到手（客户端"已接收"= 请求被受理，不是首 token）'
+      ).not.toBeNull()
+
+      openGate()
+      const arrived = await response
+      const body = await arrived.text()
+      const parts = sseParts(body)
+      expect(arrived.status).toBe(200)
+      expect(parts.some((part) => part.type === 'error')).toBe(false)
+      expect(
+        parts.some((part) => part.type === 'text-delta' && part.delta === '已收到你的选择。')
+      ).toBe(true)
+      console.log(
+        `[kyclaw][001 探针] resume 响应头 +${headersAt! - started}ms / 首块放闸后才到；整流照常跑完（${parts.length} 个 part）`
+      )
+    } finally {
+      openGate()
+      firstChunkGate = null
+      onModelEntered = null
     }
   }, 60_000)
 

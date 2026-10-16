@@ -30,13 +30,19 @@ import { settingsPath, writeSettings } from '../../settings'
 import { defaultSettings, type Workspace } from '../../../shared/settings'
 import type { ProviderConfig } from '../../../shared/providers'
 
-const enabled = process.env.KYCLAW_R69_REAL === '1'
+const requested = process.env.KYCLAW_R69_REAL === '1'
 const LABEL = process.env.KYCLAW_R69_LABEL ?? 'after'
 const repoRoot = resolve(__dirname, '..', '..', '..', '..')
 const evidenceDir = join(repoRoot, '.superpowers', 'sdd', '2026-10-10-kyclaw-mvp', '_r69-probe')
 
 const BASE_URL = process.env.KYCLAW_R69_BASE ?? 'https://api.deepseek.com'
-const API_KEY = process.env.KYCLAW_R69_KEY ?? 'sk-REDACTED'
+const API_KEY = process.env.KYCLAW_R69_KEY ?? ''
+
+/** 门开一半（REAL=1 但 KEY 空）时说清为什么跳过：本文件**不提供任何默认密钥** */
+if (requested && API_KEY === '') {
+  console.warn('[R69] KYCLAW_R69_REAL=1 但 KYCLAW_R69_KEY 为空——真服务探针跳过（没有默认密钥可用）')
+}
+const enabled = requested && API_KEY !== ''
 const MODEL = process.env.KYCLAW_R69_MODEL ?? 'deepseek-flash'
 const TASK = process.env.KYCLAW_R69_TASK ?? '看下这个目录里有什么文件，随便写个 md 总结一下'
 /** 会话 id（前 8 位决定会话根目录名；两次对照必须一致） */

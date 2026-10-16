@@ -41,12 +41,18 @@ import type { ProviderConfig } from '../../../shared/providers'
 import { extractPptx } from '../../workbench-office'
 import { runProcess } from '../../../mastra/tools/exec'
 
-const enabled = process.env.KYCLAW_R68_REAL === '1'
+const requested = process.env.KYCLAW_R68_REAL === '1'
 const repoRoot = resolve(__dirname, '..', '..', '..', '..')
 const evidenceDir = join(repoRoot, '.superpowers', 'sdd', '2026-10-10-kyclaw-mvp', '_r68-probe')
 
 const BASE_URL = process.env.KYCLAW_R68_BASE ?? 'https://api.deepseek.com'
-const API_KEY = process.env.KYCLAW_R68_KEY ?? 'sk-REDACTED'
+const API_KEY = process.env.KYCLAW_R68_KEY ?? ''
+
+/** 门开一半（REAL=1 但 KEY 空）时说清为什么跳过：本文件**不提供任何默认密钥** */
+if (requested && API_KEY === '') {
+  console.warn('[R68] KYCLAW_R68_REAL=1 但 KYCLAW_R68_KEY 为空——真服务探针跳过（没有默认密钥可用）')
+}
+const enabled = requested && API_KEY !== ''
 const MODEL = process.env.KYCLAW_R68_MODEL ?? 'deepseek-flash'
 const TASK = process.env.KYCLAW_R68_TASK ?? '简单查下今天的新闻，做个简报 PPT 给我，简单做下就行'
 const LABEL = process.env.KYCLAW_R68_LABEL ?? 'after'

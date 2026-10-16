@@ -1,0 +1,132 @@
+/**
+ * 只读表格的样式：FortuneSheet 是第三方 canvas 表格，控件与格子**按它自己的口径**，
+ * 这里只做"套在本面板里、只读态藏掉多余控件"的收边。
+ *
+ * 移植自 DeepSeek Harness（MIT）`…/excel/ExcelBody.module.css`（那侧是 CSS Module）：
+ * 本仓库没有 CSS Module 约定，改成"所有选择器都挂在本组件根类下"的普通样式表。
+ * `--dsw-*` / `--dsh-*` 换成本仓库的 token（`--font-sans` / `--warning` / `--warning-bg` /
+ * `--text-secondary` / `--ui-B2-font-size`）。出处与许可见同目录 `NOTICE.md`。
+ */
+.kyclaw-excel-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  white-space: normal;
+  font-family: var(--font-sans);
+}
+
+.kyclaw-excel-preview .excel-preview-workbook {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  color-scheme: light;
+  /* FortuneSheet 的白色控件即使外层是深色主题，也要按浅色档取字色 */
+  color: CanvasText;
+}
+
+/* 只读预览里藏掉编辑手柄与多余控件 */
+.kyclaw-excel-preview .fortune-stat-area,
+.kyclaw-excel-preview .luckysheet-sheets-item-function,
+.kyclaw-excel-preview .fortune-cols-freeze-handle,
+.kyclaw-excel-preview .fortune-rows-freeze-handle {
+  display: none;
+}
+
+.kyclaw-excel-preview .luckysheet-sheet-area div.luckysheet-sheets-item {
+  padding-right: 5px;
+}
+
+.kyclaw-excel-preview .luckysheet-sheet-area {
+  padding: 0;
+}
+
+.kyclaw-excel-preview #luckysheet-sheet-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.kyclaw-excel-preview .fortune-sheettab-container {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.kyclaw-excel-preview .fortune-sheettab-container .fortune-sheettab-container-c {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.kyclaw-excel-preview .fortune-sheettab-scroll,
+.kyclaw-excel-preview .fortune-sheet-area-right {
+  flex: none;
+}
+
+.kyclaw-excel-preview .fortune-fx-input-container {
+  min-width: 0;
+}
+
+.kyclaw-excel-preview .fortune-fx-input {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.excel-preview-notice {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--warning);
+  background: var(--warning-bg);
+  font-size: var(--ui-B2-font-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.excel-preview-notice > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.excel-preview-formula-warning {
+  position: absolute;
+  top: 4px;
+  left: 142px;
+  z-index: 3;
+  display: flex;
+  width: 20px;
+  height: 20px;
+  padding: 3px;
+  color: var(--warning);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+}
+
+.excel-preview-formula-warning:hover,
+.excel-preview-formula-warning:focus-visible {
+  background: var(--warning-bg);
+  outline: none;
+}
+
+.excel-preview-with-warning .fortune-fx-input {
+  padding-left: 24px;
+}
+
+.kyclaw-excel-preview-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+  color: var(--text-secondary);
+}

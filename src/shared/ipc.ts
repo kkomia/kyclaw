@@ -28,11 +28,14 @@ import {
   type GitCommitDetail,
   type GitOverview,
   type ListDirResult,
+  type TableBytesResult,
   type TerminalExit,
   type TerminalSession,
   type WorkbenchSearchMode,
   type WorkbenchSearchResult
 } from './workbench'
+import type { TextPageCursor, TextPageResult, TextVersionResult } from './workbench-text'
+import type { OfficePreviewPriority, OfficePreviewResult } from './office-preview'
 import {
   appSettingsPatchSchema,
   workspaceModeSchema,
@@ -155,6 +158,40 @@ export const IPC_CHANNELS = {
      * 模型写的 .exe/.bat/.ps1/.lnk 从这里溜出去执行）。绝对路径只活在主进程。
      */
     open: 'workbench:open',
+    /**
+     * 办公档的**页式预览**（入参 [threadId, relative, priority, requestId]；返回 OfficePreviewResult）——
+     * doc / docx / ppt / pptx 在主进程用随包 LibreOffice 转成 PDF，渲染端拿字节交给已有的 PDF 预览画。
+     * 闸门与 read-bytes 同源或更严：会话根解析 + containment + **真实路径前后复检**、后缀白名单、
+     * 存在性、32MB 上限；**缓存命中也要先过这几道**（授权在接线层，转引擎压根不知道"路径"这回事）。
+     * 取消走下面那条通道：`requestId` 由渲染端生成，只对**发起它的那个窗口**有效。
+     */
+    officePdf: 'workbench:office-pdf',
+    /**
+     * 取消一次办公档转换（入参 [requestId]；无回包）——**只取消本窗口自己发起的那个请求**
+     * （另一个窗口拿同一个 id 来取消是空操作）；幂等。取消后 `office-pdf` 那一路回
+     * `kind:'failed', code:'cancelled'`，界面直接丢弃、不报错。
+     */
+    cancelOfficePdf: 'workbench:cancel-office-pdf',
+    /**
+     * 表格（xls / xlsx / csv / tsv）的**原始字节**（入参 [threadId, relative]；返回 TableBytesResult）——
+     * 与 read-bytes 那条"主进程抽结构"的路**刻意分开**：那条的结构合同是既有消费者在用的
+     * （表格预览 / 二进制占位），这条只回答"把这个文件的字节给我"，后缀 + 文件头双重判定，
+     * 读写期间文件在变时回 `changed`（不给半截快照）。
+     */
+    tableBytes: 'workbench:table-bytes',
+    /**
+     * **文本分页**（入参 [threadId, relative, cursor|null]；返回 TextPageResult）——
+     * 预览里的"加载更多"：一页一页读文本（有界字节 + 行游标 + UTF-8 边界 + 版本校验 +
+     * 超长单行上限），让整份文本都看得到，而不是停在旧文本通道的 64KB。第一页传 `cursor = null`。
+     * 版本不符 / 读的当口在变回 `changed`（**不交半截、不混版本**）；NUL 回 `binary`；越权路径抛。
+     */
+    readTextPage: 'workbench:read-text-page',
+    /**
+     * 只问文本文件现在的版本与大小（入参 [threadId, relative]；返回 TextVersionResult）——
+     * 给渲染端**受控轮询**用（窗口可见且预览标签在前台才轮询）：版本变了就提示"文件已更新"，
+     * 由用户决定何时重读（不静默把新内容拼进旧内容里）。只 stat、不读正文。
+     */
+    textVersion: 'workbench:text-version',
     /** git 总览（入参 [threadId]；返回分支 + 未提交变更；不是仓库/空仓库由 empty/isRepo 表达） */
     gitOverview: 'workbench:git-overview',
     /** 提交历史树（入参 [threadId, limit]；`git log --graph` 解析成结构化行） */
@@ -213,7 +250,12 @@ export const IPC_CHANNELS = {
     /** 重启并安装（只在"已下载"阶段有意义；无入参） */
     install: 'updates:install',
     /** 主进程 → 渲染端：更新状态变化推送 */
-    stateChanged: 'updates:state-changed'
+    stateChanged: 'updates:state-changed',
+    /**
+     * 本版本随包发行说明（无入参，返回 BundledReleaseNotes）：读的是 `app.getVersion()` 对应的
+     * 那一份 md（**不接受任何路径/文件名**——不存在"让渲染端指定读哪个文件"的面）。
+     */
+    releaseNotes: 'updates:release-notes'
   },
   telemetry: {
     /** Langfuse 配置状态（无入参，返回 LangfuseState） */
@@ -639,6 +681,28 @@ export type UpdateStatus = z.infer<typeof updateStatusSchema>
 export type UpdateState = z.infer<typeof updateStateSchema>
 
 /**
+ * 「本版本发行说明」（本轮，随包）：设置页「关于」那个常驻的「更新日志」入口读它 ——
+ * 断网 / 已是最新 / 没配更新源时，用户仍然能看到"我现在装的这一版改了什么"。
+ *
+ * 三态，**缺失与读异常分开**（界面给不同的话，不许把"读不出来"说成"没有说明"）：
+ *   - `ok`：`version` 是**本机版本**（主进程给 `app.getVersion()`，渲染端拿它当标题，
+ *     不自己拼版本号）；`notes` 是纯文本正文（渲染端按文本子节点显示，HTML 不执行）；
+ *   - `missing`：这一版没有随发行说明（老包里没有、开发态没写日志）；
+ *   - `unreadable`：有文件但用不了（超过大小上限 / 读失败）——`message` 是主进程写好的
+ *     一句人话（不含路径、不含堆栈）。
+ *
+ * 与 `updateStatusSchema` 里那份 `notes` 是**两件事**，各标各的版本：那份是**源上新版本**的
+ * 日志（只在检出更新时才有），这份是**当前已安装版本**的日志（随包，离线可得）。
+ */
+export const bundledReleaseNotesSchema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('ok'), version: z.string(), notes: z.string() }),
+  z.strictObject({ state: z.literal('missing') }),
+  z.strictObject({ state: z.literal('unreadable'), message: z.string() })
+])
+
+export type BundledReleaseNotes = z.infer<typeof bundledReleaseNotesSchema>
+
+/**
  * Langfuse 的配置状态（T17）：地址是落盘设置的原文，公私钥只有"有没有"。
  * `active` = 本次启动的 agent 服务真把导出挂上了（配置改动要重启应用才生效，UI 拿它说人话）。
  */
@@ -832,6 +896,11 @@ export interface KyclawUpdatesApi {
   install(): Promise<void>
   /** 订阅更新状态变化，返回退订函数 */
   onStateChanged(listener: (state: UpdateState) => void): () => void
+  /**
+   * 本版本随包发行说明（本轮）：无入参（读哪个文件由主进程按 app.getVersion() 定），
+   * 纯读盘、不发网络请求 —— 断网 / 已是最新时也能答。
+   */
+  releaseNotes(): Promise<BundledReleaseNotes>
 }
 
 /**
@@ -934,6 +1003,52 @@ export interface KyclawWorkbenchApi {
    * 不假装打开。
    */
   open(threadId: string, relative: string): Promise<{ path: string }>
+  /**
+   * 办公档（doc / docx / ppt / pptx）转成 PDF 给预览用：
+   * **真按页看**（版式、图、表格都在），渲染端拿回的字节直接交给既有的 PDF 预览组件。
+   *
+   * `requestId` 由渲染端生成（每次预览一个新值），只用来取消 —— 见 `cancelOfficePdf`。
+   * `priority='foreground'` 是用户正在看的这一份；`'background'` 是预热（现在没人用，
+   * 但队列的准入/淘汰语义按它分档：后台只在有富余时跑，且会被前台挤掉）。
+   *
+   * 失败不抛而是回 `kind:'failed'`（带分类与中文人话）——**越权路径**才是抛（fail closed）。
+   * 文件的**前半截**在库里查得到（会话根 + containment + 前后 stat + 有界读），
+   * 这里只说渲染端看得到的：它只递"树上哪一条"，永远递不了绝对路径。
+   */
+  officePdf(
+    threadId: string,
+    relative: string,
+    priority: OfficePreviewPriority,
+    requestId: string
+  ): Promise<OfficePreviewResult>
+  /**
+   * 取消一次办公档转换（幂等，无回包）。**只对本窗口发起的请求有效**：
+   * 主进程按 webContents 绑归属，另一个窗口拿同一个 id 取消是空操作。
+   * 取消后原来那一路回 `kind:'failed', code:'cancelled'`（不是 reject）。
+   */
+  cancelOfficePdf(requestId: string): Promise<void>
+  /**
+   * 表格（xls / xlsx / csv / tsv）的**原始字节**：给要在渲染端自己解析工作簿的预览用。
+   * 与 `readBytes`（那条回主进程抽好的结构）刻意分开，互不影响；后缀 + 文件头双重判定，
+   * 读的当口文件在变时回 `kind:'changed'`（不交半截快照）。
+   */
+  tableBytes(threadId: string, relative: string): Promise<TableBytesResult>
+  /**
+   * 文本分页：读一页（`cursor = null` 是第一页，之后用上一页回的 `{ offset, version }`）。
+   * 页边界落在换行之后并从 UTF-8 字符边界上收 —— 各页**直接拼接**就是原文；超长单行按 32KB
+   * 切开（`overlongLine` 为真时界面如实说明）。文件与 `version` 不符、或读的当口在变，回
+   * `kind:'changed'`（不交半截快照）；NUL 回 `binary`；超过 64MB 回 `too-large`。
+   */
+  readTextPage(
+    threadId: string,
+    relative: string,
+    cursor: TextPageCursor | null
+  ): Promise<TextPageResult>
+  /**
+   * 只 stat：文本文件现在的版本（`size:mtimeMs`）与大小。给"文件变了没有"的**受控轮询**用
+   * （渲染端只在窗口可见且预览在前台时轮询；卸载即停）。文件没了回 `kind:'missing'`。
+   */
+  textVersion(threadId: string, relative: string): Promise<TextVersionResult>
   /** 仓库总览：分支 + 未提交变更；不是仓库/空仓库由 isRepo / empty 表达（不抛） */
   gitOverview(threadId: string): Promise<GitOverview>
   /** 提交历史（`--graph` 解析后的结构化行，上限 200） */

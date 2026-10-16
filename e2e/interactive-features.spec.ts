@@ -198,10 +198,15 @@ test.describe('interactive features — production UI functional evidence', () =
       await app.page.evaluate(() => {
         location.hash = '/settings/rules'
       })
-      await app.page.getByLabel('全局约束').fill('INTERACTIVE_RULE_NEXT_TURN_唯一标记')
+      // 返工后编辑器收在「记忆指令」二级弹窗里：老深链只定位到那一行，得先点开入口
+      await app.page.getByTestId('rules-open').click()
+      await app.page.getByLabel('全局记忆指令').fill('INTERACTIVE_RULE_NEXT_TURN_唯一标记')
       await app.page.getByRole('button', { name: '保存', exact: true }).click()
       await expect(app.page.getByText('已保存', { exact: true })).toBeVisible()
       await functionEvidence(app.page, 'rules-saved.png')
+      // 关掉弹窗再离开这一页（后续步骤在对话页；表单状态不留给下一段）
+      await app.page.keyboard.press('Escape')
+      await expect(app.page.getByTestId('rules-dialog-body')).toHaveCount(0)
       await selectSession(app.page, first)
       const before = provider.requests.length
       provider.enqueue({ text: 'RULES_REQUEST_VERIFIED' })
@@ -238,14 +243,18 @@ test.describe('interactive features — production UI functional evidence', () =
       await app.page.evaluate(() => {
         location.hash = '/settings/rules'
       })
+      // 同上：编辑器在二级弹窗里，先点开「记忆指令」入口
+      await app.page.getByTestId('rules-open').click()
       await app.page
-        .getByLabel('全局约束')
+        .getByLabel('全局记忆指令')
         .fill('INTERACTIVE_GLOBAL_FORMAT：同一事项默认使用文档。')
       await app.page.getByRole('button', { name: '保存', exact: true }).click()
       await expect(app.page.getByText('已保存', { exact: true })).toBeVisible()
-      await app.page.getByLabel('选择项目约束').selectOption(project.id)
+      // 002：项目选择器是产品自定义下拉（不再是原生 select）——点开面板，再点那条项目
+      await app.page.getByTestId('rules-project-select').click()
+      await app.page.getByTestId(`rules-project-${project.id}`).click()
       const projectRules = 'INTERACTIVE_PROJECT_FORMAT：同一事项改用表格，覆盖全局默认。'
-      const editor = app.page.getByLabel('项目约束', { exact: true })
+      const editor = app.page.getByLabel('项目记忆指令', { exact: true })
       await editor.fill(projectRules)
       await editor.locator('..').getByRole('button', { name: '保存', exact: true }).click()
       await expect

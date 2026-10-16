@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Shield, Square, X } from 'lucide-react'
+import { ArrowUp, Square, X } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
@@ -13,7 +13,11 @@ import type { ComposerModeMenu, ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
 import { resolveContextItem, subscribeContextItems, subscribeDrafts } from './composer-inbox'
-import { keepComposerCarryover, takeComposerCarryover } from './composer-carryover'
+import {
+  discardComposerCarryover,
+  keepComposerCarryover,
+  takeComposerCarryover
+} from './composer-carryover'
 import { ComposerSuggest } from './ComposerSuggest'
 import { ReferenceChipInner } from './reference-chip'
 import {
@@ -38,7 +42,8 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 结构 = （附件/引用 chip 行）+ 输入区（自适应，最小 --composer-input-min-height（常态 56）/
  * 最大 170，超出内部滚动；round 64 起初始页再高一档，见 ComposerProps.hero）+ 底部工具条（48）：
  * 左起 ＋菜单（添加文件/引用技能/引用插件/引用上下文/**模式分组**——round 81 起「进入规划模式」
- * 与「任务清单」也收在这里）、权限 chip（两档 ask|full，当前会话工作区）；
+ * 与「任务清单」也收在这里）、权限 chip（两档 ask|full，当前会话工作区；**判不出工作区时入口
+ * 也照旧在**——同一枚下拉里说明原因并指路去设置，用户实报过"权限模式选择按钮不见了"）；
  * 右端（round 42 二轮起）**上下文环**（独立组件 ContextChip）+ 模型 chip
  * （T8 已配置 provider 的默认项；round 8 按用户实拍从左侧组移到右侧、发送钮之前）+ 发送/停止。
  * round 57：用量 ≥ 80% 时 ContextChip 会在环**左边**多渲染一枚「压缩上下文」胶囊（点即压缩）。
@@ -80,7 +85,7 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 一次，草稿/附件/焦点由 composer-carryover 过桥带走（见下面的落位 effect）。
  */
 export interface ComposerProps {
-  /** 当前会话 id（权限 chip 判"会话的工作区根"用；判不出就不渲染权限入口） */
+  /** 当前会话 id（权限 chip 判"会话的工作区根"用；判不出时入口照旧在，下拉里说明原因并指路去设置） */
   threadId?: string | null
   /** 流式中（submitted / streaming）：发送钮切换为停止 */
   busy?: boolean
@@ -134,6 +139,15 @@ export interface ComposerProps {
    * 两条入口背后是同一个 `enterPlan`，不是第二套实现。
    */
   mode?: ComposerModeMenu | null
+  /**
+   * R92：**草稿过桥放行位**（默认 true = 既有口径，直接使用 Composer 的测试不受影响）。
+   *
+   * 只有"同一次初始化落位"的重挂该接上一挂的草稿（冷启动里用户提前敲的字不白敲）；
+   * 不放行时把上一挂可能留下的残留**一并丢掉**——用户主动换会话 / 新建 / 删除 触发的重挂
+   * 不许把草稿带过去（见 composer-carryover 的边界说明）。ChatPage 按
+   * "activeId 从无到有、且这次变更不是用户点出来的"判定它（见那边的 `carryoverAllowed`）。
+   */
+  allowCarryover?: boolean
 }
 
 let uidCounter = 0
@@ -185,7 +199,8 @@ export function Composer({
   usageVersion = 0,
   hero = false,
   pending = null,
-  mode = null
+  mode = null,
+  allowCarryover = true
 }: ComposerProps): React.JSX.Element {
   /** 实例没就绪（round 76）：发送挡住 + 工具条那一行露状态（label 可能是 null，见 ComposerProps） */
   const blocked = pending !== null
@@ -199,6 +214,26 @@ export function Composer({
   useEffect(() => {
     draftRef.current = draft
   }, [draft])
+  /**
+   * R92：草稿的**最后写入记录**与**最后一次 commit 的草稿**。
+   *
+   * 为什么需要（v4 取证，2026-10-16）：冷启动"落位换 key 重挂"若与输入落在**同一批提交**，
+   * 这一挂的 `draft` 更新会随组件一起被 React 丢掉，受控恢复又把输入框按旧 state 写回 ——
+   * 卸载过桥只抄 DOM 就会把用户刚敲的字吞掉（e2e 间歇 8s/30s 超时的实测形状：
+   * keep 时 dom/state 双双是空）。所以：**每一次写入都同步记进 `draftTruthRef`**
+   * （键与程序化都算，和写入同拍、不等 commit）；卸载过桥时"DOM 等于上一次 commit 的草稿
+   * （= 被回写的产物）、或节点已经不在了"就改以它为准（见 keep 处的判据）。
+   */
+  const draftTruthRef = useRef('')
+  const draftPropRef = useRef('')
+  useEffect(() => {
+    draftPropRef.current = draft
+  }, [draft])
+  /** 草稿的唯一写入口：先记真值、再落 state（`draftTruthRef` 因此永远不比输入慢） */
+  const trackDraft = (value: string): void => {
+    draftTruthRef.current = value
+    setDraft(value)
+  }
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   /** 附件的实时值（与 draftRef 同一个用途：重挂前过桥带走，见 composer-carryover） */
   const attachmentsRef = useRef(attachments)
@@ -248,6 +283,14 @@ export function Composer({
   const rootWorkspace = sessionWorkspaceOf({ threadId, settings, projectOf })
   const rootPath = sessionRootPathOf({ threadId, settings, projectOf })
   const contextLabel = rootWorkspace === null ? null : folderNameOf(rootWorkspace.path)
+  /**
+   * 判不出工作区时，权限下拉里那句原因（说清"为什么现在切不了 + 去哪儿"，对得上设置页里
+   * 真能看到的两种状态）。判得出时用不到它。
+   */
+  const permissionReason =
+    settings.workspaces.length === 0
+      ? '还没有授权工作区：先去设置里添加一个'
+      : '会话的工作区还没定下来：去设置里指认默认工作区，或给这条会话选一个项目'
   const enabledPlugins = settings.mcpServers
     .filter((server) => server.enabled)
     .map((server) => ({ id: server.id, name: server.name }))
@@ -416,7 +459,7 @@ export function Composer({
       // 命令行：不插引用标记 —— 触发词整段移除后立即执行
       const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
       setCaretToken(suggest.start)
-      setDraft(remaining)
+      trackDraft(remaining)
       setSuggest(null)
       if (row.command === 'compact') onCompact?.()
       // round 85：`/进入规划模式` 与 ＋ 菜单那条是**同一个实现**（mode.plan.onSelect = enterPlan）
@@ -432,7 +475,7 @@ export function Composer({
       row.reference.label
     )
     setCaretToken(inserted.caret)
-    setDraft(inserted.text)
+    trackDraft(inserted.text)
     setSuggest(null)
   }
 
@@ -451,14 +494,14 @@ export function Composer({
     const start = Math.max(0, Math.min(segment.start, draft.length))
     const end = Math.min(draft.length, start + segment.raw.length)
     setCaretToken(start)
-    setDraft(draft.slice(0, start) + draft.slice(end))
+    trackDraft(draft.slice(0, start) + draft.slice(end))
   }
 
   const submit = (): void => {
     // round 76：实例没就绪就不发（草稿一个字都不动 —— 就绪之后接着发）
     if (!sendable) return
     onSend(composeOutgoing({ text: draft, attachments }))
-    setDraft('')
+    trackDraft('')
     setAttachments([])
     setNotice(null)
   }
@@ -473,7 +516,7 @@ export function Composer({
     const caret = textarea?.selectionStart ?? draft.length
     const inserted = insertReferenceMarker(draft, caret, reference.kind, reference.label)
     setCaretToken(inserted.caret)
-    setDraft(inserted.text)
+    trackDraft(inserted.text)
   }
 
   /**
@@ -586,11 +629,11 @@ export function Composer({
       if (draft.mode === 'append' && draftRef.current.trim() !== '') {
         const current = draftRef.current
         const next = `${current}${current.endsWith('\n') ? '' : '\n'}${draft.text}`
-        setDraft(next)
+        trackDraft(next)
         setCaretToken(next.length)
         return
       }
-      setDraft(draft.text)
+      trackDraft(draft.text)
       setCaretToken(draft.text.length)
     })
   }, [threadId])
@@ -610,15 +653,23 @@ export function Composer({
   }, [pending])
   /**
    * 接上一挂留下的那一小包（见 composer-carryover）。**只在挂载时读一次** —— 读的是组件外部
-   * （模块级过桥）的东西，不是渲染派生的状态，正是这条规则说的"与外部系统同步"；只是取回来要
-   * 落到 state 上，规则按"effect 里同步 setState"报。显式豁免：触发点是"重挂"这一次外部事件，
-   * 一次挂载最多读一次（过桥取走即清），不会级联。
+   * （模块级过桥）的东西，不是渲染派生的状态，正是这条规则说的"与外部系统同步"；取回来落到
+   * state 上（经 trackDraft 写入）。触发点是"重挂"这一次外部事件，一次挂载最多读一次
+   * （过桥取走即清），不会级联。
    */
+  /**
+   * R92：**挂载那一刻**的放行位。过桥只在"重挂"这一次外部事件上读一次 —— 之后它再变化
+   * （用户切走等）与这一挂无关，所以冻结成 ref（也正好避开 exhaustive-deps 的追问）。
+   */
+  const allowCarryoverRef = useRef(allowCarryover)
   useEffect(() => {
-    const carried = takeComposerCarryover()
+    // R92：这一次重挂被允许过桥吗 —— 不放行（用户主动换会话 / 新建 / 删除等）就**丢掉**残留，
+    // 绝不让它漏进下一个会话（见 composer-carryover 的边界与 ChatPage 的 carryoverAllowed）。
+    const carried = allowCarryoverRef.current
+      ? takeComposerCarryover()
+      : (discardComposerCarryover(), null)
     if (carried === null) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 理由见上面这条注释
-    if (carried.text !== '') setDraft(carried.text)
+    if (carried.text !== '') trackDraft(carried.text)
     if (carried.attachments.length > 0) setAttachments(carried.attachments)
     // 焦点交回输入框（光标落在末尾）：草稿非空、或重挂前它本来就 focus 着
     if (carried.text !== '' || carried.focused) setCaretToken(carried.text.length)
@@ -632,7 +683,18 @@ export function Composer({
         // 以它为准，卸载时就不会把半句吞掉（这条口径由 composer-first.spec 的
         // 「DOM 有字、state 空」那条用例钉住）。`textareaRef` 此刻已被 React 置空，所以读
         // `lastTextareaRef`（回调 ref 存下的那个节点）。
-        text: lastTextareaRef.current === null ? draftRef.current : lastTextareaRef.current.value,
+        //
+        // R92 补充（何时 DOM **不可信**）：只有"DOM 有**非空且与上一次 commit 不同**的值"才
+        // 当"用户/浏览器新写进去的"以它为准；其余三种（空值 / 等于上一次 commit 的值 / 节点不在）
+        // 都可能是受控恢复按旧 state 回写之后的产物（"同批重挂吞掉新输入"的那一轮，
+        // v4 取证里 dom 与 state 双双为空）—— 改以 `draftTruthRef`（写入时同步记下的真值）为准。
+        // 非吞路径下 truth 与真值同拍（每次写入都过 trackDraft），这条极窄，不会错带。
+        text:
+          lastTextareaRef.current !== null &&
+          lastTextareaRef.current.value !== '' &&
+          lastTextareaRef.current.value !== draftPropRef.current
+            ? lastTextareaRef.current.value
+            : draftTruthRef.current,
         attachments: attachmentsRef.current,
         focused:
           lastTextareaRef.current !== null && document.activeElement === lastTextareaRef.current
@@ -753,7 +815,7 @@ export function Composer({
           spellCheck={false}
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value)
+            trackDraft(event.target.value)
             refreshTrigger(event.target.value, event.target.selectionStart)
           }}
           onSelect={(event) => {
@@ -860,21 +922,11 @@ export function Composer({
           onOpenMenu={refreshSkills}
           mode={mode}
         />
-        {rootWorkspace === null ? (
-          <a
-            data-testid="composer-workspace-settings"
-            href="#/settings/workspaces"
-            title={
-              settings.workspaces.length === 0 ? '尚未授权工作区' : '请选择默认工作区或会话所属项目'
-            }
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
-          >
-            <Shield aria-hidden="true" className="size-3.5 shrink-0" />
-            设置工作区
-          </a>
-        ) : (
-          <PermissionChip workspace={rootWorkspace} onNotice={setNotice} />
-        )}
+        {/* 权限入口**永远在**（用户实报"聊天页面里 composer 的权限模式选择按钮不见了"）：
+            判得出工作区 = 两档 chip（每次询问 / 完全访问）；判不出（没授权 / 多个并列且没指认
+            默认 / 项目的文件夹不在列表里）也保留**同一枚下拉** —— 菜单里说明为什么切不了 +
+            一条去设置的实动作。原来那一档把入口整块换成另一个链接，观感就是"下拉没了"。 */}
+        <PermissionChip workspace={rootWorkspace} reason={permissionReason} onNotice={setNotice} />
 
         <span className="min-w-0 flex-1 truncate">
           {/* round 76：实例没就绪时这一格先说"为什么按不动"（就在发送钮左边）；就绪后照旧显示排队条数 */}

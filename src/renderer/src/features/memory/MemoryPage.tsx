@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
-import { Dialog } from '@renderer/components/ui/dialog'
+import { Dialog, DialogClose } from '@renderer/components/ui/dialog'
 import { Textarea } from '@renderer/components/ui/input'
 import { Skeleton } from '@renderer/components/ui/skeleton'
 import { RecallStatusLine } from '@renderer/features/settings/RecallSettings'
 import { TextPart } from '@renderer/features/chat/parts/TextPart'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { clearMemory, fetchMemory, saveMemory } from '@renderer/lib/memory-api'
+import type { ThreadSummary } from '@shared/threads'
 
 /**
  * 记忆面板（T14 起；round 5 从页面里拆出；round 58 起按会话隔离）：working memory 的查看 / 编辑 / 清空。
@@ -23,25 +24,34 @@ import { clearMemory, fetchMemory, saveMemory } from '@renderer/lib/memory-api'
  * 不在 effect 里同步 setState 清场。round 58 起 key = `<会话 id>#<重试次数>`：
  * 换会话就是换 key，上一次的结果自然"过时"（不匹配）；编辑草稿同样记着它属于哪个会话，
  * 切走后自动作废，不必手动清。
+ *
+ * 本轮（设置页重组，记忆合栏）：**两个入口，一份面板**——
+ *   /memory 独立页（标题「记忆空间」）直接铺面板；设置页「记忆」栏里面板收进「记忆空间」弹窗
+ *   （MemorySpaceEntry 打开，复用这里的 Dialog 组件），页面上不再平铺一份。
+ *   两个入口看到的都是**当前活动会话**那一份（面板自己认会话，页面/弹窗都不管）。
  */
 function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
+/** 未命名会话的占位标题（与侧栏列表 / 会话动作菜单同一口径） */
+const UNTITLED = '新会话'
+
 /**
- * 当前会话 id：只认**服务端已经认识的会话**（草稿还没落库，服务端那边没有它的记忆行）。
- * null = 没有可看的会话（草稿 / 还没载入列表），页面按空态处理。
+ * 当前活动会话：只认**服务端已经认识的会话**（草稿还没落库，服务端那边没有它的记忆行）。
+ * null = 没有可看的会话（草稿 / 还没载入列表），页面与弹窗都按空态处理。
+ * 返回的是列表里那条摘要本身（引用稳定），要看标题的地方顺带就有了。
  */
-function useActiveThreadId(): string | null {
+function useActiveThread(): ThreadSummary | null {
   return useSessionsStore((state) =>
-    state.activeId !== null && state.threads.some((thread) => thread.id === state.activeId)
-      ? state.activeId
-      : null
+    state.activeId === null
+      ? null
+      : (state.threads.find((thread) => thread.id === state.activeId) ?? null)
   )
 }
 
 export function MemoryPanel(): React.JSX.Element {
-  const threadId = useActiveThreadId()
+  const threadId = useActiveThread()?.id ?? null
   const [resolveKey, setResolveKey] = useState(0)
   const [state, setState] = useState<{
     key: string
@@ -125,15 +135,15 @@ export function MemoryPanel(): React.JSX.Element {
 
   const content = current?.content ?? null
 
-  // 没有活动会话（草稿 / 列表还没到）：服务端那边没有可看可写的记忆 —— 空态，不发请求
+  // 没有活动会话（草稿 / 列表还没到）：服务端那边没有可看可写的记忆 —— 空态，不发请求。
+  // 与"有会话但还没记东西"分开说（`memory-no-session` / `memory-empty`）：这一档不是"记过又空"，
+  // 而是压根没有那一份（记忆跟着会话走，草稿还不算服务端认识的会话）。
   if (threadId === null) {
     return (
       <div data-testid="memory-card" className="flex flex-col gap-4 rounded-panel bg-secondary p-4">
-        <div data-testid="memory-content">
-          <p data-testid="memory-empty" className="text-b2 text-ink-secondary">
-            还没有记忆：告诉助手值得长期记住的信息，它会记在这里。
-          </p>
-        </div>
+        <p data-testid="memory-no-session" className="text-b2 text-ink-secondary">
+          当前没有会话：记忆跟着会话走，新建或打开一个会话后，这里才会有一份。
+        </p>
       </div>
     )
   }
@@ -194,15 +204,43 @@ export function MemoryPanel(): React.JSX.Element {
                 >
                   编辑
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid="memory-clear"
-                  disabled={busy || content === null}
-                  onClick={() => setConfirmClear(true)}
-                >
-                  清空
-                </Button>
+                {/* 清空是不可逆动作：受控确认框（R12 口径），确认后才发 DELETE。
+                    「清空」这颗就是确认框的 trigger —— 关掉它时 Radix 把焦点还给它
+                    （设置页那条路是"弹窗套弹窗"，没挂 trigger 的话焦点会掉到 body）。 */}
+                <Dialog
+                  trigger={
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="memory-clear"
+                      disabled={busy || content === null}
+                    >
+                      清空
+                    </Button>
+                  }
+                  open={confirmClear}
+                  onOpenChange={setConfirmClear}
+                  title="清空记忆？"
+                  description="清空后助手不再记得这些内容；已有的对话不受影响。"
+                  footer={
+                    <>
+                      <Button
+                        variant="ghost"
+                        data-testid="memory-clear-cancel"
+                        onClick={() => setConfirmClear(false)}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        variant="danger"
+                        data-testid="memory-clear-confirm"
+                        onClick={() => void clear()}
+                      >
+                        清空
+                      </Button>
+                    </>
+                  }
+                />
               </div>
             </>
           ) : (
@@ -249,41 +287,59 @@ export function MemoryPanel(): React.JSX.Element {
           )}
         </div>
       )}
-
-      {/* 清空是不可逆动作：受控确认框（R12 口径），确认后才发 DELETE */}
-      <Dialog
-        open={confirmClear}
-        onOpenChange={setConfirmClear}
-        title="清空记忆？"
-        description="清空后助手不再记得这些内容；已有的对话不受影响。"
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              data-testid="memory-clear-cancel"
-              onClick={() => setConfirmClear(false)}
-            >
-              取消
-            </Button>
-            <Button
-              variant="danger"
-              data-testid="memory-clear-confirm"
-              onClick={() => void clear()}
-            >
-              清空
-            </Button>
-          </>
-        }
-      />
     </>
   )
 }
 
 /**
+ * 记忆空间入口（设置页「记忆」栏的第二块）：一行标签 + 一句说明 + 「查看记忆」按钮。
+ *
+ * 按钮就是弹窗的 trigger（Radix 的"关掉后把焦点还给触发元素"靠它：Esc / 点蒙层关掉之后
+ * 焦点回到这颗按钮，不会掉到 body）。弹窗体里只有 MemoryPanel——标题只由弹窗给
+ * （正文不再套一层标题，内外不重复），会话范围写在说明里（没有活动会话就不编标题，
+ * 由面板自己说清"当前没有会话"）。
+ *
+ * 高度：记忆是一整块 markdown，几条就撑满屏 —— 正文区封顶 60vh 里面滚，弹窗本身不滚。
+ */
+export function MemorySpaceEntry(): React.JSX.Element {
+  const thread = useActiveThread()
+
+  return (
+    <div data-testid="memory-space" className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-b2 text-ink">记忆空间</span>
+        <Dialog
+          trigger={
+            <Button size="sm" variant="ghost" data-testid="memory-space-open">
+              查看记忆
+            </Button>
+          }
+          title="记忆空间"
+          // 会话范围明确到名字（没有活动会话时不给说明行，空态由面板那句说）
+          description={
+            thread === null
+              ? undefined
+              : `只显示「${thread.title ?? UNTITLED}」这一份记忆；切到别的会话就是另一份。`
+          }
+          size="md"
+        >
+          <DialogClose />
+          <div data-testid="memory-space-body" className="max-h-[60vh] overflow-y-auto">
+            <MemoryPanel />
+          </div>
+        </Dialog>
+      </div>
+      <p className="text-c1 text-ink-secondary">记忆跟着会话走，一个会话一份。</p>
+    </div>
+  )
+}
+
+/**
  * 记忆页（独立路由 /memory）：页级容器 + 标题 + 面板。
- * 面板本体（MemoryPanel）同时被设置页「记忆」栏复用（round 5 去重：弹层不再有第二入口，
- * 设置为唯一导航源）——所以内容与交互都装在面板里，页面只是它的壳。
+ * 面板本体（MemoryPanel）同时被设置页「记忆」栏的「记忆空间」弹窗复用（MemorySpaceEntry；
+ * round 5 去重：设置为唯一导航源）——所以内容与交互都装在面板里，页面只是它的壳。
  * round 58：两个入口看到的都是**当前会话**的记忆（面板自己认活动会话，页面不必管）。
+ * 本轮标题从「记忆」改成「记忆空间」，与设置页那一块同名（独立页保留、可直达）。
  */
 export function MemoryPage(): React.JSX.Element {
   return (
@@ -293,7 +349,7 @@ export function MemoryPage(): React.JSX.Element {
       className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
       <div data-testid="memory-page-column" className="content-column flex flex-col gap-6 p-6">
-        <h1 className="text-t1 font-medium text-ink">记忆</h1>
+        <h1 className="text-t1 font-medium text-ink">记忆空间</h1>
         {/* round 28：语义召回的本次运行状态（开关与嵌入来源在「设置 → 记忆」里） */}
         <RecallStatusLine />
         <MemoryPanel />

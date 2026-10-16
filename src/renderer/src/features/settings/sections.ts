@@ -19,6 +19,10 @@ import {
  * 设置为唯一导航源、插件页为 MCP/技能的进入点；旧的 /settings/tools 深链会回落默认栏。
  * T17 追加两栏：「追踪」（Langfuse，默认关）与「关于」（版本与更新）——都是显式配置项，
  * 放在设置里而不是首页菜单（雷点 3）。
+ *
+ * 本轮（设置页重组）：撤掉单独的「约束」栏 —— 约束并进「记忆」栏（那一栏现在依次是语义召回 /
+ * 记忆空间 / 记忆指令，见 SettingsPage 的 memory 分支）。**旧 id 不能直接删**：/settings/rules
+ * 是发出去的深链（E2E 也在用），走下面的 SECTION_ALIASES 落到「记忆」栏，不掉到默认栏。
  */
 export interface SettingsSection {
   id: string
@@ -50,15 +54,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: '工作区',
     navTestId: 'settings-nav-workspaces',
     groupTestId: 'settings-group-workspaces',
-    icon: FolderOpen
-  },
-  {
-    id: 'rules',
-    // 用户口径 009：「我的规矩」太抽象，菜单名与页面标题都取这里，统一叫「约束」；
-    // id 不动（它进 URL，改了等于改深链）
-    label: '约束',
-    navTestId: 'settings-nav-rules',
-    groupTestId: 'settings-group-rules',
     icon: FolderOpen
   },
   {
@@ -106,9 +101,19 @@ export function findSettingsSection(id: string | undefined): SettingsSection | u
   return SETTINGS_SECTIONS.find((section) => section.id === id)
 }
 
-/** 当前路由的栏目 id：/settings/:section 取第二段，/settings 取默认栏 */
+/**
+ * 老深链的别名：栏目合并后，旧 id 指向它现在并进的那一栏。
+ * 与 SETTINGS_SECTIONS 里的 id 一样进过 URL —— 删栏目不等于让老地址失效。
+ */
+const SECTION_ALIASES: Record<string, string> = {
+  // 「约束」并进「记忆」栏（菜单只剩「记忆」一项）
+  rules: 'memory'
+}
+
+/** 当前路由的栏目 id：/settings/:section 取第二段（旧 id 先过别名），/settings 取默认栏 */
 export function settingsSectionFromPath(pathname: string): string {
   const [, root, section] = pathname.split('/')
   if (root !== 'settings') return DEFAULT_SETTINGS_SECTION
-  return findSettingsSection(section)?.id ?? DEFAULT_SETTINGS_SECTION
+  const id = section === undefined ? section : (SECTION_ALIASES[section] ?? section)
+  return findSettingsSection(id)?.id ?? DEFAULT_SETTINGS_SECTION
 }

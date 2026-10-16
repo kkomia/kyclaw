@@ -9,6 +9,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   agentEndpointSchema,
+  bundledReleaseNotesSchema,
   connectionTestResultSchema,
   IPC_CHANNELS,
   langfuseStateSchema,
@@ -25,6 +26,7 @@ import {
   windowStateSchema,
   workspaceListFilesResultSchema,
   workspaceOpenInExplorerResultSchema,
+  type BundledReleaseNotes,
   type KyclawAgentApi,
   type KyclawApi,
   type KyclawAttachmentsApi,
@@ -71,6 +73,7 @@ import {
   listDirResultSchema,
   openResultSchema,
   revealResultSchema,
+  tableBytesResultSchema,
   terminalDataSchema,
   terminalExitSchema,
   terminalSessionSchema,
@@ -81,10 +84,22 @@ import {
   type GitCommitDetail,
   type GitOverview,
   type ListDirResult,
+  type TableBytesResult,
   type TerminalExit,
   type TerminalSession,
   type WorkbenchSearchResult
 } from '../shared/workbench'
+import {
+  textPageResultSchema,
+  textVersionResultSchema,
+  type TextPageResult,
+  type TextVersionResult
+} from '../shared/workbench-text'
+import {
+  officePreviewResultSchema,
+  type OfficePreviewPriority,
+  type OfficePreviewResult
+} from '../shared/office-preview'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -303,6 +318,9 @@ const updatesApi: KyclawUpdatesApi = {
   install: async () => {
     await ipcRenderer.invoke(IPC_CHANNELS.updates.install)
   },
+  // 本版本随包发行说明（本轮）：无入参（读哪个文件由主进程按 app.getVersion() 定）
+  releaseNotes: async () =>
+    parseBundledReleaseNotes(await ipcRenderer.invoke(IPC_CHANNELS.updates.releaseNotes)),
   onStateChanged: (listener) => {
     const handler = (_event: unknown, payload: unknown): void => {
       const parsed = updateStateSchema.safeParse(payload)
@@ -318,6 +336,12 @@ const updatesApi: KyclawUpdatesApi = {
 function parseUpdateState(payload: unknown): UpdateState {
   const parsed = updateStateSchema.safeParse(payload)
   if (!parsed.success) throw new Error('[kyclaw] 更新状态响应结构不合法')
+  return parsed.data
+}
+
+function parseBundledReleaseNotes(payload: unknown): BundledReleaseNotes {
+  const parsed = bundledReleaseNotesSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 本版发行说明响应结构不合法')
   return parsed.data
 }
 
@@ -554,6 +578,48 @@ const workbenchApi: KyclawWorkbenchApi = {
     )
     if (!parsed.success) throw new Error('[kyclaw] 打开文件响应结构不合法')
     return parsed.data
+  },
+  // 表格原始字节（xls / xlsx / csv / tsv）：与 readBytes 那条"抽结构"的路分开，互不影响
+  tableBytes: async (threadId, relative) => {
+    const parsed = tableBytesResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.tableBytes, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 表格字节响应结构不合法')
+    return parsed.data satisfies TableBytesResult
+  },
+  // 文本分页：第一页传 cursor = null，续读把上一页的 { offset, version } 原样带回来
+  readTextPage: async (threadId, relative, cursor) => {
+    const parsed = textPageResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.readTextPage, threadId, relative, cursor)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 文本分页响应结构不合法')
+    return parsed.data satisfies TextPageResult
+  },
+  // 只 stat 的版本探询（渲染端受控轮询用；不读正文）
+  textVersion: async (threadId, relative) => {
+    const parsed = textVersionResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.workbench.textVersion, threadId, relative)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 文本版本响应结构不合法')
+    return parsed.data satisfies TextVersionResult
+  },
+  // 办公档页式预览：四个入参都发出去（requestId 是取消用的凭据）；结构不对就抛
+  officePdf: async (threadId, relative, priority: OfficePreviewPriority, requestId) => {
+    const parsed = officePreviewResultSchema.safeParse(
+      await ipcRenderer.invoke(
+        IPC_CHANNELS.workbench.officePdf,
+        threadId,
+        relative,
+        priority,
+        requestId
+      )
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 办公档预览响应结构不合法')
+    return parsed.data satisfies OfficePreviewResult
+  },
+  // 取消一次转换：fire-and-forget（界面切走时不等回包）；主进程只认本窗口的 requestId
+  cancelOfficePdf: async (requestId) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.workbench.cancelOfficePdf, requestId)
   },
   gitOverview: async (threadId) => {
     const parsed = gitOverviewSchema.safeParse(

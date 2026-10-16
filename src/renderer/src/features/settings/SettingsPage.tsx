@@ -1,6 +1,6 @@
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
-import { MemoryPanel } from '@renderer/features/memory/MemoryPage'
+import { MemorySpaceEntry } from '@renderer/features/memory/MemoryPage'
 import { UsagePanel } from '@renderer/features/usage/UsagePage'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
@@ -10,7 +10,7 @@ import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
-import { RulesSettings } from './RulesSettings'
+import { RulesEntry } from './RulesSettings'
 import { SettingsGroup } from './SettingsGroup'
 import { TracingSettings } from './TracingSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
@@ -126,19 +126,29 @@ export function SettingsPage(): React.JSX.Element {
               </SettingsGroup>
             </>
           ) : null}
-          {meta.id === 'rules' ? <RulesSettings /> : null}
           {meta.id === 'workspaces' ? (
             <SettingsGroup title="工作区" testId="settings-group-workspaces">
               <WorkspaceSettings />
             </SettingsGroup>
           ) : null}
           {/* 记忆 / 用量（round 5 去重）：设置是唯一导航源——面板直接复用独立页的实现（MemoryPanel /
-            UsagePanel），不再套一层分组卡（面板自带 round 5 的 ≤2 层口径），版式与其他组同一内容列。
-            round 28：语义召回（长期记忆）的设置面在面板前面一行（状态 + 开关 + 来源）。 */}
+            UsagePanel），版式与其他组同一内容列。记忆栏是两张行式卡片（语义召回 + 记忆空间 /
+            记忆指令），记忆面板与指令编辑器都开在弹窗里；卡片内部的行间分隔由 `[&>*+*]` 给。 */}
           {meta.id === 'memory' ? (
-            <div data-testid="settings-group-memory" className="flex flex-col gap-3">
-              <RecallSettings />
-              <MemoryPanel />
+            <div data-testid="settings-group-memory" className="flex flex-col gap-4">
+              <div
+                data-testid="memory-card-base"
+                className="rounded-panel bg-secondary px-4 [&>*+*]:border-t [&>*+*]:border-surface-border [&>*]:py-4"
+              >
+                <RecallSettings />
+                <MemorySpaceEntry />
+              </div>
+              <div
+                data-testid="memory-card-rules"
+                className="rounded-panel bg-secondary px-4 [&>*]:py-4"
+              >
+                <RulesEntry />
+              </div>
             </div>
           ) : null}
           {meta.id === 'usage' ? (

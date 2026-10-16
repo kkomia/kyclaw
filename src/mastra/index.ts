@@ -523,6 +523,9 @@ export async function createKyclawMastra(options: {
         await plans.finish(threadId, planRefOf(state), state.approval.runId)
       }
     },
+    // round 88：原先挂在这个列表末尾的 system-first processor 已删 —— 它读的
+    // `messageList.get.all.db()` 里没有 system（MessageList 把 system 放自己的桶里），改不到 wire。
+    // system-first 现在在模型边界做，见 model.ts 的 mergeSystemFirstPrompt / withSystemFirstPrompt。
     inputProcessors: [
       createCompactionProcessor(compactionStore),
       ...(rulesProcessor === null ? [] : [rulesProcessor]),

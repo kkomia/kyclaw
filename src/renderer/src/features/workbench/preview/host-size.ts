@@ -1,0 +1,22 @@
+/**
+ * 预览宿主的高度口径（纯常量 + 一个判据；独立成 `.ts` —— 放在 `PreviewBody.tsx` 里会被
+ * react-refresh 的"只导出组件"规则挡下）。
+ *
+ * 背景（R90 探针在真机上实测出来的）：**内部自带滚动口的预览**（页式 PDF / 表格 / 旧 PDF 入口）
+ * 必须由宿主给出**确定高度**——`BottomSheet` 的默认口径是"内容撑高、上限 70%"，而"上限"只在
+ * 宿主高度确定时才成立。不设这一条时的实测后果：
+ *   · 表格只剩几十像素（`excel-preview` 实测 59px）；
+ *   · 页式预览按内容长到一千多像素（1053px），浮动缩放控件的"露头区"落到可视区外（够不着）；
+ *   · 旧 PDF 入口的滚动口退化成内容高（没有可滚动量）→ "当前页"永远算成最后一页、
+ *     点目录跳页不滚动（R90 探针：点第 2 条目录，高亮当场跳去第 3 条）。
+ * 文本 / markdown / 图片 / HTML 那几档由内容撑高，维持原样。
+ */
+import type { PreviewMode } from './modes'
+
+/**
+ * 哪几档需要宿主给确定高度。
+ * @param mode 按后缀定下来的预览档。
+ */
+export function previewNeedsFixedHeight(mode: PreviewMode): boolean {
+  return mode === 'office' || mode === 'table' || mode === 'pdf'
+}

@@ -128,11 +128,16 @@ it('只挂 ChatPage 也加载项目映射，权限入口随有效项目根恢复
     </MemoryRouter>
   )
   await waitFor(() => expect(fetchSessionProjects).toHaveBeenCalledOnce())
-  expect(screen.queryByTestId('composer-permission')).not.toBeInTheDocument()
-  expect(screen.getByTestId('composer-workspace-settings')).toHaveAttribute(
-    'href',
-    '#/settings/workspaces'
+  // 映射还没到：入口**照旧在**（同一枚下拉），只是工作区还没定下来 → 下拉里是说明 + 指路，
+  // 没有可切的档位（用户实报过"权限模式选择按钮不见了"，这一档正是它消失的地方）
+  const undecided = screen.getByTestId('composer-permission')
+  expect(undecided).toHaveTextContent('权限模式')
+  fireEvent.keyDown(undecided, { key: 'ArrowDown' })
+  expect(screen.getByTestId('composer-permission-reason')).toHaveTextContent(
+    '会话的工作区还没定下来'
   )
+  expect(screen.getByTestId('composer-workspace-settings')).toHaveTextContent('打开工作区设置')
+  fireEvent.keyDown(document.body, { key: 'Escape' })
   await act(async () => mappings.resolve([{ threadId: THREAD_ID, projectId: 'p1' }]))
   await waitFor(() =>
     expect(screen.getByTestId('composer-permission')).toHaveTextContent('每次询问')

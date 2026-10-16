@@ -116,6 +116,8 @@ describe('read：边界与失败', () => {
  * read 按类型分派：PDF / Word 走主进程既有抽取器（与"把文件当附件发"那条路同一份实现），
  * 把正文交给模型；图片**不抽文字**，把字节直接交给模型**看**（形状与 render_ppt 的页图一致，
  * 见 tools/render-ppt.ts 头注）。
+ * 0.1.2 把办公面铺全（xlsx / pptx / csv 直读、旧 .doc/.xls/.ppt 经转换复用、宏与加密不假读、
+ * toModelOutput 形状校验）—— 那一批用例在 `read-formats.spec.ts`，这里保持原有这几条。
  *
  * fixture 全是**真件**：PDF 用 main/__tests__/pdf-fixture 的 buildPdf（pdf.js 能解的真 PDF，
  * 正文必须 ASCII，理由见那份 fixture 的头注）、docx 用仓库自己的产出器 renderDocx、
@@ -268,23 +270,29 @@ describe('read：Word（真件）', () => {
     expect(out).toMatch(/下一步/)
   })
 
-  it('旧的 .doc（OLE 二进制）：人话说明它是什么 + 下一步', async () => {
-    const tool = await createReadTool(bed.ctx)
+  it('旧的 .doc（OLE 二进制）：交给转换器；转不出来时人话 + 下一步（不假装读到）', async () => {
+    const tool = await createReadTool(bed.ctx, {
+      // 真实转换器要随包 LibreOffice（194MB，单测不装）：注入一个必失败的，钉住"失败怎么说话"
+      legacyConverter: async () => {
+        throw new Error('本机没有随包 LibreOffice')
+      }
+    })
     writeBytes(join(bed.root, 'legacy.doc'), Buffer.concat([OLE_HEAD, Buffer.alloc(64)]))
 
     const out = String(await callTool(tool, { path: 'legacy.doc' }))
 
-    expect(out).toContain('旧版 Office')
-    expect(out).toMatch(/另存为|\.docx/)
+    expect(out).toContain('转不了')
+    expect(out).toContain('本机没有随包 LibreOffice')
+    expect(out).toMatch(/另存为|截图/)
     expect(out).not.toContain('\uFFFD')
   })
 })
 
 describe('read：认得出的二进制（不是文本）', () => {
-  it('xlsx（OOXML，read 不抽）：说清它是什么、下一步怎么办', async () => {
+  it('OOXML 容器但扩展名对不上（.bin）：说清它是什么、下一步把扩展名改对', async () => {
     const tool = await createReadTool(bed.ctx)
     writeBytes(
-      join(bed.root, 'sheet.xlsx'),
+      join(bed.root, 'sheet.bin'),
       await renderXlsx([
         {
           name: '汇总',
@@ -296,10 +304,11 @@ describe('read：认得出的二进制（不是文本）', () => {
       ])
     )
 
-    const out = String(await callTool(tool, { path: 'sheet.xlsx' }))
+    const out = String(await callTool(tool, { path: 'sheet.bin' }))
 
     expect(out).toContain('二进制')
-    expect(out).toMatch(/xlsx|OOXML/)
+    expect(out).toMatch(/OOXML/)
+    expect(out).toMatch(/扩展名/)
     expect(out).toMatch(/下一步/)
     expect(out).not.toContain('\uFFFD')
   })
