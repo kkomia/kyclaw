@@ -39,20 +39,22 @@
     <style>
       :root {
         color-scheme: light dark;
-        --splash-bg: #fbfaf9;
-        --splash-ink: #000000e6;
-        --splash-muted: #0000008c;
-        --splash-track: #00000014;
-        --splash-accent: #1783ff;
+        /* P0 身份层（Claude 保底）：启动画面与首屏同色同墨，避免闪旧色。
+           内联样式先于 bundle 里的 identity.css 生效，所以这里写字面量而不是 var()。 */
+        --splash-bg: #fcfcfb;
+        --splash-ink: #141413;
+        --splash-muted: #6e6a60;
+        --splash-track: rgba(20, 20, 19, 0.09);
+        --splash-accent: #d97757;
       }
 
       @media (prefers-color-scheme: dark) {
         :root {
-          --splash-bg: #181817;
-          --splash-ink: #ffffffd6;
-          --splash-muted: #ffffff6b;
-          --splash-track: #ffffff24;
-          --splash-accent: #1a88ff;
+          --splash-bg: #141413;
+          --splash-ink: #faf9f5;
+          --splash-muted: #b0aea5;
+          --splash-track: rgba(255, 255, 255, 0.1);
+          --splash-accent: #d97757;
         }
       }
 
@@ -66,19 +68,12 @@
         background: var(--splash-bg);
       }
 
+      /* 注意：body 上不要写 font-family——内联样式未分层，会压过 tailwind @layer base 的
+         --font-ui（A5 真机验收的 P1 字体 bug：界面中文因此落到微软雅黑）。字体只给启动画面。 */
       body {
         margin: 0;
         background: var(--splash-bg);
         color: var(--splash-ink);
-        font-family:
-          system-ui,
-          -apple-system,
-          'Segoe UI',
-          'PingFang SC',
-          'Hiragino Sans GB',
-          'Microsoft YaHei',
-          'Noto Sans CJK SC',
-          sans-serif;
       }
 
       #app-splash {
@@ -92,6 +87,10 @@
         color: var(--splash-ink);
         user-select: none;
         transition: opacity 180ms ease;
+        /* 启动画面属界面声部：与 --font-ui 同一中文链（DSH 同款，Noto Sans SC 起） */
+        font-family:
+          'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
+          'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
       }
 
       #app-splash.is-leaving {

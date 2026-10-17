@@ -74,7 +74,7 @@ export function OfficeStatusBar({
       data-readonly={readOnly ? 'true' : 'false'}
       data-save-state={state}
       aria-label="文档状态栏"
-      className="flex h-(--office-status-height) shrink-0 items-center gap-3 border-t border-hairline bg-(--doc-page-bg) px-3 text-c1 text-ink-tertiary select-none"
+      className="flex h-(--office-status-height) shrink-0 items-center gap-3 border-t border-hairline bg-surface px-3 text-c1 text-ink-tertiary-readable select-none"
     >
       {/* 左：文档名 + 类型（类型是技术标签 → mono + tabular-nums） */}
       <span className="flex min-w-0 items-center gap-2">
