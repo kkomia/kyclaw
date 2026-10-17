@@ -326,12 +326,17 @@ test.describe('M3-S2 · Office 文档注册表 + 打开/读字节（真机 previ
           surfaceTheme: document.documentElement.dataset.surfaceTheme,
           colorScheme: document.documentElement.style.colorScheme,
           bodyBackground: getComputedStyle(document.body).backgroundColor,
+          canvasToken: getComputedStyle(document.documentElement)
+            .getPropertyValue('--doc-canvas-bg')
+            .trim(),
           bootState: document.querySelector('[data-testid="surface-boot-state"]')?.textContent
         }
       })
       expect(surfaceDark.surfaceTheme).toBe('dark')
       expect(surfaceDark.colorScheme).toBe('dark')
-      expect(surfaceDark.bodyBackground).toBe('rgb(24, 24, 23)')
+      // A1 起面的底色走 token：深色档画布 = Bg-Secondary #1f1f1f（原先是硬编码 #181817）
+      expect(surfaceDark.canvasToken).toBe('#1f1f1f')
+      expect(surfaceDark.bodyBackground).toBe('rgb(31, 31, 31)')
       // 不重载 iframe：面还是 ready、文档还在（重载会回到 booting / doc:open 重来）
       expect(surfaceDark.bootState).toBe('surface ready')
       expect(await officeFrame.getByTestId('surface-doc-open').getAttribute('data-state')).toBe(

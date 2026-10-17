@@ -44,26 +44,19 @@ import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
 const HELLO_RETRY_MS = 250
 const HELLO_RETRY_WINDOW_MS = 5000
 
-/** 面的底色：与壳的窗口底色同值（main/window.ts 的 WINDOW_BACKGROUND） */
-const SURFACE_COLORS = {
-  light: { background: '#fbfaf9', text: '#1f1f1f', border: '#e0e0e0' },
-  dark: { background: '#181817', text: '#e8e6e3', border: '#3c3c3c' }
-} as const
-
 /**
- * 把主题落到面的文档根上：`data-surface-theme` 给断言/截图用，`color-scheme` 让原生控件
- * （滚动条/输入框）跟着变，背景/文字色兜住"面本身没有编辑器 UI"时的整块白底。
+ * 把主题落到面的文档根上（A1：颜色不再写字面值，全部走 token）。
+ *
+ * - `data-surface-theme`：S2/S3 探针与截图断言的稳定标记（保留）；
+ * - `data-theme`：主界面同款主题档，token（kimi-tokens.css / semantic.css）靠它翻深色；
+ * - `color-scheme`：让原生控件（滚动条/输入框）跟着变；
+ * - 背景/文字由 surface.css 的 `--doc-canvas-bg` / `--text-primary` 给（画布=灰、纸=白由内核负责）。
  */
 function applySurfaceTheme(theme: SurfaceTheme): void {
-  const colors = SURFACE_COLORS[theme]
   const root = document.documentElement
   root.dataset.surfaceTheme = theme
+  root.dataset.theme = theme
   root.style.colorScheme = theme
-  root.style.background = colors.background
-  if (document.body !== null) {
-    document.body.style.background = colors.background
-    document.body.style.color = colors.text
-  }
 }
 
 /** 面当前打开的文档（S3：字节留在内存里给编辑器；壳不持久化内容） */
@@ -94,6 +87,11 @@ export function SurfaceBoot(): React.JSX.Element {
     count: 0,
     bytes: 0
   })
+  /**
+   * A1：调试条默认不露出；只有 `?officeDebug=1`（shell 在 DEV+localStorage flag 时拼进 iframe URL）
+   * 才显示。DOM 始终在（testid/data-* 供探针查）。
+   */
+  const [debug] = useState(() => new URLSearchParams(window.location.search).has('officeDebug'))
 
   const nonceRef = useRef<string | null>(null)
   const docRef = useRef<SurfaceDocument | null>(null)
@@ -357,7 +355,6 @@ export function SurfaceBoot(): React.JSX.Element {
       })
   }, [doc, postError])
 
-  const colors = SURFACE_COLORS[theme]
   const ready = bootState === 'ready'
   const showEditor = doc !== null && fontsState === 'ready'
 
@@ -367,17 +364,16 @@ export function SurfaceBoot(): React.JSX.Element {
       data-testid="office-surface"
       data-state={bootState}
       data-theme={theme}
-      style={{ background: colors.background, color: colors.text }}
     >
       <div
         className="office-surface-status"
-        style={{ borderBottomColor: colors.border }}
+        data-debug={debug ? 'true' : 'false'}
         data-testid="surface-status-bar"
       >
         <span
           data-testid="surface-boot-state"
           data-state={bootState}
-          style={{ color: ready ? (theme === 'dark' ? '#7ee2a8' : '#137333') : 'inherit' }}
+          style={{ color: ready ? 'var(--positive)' : 'inherit' }}
         >
           {ready ? 'surface ready' : '等待壳握手…'}
         </span>
@@ -414,10 +410,7 @@ export function SurfaceBoot(): React.JSX.Element {
           保存 {saveStats.count} 次
         </span>
         {error === '' ? null : (
-          <span
-            data-testid="surface-error"
-            style={{ color: theme === 'dark' ? '#f28b82' : '#c5221f' }}
-          >
+          <span data-testid="surface-error" style={{ color: 'var(--danger)' }}>
             {error}
           </span>
         )}

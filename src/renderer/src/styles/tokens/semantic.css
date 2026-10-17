@@ -124,6 +124,20 @@
      （2026-10-17 起会话侧栏已进卡内，覆盖层时代的 shell-notch 补角随之退休）。 */
   --shell-edge-gap: var(--space-1-5);
 
+  /* Office 文档画布（A1 / office-ui-redesign-spec §5.2）：灰画布上的白纸。
+     映射（office-ui-redesign-spec §5.1）：画布 = Bg-Secondary（HF `--canvas:#e6e6e6` 的
+     "比 chrome 暗一档" 对应档；浅色 #f5f5f5 上的白纸层次清楚，深色 #1f1f1f 比 chrome 抬起）、
+     纸 = Bg-Primary（浅色 #fff；深色 #121212）；
+     阴影走 Shadows-S1（与 --shadow-overlay 同一档基色，暗色下自动加深）。
+     这三条都是**纯别名**：深色档不重写（var() 在使用处解析，data-theme 翻档后跟着翻）；
+     隔离面（office.html）也 import 本文件 + kimi-tokens.css，并用 `html[data-theme]` 走同一套档。
+     注意：`--doc-page-bg` 与 @betteroffice/docx-react 内部同名 CV（内核目前未消费）撞名——
+     面内 .oox-root 里以内核值为准（Word-faithful，纸面不套皮肤）；本仓语义值在 :root，
+     给 shell 的空态"纸卡"和 A2 起的自绘 chrome 用。 */
+  --doc-canvas-bg: var(--Bg-Secondary);
+  --doc-page-bg: var(--Bg-Primary);
+  --doc-page-shadow: 0 1px 2px var(--Shadows-S1), 0 8px 24px var(--Shadows-S1);
+
   /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
      2026-10-17 起会话侧栏在内容卡**内部**、是主列的 flex 兄弟：主列几何天然不含侧栏那 240，
      所以页面内容列（.content-column，见 styles/tailwind.css）只要"限宽 + 在自己的可用宽里居中"。

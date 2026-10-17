@@ -1,10 +1,13 @@
 /*
- * Office 隔离面的基础布局（M3-S3）。
+ * Office 隔离面的基础布局（M3-S3；A1 起改「全出血画布」）。
  *
  * 为什么还要自己写一份：`office.html` 只负责 CSP/标题，编辑器 CSS
  * （`@betteroffice/docx-react/styles.css`）是组件级样式，不铺满视口；面需要
- * “状态条 + 编辑器填满剩余高度”的整页骨架。不引 Tailwind（隔离面不继承主界面样式）。
+ * “编辑器填满 + 调试条可选”的整页骨架。不引 Tailwind（隔离面不继承主界面样式），
+ * 但 **import 主界面同一套 token**（见 main.tsx：kimi-tokens.css + semantic.css）——
+ * 底色/分隔/文字全部走 `--doc-*` / `--*` 语义名，暗色靠 `html[data-theme='dark']` 自动翻档。
  */
+
 html,
 body,
 #root {
@@ -16,23 +19,39 @@ body,
 }
 
 body {
+  background: var(--doc-canvas-bg, #f5f5f5);
+  color: var(--text-primary, #1f1f1f);
   font-family:
     system-ui,
     -apple-system,
     'Segoe UI',
     'Microsoft YaHei',
     sans-serif;
+  /* A1：画布与纸面（Word-faithful：只动画布底色，不碰文档内容/字体/分页） */
+  color-scheme: light;
 }
 
-/* 面根节点：纵向 flex，状态条固定高，编辑器区吃满剩余空间 */
+html[data-theme='dark'] body {
+  color-scheme: dark;
+}
+
+/* 面根节点：纵向 flex；默认编辑器吃满整个面（A1 全出血） */
 .office-surface-root {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  background: var(--doc-canvas-bg, #f5f5f5);
+  color: var(--text-primary, #1f1f1f);
 }
 
+/*
+ * 调试条（S2/S3 的握手/主题/已收字节/保存次数）。
+ * 正式视图不露出：只有 DEV + `?officeDebug=1`（shell 侧 localStorage flag 会拼进 iframe URL）
+ * 或手工给 iframe URL 加 query 才显示；隐藏时元素仍在 DOM，探针按 testid/data-* 查（getByTestId
+ * 不要求可见）。`display:none` 同时把它从键盘/读屏里摘掉。
+ */
 .office-surface-status {
   flex: 0 0 auto;
   display: flex;
@@ -45,7 +64,11 @@ body {
   line-height: 1.6;
   white-space: nowrap;
   overflow: hidden;
-  border-bottom: 1px solid var(--doc-border, #e0e0e0);
+  border-bottom: 1px solid var(--border-hairline, #e0e0e0);
+}
+
+.office-surface-status[data-debug='false'] {
+  display: none;
 }
 
 .office-surface-status > span {
@@ -60,10 +83,24 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background: var(--doc-canvas-bg, #f5f5f5);
 }
 
 .office-surface-loading {
   padding: 16px;
   font-size: 13px;
   opacity: 0.75;
+}
+
+/*
+ * A1：把 BetterOffice 的「画布底」映射到本仓 token（§5.1 的 --doc-* 映射）。
+ * 只改 `--doc-bg`（编辑器 chrome/画布底，Word 文档内容与纸面不动）。
+ * 选择器带 `.dark` 变体：内核在 `.oox-root.dark` 里也定义了 --doc-bg，特异性相同，
+ * 我们这份样式表在编辑器 CSS 之后加载 → 后写胜出（两档都覆盖）。
+ * `--doc-page-bg` 与内核同名变量（内核目前未消费）不在这里映射，避免自引用；
+ * 纸面/正文保持 Word-faithful（见 spec R4）。
+ */
+.oox-root,
+.oox-root.dark {
+  --doc-bg: var(--doc-canvas-bg, #f5f5f5);
 }

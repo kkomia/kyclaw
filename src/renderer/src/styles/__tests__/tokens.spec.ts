@@ -5,6 +5,8 @@ const TOKENS_CSS = '../tokens/kimi-tokens.css'
 const SEMANTIC_CSS = '../tokens/semantic.css'
 const TAILWIND_CSS = '../tailwind.css'
 const MAIN_TSX = '../../main.tsx'
+const OFFICE_SURFACE_CSS = '../../office/surface.css'
+const OFFICE_MAIN_TSX = '../../office/main.tsx'
 
 function readSource(relativePath: string): string {
   try {
@@ -17,6 +19,8 @@ function readSource(relativePath: string): string {
 const tokensCss = readSource(TOKENS_CSS)
 const semanticCss = readSource(SEMANTIC_CSS)
 const tailwindCss = readSource(TAILWIND_CSS)
+const officeSurfaceCss = readSource(OFFICE_SURFACE_CSS)
+const officeMainTsx = readSource(OFFICE_MAIN_TSX)
 
 type Decls = Map<string, string>
 
@@ -792,5 +796,52 @@ describe('壳 · 内容卡留缝（R2 修复轮 round 3；2026-10-17 侧栏进�
     // 2026-10-17：会话侧栏成了卡内 flex 子列，内容卡左缘不再被覆盖层盖住，缺口角机制退休
     expect(appShell).not.toContain('data-testid="shell-notch"')
     expect(appShell).not.toContain('left-(--content-safe-left)')
+  })
+})
+
+/**
+ * A1（Office UI 改版 · 外壳与画布）：`--doc-*` 最小 token 集。
+ *
+ * 契约：画布/纸面/页影都从**既有原样层**别名出来（不新增颜色档）；深色档不重写
+ * （var() 在使用处解析，data-theme 翻档后跟着翻——与 semantic.css 头注"纯别名"同一口径）。
+ * 隔离面也 import 同一套 token（office/main.tsx），画布底由 surface.css 把内核 `--doc-bg` 映射过去。
+ */
+describe('Office 文档画布 token（A1：--doc-* 最小集）', () => {
+  const docRoot = semantic.get(':root') ?? new Map<string, string>()
+  const docDark = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
+
+  it('三条 token 都是原样层别名（画布=Bg-Secondary / 纸=Bg-Primary / 页影=Shadows-S1）', () => {
+    expectDecl(docRoot, '--doc-canvas-bg', 'var(--Bg-Secondary)', 'semantic :root')
+    expectDecl(docRoot, '--doc-page-bg', 'var(--Bg-Primary)', 'semantic :root')
+    expectDecl(
+      docRoot,
+      '--doc-page-shadow',
+      '0 1px 2px var(--Shadows-S1), 0 8px 24px var(--Shadows-S1)',
+      'semantic :root'
+    )
+  })
+
+  it('深色档不重写这三条（纯别名），但原样层的值确实分档', () => {
+    expect(docDark.get('--doc-canvas-bg')).toBeUndefined()
+    expect(docDark.get('--doc-page-bg')).toBeUndefined()
+    expect(docDark.get('--doc-page-shadow')).toBeUndefined()
+    // 引用到的原样 token 必须两档都有定义（浅/深各一份）
+    for (const name of ['--Bg-Secondary', '--Bg-Primary', '--Shadows-S1'] as const) {
+      expect(light.get(name), `原样层浅色缺 ${name}`).toBeDefined()
+      expect(dark.get(name), `原样层深色缺 ${name}`).toBeDefined()
+      expect(light.get(name)).not.toBe(dark.get(name))
+    }
+  })
+
+  it('隔离面复用同一套 token：office/main.tsx 引 kimi-tokens + semantic', () => {
+    expect(officeMainTsx).toContain("import '../styles/tokens/kimi-tokens.css'")
+    expect(officeMainTsx).toContain("import '../styles/tokens/semantic.css'")
+  })
+
+  it('surface.css：内核画布底 --doc-bg 映射到 --doc-canvas-bg；调试条默认隐藏', () => {
+    expect(officeSurfaceCss).toContain('--doc-bg: var(--doc-canvas-bg')
+    // .oox-root / .oox-root.dark 两档都覆盖（后者特异性相同、后写胜出）
+    expect(officeSurfaceCss).toMatch(/\.oox-root,\s*\.oox-root\.dark\s*\{/)
+    expect(officeSurfaceCss).toContain("[data-debug='false']")
   })
 })

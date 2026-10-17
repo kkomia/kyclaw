@@ -248,7 +248,6 @@ test.describe('M3-S4 · Office 模块保活 + 多 workspace 常驻（真机 prev
       const tabB = page.getByTestId('app-tab').filter({ hasText: '乙' })
       await tabB.click()
       await expect(activeDirty(page)).toHaveAttribute('data-dirty', 'false')
-      await page.getByTestId('office-page-title').click()
       await page.keyboard.press('Control+w')
       await expect(page.getByTestId('app-tab')).toHaveCount(1, { timeout: 60_000 })
       checks.ctrlWOnOffice = { tabsAfter: 1 }
@@ -310,8 +309,9 @@ test.describe('M3-S4 · Office 模块保活 + 多 workspace 常驻（真机 prev
       await typeIntoActiveEditor(page, 'S4-壳存-中文')
       await expect(activeDirty(page)).toHaveAttribute('data-dirty', 'true', { timeout: 60_000 })
 
-      // 焦点在壳里（点标题区，别点回 iframe）→ Ctrl+S 由 AppTabBar 的 window 监听处理
-      await page.getByTestId('office-page-title').click()
+      // 焦点在壳里（A1 起页头标题是 sr-only，改为点激活标签把焦点交回壳）→ Ctrl+S 由
+      // AppTabBar 的 window 监听处理
+      await page.getByTestId('app-tab').first().click()
       await page.keyboard.press('Control+s')
       await expect(activeDirty(page)).toHaveAttribute('data-dirty', 'false', { timeout: 180_000 })
       const saved = readFileSync(fixture.path)

@@ -28,3 +28,22 @@ export const useOfficeUiStore = create<OfficeUiState>()((set) => ({
 export function resetOfficeUiStore(): void {
   useOfficeUiStore.setState({ pickerOpen: false })
 }
+
+/**
+ * 「Office 调试信息」开关（A1）。
+ *
+ * S2/S3 的临时状态条（隔离面握手/主题/已收字节、保存态徽标）只给开发和探针用，正式视图
+ * 不露出。显示条件：**DEV + localStorage `kyclaw:office-debug=1`**（默认关，截图/交付态干净）。
+ * 关掉时元素仍在 DOM（testid / data-* 可查，e2e 探针照旧断言），只是 `hidden`。
+ * 开关由开发者手动置位后刷新页面生效；隔离面沿用同一个 flag（OfficeSurface 给 URL 加 query）。
+ */
+export const OFFICE_DEBUG_STORAGE_KEY = 'kyclaw:office-debug'
+
+export function officeDebugEnabled(): boolean {
+  if (!import.meta.env.DEV) return false
+  try {
+    return window.localStorage.getItem(OFFICE_DEBUG_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}

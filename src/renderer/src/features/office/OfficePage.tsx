@@ -13,7 +13,7 @@ import {
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
-import { useOfficeUiStore } from './office-ui-store'
+import { officeDebugEnabled, useOfficeUiStore } from './office-ui-store'
 import { useDocumentTheme } from './use-document-theme'
 
 /**
@@ -103,41 +103,47 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     <section
       data-testid="office-page"
       data-active={active ? 'true' : 'false'}
-      className="animate-page-in flex min-h-0 flex-1 flex-col"
+      className="animate-page-in flex min-h-0 flex-1 flex-col bg-(--doc-canvas-bg)"
     >
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-4">
-        <Briefcase aria-hidden="true" className="size-(--icon-size-sm) text-ink-tertiary" />
-        <h1 data-testid="office-page-title" className="text-t2 font-medium text-ink">
-          Office
-        </h1>
-      </header>
+      {/*
+        A1（Office UI 改版）：去掉 40px「Office」页头与内层卡片，Office 区**全出血**直接铺满
+        内容卡（外壳四角圆角由 AppShell 的 content-region 裁）；文件身份/保存态/调试信息
+        收进下面每个 workspace 的隐藏 strip（A2 ribbon / A4 状态栏接管）。标题仍以 sr-only h1
+        保留语义（既有 testid 契约：module-host / routes 单测与 e2e 都在用）。
+      */}
+      <h1 data-testid="office-page-title" className="sr-only">
+        Office
+      </h1>
 
       {tabs.length === 0 ? (
         <div
           data-testid="office-empty"
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6 text-center"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center"
         >
-          <span
-            aria-hidden="true"
-            className="flex size-12 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
-          >
-            <Briefcase className="size-(--icon-size-lg)" />
-          </span>
-          <div className="flex max-w-md flex-col gap-1">
-            <h2 className="text-t2 font-medium text-ink">还没有打开的文档</h2>
-            <p className="text-b2 text-ink-secondary">
-              打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
-            </p>
+          {/* 空态 = 灰画布上的一张「白纸」：--doc-page-bg / --doc-page-shadow 的可见落点 */}
+          <div className="flex max-w-md flex-col items-center gap-4 rounded-overlay border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-8 py-10 shadow-(--doc-page-shadow)">
+            <span
+              aria-hidden="true"
+              className="flex size-12 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
+            >
+              <Briefcase className="size-(--icon-size-lg)" />
+            </span>
+            <div className="flex flex-col gap-1">
+              <h2 className="text-t2 font-medium text-ink">还没有打开的文档</h2>
+              <p className="text-b2 text-ink-secondary">
+                打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
+              </p>
+            </div>
+            <Button
+              data-testid="office-open"
+              icon={<Plus />}
+              loading={opening}
+              disabled={opening}
+              onClick={() => void openViaDialog()}
+            >
+              打开文件
+            </Button>
           </div>
-          <Button
-            data-testid="office-open"
-            icon={<Plus />}
-            loading={opening}
-            disabled={opening}
-            onClick={() => void openViaDialog()}
-          >
-            打开文件
-          </Button>
           {openError === '' ? null : (
             <p
               data-testid="office-open-error"
@@ -151,6 +157,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
       ) : (
         // M3-S4：**所有已打开标签都挂载**，非激活 `hidden + inert`——切标签只换可见性，
         // iframe / 面内编辑器 / 未保存修改 / 滚动位置全部保活（不再 key=activeTab.id 重建）。
+        // A1：全出血画布（灰底），每个 workspace 自己铺满。
         <div data-testid="office-workspaces" className="relative flex min-h-0 flex-1 flex-col">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTab?.id
@@ -336,6 +343,9 @@ function OfficeWorkspace({
     handleOfficeShortcut(action)
   }
 
+  /** A1 调试信息开关：默认关（正式视图不露出），DOM/属性仍供单测与探针查 */
+  const debugVisible = officeDebugEnabled()
+
   return (
     <div
       data-testid="office-workspace"
@@ -344,120 +354,131 @@ function OfficeWorkspace({
       data-active={active ? 'true' : 'false'}
       data-document-state={loaded === null ? (docError === '' ? 'loading' : 'error') : 'loaded'}
       data-editor-state={isDocx ? (editorReady ? 'ready' : 'loading') : 'n/a'}
-      className="flex min-h-0 flex-1 flex-col p-4"
+      className="relative flex min-h-0 flex-1 flex-col"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border-(length:--hairline-width) border-hairline bg-secondary">
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <Icon aria-hidden="true" className="size-(--icon-size-md) shrink-0 text-ink-tertiary" />
-            <div className="min-w-0">
-              <p className="truncate text-b2 font-medium text-ink" title={tab.title}>
-                {tab.title}
-              </p>
-              <p className="truncate text-c1 text-ink-tertiary" title={source}>
-                {source}
-                {pageCount > 0 ? ` · ${pageCount} 页` : ''}
-              </p>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {isDocx ? (
-              // 保存按钮：走 office-actions 的同一动作（S4 的标签条/iframe 内快捷键也走它）
-              <Button
-                data-testid="office-save"
-                variant="ghost"
-                size="sm"
-                loading={saving}
-                disabled={!canSave}
-                title="保存（Ctrl+S）"
-                onClick={requestSave}
-              >
-                保存
-              </Button>
-            ) : null}
-            {isDocx ? (
-              // 临时调试展示：隔离面握手状态（S1/S2 探针依赖，保留）
-              <span
-                data-testid="office-surface-status"
-                data-state={surfaceStatus}
-                title="Office 隔离面握手状态"
-                className="inline-flex items-center rounded-badge bg-selected px-1.5 py-0.5 text-c2 text-ink-tertiary"
-              >
-                隔离面 {surfaceStatus}
-              </span>
-            ) : null}
-            {tab.readOnly ? (
-              <span className="rounded-badge border-(length:--hairline-width) border-hairline px-1.5 py-0.5 text-c2 text-ink-tertiary">
-                只读
-              </span>
-            ) : null}
-            <span
-              data-testid="office-dirty-status"
-              data-dirty={tab.dirty ? 'true' : 'false'}
-              data-saving={saving ? 'true' : 'false'}
-              title={
-                saving
-                  ? '正在写盘…'
-                  : tab.dirty
-                    ? '有未保存的修改（Ctrl+S 保存）'
-                    : '磁盘上的内容与编辑器里的一致'
-              }
-              className={cn(
-                'inline-flex items-center rounded-badge px-1.5 py-0.5 text-c2',
-                tab.dirty ? 'bg-(--fill-selected) text-warning' : 'bg-selected text-ink-tertiary'
-              )}
-            >
-              {saving ? '保存中…' : tab.dirty ? '未保存修改' : '已保存'}
-            </span>
-          </div>
-        </div>
-        {isDocx ? (
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <OfficeSurface
-              ref={surfaceRef}
-              onStatusChange={handleSurfaceStatus}
-              theme={theme}
-              documentInfo={loaded?.info}
-              documentBytes={loaded?.bytes}
-              surfaceUrl={surfaceUrl}
-              onDocLoaded={(pages) => {
-                setEditorReady(true)
-                setPageCount(pages)
-                setDocError('')
-              }}
-              onDocChanged={handleDocChanged}
-              onDocSaveRequest={handleDocSaveRequest}
-              onDocError={handleDocError}
-              onShortcut={handleSurfaceShortcut}
-            />
-            {docError === '' ? null : (
-              <p
-                data-testid="office-doc-error"
-                role="alert"
-                className="absolute inset-x-0 bottom-0 border-t border-hairline bg-secondary px-4 py-2 text-c1 text-warning"
-              >
-                {docError}
-              </p>
-            )}
-          </div>
-        ) : (
-          <div
-            data-testid="office-editor-placeholder"
-            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
-          >
-            <Icon aria-hidden="true" className="size-(--icon-size-lg) text-ink-tertiary" />
-            <p className="text-b2 text-ink-secondary">编辑器接入中</p>
-            <p className="max-w-md text-c1 text-ink-tertiary">
-              {OFFICE_KIND_LABEL[tab.kind]}编辑器会在这里打开；切换标签不会关闭或重置其他文档。
-            </p>
-          </div>
+      {/*
+        A1 全出血：原来的「文档头」（标题/路径/保存按钮/隔离面/脏徽标）不再占一行 ——
+        文件身份与保存态在 A2 的 ribbon QAT / A4 的状态栏接管。这里保留 DOM 契约：
+        默认 `hidden`（正式视图不露出），DOM 里可查 testid / data-*（单测与探针依赖）；
+        DEV + localStorage `kyclaw:office-debug=1` 时才展开供开发核对。
+      */}
+      <div
+        data-testid="office-workspace-debug"
+        data-debug={debugVisible ? 'true' : 'false'}
+        hidden={!debugVisible}
+        className={cn(
+          'shrink-0 items-center gap-2 border-b border-hairline bg-(--doc-page-bg) px-3 py-1 text-c1 text-ink-tertiary',
+          debugVisible ? 'flex' : 'hidden'
         )}
+      >
+        <Icon aria-hidden="true" className="size-(--icon-size-sm) shrink-0" />
+        <p
+          data-testid="office-doc-title"
+          className="min-w-0 truncate font-medium text-ink"
+          title={tab.title}
+        >
+          {tab.title}
+        </p>
+        <p className="min-w-0 truncate" title={source}>
+          {source}
+          {pageCount > 0 ? ` · ${pageCount} 页` : ''}
+        </p>
+        {isDocx ? (
+          // 保存按钮（A1 起视觉上收进调试 strip；A2 会搬进 ribbon QAT）
+          <Button
+            data-testid="office-save"
+            variant="ghost"
+            size="sm"
+            loading={saving}
+            disabled={!canSave}
+            title="保存（Ctrl+S）"
+            onClick={requestSave}
+          >
+            保存
+          </Button>
+        ) : null}
+        {isDocx ? (
+          <span
+            data-testid="office-surface-status"
+            data-state={surfaceStatus}
+            title="Office 隔离面握手状态"
+            className="inline-flex items-center rounded-badge bg-selected px-1.5 py-0.5 text-c2 text-ink-tertiary"
+          >
+            隔离面 {surfaceStatus}
+          </span>
+        ) : null}
+        {tab.readOnly ? (
+          <span className="rounded-badge border-(length:--hairline-width) border-hairline px-1.5 py-0.5 text-c2 text-ink-tertiary">
+            只读
+          </span>
+        ) : null}
+        <span
+          data-testid="office-dirty-status"
+          data-dirty={tab.dirty ? 'true' : 'false'}
+          data-saving={saving ? 'true' : 'false'}
+          title={
+            saving
+              ? '正在写盘…'
+              : tab.dirty
+                ? '有未保存的修改（Ctrl+S 保存）'
+                : '磁盘上的内容与编辑器里的一致'
+          }
+          className={cn(
+            'inline-flex items-center rounded-badge px-1.5 py-0.5 text-c2',
+            tab.dirty ? 'bg-(--fill-selected) text-warning' : 'bg-selected text-ink-tertiary'
+          )}
+        >
+          {saving ? '保存中…' : tab.dirty ? '未保存修改' : '已保存'}
+        </span>
       </div>
+
+      {isDocx ? (
+        // 画布全出血：iframe 直接填满 workspace（外壳圆角由 content-region 裁）
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <OfficeSurface
+            ref={surfaceRef}
+            onStatusChange={handleSurfaceStatus}
+            theme={theme}
+            documentInfo={loaded?.info}
+            documentBytes={loaded?.bytes}
+            surfaceUrl={surfaceUrl}
+            onDocLoaded={(pages) => {
+              setEditorReady(true)
+              setPageCount(pages)
+              setDocError('')
+            }}
+            onDocChanged={handleDocChanged}
+            onDocSaveRequest={handleDocSaveRequest}
+            onDocError={handleDocError}
+            onShortcut={handleSurfaceShortcut}
+          />
+          {docError === '' ? null : (
+            <p
+              data-testid="office-doc-error"
+              role="alert"
+              className="absolute inset-x-0 bottom-0 border-t border-hairline bg-(--doc-page-bg) px-4 py-2 text-c1 text-warning"
+            >
+              {docError}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div
+          data-testid="office-editor-placeholder"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-(--doc-canvas-bg) p-6 text-center"
+        >
+          <Icon aria-hidden="true" className="size-(--icon-size-lg) text-ink-tertiary" />
+          <p className="text-b2 text-ink-secondary">编辑器接入中</p>
+          <p className="max-w-md text-c1 text-ink-tertiary">
+            {OFFICE_KIND_LABEL[tab.kind]}编辑器会在这里打开；切换标签不会关闭或重置其他文档。
+          </p>
+        </div>
+      )}
       {saveError === '' ? null : (
         <div
           data-testid="office-save-error"
           role="alert"
-          className="mt-2 flex shrink-0 items-center gap-3 rounded-control border-(length:--hairline-width) border-hairline bg-secondary px-3 py-2 text-c1 text-warning"
+          className="absolute inset-x-0 bottom-0 flex shrink-0 items-center gap-3 border-t border-hairline bg-(--doc-page-bg) px-3 py-2 text-c1 text-warning"
         >
           <span className="min-w-0 flex-1 truncate" title={saveError}>
             {saveError}

@@ -39,6 +39,7 @@ import {
   type SurfaceShortcutAction,
   type SurfaceTheme
 } from '@renderer/office/bridge-protocol'
+import { officeDebugEnabled } from './office-ui-store'
 import { currentSurfaceUrl } from './surface-url'
 
 /** 面状态：loading = 已建 iframe 等握手；ready = 面已应用 init；fatal = 等了超时/面自报崩溃 */
@@ -89,6 +90,22 @@ export interface OfficeSurfaceHandle {
 /** 一次保存请求的等待上限（generate 含 64MB 文档 flush+save，给足余量） */
 const SAVE_REQUEST_TIMEOUT_MS = 60_000
 
+/**
+ * A1：DEV + localStorage 调试开关打开时，给隔离面 URL 拼 `?officeDebug=1` —— 面内那条
+ * 「surface ready / theme / 已收到…」调试条才会显示（默认隐藏，交付态干净）。
+ * 非 dev / 开关关：URL 原样（单测与 preview 探针断言的 src 不变）。
+ */
+function surfaceUrlWithDebugFlag(url: string): string {
+  if (!officeDebugEnabled()) return url
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.set('officeDebug', '1')
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>(
   function OfficeSurface(
     {
@@ -111,7 +128,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     const statusRef = useRef<OfficeSurfaceStatus>('loading')
     const [status, setStatus] = useState<OfficeSurfaceStatus>('loading')
     const [fatalMessage, setFatalMessage] = useState('')
-    const [url] = useState(() => surfaceUrl ?? currentSurfaceUrl())
+    const [url] = useState(() => surfaceUrlWithDebugFlag(surfaceUrl ?? currentSurfaceUrl()))
 
     /** 面生成的握手 nonce（hello 时记下；所有壳→面消息都带它） */
     const nonceRef = useRef<string | null>(null)
@@ -353,7 +370,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         data-state={status}
         data-theme={theme}
         data-document-id={documentInfo?.documentId ?? ''}
-        className="relative flex min-h-0 flex-1 flex-col bg-surface"
+        className="relative flex min-h-0 flex-1 flex-col bg-(--doc-canvas-bg)"
       >
         {/*
           src 不写在 JSX 里：由上面的 effect 在 message 监听挂好之后赋值（避免竞态）。
@@ -364,7 +381,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           data-testid="office-surface-iframe"
           data-status={status}
           title="Office 隔离面"
-          className="h-full min-h-0 w-full flex-1 border-0"
+          className="block h-full min-h-0 w-full flex-1 border-0"
           sandbox="allow-scripts allow-same-origin"
         />
         {status === 'fatal' ? (
