@@ -75,8 +75,8 @@ const dark: Decls = tokens.get(":root[data-theme='dark']") ?? new Map<string, st
 const identityLight: Decls = identity.get(':root') ?? new Map<string, string>()
 const identityDark: Decls = identity.get(":root[data-theme='dark']") ?? new Map<string, string>()
 const motionRoot: Decls = motion.get(':root') ?? new Map<string, string>()
-const small: Decls = tokens.get(":root[data-font-size='small']") ?? new Map<string, string>()
-const large: Decls = tokens.get(":root[data-font-size='large']") ?? new Map<string, string>()
+/** 语义层（semantic.css）的 :root：task-69 起六档字号/行高在这里按 --ui-scale 缩放 */
+const semanticRoot: Decls = semantic.get(':root') ?? new Map<string, string>()
 
 function expectDecl(decls: Decls, name: string, value: string, scope: string): void {
   const actual = decls.get(name)
@@ -241,25 +241,41 @@ describe('原样层 · 字阶（UI 参考 §3）', () => {
     expectDecl(light, `--${tier}-line-height`, `${lineHeight}px`, ':root')
   })
 
-  it.each(TYPE_TIERS)('small 档 %s = %ipx / %ipx', (tier, _d, [size, lineHeight]) => {
-    expectDecl(small, `--${tier}-font-size`, `${size}px`, ':root[data-font-size=small]')
-    expectDecl(small, `--${tier}-line-height`, `${lineHeight}px`, ':root[data-font-size=small]')
+  // task-69：字号设置从"三档整组换值（data-font-size）"改成"数值 → --ui-scale 乘法缩放"。
+  // 语义层（semantic.css）把六档字号/行高写成 calc(基准 × var(--ui-scale, 1))：
+  //   - 默认 14px → scale=1 → 计算值与 kimi 基准逐字相同（观感不变）；
+  //   - 12/18px → 0.857 / 1.286，字号与行高**同步**缩放。
+  const SCALED_TIERS = TYPE_TIERS.slice(0, 6)
+
+  it.each(SCALED_TIERS)('语义层 %s：字号与行高都按 --ui-scale 缩放', (tier, [size, lineHeight]) => {
+    expectDecl(
+      semanticRoot,
+      `--${tier}-font-size`,
+      `calc(${size}px * var(--ui-scale, 1))`,
+      'semantic.css :root'
+    )
+    expectDecl(
+      semanticRoot,
+      `--${tier}-line-height`,
+      `calc(${lineHeight}px * var(--ui-scale, 1))`,
+      'semantic.css :root'
+    )
   })
 
-  it.each(TYPE_TIERS)('large 档 %s = %ipx / %ipx', (tier, _d, _s, [size, lineHeight]) => {
-    expectDecl(large, `--${tier}-font-size`, `${size}px`, ':root[data-font-size=large]')
-    expectDecl(large, `--${tier}-line-height`, `${lineHeight}px`, ':root[data-font-size=large]')
+  it('六档全部覆盖（12 条声明；行高不能漏，否则紧凑档行距会变松）', () => {
+    for (const [tier] of SCALED_TIERS) {
+      expect(semanticRoot.get(`--${tier}-font-size`), tier).toContain('var(--ui-scale')
+      expect(semanticRoot.get(`--${tier}-line-height`), tier).toContain('var(--ui-scale')
+    }
   })
 
-  it('整组换值：三档各自覆盖全部 14 阶（28 条声明），不是乘法缩放', () => {
-    const expected = TYPE_TIERS.length * 2
-
-    expect(
-      [...small.keys()].filter((key) => key.includes('-font-size') || key.includes('-line-height'))
-    ).toHaveLength(expected)
-    expect(
-      [...large.keys()].filter((key) => key.includes('-font-size') || key.includes('-line-height'))
-    ).toHaveLength(expected)
+  it('不再是整组换值：kimi 三层字号档不被当成渲染机制（语义层统一按 scale）', () => {
+    // 旧机制是 :root[data-font-size='small|large'] 覆盖 14 阶；现在渲染不再依赖它
+    // （属性没人写；语义层的 calc 覆盖了 ui-* 六档）。这里只钉"语义层六档都走 calc"，
+    // kimi-tokens 的三档块保留为回滚资料、不参与断言。
+    for (const [tier] of SCALED_TIERS) {
+      expect(semanticRoot.get(`--${tier}-font-size`)).not.toMatch(/^\d+px$/)
+    }
   })
 
   it('无字体度量 token 之外的字阶残留：ui-* 恰好六档（§3.1）', () => {
@@ -562,6 +578,9 @@ describe('语义层（semantic.css）· 重映射到身份层', () => {
       ...[...identity.values()].flatMap((decls) => [...decls.keys()]),
       ...[...semantic.values()].flatMap((decls) => [...decls.keys()])
     ])
+    // task-69：--ui-scale 是**运行时**注入（lib/theme.ts 写 html；默认 14px → 1.000），
+    // 不归 CSS 层声明；语义层 calc 引用它时带 fallback 1，所以这里当成允许的运行时令牌。
+    declared.add('--ui-scale')
     const referenced = [
       ...new Set([...semanticCss.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))
     ].sort()
@@ -570,6 +589,59 @@ describe('语义层（semantic.css）· 重映射到身份层', () => {
     for (const name of referenced) {
       expect(declared.has(name), `三层 token 都没有定义 ${name}`).toBe(true)
     }
+  })
+})
+
+describe('图标尺寸随字号 scale（task-69 机制 · task-73 收口：侧栏/会话行/菜单/标签栏对齐）', () => {
+  const ICON_SIZES: Array<[string, number]> = [
+    ['--icon-size-xs', 12],
+    ['--icon-size-sm', 16],
+    ['--icon-size-md', 18],
+    ['--icon-size-lg', 20]
+  ]
+
+  it.each(ICON_SIZES)('%s 与六档字号用同一个 --ui-scale 等比缩放', (token, base) => {
+    expectDecl(semanticRoot, token, `calc(${base}px * var(--ui-scale, 1))`, 'semantic.css :root')
+  })
+
+  // 12 / 14 / 18 三档的**计算值**（base × size / 14，两位小数）。
+  // 14px 是默认档 → 与改造前 12/16/18/20 逐字一致；12/18 两端按同一比例缩/放。
+  it.each([
+    [12, { xs: 10.29, sm: 13.71, md: 15.43, lg: 17.14 }],
+    [14, { xs: 12, sm: 16, md: 18, lg: 20 }],
+    [18, { xs: 15.43, sm: 20.57, md: 23.14, lg: 25.71 }]
+  ] as const)('字号 %ipx：图标计算值 = %o', (size, expected) => {
+    const px = (base: number): number => Number(((base * size) / 14).toFixed(2))
+
+    expect(px(12)).toBe(expected.xs)
+    expect(px(16)).toBe(expected.sm)
+    expect(px(18)).toBe(expected.md)
+    expect(px(20)).toBe(expected.lg)
+  })
+
+  it.each([12, 14, 18])(
+    '字号 %ipx：图标 md 与 B2 行高按同一 scale（居中所需的盒/基线比例恒定）',
+    (size) => {
+      const scale = size / 14
+      const icon = 18 * scale
+      const lineHeight = 20 * scale
+      // 比例恒为 18/20：行内 flex items-center 居中时，图标不会比缩后的行高大/小（不出现错位）。
+      expect(icon / lineHeight).toBeCloseTo(18 / 20, 6)
+      // 行高随 scale 缩放：默认档 20（原值），12/18 两档不是固定 20
+      if (size === 14) expect(lineHeight).toBe(20)
+      else expect(lineHeight).not.toBe(20)
+    }
+  )
+
+  it('像素资产不参与 scale：图标是矢量尺寸 token，位图/海獭走固定整数倍（不在本层）', () => {
+    // 只钉机制边界：vector token 用 calc + --ui-scale；brand 像素资产没有尺寸 token 引用
+    expect(semanticRoot.get('--icon-size-md')).toContain('var(--ui-scale')
+    expect(semanticCss).not.toMatch(/--brand-.*size:\s*calc/)
+    // 像素海獭尺寸是整数 px 字面量（32/96），不经 --ui-scale（task-73 边界核对）
+    const otter = readSource('../../features/brand/PixelOtter.tsx')
+    expect(otter).not.toBe('')
+    expect(otter).toContain("'--otter-size': `${size}px`")
+    expect(otter).not.toContain('--ui-scale')
   })
 })
 
@@ -594,10 +666,12 @@ describe('T3 控件尺寸与组件级 token（UI 验收表数值）', () => {
     ['--icon-button-size', '36px'],
     ['--field-height', '40px'],
     ['--chip-height', '36px'],
-    // 图标与 spinner（§4.7 spinner 16/18/20、§4.8 图标 18 与不透明度三档）
-    ['--icon-size-sm', '16px'],
-    ['--icon-size-md', '18px'],
-    ['--icon-size-lg', '20px'],
+    // 图标与 spinner（§4.7 spinner 16/18/20、§4.8 图标 18 与不透明度三档）；
+    // task-69 起图标尺寸随字号 --ui-scale 等比缩放（14px 默认档 = 原 12/16/18/20）
+    ['--icon-size-xs', 'calc(12px * var(--ui-scale, 1))'],
+    ['--icon-size-sm', 'calc(16px * var(--ui-scale, 1))'],
+    ['--icon-size-md', 'calc(18px * var(--ui-scale, 1))'],
+    ['--icon-size-lg', 'calc(20px * var(--ui-scale, 1))'],
     ['--icon-opacity', '0.56'],
     ['--icon-opacity-hover', '0.84'],
     ['--icon-opacity-disabled', '0.26'],
@@ -1013,8 +1087,8 @@ describe('T5 导航项与新建会话尺寸（附录 A 实测值）', () => {
     }
   })
 
-  it('图标尺度复用 §4.8 的 18 档（导航项图标不另起一个尺寸 token）', () => {
-    expectDecl(t5root, '--icon-size-md', '18px', 'semantic :root')
+  it('图标尺度复用 §4.8 的 18 档（导航项图标不另起一个尺寸 token；且随字号 scale）', () => {
+    expectDecl(t5root, '--icon-size-md', 'calc(18px * var(--ui-scale, 1))', 'semantic :root')
     expect(t5root.has('--nav-icon-size'), '不该另起 nav 专用图标尺寸').toBe(false)
   })
 
@@ -1126,9 +1200,10 @@ describe('Office ribbon 布局与动效 token（A2）', () => {
   const ribbonRoot: Decls = semantic.get(':root') ?? new Map<string, string>()
   const ribbonDark: Decls = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
 
-  it('布局 token：QAT/tab 行 32 / 工具带 80 / 状态栏 26（A4）/ AI 面板 320（A3）', () => {
-    expectDecl(ribbonRoot, '--office-ribbon-tabs-height', '32px', 'semantic :root')
-    expectDecl(ribbonRoot, '--office-ribbon-body-height', '80px', 'semantic :root')
+  it('布局 token：QAT/tab 行 28 / 工具带 54 / 总高 83（task-76 紧凑化）/ 状态栏 26 / AI 面板 320', () => {
+    expectDecl(ribbonRoot, '--office-ribbon-tabs-height', '28px', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-ribbon-body-height', '54px', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-ribbon-total-height', '83px', 'semantic :root')
     expectDecl(ribbonRoot, '--office-status-height', '26px', 'semantic :root')
     expectDecl(ribbonRoot, '--office-ai-panel-width', '320px', 'semantic :root')
   })
@@ -1147,10 +1222,11 @@ describe('Office ribbon 布局与动效 token（A2）', () => {
     expectDecl(ribbonRoot, '--office-motion-exit', '120ms', 'semantic :root')
   })
 
-  it('这七条深浅同值：深色块不重写', () => {
+  it('这八条深浅同值：深色块不重写', () => {
     for (const name of [
       '--office-ribbon-tabs-height',
       '--office-ribbon-body-height',
+      '--office-ribbon-total-height',
       '--office-status-height',
       '--office-motion-feedback',
       '--office-motion-enter',
