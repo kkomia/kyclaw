@@ -81,6 +81,9 @@ importers:
       pptxgenjs:
         specifier: 4.0.1
         version: 4.0.1
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
     devDependencies:
       '@ai-sdk/react':
         specifier: 4.0.140
@@ -271,9 +274,6 @@ importers:
       yaml:
         specifier: 2.9.1
         version: 2.9.1
-      zod:
-        specifier: 4.6.5
-        version: 4.6.5
       zustand:
         specifier: 5.0.15
         version: 5.0.15(@types/react@19.3.0)(immer@9.0.12)(react@19.3.0)(use-sync-external-store@1.7.0(react@19.3.0))
@@ -5696,7 +5696,7 @@ packages:
         optional: true
 
   xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz:
-    resolution: {tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
+    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
     version: 0.20.3
     engines: {node: '>=0.8'}
     hasBin: true

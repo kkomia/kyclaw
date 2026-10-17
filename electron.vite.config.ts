@@ -52,6 +52,18 @@ export default defineConfig({
     // 0.2.0 Office 面（M3-S0）：渲染端多入口 —— 主界面 index.html + 隔离的 office.html。
     // 两个入口各自成页；office 面以后由 kyclaw-office:// 协议加载（见 S1）。
     build: {
+      /**
+       * task-98 验收 P2：**字体资产不内联**。
+       * Vite 默认把 <4KB 的资产内联成 data: URI；KaTeX_Size3-Regular.woff2（3,624 B）就是这样
+       * 进了主 renderer 的 CSS。主页面是 `src/renderer/index.html`，其 CSP 只有 `default-src 'self'`
+       * 且没显式 `font-src` → data:font 被兜底规则拦下，`page.reload()` 后 console 出现 2 条
+       * 「Loading the font 'data:font/woff2;base64,…' violates … default-src 'self'」。
+       * 这里让字体文件一律走**同源文件 URL**（`'self'` 本来就被 CSP 允许），既不放宽 CSP、
+       * 也不改主页面（index.html 与海獭换装并行，归 office-surface-dev）；
+       * 非字体小资产仍按 Vite 默认内联。
+       */
+      assetsInlineLimit: (filePath: string): boolean | undefined =>
+        /\.(woff2?|ttf|otf|eot)$/i.test(filePath) ? false : undefined,
       rollupOptions: {
         input: {
           index: resolve('src/renderer/index.html'),
