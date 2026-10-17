@@ -1,0 +1,25 @@
+/*
+ * 知识库页美术层（task-95）：**资料馆 / 索引卡**气质（与笔记页同族、可区分）。
+ *
+ * 口径：
+ *   - 列表用 hairline 行分隔（不做卡片矩阵、不与笔记抢同一种卡片语言）；
+ *   - 搜索命中 mark 用 accent 薄底（唯一 accent 使用点：命中高亮），不加粗整段；
+ *   - 来源路径 / 大小 / 时间 / 扩展名都走 code 声部（mono + tabular，读数不跳宽）；
+ *   - 动效只用既有 `animate-message-in` / motion token；reduced 由全局规则兜底（无新增动画）。
+ */
+.knowledge-hit-mark {
+  border-radius: 2px;
+  padding: 0 1px;
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+}
+
+/* 索引卡的「纸边」：列表行之间 1px hairline，最后一行不出线（不用圆角卡片铺满） */
+.knowledge-index-item + .knowledge-index-item {
+  border-top: 1px solid var(--border-hairline);
+}
+
+/* 选中行不新造色：沿用 bg-selected；行内标题保持 ink，未选中为 ink-secondary */
+.knowledge-index-item[data-selected='true'] .knowledge-index-title {
+  color: var(--text-primary);
+}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   clearKyclawBridge,
@@ -239,7 +239,7 @@ describe('知识库：字体声部（task-64 字体一致性）', () => {
       expect(paragraph).toHaveClass('font-prose')
       expect(paragraph).not.toHaveClass('font-sans')
     }
-    expect(screen.getByTestId('knowledge-detail-title')).toHaveClass('font-serif')
+    expect(screen.getByTestId('knowledge-detail-title')).toHaveClass('ui-detail-title')
 
     // meta：数值/大小/时间走 code 声部 + tabular（列表次行同理）
     const meta = screen.getByTestId('knowledge-meta')
@@ -247,5 +247,111 @@ describe('知识库：字体声部（task-64 字体一致性）', () => {
     expect(meta.querySelectorAll('.font-mono').length).toBeGreaterThanOrEqual(3)
     const listMeta = screen.getByTestId('knowledge-item').querySelector('.tabular-nums')
     expect(listMeta).not.toBeNull()
+  })
+})
+
+describe('知识库：美术层（task-95 · 资料馆/索引卡）', () => {
+  it('顶栏：衬线标题 + mono 计数/体积（不重复说明按钮）', async () => {
+    const a = docFixture({ id: '00000000-0000-4000-8000-000000000008', size: 2048 })
+    const b = docFixture({ id: '00000000-0000-4000-8000-000000000009', size: 1024, title: '二.md' })
+    bridge.knowledge.list.mockResolvedValue({ documents: [a, b] })
+    bridge.knowledge.readText.mockResolvedValue({ text: '正文', truncated: false })
+
+    render(<KnowledgePage />)
+    await screen.findByTestId('knowledge-detail-title')
+
+    const band = screen.getByTestId('knowledge-page-band')
+    expect(band).toHaveClass('h-12', 'border-b')
+    const meta = screen.getByTestId('knowledge-page-meta')
+    expect(meta).toHaveTextContent('共 2 份')
+    expect(meta).toHaveClass('ui-page-meta')
+    // 导入主按钮克制：sm（与笔记页同一档）
+    expect(screen.getByTestId('knowledge-import')).toHaveClass('h-(--control-height-sm)')
+  })
+
+  it('列表：索引卡行（扩展名标签 + mono meta）；行间 hairline 分隔', async () => {
+    const doc = docFixture({
+      id: '00000000-0000-4000-8000-00000000000a',
+      title: '会议纪要.md',
+      ext: 'md'
+    })
+    bridge.knowledge.list.mockResolvedValue({ documents: [doc] })
+    bridge.knowledge.readText.mockResolvedValue({ text: '正文', truncated: false })
+
+    render(<KnowledgePage />)
+    const item = await screen.findByTestId('knowledge-item')
+    expect(item.querySelector('[data-testid="knowledge-kind"]')).toHaveTextContent('MD')
+    expect(item.querySelector('.font-mono')).not.toBeNull()
+    expect(item.closest('li')).toHaveClass('knowledge-index-item')
+  })
+
+  it('搜索命中：mono 计数行 + 标题/摘要高亮 mark；清除键回全量', async () => {
+    const doc = docFixture({ id: '00000000-0000-4000-8000-00000000000b', title: '会议纪要.md' })
+    bridge.knowledge.list.mockResolvedValue({ documents: [doc] })
+    bridge.knowledge.readText.mockResolvedValue({ text: '会议正文', truncated: false })
+    bridge.knowledge.search.mockResolvedValue({
+      hits: [{ id: doc.id, title: '会议纪要.md', snippet: '…会议里的关键词上下文…' }]
+    })
+
+    render(<KnowledgePage />)
+    await screen.findByTestId('knowledge-item')
+    fireEvent.change(screen.getByTestId('knowledge-search'), { target: { value: '会议' } })
+
+    const count = await screen.findByTestId('knowledge-search-count')
+    expect(count).toHaveTextContent('共 1 条命中')
+    expect(count).toHaveClass('font-mono', 'tabular-nums')
+    const marks = within(screen.getByTestId('knowledge-hit-list')).getAllByText('会议')
+    expect(marks.length).toBeGreaterThan(0)
+    expect(marks[0]).toHaveClass('knowledge-hit-mark')
+
+    // 清除键：回全量列表
+    fireEvent.click(screen.getByTestId('knowledge-search-clear'))
+    expect(await screen.findByTestId('knowledge-list')).toBeInTheDocument()
+  })
+
+  it('详情：资料夹页头（眉题 资料 · MD + 衬线标题 + 来源槽）走统一 800 内容列', async () => {
+    const doc = docFixture({
+      id: '00000000-0000-4000-8000-00000000000c',
+      title: '第二篇.md',
+      originalPath: 'C:\\资料\\第二篇.md',
+      ext: 'md'
+    })
+    bridge.knowledge.list.mockResolvedValue({ documents: [doc] })
+    bridge.knowledge.readText.mockResolvedValue({ text: '正文', truncated: false })
+
+    render(<KnowledgePage />)
+    await screen.findByTestId('knowledge-detail-title')
+
+    const header = screen.getByTestId('knowledge-detail-header')
+    // P2 修复：与设置/笔记同一条 800 内容列规则（旧结构 px 在 max-width 外层，1100 下右缘多 16px）
+    expect(header).toHaveClass('content-column', 'px-(--page-gutter)')
+    expect(screen.getByTestId('knowledge-detail')).toContainElement(
+      screen.getByTestId('knowledge-source-path')
+    )
+    expect(screen.getByTestId('knowledge-detail-eyebrow')).toHaveTextContent('资料')
+    expect(screen.getByTestId('knowledge-detail-kind')).toHaveTextContent('MD')
+    expect(screen.getByTestId('knowledge-source-path')).toHaveTextContent('来源')
+    expect(screen.getByTestId('knowledge-source-path')).toHaveTextContent('C:\\资料\\第二篇.md')
+    // 正文区同样落在内容列里（滚动区内的 content-column）
+    expect(
+      screen.getByTestId('knowledge-detail').querySelectorAll('.content-column').length
+    ).toBeGreaterThanOrEqual(2)
+  })
+
+  it('空态：支持格式的索引标签 + 衬线邀请；错误条按章程只留左边 2px 线', async () => {
+    render(<KnowledgePage />)
+    await screen.findByTestId('knowledge-empty')
+    const kinds = screen.getByTestId('knowledge-empty-kinds')
+    expect(kinds).toHaveTextContent('Markdown')
+    expect(kinds).toHaveTextContent('JSON')
+
+    cleanup()
+    resetKnowledgeStore()
+    bridge.knowledge.list.mockRejectedValue(new Error('知识库目录读不了'))
+    render(<KnowledgePage />)
+    const error = await screen.findByTestId('knowledge-error')
+    expect(error).toHaveClass('border-l-2')
+    expect(error).toHaveClass('bg-secondary')
+    expect(error.className).not.toContain('bg-warning-bg')
   })
 })
