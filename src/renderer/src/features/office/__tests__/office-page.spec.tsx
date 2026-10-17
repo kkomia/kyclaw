@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearKyclawBridge,
@@ -140,7 +140,7 @@ describe('OfficePage：空态与真实「打开文件」（M3-S2）', () => {
 })
 
 describe('OfficePage：有标签态（dirty / 主题 / 读失败）', () => {
-  it('有标签态：workspace 跟当前激活标签走（dirty 状态也跟着变）', () => {
+  it('多 workspace 常驻：所有标签都挂载、非激活 hidden+inert；切标签只换可见性（dirty 跟标签）', () => {
     installOfficeBridge()
     const docx = useOfficeTabsStore
       .getState()
@@ -150,19 +150,58 @@ describe('OfficePage：有标签态（dirty / 主题 / 读失败）', () => {
 
     render(<OfficePage />)
 
-    // 当前是后开的 pptx（未修改）
-    expect(screen.getByTestId('office-workspace')).toHaveTextContent('D:\\汇报.pptx')
-    expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'false')
-    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('已保存')
-    expect(screen.getByTestId('office-dirty-status').querySelector('.rounded-full')).toBeNull()
+    const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-office-panel]'))
+    expect(panels).toHaveLength(2)
+    const docxPanel = panels.find((panel) => panel.dataset.officePanel === docx)
+    const pptxPanel = panels.find((panel) => panel.dataset.officePanel === pptx)
+    expect(docxPanel).toBeDefined()
+    expect(pptxPanel).toBeDefined()
+    // 两个 panel id 唯一（aria-controls 才能各指各的）
+    expect(docxPanel?.id).not.toBe(pptxPanel?.id)
+    expect(docxPanel?.id).toBe(`office-panel-${docx}`)
+
+    // 当前是后开的 pptx（未修改）：pptx panel 可见、docx panel hidden+inert（但仍在 DOM）
+    expect(pptxPanel).toHaveAttribute('data-active', 'true')
+    expect(pptxPanel).not.toHaveAttribute('hidden')
+    expect(pptxPanel).not.toHaveAttribute('inert')
+    expect(docxPanel).toHaveAttribute('data-active', 'false')
+    expect(docxPanel).toHaveAttribute('hidden')
+    expect(docxPanel).toHaveAttribute('inert')
+    expect(within(pptxPanel as HTMLElement).getByTestId('office-workspace')).toHaveTextContent(
+      'D:\\汇报.pptx'
+    )
+    expect(within(pptxPanel as HTMLElement).getByTestId('office-dirty-status')).toHaveAttribute(
+      'data-dirty',
+      'false'
+    )
 
     act(() => useOfficeTabsStore.getState().activate(docx))
 
-    expect(screen.getByTestId('office-workspace')).toHaveTextContent('方案.docx')
-    expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
-    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未保存修改')
-    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
-    expect(useOfficeTabsStore.getState().activeTabId).not.toBe(pptx)
+    // 切标签只是显隐：两个 workspace 还都在，没有重建
+    expect(document.querySelectorAll('[data-office-panel]')).toHaveLength(2)
+    expect(docxPanel).toHaveAttribute('data-active', 'true')
+    expect(docxPanel).not.toHaveAttribute('hidden')
+    expect(pptxPanel).toHaveAttribute('hidden')
+    expect(within(docxPanel as HTMLElement).getByTestId('office-workspace')).toHaveTextContent(
+      '方案.docx'
+    )
+    expect(within(docxPanel as HTMLElement).getByTestId('office-dirty-status')).toHaveAttribute(
+      'data-dirty',
+      'true'
+    )
+    expect(within(docxPanel as HTMLElement).getByTestId('office-dirty-status')).toHaveTextContent(
+      '未保存修改'
+    )
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(docx)
+  })
+
+  it('active=false（模块被隐藏）：不开自动选择器、根节点标记 data-active=false', () => {
+    const bridge = installOfficeBridge()
+    render(<OfficePage active={false} />)
+
+    expect(screen.getByTestId('office-page')).toHaveAttribute('data-active', 'false')
+    act(() => useOfficeUiStore.getState().openPicker())
+    expect(bridge.office.openDialog).not.toHaveBeenCalled()
   })
 
   it('深色主题传给 OfficeSurface；运行中切主题（data-theme 变化）也跟着更新', async () => {
@@ -393,7 +432,7 @@ describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误
     expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未保存修改')
   })
 
-  it('壳侧 Ctrl+S（焦点不在 iframe 里）经 office-actions 触发保存', async () => {
+  it('面内 Ctrl+S（surface:shortcut）→ 壳统一分发 → doc:save → 保存成功清脏', async () => {
     const bridge = installOfficeBridge(
       officeDocumentFixture({ documentId: 'doc-key', displayName: '快捷键.docx' }),
       new Uint8Array([1])
@@ -402,6 +441,14 @@ describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误
       ok: true,
       document: officeDocumentFixture({ documentId: 'doc-key', displayName: '快捷键.docx' }),
       alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: true,
+      documentId: 'doc-key',
+      mtimeMs: 2,
+      sha256: 'b'.repeat(64),
+      size: 4,
+      savedAt: 1
     })
     render(<OfficePage />)
     fireEvent.click(screen.getByTestId('office-open'))
@@ -419,7 +466,25 @@ describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误
     await waitFor(() =>
       expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
     )
-    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+
+    // 焦点在面内时由 SurfaceBoot 转发 surface:shortcut（这里直接从 iframe 来源派发）
+    act(() =>
+      dispatchFromSurface(frameWindow, { type: 'surface:shortcut', nonce: 'n-1', action: 'save' })
+    )
     await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    const requestId = sentToSurface(frameWindow, 'doc:save')[0]?.requestId
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId,
+        documentId: 'doc-key',
+        bytes: new Uint8Array([1, 2, 3, 4])
+      })
+    )
+    await waitFor(() => expect(bridge.office.save).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'false')
+    )
   })
 })

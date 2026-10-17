@@ -1,6 +1,15 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  clearKyclawBridge,
+  installKyclawBridge,
+  officeDocumentFixture
+} from '@renderer/__tests__/kyclaw-bridge'
+import {
+  handleOfficeShortcut,
+  resetOfficeActionsForTest
+} from '@renderer/features/office/office-actions'
 import {
   resetOfficeTabsStore,
   useOfficeTabsStore
@@ -9,8 +18,15 @@ import { resetOfficeUiStore, useOfficeUiStore } from '@renderer/features/office/
 import { AppTabBar, type AppTabBarProps } from '../AppTabBar'
 
 beforeEach(() => {
+  installKyclawBridge()
   resetOfficeTabsStore()
   resetOfficeUiStore()
+  resetOfficeActionsForTest()
+})
+
+afterEach(() => {
+  clearKyclawBridge()
+  resetOfficeActionsForTest()
 })
 
 /** 路由落点探针：点标签 / 按「＋」之后要能断言真的去了目标路由 */
@@ -178,20 +194,24 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(dividers[2]).not.toHaveClass('opacity-0')
   })
 
-  it('关闭非脏标签立即生效；中键能关（dirty 时同样先确认）；主对话标签始终在', async () => {
-    useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+  it('关闭非脏标签：默认走 closeOfficeTab（先释放主进程注册表再关）；中键能关；dirty 时先确认', async () => {
+    const bridge = installKyclawBridge()
+    useOfficeTabsStore.getState().openDocument(officeDocumentFixture({ documentId: 'doc-rel' }))
     const pptx = useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
     renderTabBar()
 
-    fireEvent.click(screen.getByRole('button', { name: '关闭 a.docx' }))
-    expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([pptx])
-    expect(screen.queryByRole('button', { name: '关闭 a.docx' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '关闭 方案.docx' }))
+    await waitFor(() =>
+      expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([pptx])
+    )
+    expect(bridge.office.release).toHaveBeenCalledWith('doc-rel')
+    expect(screen.queryByRole('button', { name: '关闭 方案.docx' })).not.toBeInTheDocument()
 
     fireEvent(
       documentTabs()[0] as HTMLElement,
       new MouseEvent('auxclick', { bubbles: true, button: 1 })
     )
-    expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
     expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
 
     // dirty 时中键同样先弹确认，标签不先没
@@ -208,19 +228,33 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([dirty])
   })
 
-  it('关脏标签先确认：取消保留、放弃修改才关；没有编辑器时不出「保存」；弹窗态 Ctrl+W no-op 但仍拦默认', async () => {
-    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'D:\\方案.docx' })
+  it('关脏标签三态：取消保留、放弃才关；没有运行时「保存」仍显示但失败停弹窗；弹窗态 Ctrl+W no-op 但仍拦默认', async () => {
+    const bridge = installKyclawBridge()
+    const docx = useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-dirty' }))
     useOfficeTabsStore.getState().markDirty(docx)
     renderTabBar()
 
     fireEvent.click(screen.getByRole('button', { name: '关闭 方案.docx' }))
     let dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('关闭未保存的标签？')).toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
+    // 三态齐全：保存 / 放弃 / 取消（保存档不再因"没接编辑器"而消失）
+    expect(within(dialog).getByRole('button', { name: '保存' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '放弃修改' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeInTheDocument()
 
     // 确认弹窗打开时 Ctrl+W：no-op（标签还在），但必须拦住 Electron 的默认关窗
     expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
     expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+
+    // 点「保存」但注册表里没有运行时：保存返回 false → 停在弹窗、标签不丢
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(within(screen.getByRole('dialog')).getByRole('button', { name: '保存' })).toBeEnabled()
+    )
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(bridge.office.save).not.toHaveBeenCalled()
 
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -231,6 +265,7 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: '放弃修改' }))
     await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
+    expect(bridge.office.release).toHaveBeenCalledWith('doc-dirty')
     expect(screen.queryAllByTestId('app-tab')).toHaveLength(0)
     expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
   })
@@ -282,24 +317,87 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(useOfficeTabsStore.getState().activeTabId).toBe(xlsx)
   })
 
-  it('Ctrl+W 口径不变：有文档标签就拦默认并关当前文档标签（非 Office 路由同样生效）', () => {
+  it('Ctrl+W（D14）：/office 关当前文档标签；非 /office 只拦默认、绝不误关标签', async () => {
     useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
     useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
     useOfficeTabsStore.getState().open({ kind: 'xlsx', path: 'c.xlsx' })
-    renderTabBar({}, '/chat')
+    const before = useOfficeTabsStore.getState().activeTabId
+    const unmountChat = renderTabBar({}, '/chat')
 
+    // 非 Office：仍然拦住 Electron 默认关窗（preventDefault），但标签一个不关
     expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
-    expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.path)).toEqual(['a.docx', 'b.pptx'])
-    expect(useOfficeTabsStore.getState().activeTabId).toBe(
-      useOfficeTabsStore.getState().tabs[1]?.id
-    )
-    // 固定标签不受影响
-    expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
-
+    expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.path)).toEqual([
+      'a.docx',
+      'b.pptx',
+      'c.xlsx'
+    ])
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(before)
     // 没按 Ctrl：不是我们的快捷键，不拦；Ctrl+Shift+W 也不归我们管
     expect(fireEvent.keyDown(window, { key: 'w' })).toBe(true)
     expect(fireEvent.keyDown(window, { key: 'W', ctrlKey: true, shiftKey: true })).toBe(true)
-    expect(useOfficeTabsStore.getState().tabs).toHaveLength(2)
+    unmountChat()
+
+    // /office：关掉当前（第三个）标签
+    renderTabBar({}, '/office')
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+    await waitFor(() =>
+      expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.path)).toEqual([
+        'a.docx',
+        'b.pptx'
+      ])
+    )
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(
+      useOfficeTabsStore.getState().tabs[1]?.id
+    )
+    expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
+  })
+
+  it('Ctrl+S：只在 /office 且有标签时把 active 标签交给保存服务；非 /office 不抢键', async () => {
+    useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    const onSave = vi.fn(async () => false)
+    const unmountChat = renderTabBar({ onSave }, '/chat')
+
+    expect(fireEvent.keyDown(window, { key: 's', ctrlKey: true })).toBe(true)
+    expect(onSave).not.toHaveBeenCalled()
+    unmountChat()
+
+    renderTabBar({ onSave }, '/office')
+    expect(fireEvent.keyDown(window, { key: 's', ctrlKey: true })).toBe(false)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: 'docx', path: 'a.docx' }))
+
+    // 打开文件弹窗开着时：只吞键，不触发保存
+    act(() => useOfficeUiStore.getState().openPicker())
+    expect(fireEvent.keyDown(window, { key: 's', ctrlKey: true })).toBe(false)
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+
+  it('面内快捷键（surface:shortcut 转到 handleOfficeShortcut）与壳侧走同一条分发', async () => {
+    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    const onSave = vi.fn(async () => true)
+    renderTabBar({ onSave }, '/office')
+
+    expect(handleOfficeShortcut('save')).toBe(true)
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: docx }))
+
+    // 面内 Ctrl+W 也走 requestClose：脏标签仍弹三态，不直接吞掉
+    useOfficeTabsStore.getState().markDirty(docx)
+    expect(handleOfficeShortcut('close')).toBe(true)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('注入 onClose：干净关闭走同一编排（测试里由注入实现负责 store 收尾，等价 closeOfficeTab）', async () => {
+    const onClose = vi.fn(async (tab: { id: string }) => {
+      useOfficeTabsStore.getState().close(tab.id)
+    })
+    useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
+    renderTabBar({ onClose })
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭 b.pptx' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
   })
 
   it('没有文档标签时不拦截 Ctrl+W / Ctrl+Tab（不抢窗口的默认动作）', () => {

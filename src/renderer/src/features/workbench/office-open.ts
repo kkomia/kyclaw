@@ -32,19 +32,6 @@ export function goToOffice(): void {
   window.location.hash = '#/office'
 }
 
-/**
- * 主进程回包里只读的 `absolutePath`：**只用于"同一文件"匹配**（预览交叉提示）。
- * 为什么要在渲染端记一份：`OfficeTab` 里存的是 `path = displayPath`（选择器入口是绝对路径、
- * 会话入口是相对路径），光靠它做跨工作区匹配会把同名相对路径误判成同一文件。等 S4-2 给 store
- * 补上绝对路径字段后，这里可以退化成直接读 tab。
- */
-const absolutePathByDocumentId = new Map<string, string>()
-
-/** 测试用：清掉模块级缓存（不随 render 重置） */
-export function resetOfficeOpenState(): void {
-  absolutePathByDocumentId.clear()
-}
-
 export interface OpenOfficeResult {
   document: OfficeDocumentInfo
   /** 壳 store 里的标签 id（已存在时是激活的那条） */
@@ -70,9 +57,19 @@ export async function openOfficeFromSession(
   }
   const result = await office.openFromSession(threadId, relative)
   if (!result.ok) throw new Error(result.message)
-  absolutePathByDocumentId.set(result.document.documentId, result.document.absolutePath)
+  // 绝对路径已随 `OfficeDocumentInfo` 落进 OfficeTab.absolutePath（store 里只读，仅用于匹配）
   const tabId = useOfficeTabsStore.getState().openDocument(result.document)
   return { document: result.document, tabId, alreadyOpen: result.alreadyOpen }
+}
+
+/**
+ * 测试用：早先渲染端用模块级 Map 记 `documentId → absolutePath`，S4 起该缓存已删
+ * （绝对路径随 `OfficeDocumentInfo` 落进 `OfficeTab.absolutePath`）。保留这个空函数只是
+ * 让既有测试床不用为一行清理逻辑改 import；新用例不应再依赖它。
+ */
+export function resetOfficeOpenState(): void {
+  // S4 起渲染端不再有 absolutePath 缓存；保留函数只为兼容既有测试床（不再有要清的模块级状态）
+  void 0
 }
 
 /** 路径归一（Windows 大小写不敏感 + 正反斜杠都认）；只做匹配，不做任何访问判定 */
@@ -83,12 +80,13 @@ function normalizePath(path: string): string {
 /**
  * 在 Office 标签里找出与「预览里这份文件」同一个文件的那条标签（只认第一步的 docx）。
  *
- * 匹配顺序（宁可漏提示，不误报成"同一文件"）：
- *   1. 经本模块入口打开过的标签：只认渲染端记下的**绝对路径**精确匹配（跨工作区同名相对路径不会误报）；
- *   2. 其他标签（选择器打开 / 别处打开的）：`displayPath` 可能绝对也可能相对，双候选匹配
- *      （相对路径 或 rootPath+relative 拼出的绝对路径）。跨工作区同名相对路径是已知的弱边界。
+ * 匹配口径（宁可漏提示，不误报成"同一文件"）：
+ *   1. 有 `absolutePath`（M3-S4 起所有 docx 标签都有，主进程回包带过来的只读字段）：
+ *      与 `rootPath + relative` 拼出的绝对路径精确比 —— 跨工作区同名相对路径**不会**误报；
+ *   2. 没有（S4 之前落下的标签 / 直接 `open()` 开的假标签）才退化成 `displayPath` 双候选
+ *      （相对路径或绝对路径相等即可）。这是已知的弱边界，只为兼容旧调用方。
  *
- * 找不到返回 undefined。`rootPath` 判不出时只能比相对路径。
+ * 找不到返回 undefined。`rootPath` 判不出时只能比相对路径（绝对路径那一路自动跳过）。
  */
 export function officeTabForPreview(
   tabs: readonly OfficeTab[],
@@ -101,10 +99,9 @@ export function officeTabForPreview(
 
   for (const tab of tabs) {
     if (tab.kind !== 'docx') continue
-    const knownAbsolute =
-      tab.documentId === undefined ? undefined : absolutePathByDocumentId.get(tab.documentId)
-    if (knownAbsolute !== undefined) {
-      if (absoluteKey !== null && normalizePath(knownAbsolute) === absoluteKey) return tab
+    if (tab.absolutePath !== undefined) {
+      // 有绝对路径身份：只认精确绝对匹配，绝不拿相对路径兜底（防跨根误报）
+      if (absoluteKey !== null && normalizePath(tab.absolutePath) === absoluteKey) return tab
       continue
     }
     if (tab.path === undefined) continue

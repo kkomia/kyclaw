@@ -3,8 +3,13 @@ import { Briefcase, Plus } from 'lucide-react'
 import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
-import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, OFFICE_PANEL_ID } from './office-kinds'
-import { handleOfficeShortcut, registerOfficeRuntime, saveOfficeTab } from './office-actions'
+import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, officePanelIdOf } from './office-kinds'
+import {
+  handleOfficeShortcut,
+  registerOfficeRuntime,
+  saveOfficeTab,
+  type OfficeShortcutAction
+} from './office-actions'
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
@@ -28,7 +33,15 @@ import { useDocumentTheme } from './use-document-theme'
  * 页面看到标志置位就发起一次真实选择器请求，然后立刻把标志清掉。用 ref 去重是为了
  * React StrictMode 的 effect 双跑不会弹两次原生对话框。
  */
-export function OfficePage(): React.JSX.Element {
+export interface OfficePageProps {
+  /**
+   * 是否是当前可见模块（M3-S4：ModuleHost 常驻 Office，切走时只 hidden+inert）。
+   * 页内键盘/快捷键/自动弹窗一律按它门控；默认 true（单测/独立渲染时仍是"当前页"）。
+   */
+  active?: boolean
+}
+
+export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.Element {
   const tabs = useOfficeTabsStore((state) => state.tabs)
   const activeTabId = useOfficeTabsStore((state) => state.activeTabId)
   const openDocument = useOfficeTabsStore((state) => state.openDocument)
@@ -78,28 +91,20 @@ export function OfficePage(): React.JSX.Element {
 
   // 顶栏「＋」→ 标志置位 → 这里发起一次真实选择器（并立刻消费掉标志）
   useEffect(() => {
-    if (!pickerOpen || openingFromFlagRef.current) return
+    if (!active || !pickerOpen || openingFromFlagRef.current) return
     openingFromFlagRef.current = true
     setPickerOpen(false)
     void openViaDialog().finally(() => {
       openingFromFlagRef.current = false
     })
-  }, [pickerOpen, setPickerOpen, openViaDialog])
-
-  // 壳侧 Ctrl+S（焦点在壳里时）：经 office-actions 统一动作；焦点在 iframe 内由 S4 的面内转发补
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      if (event.key !== 's' && event.key !== 'S') return
-      // 有 active 文档才拦（没有文档时保留浏览器默认行为，不抢键）
-      if (handleOfficeShortcut('save')) event.preventDefault()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [active, pickerOpen, setPickerOpen, openViaDialog])
 
   return (
-    <section data-testid="office-page" className="animate-page-in flex min-h-0 flex-1 flex-col">
+    <section
+      data-testid="office-page"
+      data-active={active ? 'true' : 'false'}
+      className="animate-page-in flex min-h-0 flex-1 flex-col"
+    >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Briefcase aria-hidden="true" className="size-(--icon-size-sm) text-ink-tertiary" />
         <h1 data-testid="office-page-title" className="text-t2 font-medium text-ink">
@@ -143,20 +148,48 @@ export function OfficePage(): React.JSX.Element {
             </p>
           )}
         </div>
-      ) : activeTab === undefined ? null : (
-        // key 把每一份文档的隔离面隔开：切标签时重建 iframe（S4 的保活/多实例策略再改）
-        <OfficeWorkspace key={activeTab.id} tab={activeTab} surfaceUrl={surfaceUrl} />
+      ) : (
+        // M3-S4：**所有已打开标签都挂载**，非激活 `hidden + inert`——切标签只换可见性，
+        // iframe / 面内编辑器 / 未保存修改 / 滚动位置全部保活（不再 key=activeTab.id 重建）。
+        <div data-testid="office-workspaces" className="relative flex min-h-0 flex-1 flex-col">
+          {tabs.map((tab) => {
+            const isActive = tab.id === activeTab?.id
+            return (
+              <div
+                key={tab.id}
+                id={officePanelIdOf(tab.id)}
+                role="tabpanel"
+                aria-labelledby={`office-tab-${tab.id}`}
+                data-office-panel={tab.id}
+                data-active={isActive ? 'true' : 'false'}
+                hidden={!isActive}
+                inert={!isActive}
+                className={isActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+              >
+                <OfficeWorkspace tab={tab} active={isActive} surfaceUrl={surfaceUrl} />
+              </div>
+            )
+          })}
+        </div>
       )}
     </section>
   )
 }
 
-/** 有标签时的内容区：当前标签的标题/来源 + 真实保存状态 + 隔离面（内含编辑器） */
+/**
+ * 一个标签的内容区：标题/来源 + 真实保存状态 + 隔离面（内含编辑器）。
+ *
+ * M3-S4：每个标签一份实例并**常驻**（由父级 OfficePage 全量挂载、非激活 hidden+inert），
+ * 所以这里不再需要用 `tab.id` 判"是否换标签"——切标签不会重建，状态自然跟着标签留着。
+ */
 function OfficeWorkspace({
   tab,
+  active,
   surfaceUrl
 }: {
   tab: OfficeTab
+  /** 是否当前可见标签（面内快捷键只在该 workspace 上转发，双保险） */
+  active: boolean
   surfaceUrl?: string
 }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
@@ -167,16 +200,8 @@ function OfficeWorkspace({
   const surfaceRef = useRef<OfficeSurfaceHandle | null>(null)
   const machineRef = useRef<OfficeSaveMachine | null>(null)
 
-  // 状态带 tabId：同一个 OfficeWorkspace 实例跨标签复用，切走再切回来时旧状态自动失效
-  // （不用 effect 复位——render 期按 tab.id 过滤，天然回到 loading）
-  const [surfaceState, setSurfaceState] = useState<{ tabId: string; status: OfficeSurfaceStatus }>({
-    tabId: tab.id,
-    status: 'loading'
-  })
-  const surfaceStatus = surfaceState.tabId === tab.id ? surfaceState.status : 'loading'
-  const handleSurfaceStatus = (status: OfficeSurfaceStatus): void => {
-    setSurfaceState({ tabId: tab.id, status })
-  }
+  const [surfaceStatus, setSurfaceStatus] = useState<OfficeSurfaceStatus>('loading')
+  const handleSurfaceStatus = setSurfaceStatus
 
   /** 主进程回包里的文档信息 + 字节（壳只在内存里中转给面，不持久化内容） */
   const [loaded, setLoaded] = useState<{
@@ -190,7 +215,8 @@ function OfficeWorkspace({
   const [pageCount, setPageCount] = useState(0)
 
   useEffect(() => {
-    // 每个标签一份 OfficeWorkspace（父组件用 key=tab.id），切标签会重建 → 这里不需要复位状态
+    // 每个标签一份 OfficeWorkspace 且常驻：本 effect 只在首次挂载/documentId 变化时读一次，
+    // 切标签不重读（S3 遗留的"保存后壳内 loaded 快照不更新"不在 S4 做静默重读）
     if (!isDocx || tab.documentId === undefined) return
     let alive = true
     const read = window.kyclaw?.office?.read
@@ -300,14 +326,22 @@ function OfficeWorkspace({
     else setDocError(message)
   }
 
+  /**
+   * 面内快捷键（焦点在 iframe 编辑器里）→ 壳的统一分发。
+   * 只有**可见** workspace 才转发（隐藏的 iframe 拿不到键盘事件，这里是双保险），
+   * 动作最终由常驻 AppTabBar 注册的 `office-actions` handler 处理（保存/关闭三态/切标签）。
+   */
+  const handleSurfaceShortcut = (action: OfficeShortcutAction): void => {
+    if (!active) return
+    handleOfficeShortcut(action)
+  }
+
   return (
     <div
-      id={OFFICE_PANEL_ID}
-      role="tabpanel"
-      aria-labelledby={`office-tab-${tab.id}`}
       data-testid="office-workspace"
       data-kind={tab.kind}
       data-document-id={tab.documentId ?? ''}
+      data-active={active ? 'true' : 'false'}
       data-document-state={loaded === null ? (docError === '' ? 'loading' : 'error') : 'loaded'}
       data-editor-state={isDocx ? (editorReady ? 'ready' : 'loading') : 'n/a'}
       className="flex min-h-0 flex-1 flex-col p-4"
@@ -394,6 +428,7 @@ function OfficeWorkspace({
               onDocChanged={handleDocChanged}
               onDocSaveRequest={handleDocSaveRequest}
               onDocError={handleDocError}
+              onShortcut={handleSurfaceShortcut}
             />
             {docError === '' ? null : (
               <p

@@ -5,9 +5,15 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import {
+  closeOfficeTab,
+  registerOfficeShortcutHandler,
+  saveOfficeTab,
+  type OfficeShortcutAction
+} from '@renderer/features/office/office-actions'
+import {
   OFFICE_KIND_ICON,
   OFFICE_KIND_LABEL,
-  OFFICE_PANEL_ID
+  officePanelIdOf
 } from '@renderer/features/office/office-kinds'
 import {
   useOfficeTabsStore,
@@ -18,10 +24,15 @@ import { useOfficeUiStore } from '@renderer/features/office/office-ui-store'
 
 export interface AppTabBarProps {
   /**
-   * 接编辑器后注入的保存动作：返回 true 才关标签。
-   * 不传（当前没有编辑器）= 脏标签关闭只给「取消 / 放弃修改」两档，保存档留在接口上。
+   * 保存动作（测试注入用）：返回 true 才关标签。不传 = 走 `office-actions.saveOfficeTab`
+   * （与 OfficePage 保存按钮 / Ctrl+S / 面内转发同一条路）。
    */
   onSave?: (tab: OfficeTab) => boolean | Promise<boolean>
+  /**
+   * 关闭动作（测试注入用）：默认 `closeOfficeTab`（面 `doc:close` → `office:release` → store close）。
+   * 注入它只影响"关标签"的编排，脏确认三态仍在这里。
+   */
+  onClose?: (tab: OfficeTab) => void | Promise<void>
 }
 
 /**
@@ -32,25 +43,32 @@ export interface AppTabBarProps {
  * 「可关闭标签」体系），其右侧是 Office 文档标签（图标 + 标题 + hover/激活才可见的关闭钮；激活
  * 标签白底圆角 pill、未激活纯文字；宽 100~150；溢出横向滚动、隐藏原生滚动条、滚轮横向滚；
  * 活动标签变化 / 窗口 resize 后 scrollIntoView；标签间 1px 分隔线、active 两侧隐藏），末尾「＋」
- * = 去 /office 并打开「打开文件（示例）」弹窗（标志放 office-ui-store）。
+ * = 去 /office 并打开「打开文件」弹窗（标志放 office-ui-store）。
  *
  * v2 路由口径（用户看完布局后拍板）：
  *   - 文档标签的激活态**只在 /office 生效**（其他路由不高亮，activeTabId 保留，切回 Office 继续亮）；
  *   - Ctrl+Tab / Ctrl+Shift+Tab **只在 /office 且文档标签 >0** 时响应，其他路由不抢键；
- *   - Ctrl+W 口径不变（有文档标签就拦默认 + 关当前文档标签；「主对话」标签不在 store 里，永远关不到）；
- *   - 确认弹窗 / 示例弹窗打开时快捷键只吞键、no-op。
+ *   - Ctrl+W（D14，M3-S4 口径变更）：**只在 /office** 关当前文档标签；其他路由若开着文档标签
+ *     仍然 `preventDefault()` 压住 Electron 的默认关窗，但 **no-op**（不误关 Office 标签）；
+ *   - Ctrl+S（M3-S4）：只在 /office 且文档标签 >0 时把 active 标签交给 `saveOfficeTab`
+ *     （与 OfficePage 保存按钮、面内 `surface:shortcut` 同一实现）；
+ *   - 确认弹窗 / 打开文件弹窗开着时快捷键只吞键、no-op。
+ *
+ * M3-S4：关闭先走 `closeOfficeTab`（面 `doc:close` → `office:release` → store close）；脏标签
+ * 三态（保存/放弃/取消）在本文的 Dialog 里，**保存失败或没有运行时都会停在弹窗**，不吞标签。
+ * 面内快捷键（焦点在 iframe 编辑器里）由 `surface:shortcut` 转到 OfficePage，再经
+ * `registerOfficeShortcutHandler` 回到本文件的同一个 `runShortcut` —— 两条入口一套判断。
  *
  * 为什么标签栏在 TitleBar 里常驻、键盘监听也挂在这里：Office 是独立于会话的多标签工作区，标签栏
  * 要跨路由可见；Ctrl+W 在 Electron 里等于窗口 Close 加速键，有文档标签时不能让默认动作漏下去
  * （审查 shell-audit P1）。
  */
-export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
+export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.Element {
   const pathname = useLocation().pathname
   const inOffice = pathname.startsWith('/office')
   const inChat = pathname.startsWith('/chat')
   const tabs = useOfficeTabsStore((state) => state.tabs)
   const activeTabId = useOfficeTabsStore((state) => state.activeTabId)
-  const close = useOfficeTabsStore((state) => state.close)
   const activate = useOfficeTabsStore((state) => state.activate)
   const openPicker = useOfficeUiStore((state) => state.openPicker)
   const navigate = useNavigate()
@@ -61,6 +79,21 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
   // 标签若被别的路径关掉，pendingCloseId 可能残留；一律以"还找得到这个标签"为准
   const confirming = pendingTab !== undefined
 
+  /** 保存服务：默认走 office-actions 的同一实现（与保存按钮/面内转发同一条），测试可注入 */
+  const saveService = onSave ?? saveOfficeTab
+
+  /** 真正的关标签编排：默认释放主进程注册表 + 卸载面内编辑器；测试可注入 onClose */
+  const performClose = useCallback(
+    (tab: OfficeTab): void => {
+      if (onClose !== undefined) {
+        void onClose(tab)
+        return
+      }
+      void closeOfficeTab(tab)
+    },
+    [onClose]
+  )
+
   const requestClose = useCallback(
     (id: string): void => {
       const tab = useOfficeTabsStore.getState().tabs.find((entry) => entry.id === id)
@@ -69,11 +102,60 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
         setPendingCloseId(id)
         return
       }
-      close(id)
+      performClose(tab)
     },
     // setPendingCloseId 是 useState 的稳定 setter，写进依赖只为满足编译器对显式依赖的校验
-    [close, setPendingCloseId]
+    [performClose, setPendingCloseId]
   )
+
+  /**
+   * 快捷键唯一实现（壳侧按键 + 面内 surface:shortcut 共用）。
+   * 返回 true = 消费这次按键（调用方 preventDefault）；false = 不归我们管、不抢默认。
+   *
+   * 注意 Ctrl+W 的 D14 口径：非 /office 且开着文档标签时返回 true（拦住窗口默认关闭）但 no-op。
+   */
+  const runShortcut = useCallback(
+    (action: OfficeShortcutAction): boolean => {
+      const state = useOfficeTabsStore.getState()
+      const dialogsOpen = confirming || useOfficeUiStore.getState().pickerOpen
+
+      if (action === 'save') {
+        if (!inOffice || state.tabs.length === 0) return false
+        if (dialogsOpen) return true
+        const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0]
+        if (activeTab !== undefined) void saveService(activeTab)
+        return true
+      }
+
+      if (action === 'next-tab' || action === 'prev-tab') {
+        if (!inOffice || state.tabs.length === 0) return false
+        if (dialogsOpen) return true
+        const current = state.tabs.findIndex((tab) => tab.id === state.activeTabId)
+        const step = action === 'next-tab' ? 1 : -1
+        const nextIndex =
+          current === -1
+            ? step === -1
+              ? state.tabs.length - 1
+              : 0
+            : (current + step + state.tabs.length) % state.tabs.length
+        const next = state.tabs[nextIndex]
+        if (next !== undefined) state.activate(next.id)
+        return true
+      }
+
+      // close
+      if (state.tabs.length === 0) return false
+      // D14：非 /office 仍然拦住默认关窗，但不关任何标签
+      if (!inOffice) return true
+      if (dialogsOpen) return true
+      requestClose(state.activeTabId)
+      return true
+    },
+    [confirming, inOffice, requestClose, saveService]
+  )
+
+  // 面内快捷键（焦点在 iframe 编辑器里）经 OfficePage → handleOfficeShortcut → 这里
+  useEffect(() => registerOfficeShortcutHandler(runShortcut), [runShortcut])
 
   // 活动标签滚回视野；resize 之后也滚一次（审查 P1：溢出后窗口变窄，活动标签会被挤出可视区）。
   // 只认文档标签（主对话是固定位、不参与滚动定位）。
@@ -110,41 +192,21 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
     return () => container.removeEventListener('wheel', onWheel)
   }, [])
 
-  // 键盘快捷键（v2 路由口径）：
-  //   Ctrl+Tab / Ctrl+Shift+Tab —— 只在 /office 且文档标签 >0 时响应；其他路由完全不抢。
-  //   Ctrl+W —— 口径不变：有文档标签就无条件 preventDefault（防 Electron 默认关窗），
-  //             弹窗打开时 no-op，否则关当前文档标签。「主对话」标签不在 store 里，永远关不到。
+  // 键盘快捷键（壳侧焦点）：只做"按键 → 动作"的映射，动作语义全在 runShortcut。
+  // Ctrl+S/W/Tab 都走这里；面内转发的同一套动作也落到 runShortcut（见上）。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      const state = useOfficeTabsStore.getState()
-      const dialogsOpen = confirming || useOfficeUiStore.getState().pickerOpen
-
-      if (event.key === 'Tab') {
-        if (!inOffice || state.tabs.length === 0) return
-        event.preventDefault()
-        if (dialogsOpen) return
-        const current = state.tabs.findIndex((tab) => tab.id === state.activeTabId)
-        const nextIndex =
-          current === -1
-            ? event.shiftKey
-              ? state.tabs.length - 1
-              : 0
-            : (current + (event.shiftKey ? -1 : 1) + state.tabs.length) % state.tabs.length
-        const next = state.tabs[nextIndex]
-        if (next !== undefined) state.activate(next.id)
-        return
-      }
-
-      const isClose = (event.key === 'w' || event.key === 'W') && !event.shiftKey
-      if (!isClose || state.tabs.length === 0) return
-      event.preventDefault()
-      if (dialogsOpen) return
-      requestClose(state.activeTabId)
+      let action: OfficeShortcutAction | null = null
+      if (event.key === 'Tab') action = event.shiftKey ? 'prev-tab' : 'next-tab'
+      else if ((event.key === 'w' || event.key === 'W') && !event.shiftKey) action = 'close'
+      else if (event.key === 's' || event.key === 'S') action = 'save'
+      if (action === null) return
+      if (runShortcut(action)) event.preventDefault()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [confirming, inOffice, requestClose])
+  }, [runShortcut])
 
   const selectTab = (id: string): void => {
     activate(id)
@@ -163,17 +225,17 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
       return
     }
     if (action === 'discard') {
-      close(pendingTab.id)
+      performClose(pendingTab)
       setPendingCloseId(null)
       return
     }
-    if (onSave === undefined) return
+    // 保存档：保存成功才关；失败/没有运行时都**停在弹窗里**（用户还能取消或放弃）
     setSaving(true)
     void (async () => {
       try {
-        const saved = await onSave(pendingTab)
+        const saved = await saveService(pendingTab)
         if (!saved) return
-        close(pendingTab.id)
+        performClose(pendingTab)
         setPendingCloseId(null)
       } catch {
         // 保存失败留在弹窗里，别把标签吞掉
@@ -251,7 +313,7 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
                     type="button"
                     role="tab"
                     id={`office-tab-${tab.id}`}
-                    aria-controls={OFFICE_PANEL_ID}
+                    aria-controls={officePanelIdOf(tab.id)}
                     aria-selected={active}
                     data-testid="app-tab"
                     data-office-tab-id={tab.id}
@@ -330,11 +392,9 @@ export function AppTabBar({ onSave }: AppTabBarProps = {}): React.JSX.Element {
             <Button variant="ghost" onClick={() => resolveDirtyClose('cancel')} disabled={saving}>
               取消
             </Button>
-            {onSave === undefined ? null : (
-              <Button variant="primary" loading={saving} onClick={() => resolveDirtyClose('save')}>
-                保存
-              </Button>
-            )}
+            <Button variant="primary" loading={saving} onClick={() => resolveDirtyClose('save')}>
+              保存
+            </Button>
             <Button variant="danger" onClick={() => resolveDirtyClose('discard')} disabled={saving}>
               放弃修改
             </Button>

@@ -12,6 +12,9 @@
  * 主题：壳在运行中切换时**用同一个 nonce 再发一次 `surface:init`**（不重载 iframe）；这里每次
  * 都重新应用（P2 修复的延续），编辑器自身主题走 `colorMode`。
  *
+ * M3-S4：焦点在面内编辑器时按 Ctrl+S / Ctrl+W / Ctrl+Tab —— 浏览器事件不跨文档，壳的
+ * window 监听收不到；这里在 capture 阶段拦下并只把**动作名**（`surface:shortcut`）转给壳。
+ *
  * 为什么有重发 hello：父页（React）的 message 监听是在 effect 里挂的，而 iframe 的文档加载可能
  * 先完成；这里每 250ms 重发一次 hello、最多 5s，直到收到 init —— 一次竞态也不用父页配合重试。
  */
@@ -31,6 +34,7 @@ import {
   type DocSaveRequestMessage,
   type SurfaceHelloMessage,
   type SurfaceReadyMessage,
+  type SurfaceShortcutMessage,
   type SurfaceTheme
 } from './bridge-protocol'
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
@@ -314,6 +318,26 @@ export function SurfaceBoot(): React.JSX.Element {
       window.removeEventListener('message', onMessage)
     }
   }, [post, postError])
+
+  // M3-S4：面内快捷键转发（capture 阶段拦下并吞掉，避免编辑器自己的 Ctrl+S 再走一遍；
+  // 保存只从壳的 office-actions 走一条路）。未握手 / 无文档时不抢键。
+  useEffect(() => {
+    if (bootState !== 'ready' || doc === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      let action: SurfaceShortcutMessage['action'] | null = null
+      if (event.key === 's' || event.key === 'S') action = 'save'
+      else if ((event.key === 'w' || event.key === 'W') && !event.shiftKey) action = 'close'
+      else if (event.key === 'Tab') action = event.shiftKey ? 'prev-tab' : 'next-tab'
+      if (action === null) return
+      event.preventDefault()
+      event.stopPropagation()
+      const message: Omit<SurfaceShortcutMessage, 'nonce'> = { type: 'surface:shortcut', action }
+      post(message)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [bootState, doc, post])
 
   // 文档到达后先注册本地字体（只启动一次；失败不阻塞页面，但编辑器不挂）
   useEffect(() => {

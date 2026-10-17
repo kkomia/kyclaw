@@ -370,3 +370,42 @@ describe('OfficeSurface：S3 数据面（保存/重载/关闭/事件回调）', 
     await expect(ref.current?.requestSaveBytes()).resolves.toBeNull()
   })
 })
+describe('OfficeSurface：M3-S4 面内快捷键转发', () => {
+  const SURFACE = 'kyclaw-office://surface/'
+
+  it('surface:shortcut（来源 + nonce 都对）→ onShortcut 回调；伪造来源/错 nonce 一律忽略', async () => {
+    const onShortcut = vi.fn()
+    render(<OfficeSurface surfaceUrl={SURFACE} onShortcut={onShortcut} />)
+    const frameWindow = getIframe().contentWindow as Window
+    dispatchFromSurface({ type: 'surface:hello', nonce: 'n-1', version: 1 })
+    dispatchFromSurface({ type: 'surface:ready', nonce: 'n-1' })
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'n-1', action: 'save' })
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'n-1', action: 'close' })
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'n-1', action: 'next-tab' })
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'n-1', action: 'prev-tab' })
+    expect(onShortcut.mock.calls.map((call) => call[0])).toEqual([
+      'save',
+      'close',
+      'next-tab',
+      'prev-tab'
+    ])
+
+    // 伪 nonce / 伪造来源 / 非法动作：都不回调
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'forged', action: 'save' })
+    dispatchFromSurface({ type: 'surface:shortcut', nonce: 'n-1', action: 'quit' })
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'surface:shortcut', nonce: 'n-1', action: 'save' },
+        source: null
+      })
+    )
+    expect(onShortcut).toHaveBeenCalledTimes(4)
+    // 不影响握手状态
+    expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    expect(frameWindow).toBeTruthy()
+  })
+})

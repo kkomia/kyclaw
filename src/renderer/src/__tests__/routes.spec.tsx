@@ -212,3 +212,30 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('plugins-page')).toHaveClass('overflow-y-auto')
   })
 })
+/**
+ * M3-S4：Office 从"路由内页面"改为"模块宿主常驻页面"（与 /chat 同口径）。
+ * `/office` 路由元素为 null，页面由 ModuleHost 挂载；离开路由只 hidden+inert，不卸载。
+ */
+describe('路由：Office 模块保活（M3-S4）', () => {
+  it('深链 /office：Office 页在、聊天不预挂、模块 active；切聊天后 Office 仍在 DOM（hidden+inert）', () => {
+    renderAt('/office')
+
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(screen.getByTestId('office-page-title')).toHaveTextContent('Office')
+    expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'true')
+    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+    // 非 Office/chat 的 Outlet 内容此时是空的（Office 不再走 Outlet）
+    expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('primary-nav-chat'))
+
+    expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    // 保活口径：Office 页面仍在 DOM，只是隐藏并 inert
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'false')
+    expect(screen.getByTestId('module-office')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
+    // 唯一实例：不会出现第二个 OfficePage
+    expect(screen.getAllByTestId('office-page')).toHaveLength(1)
+  })
+})

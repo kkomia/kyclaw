@@ -19,6 +19,11 @@
  *   壳 → 面  `doc:reload`       { nonce, bytes }                冲突后从磁盘重载（丢内存修改）
  *   壳 → 面  `doc:close`        { nonce, documentId }           卸载编辑器
  *   面 → 壳  `doc:error`        { nonce, documentId?, phase, message }
+ *   面 → 壳  `surface:shortcut` { nonce, action }               焦点在 iframe 内时 Ctrl+S/W/Tab 的转发
+ *
+ * 快捷键（M3-S4）：浏览器事件不跨文档，焦点在面内编辑器里时壳的 window 监听收不到 Ctrl+S/W/Tab。
+ * 面在 capture 阶段拦下这组组合键、只发"动作名"（不带键值/业务数据），由壳的常驻 AppTabBar
+ * 走与壳侧按键完全相同的一条 `office-actions` 分发（保存/关标签/切标签三态都在壳里）。
  *
  * 安全口径：父页是 `file://`，它的 origin 是 opaque，**不能用 `event.origin` 判断来源**；
  * 壳侧只认 `event.source === iframe.contentWindow`，面侧只认消息里的 nonce 与自己的相同。
@@ -93,6 +98,16 @@ export interface DocErrorMessage {
   message: string
 }
 
+/** 面内快捷键动作（只发动作名；键值/平台差异留在面侧） */
+export type SurfaceShortcutAction = 'save' | 'close' | 'next-tab' | 'prev-tab'
+
+/** 面 → 壳：焦点在 iframe 内时按了 Ctrl+S/W/Tab（壳按当前路由/标签状态统一处理） */
+export interface SurfaceShortcutMessage {
+  type: 'surface:shortcut'
+  nonce: string
+  action: SurfaceShortcutAction
+}
+
 export type SurfaceToShellMessage =
   | SurfaceHelloMessage
   | SurfaceReadyMessage
@@ -102,6 +117,7 @@ export type SurfaceToShellMessage =
   | DocSaveRequestMessage
   | DocSaveBytesMessage
   | DocErrorMessage
+  | SurfaceShortcutMessage
 
 /** 壳 → 面：初始化（S2 起也用于**运行时主题切换**：同 nonce 再发一次，幂等） */
 export interface SurfaceInitMessage {
@@ -263,6 +279,23 @@ export function isDocError(value: unknown): value is DocErrorMessage {
     DOC_ERROR_PHASES.includes(value.phase) &&
     typeof value.message === 'string' &&
     value.message.length > 0
+  )
+}
+
+const SURFACE_SHORTCUT_ACTIONS: readonly SurfaceShortcutAction[] = [
+  'save',
+  'close',
+  'next-tab',
+  'prev-tab'
+]
+
+export function isSurfaceShortcut(value: unknown): value is SurfaceShortcutMessage {
+  if (!isRecord(value)) return false
+  return (
+    value.type === 'surface:shortcut' &&
+    isNonEmptyString(value.nonce) &&
+    typeof value.action === 'string' &&
+    SURFACE_SHORTCUT_ACTIONS.includes(value.action as SurfaceShortcutAction)
   )
 }
 

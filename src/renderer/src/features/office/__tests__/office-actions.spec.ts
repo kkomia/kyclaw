@@ -8,6 +8,7 @@ import {
 import {
   closeOfficeTab,
   handleOfficeShortcut,
+  registerOfficeShortcutHandler,
   officeRuntimeOf,
   registerOfficeRuntime,
   resetOfficeActionsForTest,
@@ -101,8 +102,8 @@ describe('office-actions：saveOfficeTab / closeOfficeTab', () => {
   })
 })
 
-describe('office-actions：壳侧快捷键分发（S3 只有 save）', () => {
-  it('handleOfficeShortcut(save)：有 active 文档且有运行时就保存；没有标签返回 false', async () => {
+describe('office-actions：快捷键统一分发（S4）', () => {
+  it('没有注册分发器时只兜底 save：有 active 文档且有运行时就保存；无标签返回 false', async () => {
     expect(handleOfficeShortcut('save')).toBe(false)
 
     const tab = openDocxTab('doc-1')
@@ -113,12 +114,53 @@ describe('office-actions：壳侧快捷键分发（S3 只有 save）', () => {
     await Promise.resolve()
     expect(save).toHaveBeenCalledTimes(1)
     expect(useOfficeTabsStore.getState().activeTabId).toBe(tab.id)
-  })
 
-  it('close / next-tab / prev-tab 在 S3 不消费（留给 S4 的标签条实现）', () => {
-    openDocxTab()
+    // 没有分发器时 close/next/prev 不消费（留给常驻 AppTabBar 的门控逻辑）
     expect(handleOfficeShortcut('close')).toBe(false)
     expect(handleOfficeShortcut('next-tab')).toBe(false)
     expect(handleOfficeShortcut('prev-tab')).toBe(false)
+  })
+
+  it('注册分发器后：所有动作（含面内 surface:shortcut）原样委托给它，返回值即"是否消费按键"', () => {
+    openDocxTab('doc-1')
+    const seen: string[] = []
+    const handler = vi.fn((action: string) => {
+      seen.push(action)
+      return action !== 'prev-tab'
+    })
+    const unregister = registerOfficeShortcutHandler(
+      handler as unknown as Parameters<typeof registerOfficeShortcutHandler>[0]
+    )
+
+    expect(handleOfficeShortcut('save')).toBe(true)
+    expect(handleOfficeShortcut('close')).toBe(true)
+    expect(handleOfficeShortcut('next-tab')).toBe(true)
+    expect(handleOfficeShortcut('prev-tab')).toBe(false)
+    expect(seen).toEqual(['save', 'close', 'next-tab', 'prev-tab'])
+    expect(handler).toHaveBeenCalledTimes(4)
+
+    unregister()
+    // 注销后回落到兜底（save 仍能保存，close 不再消费）
+    expect(handleOfficeShortcut('close')).toBe(false)
+  })
+
+  it('后注册的分发器覆盖前一个；旧的注销函数不会误删新分发器；reset 清空', () => {
+    openDocxTab('doc-1')
+    const first = vi.fn(() => false)
+    const second = vi.fn(() => true)
+    const unregisterFirst = registerOfficeShortcutHandler(first)
+    const unregisterSecond = registerOfficeShortcutHandler(second)
+
+    expect(handleOfficeShortcut('save')).toBe(true)
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(first).not.toHaveBeenCalled()
+
+    unregisterFirst()
+    expect(handleOfficeShortcut('save')).toBe(true)
+    expect(second).toHaveBeenCalledTimes(2)
+
+    unregisterSecond()
+    resetOfficeActionsForTest()
+    expect(handleOfficeShortcut('save')).toBe(true) // 兜底 save
   })
 })

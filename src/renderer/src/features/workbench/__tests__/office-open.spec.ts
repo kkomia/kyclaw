@@ -212,3 +212,51 @@ describe('officeTabForPreview：同一文件匹配（绝对路径优先，跨工
     )
   })
 })
+describe('officeTabForPreview：M3-S4 读 OfficeTab.absolutePath（跨工作区同名不误报）', () => {
+  it('会话入口打开的标签：absolutePath 落进标签，匹配按绝对路径而不是相对 displayPath', async () => {
+    bridge.office.openFromSession.mockResolvedValue(
+      okResult('D:\\工作区A\\docs\\方案.docx', { displayPath: 'docs/方案.docx' })
+    )
+    const opened = await openOfficeFromSession('thread-a', 'docs/方案.docx')
+    expect(useOfficeTabsStore.getState().tabs[0]?.absolutePath).toBe('D:\\工作区A\\docs\\方案.docx')
+
+    const tabs = useOfficeTabsStore.getState().tabs
+    expect(officeTabForPreview(tabs, 'D:\\工作区A', 'docs/方案.docx')?.id).toBe(opened.tabId)
+    // 另一个工作区里的同名相对路径：绝对路径对不上 → 不误报
+    expect(officeTabForPreview(tabs, 'D:\\工作区B', 'docs/方案.docx')).toBeUndefined()
+  })
+
+  it('两个标签 displayPath 相同但 absolutePath 不同：按根各命中各的', () => {
+    useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-a',
+        displayPath: 'docs/方案.docx',
+        absolutePath: 'D:\\工作区A\\docs\\方案.docx'
+      })
+    )
+    const tabB = useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-b',
+        displayName: '方案.docx',
+        displayPath: 'docs/方案.docx',
+        absolutePath: 'D:\\工作区B\\docs\\方案.docx'
+      })
+    )
+    const tabs = useOfficeTabsStore.getState().tabs
+    expect(tabs).toHaveLength(2)
+    expect(officeTabForPreview(tabs, 'D:\\工作区B', 'docs/方案.docx')?.id).toBe(tabB)
+    expect(officeTabForPreview(tabs, 'D:\\工作区C', 'docs/方案.docx')).toBeUndefined()
+  })
+
+  it('rootPath 判不出（null）：有绝对路径身份也不误报（宁可漏提示）', () => {
+    useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        displayPath: 'docs/方案.docx',
+        absolutePath: 'D:\\工作区\\docs\\方案.docx'
+      })
+    )
+    expect(officeTabForPreview(useOfficeTabsStore.getState().tabs, null, 'docs/方案.docx')).toBe(
+      undefined
+    )
+  })
+})

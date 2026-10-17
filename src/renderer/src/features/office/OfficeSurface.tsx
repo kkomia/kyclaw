@@ -28,6 +28,7 @@ import {
   isDocSaveBytes,
   isDocSaveRequest,
   isSurfaceFatal,
+  isSurfaceShortcut,
   isSurfaceHello,
   isSurfaceReady,
   type DocCloseMessage,
@@ -35,6 +36,7 @@ import {
   type DocReloadMessage,
   type DocSaveMessage,
   type ShellToSurfaceMessage,
+  type SurfaceShortcutAction,
   type SurfaceTheme
 } from '@renderer/office/bridge-protocol'
 import { currentSurfaceUrl } from './surface-url'
@@ -63,6 +65,11 @@ export interface OfficeSurfaceProps {
   onDocSaveRequest?: () => void
   /** 面内错误（打开/布局/保存/运行时） */
   onDocError?: (phase: OfficeSurfaceErrorPhase, message: string) => void
+  /**
+   * M3-S4：焦点在 iframe 内时的快捷键（Ctrl+S/W/Tab）由面转发过来。
+   * 壳侧不关心键值，只按动作走 `office-actions` 的同一条分发。
+   */
+  onShortcut?: (action: SurfaceShortcutAction) => void
   /** 握手超时：超过就当 fatal（壳可以重载 iframe；S2 只展示错误） */
   readyTimeoutMs?: number
   /** 覆盖 surface URL（单测用；默认按 surface-url.ts 从 location 现算） */
@@ -94,6 +101,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       onDocChanged,
       onDocSaveRequest,
       onDocError,
+      onShortcut,
       readyTimeoutMs = 15_000,
       surfaceUrl
     },
@@ -128,6 +136,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     const onDocSaveRequestRef = useRef(onDocSaveRequest)
     const onDocErrorRef = useRef(onDocError)
     const onStatusChangeRef = useRef(onStatusChange)
+    const onShortcutRef = useRef(onShortcut)
     useEffect(() => {
       localeRef.current = locale
       themeRef.current = theme
@@ -136,7 +145,17 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       onDocSaveRequestRef.current = onDocSaveRequest
       onDocErrorRef.current = onDocError
       onStatusChangeRef.current = onStatusChange
-    }, [locale, theme, onDocLoaded, onDocChanged, onDocSaveRequest, onDocError, onStatusChange])
+      onShortcutRef.current = onShortcut
+    }, [
+      locale,
+      theme,
+      onDocLoaded,
+      onDocChanged,
+      onDocSaveRequest,
+      onDocError,
+      onStatusChange,
+      onShortcut
+    ])
 
     /** 把消息发给面（非 ready / 没有 nonce 时不发） */
     const postToSurface = useCallback((message: Omit<ShellToSurfaceMessage, 'nonce'>): boolean => {
@@ -265,6 +284,11 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         }
         if (isDocError(data) && data.nonce === nonceRef.current) {
           onDocErrorRef.current?.(data.phase, data.message)
+          return
+        }
+        if (isSurfaceShortcut(data) && data.nonce === nonceRef.current) {
+          // 只信 nonce 也白搭不了：来源已在上面按 `event.source === iframe.contentWindow` 验过
+          onShortcutRef.current?.(data.action)
         }
       }
 

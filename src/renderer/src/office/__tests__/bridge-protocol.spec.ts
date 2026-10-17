@@ -4,6 +4,7 @@ import {
   isSurfaceHello,
   isSurfaceInit,
   isSurfaceReady,
+  isSurfaceShortcut,
   SURFACE_PROTOCOL_VERSION
 } from '../bridge-protocol'
 
@@ -53,5 +54,17 @@ describe('bridge-protocol：hello / init / ready / fatal 判别', () => {
 
   it('版本常量从 1 起（S1 冻结口径）', () => {
     expect(SURFACE_PROTOCOL_VERSION).toBe(1)
+  })
+})
+describe('bridge-protocol：M3-S4 面内快捷键', () => {
+  it('surface:shortcut：type + 非空 nonce + 动作白名单（save/close/next-tab/prev-tab）', () => {
+    for (const action of ['save', 'close', 'next-tab', 'prev-tab']) {
+      expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: 'n1', action })).toBe(true)
+    }
+    expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: '', action: 'save' })).toBe(false)
+    expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: 'n1', action: 'quit' })).toBe(false)
+    expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: 'n1' })).toBe(false)
+    expect(isSurfaceShortcut({ type: 'doc:save', nonce: 'n1', action: 'save' })).toBe(false)
+    expect(isSurfaceShortcut(null)).toBe(false)
   })
 })

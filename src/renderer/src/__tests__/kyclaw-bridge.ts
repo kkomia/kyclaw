@@ -48,6 +48,8 @@ import {
   type OfficeConfig,
   type OfficeDocumentInfo,
   type OfficeOpenResult,
+  type OfficeQuitRequestPayload,
+  type OfficeQuitResult,
   type OfficeReadResult,
   type OfficeSaveAsRequest,
   type OfficeSaveAsResult,
@@ -643,6 +645,13 @@ export interface OfficeApiStub {
   save: Mock<(input: OfficeSaveRequest) => Promise<OfficeSaveResult>>
   saveAs: Mock<(input: OfficeSaveAsRequest) => Promise<OfficeSaveAsResult>>
   release: Mock<(documentId: string) => Promise<void>>
+  /**
+   * M3-S5（并行块）：脏计数上报 + 退出确认请求。本桩只保证类型齐全、默认 no-op/永不触发；
+   * S5 自己的用例可覆盖。**只传计数/请求 id，不传文档内容**。
+   */
+  reportDirtyState: Mock<(count: number) => Promise<void>>
+  onQuitRequest: Mock<(listener: (payload: OfficeQuitRequestPayload) => void) => () => void>
+  respondQuitRequest: Mock<(result: OfficeQuitResult) => Promise<void>>
 }
 
 /** 造一份 `OfficeDocumentInfo`（用例只改关心的字段） */
@@ -693,7 +702,10 @@ export function officeApiStub(): OfficeApiStub {
       code: 'cancelled',
       message: '已取消'
     })),
-    release: vi.fn(async () => undefined)
+    release: vi.fn(async () => undefined),
+    reportDirtyState: vi.fn(async () => undefined),
+    onQuitRequest: vi.fn(() => () => undefined),
+    respondQuitRequest: vi.fn(async () => undefined)
   }
 }
 

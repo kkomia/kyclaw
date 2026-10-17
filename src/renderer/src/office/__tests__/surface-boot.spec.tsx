@@ -291,3 +291,92 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-state', 'empty')
   })
 })
+describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
+  /** 打开一个文档并等编辑器可交互 */
+  async function openDoc(nonce: string): Promise<void> {
+    act(() => dispatchFromParent({ ...DOC, nonce }))
+    await waitFor(() => expect(screen.getByTestId('surface-docx-editor')).toBeInTheDocument())
+    act(() => editorMock.lastProps?.onLoaded(1))
+    await waitFor(() =>
+      expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+    )
+  }
+
+  it('Ctrl+S/W/Tab 在 capture 阶段拦下并只发动作名；Shift+Tab 反向；不带 Ctrl 不发', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    await openDoc(nonce)
+
+    // Ctrl+S：preventDefault（dispatchEvent 返回 false）+ 发 surface:shortcut save
+    const saveEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
+    expect(window.dispatchEvent(saveEvent)).toBe(false)
+    // Ctrl+W：close
+    expect(
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'w', ctrlKey: true, cancelable: true })
+      )
+    ).toBe(false)
+    // Ctrl+Tab：next-tab；Ctrl+Shift+Tab：prev-tab
+    expect(
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, cancelable: true })
+      )
+    ).toBe(false)
+    expect(
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Tab',
+          ctrlKey: true,
+          shiftKey: true,
+          cancelable: true
+        })
+      )
+    ).toBe(false)
+
+    const shortcuts = sentMessages(postMessage).filter(
+      (message) => message.type === 'surface:shortcut'
+    )
+    expect(shortcuts.map((message) => message.action)).toEqual([
+      'save',
+      'close',
+      'next-tab',
+      'prev-tab'
+    ])
+    expect(shortcuts[0]?.nonce).toBe(nonce)
+
+    // 没有 Ctrl 的 S/W、Ctrl+Shift+W（不归我们管）、Ctrl+Alt+S 都不发
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', cancelable: true }))
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'W', ctrlKey: true, shiftKey: true, cancelable: true })
+    )
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 's', ctrlKey: true, altKey: true, cancelable: true })
+    )
+    expect(
+      sentMessages(postMessage).filter((message) => message.type === 'surface:shortcut')
+    ).toHaveLength(4)
+  })
+
+  it('握手未完成 / 还没有文档时不抢键（不 preventDefault、不发消息）', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    await waitFor(() => expect(postMessage).toHaveBeenCalled())
+
+    const beforeReady = new KeyboardEvent('keydown', {
+      key: 's',
+      ctrlKey: true,
+      cancelable: true
+    })
+    expect(window.dispatchEvent(beforeReady)).toBe(true)
+
+    const nonce = await handshake(postMessage)
+    // 已 ready 但没有 doc：仍不转发
+    const noDoc = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
+    expect(window.dispatchEvent(noDoc)).toBe(true)
+    expect(nonce.length).toBeGreaterThan(0)
+    expect(
+      sentMessages(postMessage).filter((message) => message.type === 'surface:shortcut')
+    ).toHaveLength(0)
+  })
+})

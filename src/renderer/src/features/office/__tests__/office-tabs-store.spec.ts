@@ -194,3 +194,62 @@ describe('office-tabs-store：M3-S2 openDocument（按 documentId 去重）', ()
     expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === id)?.readOnly).toBe(true)
   })
 })
+describe('office-tabs-store：M3-S4 绝对路径身份（只读，只用于匹配）', () => {
+  it('openDocument 把 info.absolutePath 存进标签；replaceDocument（另存为）跟着更新；直接 open() 没有', () => {
+    const state = useOfficeTabsStore.getState()
+    const tabId = state.openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-abs',
+        displayPath: 'docs/方案.docx',
+        absolutePath: 'D:\\工作区\\docs\\方案.docx'
+      })
+    )
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === tabId)).toMatchObject({
+      documentId: 'doc-abs',
+      path: 'docs/方案.docx',
+      absolutePath: 'D:\\工作区\\docs\\方案.docx'
+    })
+
+    // 另存为：documentId 不变，绝对路径/标题换成新文件
+    state.replaceDocument(
+      officeDocumentFixture({
+        documentId: 'doc-abs',
+        displayName: '方案-新版.docx',
+        displayPath: 'D:\\工作区\\docs\\方案-新版.docx',
+        absolutePath: 'D:\\工作区\\docs\\方案-新版.docx'
+      })
+    )
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === tabId)).toMatchObject({
+      title: '方案-新版.docx',
+      path: 'D:\\工作区\\docs\\方案-新版.docx',
+      absolutePath: 'D:\\工作区\\docs\\方案-新版.docx'
+    })
+
+    // 非文档入口（open）没有绝对路径身份字段
+    const pptx = state.open({ kind: 'pptx', path: 'D:\\汇报.pptx' })
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === pptx)?.absolutePath).toBe(
+      undefined
+    )
+  })
+
+  it('重复 openDocument 只激活，不把 absolutePath 洗掉', () => {
+    const state = useOfficeTabsStore.getState()
+    const first = state.openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-abs-2',
+        displayPath: 'docs/a.docx',
+        absolutePath: 'D:\\根\\docs\\a.docx'
+      })
+    )
+    const second = state.openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-abs-2',
+        displayPath: 'docs/a.docx',
+        absolutePath: 'D:\\根\\docs\\a.docx'
+      })
+    )
+    expect(second).toBe(first)
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(useOfficeTabsStore.getState().tabs[0]?.absolutePath).toBe('D:\\根\\docs\\a.docx')
+  })
+})

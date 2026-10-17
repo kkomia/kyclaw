@@ -7,7 +7,6 @@ import { startupMark } from './lib/startup-timing'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { MemoryPage } from './features/memory/MemoryPage'
 import { NotesPage } from './features/notes/NotesPage'
-import { OfficePage } from './features/office/OfficePage'
 import { PluginsPage } from './features/plugins/PluginsPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { UsagePage } from './features/usage/UsagePage'
@@ -18,9 +17,10 @@ import { UsagePage } from './features/usage/UsagePage'
  * 记忆 / 用量（standalone 直达保留，不进任何菜单——设置里已有同样的真实内容）+
  * 根路径/未知路径统一落到 /chat（主列永远有内容）。
  *
- * 一级模块共用 ModuleHost：宿主自己挂常驻的 ChatPage，`/chat` 路由只是匹配用的空元素
- * （不能在这里再挂一个 ChatPage，否则会出现第二个聊天实例）。笔记 / 知识库 / Office 的
- * 页面元素由宿主里的 <Outlet/> 渲染。
+ * 一级模块共用 ModuleHost：宿主自己挂常驻的 ChatPage **和常驻的 OfficePage**，`/chat` 与 `/office`
+ * 路由只是匹配用的空元素（不能在这里再挂页面实例，否则会出现第二个聊天/第二套 Office 编辑器）。
+ * 笔记 / 知识库 / 设置等页面元素由宿主里的 <Outlet/> 渲染；切走时 ChatPage、OfficePage 都只
+ * hidden+inert，不卸载（M3-S4：Office 的 iframe/编辑器/标签/dirty 全部保活）。
  *
  * W7（设置往返丢草稿的根因修复）：设置 / 插件 / 记忆 / 用量四条路由原来挂在 ModuleHost **之外**，
  * 一进设置宿主（连同常驻 ChatPage）就被卸载，输入草稿/滚动/页签全丢。现在它们也进 ModuleHost：
@@ -36,7 +36,8 @@ export function AppRoutes(): React.JSX.Element {
           <Route path="/chat" element={null} />
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
-          <Route path="/office" element={<OfficePage />} />
+          {/* M3-S4：Office 也交给 ModuleHost 常驻（与 /chat 同口径），路由只负责匹配 */}
+          <Route path="/office" element={null} />
           <Route path="/settings/:section?" element={<SettingsPage />} />
           <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/memory" element={<MemoryPage />} />

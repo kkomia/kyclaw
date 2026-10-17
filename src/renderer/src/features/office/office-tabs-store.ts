@@ -26,6 +26,11 @@ export interface OfficeTab {
   /** 文档/文件类：打开时的路径（同时是兜底去重键） */
   path?: string
   /**
+   * M3-S4：主进程回包里的**只读绝对路径**（仅 docx；选择器入口与 `path` 相同、会话入口不同）。
+   * 只用于"同一文件"匹配/展示（预览交叉提示、聊天入口去重），**绝不作为授权/读写参数**回传主进程。
+   */
+  absolutePath?: string
+  /**
    * M3-S2：主进程文档注册表的不透明 id（第一步 docx 必有）。
    * 有它时去重以它为准——同一真实文件的选择器绝对路径与会话相对路径不同，路径不能当身份。
    */
@@ -151,6 +156,7 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       kind: 'docx',
       title: info.displayName,
       path: info.displayPath,
+      absolutePath: info.absolutePath,
       documentId: info.documentId,
       dirty: false,
       readOnly: info.readOnly,
@@ -166,7 +172,13 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       return {
         tabs: state.tabs.map((tab) =>
           tab.documentId === info.documentId
-            ? { ...tab, title: info.displayName, path: info.displayPath, readOnly: info.readOnly }
+            ? {
+                ...tab,
+                title: info.displayName,
+                path: info.displayPath,
+                absolutePath: info.absolutePath,
+                readOnly: info.readOnly
+              }
             : tab
         )
       }

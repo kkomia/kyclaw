@@ -2,8 +2,18 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Link, MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRoutes } from '@renderer/App'
-import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import {
+  clearKyclawBridge,
+  installKyclawBridge,
+  officeDocumentFixture
+} from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { resetOfficeActionsForTest } from '@renderer/features/office/office-actions'
+import {
+  resetOfficeTabsStore,
+  useOfficeTabsStore
+} from '@renderer/features/office/office-tabs-store'
+import { resetOfficeUiStore } from '@renderer/features/office/office-ui-store'
 import { resetProjectsStore } from '@renderer/features/projects/projects-store'
 import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { resetWorkbenchStore } from '@renderer/features/workbench/workbench-store'
@@ -67,6 +77,9 @@ beforeEach(() => {
   resetProjectsStore()
   resetThreadChats()
   resetWorkbenchStore()
+  resetOfficeTabsStore()
+  resetOfficeUiStore()
+  resetOfficeActionsForTest()
   useShellStore.setState({
     sidebarCollapsed: false,
     sidebarAutoCollapsed: false,
@@ -142,7 +155,7 @@ describe('ModuleHost 模块宿主', () => {
     })
   })
 
-  it('三个占位模块都有标题、空态与稳定 testid', () => {
+  it('笔记 / 知识库 / Office 都有标题、空态与稳定 testid；离开 Office 后它仍挂载（hidden+inert）', () => {
     renderAt('/knowledge')
     expect(screen.getByTestId('knowledge-page')).toBeInTheDocument()
     expect(screen.getByTestId('knowledge-page-title')).toHaveTextContent('知识库')
@@ -152,11 +165,68 @@ describe('ModuleHost 模块宿主', () => {
     expect(screen.getByTestId('office-page')).toBeInTheDocument()
     expect(screen.getByTestId('office-page-title')).toHaveTextContent('Office')
     expect(screen.getByTestId('office-empty')).toBeInTheDocument()
+    expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'true')
 
     fireEvent.click(screen.getByTestId('primary-nav-notes'))
     expect(screen.getByTestId('notes-page')).toBeInTheDocument()
     expect(screen.getByTestId('notes-page-title')).toHaveTextContent('笔记')
     expect(screen.getByTestId('notes-empty')).toBeInTheDocument()
+    // M3-S4：Office 常驻，切走只 hidden+inert —— 不是 not.toBeInTheDocument()
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'false')
+    expect(screen.getByTestId('module-office')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
+  })
+
+  it('直接深链 /office：只挂 OfficePage，不预挂 ChatPage；首次进 /chat 才挂聊天且 Office 保活', async () => {
+    renderAt('/office')
+
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+    expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
+
+    fireEvent.click(screen.getByTestId('primary-nav-chat'))
+    await waitForChatReady()
+
+    expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-office')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
+
+    fireEvent.click(screen.getByTestId('primary-nav-office'))
+    expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+  })
+
+  it('Office 保活：切模块后 iframe/workspace 是同一节点，可见性随路由切换', async () => {
+    installKyclawBridge()
+    useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-keep', displayName: '保活.docx' }))
+    renderAt('/office')
+
+    const officePage = screen.getByTestId('office-page')
+    const workspace = screen.getByTestId('office-workspace')
+    const iframe = screen.getByTestId('office-surface-iframe')
+    expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
+
+    fireEvent.click(screen.getByTestId('primary-nav-notes'))
+    expect(screen.getByTestId('office-page')).toBe(officePage)
+    expect(screen.getByTestId('office-workspace')).toBe(workspace)
+    expect(screen.getByTestId('office-surface-iframe')).toBe(iframe)
+    expect(screen.getByTestId('module-office')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
+
+    fireEvent.click(screen.getByTestId('primary-nav-chat'))
+    await waitForChatReady()
+    expect(screen.getByTestId('office-surface-iframe')).toBe(iframe)
+
+    fireEvent.click(screen.getByTestId('primary-nav-office'))
+    expect(screen.getByTestId('office-page')).toBe(officePage)
+    expect(screen.getByTestId('office-surface-iframe')).toBe(iframe)
+    expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('module-office')).not.toHaveAttribute('inert')
   })
 
   it('工作台/工作台内容由 AppShell 常驻：模块切换前后是同一节点', async () => {

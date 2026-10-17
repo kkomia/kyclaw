@@ -10,8 +10,14 @@ import {
 } from 'lucide-react'
 import type { OfficeTabKind } from './office-tabs-store'
 
-/** 内容区 tabpanel 的固定 id（标签的 aria-controls 与 OfficePage 共用） */
-export const OFFICE_PANEL_ID = 'office-panel'
+/**
+ * 内容区 tabpanel 的 DOM id（M3-S4：每个标签一个，`AppTabBar` 的 aria-controls 与
+ * `OfficePage` 的 panel 容器共用）。**不能再是常量**：多 workspace 常驻后同屏会有多个 panel，
+ * 重复 id 会让 aria-controls / 焦点引用全部指向第一个标签。
+ */
+export function officePanelIdOf(tabId: string): string {
+  return `office-panel-${tabId}`
+}
 
 /** 标签类型 → 中文名（标签 tooltip / 内容区占位共用） */
 export const OFFICE_KIND_LABEL: Record<OfficeTabKind, string> = {
