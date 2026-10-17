@@ -92,6 +92,14 @@ function renderTitleBar(props: Partial<TitleBarProps> = {}): {
   }
 }
 
+function renderTitleBarAt(initialEntry: string): void {
+  render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <TitleBar sidebarCollapsed={false} onToggleSidebar={vi.fn()} />
+    </MemoryRouter>
+  )
+}
+
 /** 取 ipc 推送监听器（onStateChanged 注册进去的那个） */
 function pushedListener(api: KyclawWindowApi): (state: { maximized: boolean }) => void {
   const listener = vi.mocked(api.onStateChanged).mock.calls[0]?.[0]
@@ -240,5 +248,33 @@ describe('TitleBar', () => {
     expect(() => renderTitleBar()).not.toThrow()
     expect(() => fireEvent.click(screen.getByTestId('window-close'))).not.toThrow()
     expect(api.close).not.toHaveBeenCalled()
+  })
+
+  it('一屏一只：/chat 不渲染顶栏品牌位（输入卡状态灯是唯一一只）', () => {
+    renderTitleBarAt('/chat')
+    expect(screen.queryByTestId('titlebar-otter')).not.toBeInTheDocument()
+  })
+
+  it('一屏一只：关于页不渲染顶栏品牌位（关于页 96 是唯一一只）', () => {
+    renderTitleBarAt('/settings/about')
+    expect(screen.queryByTestId('titlebar-otter')).not.toBeInTheDocument()
+  })
+
+  it('一屏一只：非对话模块（Office/笔记/知识库/其它设置）渲染顶栏品牌位 32 static', () => {
+    for (const route of ['/office', '/notes', '/knowledge', '/settings/appearance', '/plugins']) {
+      const view = render(
+        <MemoryRouter initialEntries={[route]}>
+          <TitleBar sidebarCollapsed={false} onToggleSidebar={vi.fn()} />
+        </MemoryRouter>
+      )
+      const brand = screen.getByTestId('titlebar-otter')
+      expect(brand, route).toHaveClass('no-drag')
+      const mark = brand.querySelector('[data-testid="otter-mark"]')
+      expect(mark, route).toHaveAttribute('data-size', '32')
+      expect(mark, route).toHaveAttribute('data-variant', 'static')
+      expect(mark?.querySelector('svg[viewBox="0 0 48 48"]'), route).not.toBeNull()
+      expect(brand.closest('[data-testid="titlebar"]'), route).not.toBeNull()
+      view.unmount()
+    }
   })
 })

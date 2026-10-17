@@ -1,0 +1,124 @@
+/**
+ * 品牌 mark · 守页海獭 v4-pixel 的落点样式（task-96）。
+ *
+ * 颜色全部是**变量**：浅色默认、`:root[data-theme='dark']` 整段换值；SVG path 只消费变量，
+ * 主题切换/首帧渲染都不需要重新加载任何图片（对照旧 PixelOtter 的浅/深 sprite sheet：
+ * 深色首帧要等 sheet 上屏，验收发现约 1–2s 空窗——inline SVG + 变量同帧解决）。
+ *
+ * 尺寸：`--otter-mark-size` 由组件按整数档（32/96/128）以 px 写死；不用 em / transform: scale，
+ * 所以全局 `--ui-scale` / 字号缩放不会让 48 栅格变成亚像素。shape-rendering 在组件 SVG 上。
+ *
+ * 动效：3 帧 sprite strip + steps(1,end)（4s）；reduced-motion / data-motion='reduced' 直接无动画
+ * （停在帧 A，即静态版视觉）；paused 只改 animation-play-state，不重置帧。
+ */
+.otter-mark {
+  --om-page: #ffffff;
+  --om-ink: #141413;
+  --om-fur: #8a6647;
+  --om-cream: #e8dcc8;
+  --om-nose: #5c3f2a;
+  --om-eye: #141413;
+  --om-line: #b0aea5;
+  --om-clay: #d97757;
+
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--otter-mark-size);
+  height: var(--otter-mark-size);
+  line-height: 0;
+  pointer-events: none;
+  user-select: none;
+  vertical-align: middle;
+}
+
+:root[data-theme='dark'] .otter-mark {
+  --om-page: #1e1e1d;
+  --om-ink: #faf9f5;
+  --om-fur: #a9835f;
+  --om-line: #8f8d84;
+  --om-clay: #e08a6d;
+}
+
+.otter-mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 48 栅格 path 的调色板（类名来自设计文件；只在 .otter-mark 内生效，不污染全局） */
+.otter-mark .f-page {
+  fill: var(--om-page);
+}
+.otter-mark .f-ink {
+  fill: var(--om-ink);
+}
+.otter-mark .f-fur {
+  fill: var(--om-fur);
+}
+.otter-mark .f-cream {
+  fill: var(--om-cream);
+}
+.otter-mark .f-nose {
+  fill: var(--om-nose);
+}
+.otter-mark .f-eye {
+  fill: var(--om-eye);
+}
+.otter-mark .f-line {
+  fill: var(--om-line);
+}
+.otter-mark .f-clay {
+  fill: var(--om-clay);
+}
+
+/* 动效版：3 帧并排（x = 0 / 48 / 96 用户单位），整数位移 + steps(1,end) 离散帧。
+   百分比 = DESIGN §4 时间表：37.5%=1.5s、50%=2.0s、55%=2.2s、60%=2.4s。 */
+.otter-mark[data-variant='animated'][data-motion='auto'] .otter-strip {
+  animation: otter-mark-frames 4s steps(1, end) infinite;
+}
+
+.otter-mark[data-paused='true'] .otter-strip {
+  animation-play-state: paused;
+}
+
+/* 壳层显式「减弱」/静态档：不依赖媒体查询，直接停在帧 A */
+.otter-mark[data-motion='reduced'] .otter-strip {
+  animation: none !important;
+}
+
+@keyframes otter-mark-frames {
+  0% {
+    transform: translateX(0);
+  }
+  37.5% {
+    transform: translateX(-48px);
+  }
+  50% {
+    transform: translateX(0);
+  }
+  55% {
+    transform: translateX(-96px);
+  }
+  60% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* reduced-motion：直接静态帧 A（不是隐藏） */
+@media (prefers-reduced-motion: reduce) {
+  .otter-mark .otter-strip {
+    animation: none !important;
+  }
+}
+
+/**
+ * 一屏一只（task-53 用户口径；task-96 收口）：由**挂载条件**保证，不靠 CSS 挤压——
+ *   - 对话页 /chat：输入卡右上角状态灯是唯一一只（顶栏品牌位不渲染）；
+ *   - 关于页：关于页 96 是唯一一只（顶栏品牌位不渲染）；
+ *   - 其它非对话模块：顶栏品牌位 32 是唯一一只（这些页面没有输入卡海獭）；
+ *   - hero：只有欢迎页 96（顶栏/输入卡都不渲染）。
+ * 具体条件在 `components/shell/TitleBar.tsx` 与各落点组件里；这里不写 `:has` 隐藏规则。
+ */

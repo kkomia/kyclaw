@@ -1,5 +1,7 @@
 import { Copy, Minus, PanelLeftClose, PanelLeftOpen, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router'
+import { OtterMark } from '@renderer/features/brand/OtterMark'
 import { IconButton } from '../ui/icon-button'
 import { AppTabBar } from './AppTabBar'
 
@@ -52,6 +54,15 @@ function useMaximized(): boolean {
 
 export function TitleBar({ sidebarCollapsed, onToggleSidebar }: TitleBarProps): React.JSX.Element {
   const maximized = useMaximized()
+  const pathname = useLocation().pathname
+  /**
+   * task-96 收口（一屏一只，Lead 口径）：
+   *   - 对话页（/chat）：输入卡右上角状态海獭是唯一一只 → 顶栏品牌位隐藏；
+   *   - 关于页（/settings/about）：关于页自己有 96 海獭 → 顶栏让位；
+   *   - 其它非对话模块（Office/笔记/知识库/其它设置…）：顶栏品牌位 32 可见（这些页面没有输入卡海獭）。
+   */
+  const showOtterBrand =
+    pathname !== '/chat' && pathname !== '/' && !pathname.startsWith('/settings/about')
 
   return (
     <header
@@ -67,6 +78,12 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: TitleBarProps): 
           onClick={onToggleSidebar}
         />
       </div>
+
+      {showOtterBrand ? (
+        <span data-testid="titlebar-otter" className="no-drag flex items-center pl-1">
+          <OtterMark size={32} variant="static" title="kyclaw" />
+        </span>
+      ) : null}
 
       <AppTabBar />
 

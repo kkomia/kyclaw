@@ -192,17 +192,20 @@ describe('ChatHeader · 名称菜单（与侧栏同款实现）', () => {
 })
 
 /**
- * task-62（用户：「把海獭 logo 移动到对话输入框右上角而不是最右上角」）：
- * 顶栏**不再渲染任何海獭** —— 状态灯已挪到 Composer 的输入卡右上角（见 composer.spec）；
- * 这里只钉"header 里没有 pixel-otter / 没有旧 .chat-otter 类"，右端回到标题 + 页签 + 工作台走廊。
+ * task-96 收口（Lead 口径：一屏一只）：
+ *   - 对话页（/chat）只保留输入卡右上角状态海獭 → ChatHeader 不出品牌位/海獭；
+ *   - 顶栏品牌位改挂在全局 TitleBar，按路由条件渲染（见 title-bar.spec）；
+ *   - 状态灯仍在 Composer（composer.spec 钉）。
  */
-describe('ChatHeader · 不再渲染状态海獭（task-62）', () => {
-  it('header 内没有 pixel-otter；标题与页签照旧（不放松结构断言）', () => {
+describe('ChatHeader · 对话页不渲染第二只海獭（task-96 一屏一只）', () => {
+  it('header 内没有 OtterMark / 旧 pixel-otter；标题与页签照旧', () => {
     mount()
 
     const header = screen.getByTestId('chat-header')
-    expect(header.querySelector('[data-testid="pixel-otter"]')).toBeNull()
+    expect(header.querySelector('[data-testid="otter-mark"]')).toBeNull()
     expect(header.querySelector('.chat-otter')).toBeNull()
+    expect(header.querySelector('[data-testid="pixel-otter"]')).toBeNull()
+    expect(screen.queryByTestId('otter-mark')).not.toBeInTheDocument()
     expect(screen.queryByTestId('pixel-otter')).not.toBeInTheDocument()
     // 标题按钮仍在 header 左侧（既有结构不变）
     expect(header).toContainElement(screen.getByTestId('chat-title'))

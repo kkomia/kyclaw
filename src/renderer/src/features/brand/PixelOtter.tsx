@@ -1,10 +1,15 @@
 /**
  * 像素海獭 · 装饰性动画组件（品牌 mark，不是助手人格；设计稿 v4 / D-32）。
  *
+ * **task-96 起**：splash（128 inline SVG）/ ChatHeader 品牌位（32 static）/ 欢迎页（96 动画）/
+ * 关于页（96 动画）四处已换 v4-pixel 的 `OtterMark`（inline SVG，见 ./OtterMark.tsx）；
+ * 本组件**保留作回退**，目前仍用于「输入卡右上角状态灯」（task-62 落位，size 32；状态
+ * idle/think/type）。如需整体回退四处，把对应调用换回 `<PixelOtter …>` 即可（资产与测试未删）。
+ *
  * 资产：`src/renderer/src/assets/pixel-otter/`（task-65 子集 launch-v2，35 文件 47,493 B；
  * **32×32 栅格**、8 色、每侧 3 根胡须；显示尺寸全是 32 的整数倍）。
  * sheet 档位/挑档在 `pixel-otter-sheets.ts`（本文件只导出组件，react-refresh 口径）。splash 不走本组件
- * （index.html 内联 base64）。落点：
+ * （index.html 内联 SVG）。落点：
  *   - 输入卡右上角状态灯（task-62 落位）：size 32，state idle/think/type；
  *   - chat 初始页欢迎 logo：size 96（A 信笺报头；API 支持 96/128），state wave→float。
  *

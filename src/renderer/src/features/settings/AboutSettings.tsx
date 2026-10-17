@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Input } from '@renderer/components/ui/input'
+import { OtterMark } from '@renderer/features/brand/OtterMark'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { BundledReleaseNotes, UpdateState } from '@shared/ipc'
 import { updateStatusText } from './status-text'
@@ -238,6 +239,18 @@ export function AboutSettings(): React.JSX.Element {
 
   return (
     <div data-testid="about-settings" className="flex flex-col gap-4">
+      {/* task-96：关于页品牌位（v4-pixel 守页海獭，96 = 48×2 整数倍；动画在 96 上最舒服，
+          静置于 reduced-motion）。不新造页面，就放在「关于」组顶部。 */}
+      <div
+        data-testid="about-brand"
+        className="flex items-center gap-4 rounded-overlay border-(length:--hairline-width) border-hairline bg-surface px-4 py-3"
+      >
+        <OtterMark size={96} variant="animated" title="kyclaw" />
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-serif text-[22px] leading-7 font-semibold text-ink">kyclaw</span>
+          <span className="text-b2 text-ink-secondary">What needs doing, done.</span>
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <span data-testid="about-version" className="text-b2 text-ink">
           版本{' '}

@@ -80,6 +80,13 @@ describe('「关于」组', () => {
     expect(screen.getByTestId('about-check')).toBeDisabled()
     expect(screen.queryByTestId('about-install')).not.toBeInTheDocument()
     expect(bridge.updates.check).not.toHaveBeenCalled()
+    // task-96：关于页品牌位 = v4-pixel 守护海獭 96（inline SVG，不新造页面）
+    const brand = screen.getByTestId('about-brand')
+    const mark = brand.querySelector('[data-testid="otter-mark"]')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveAttribute('data-size', '96')
+    expect(mark).toHaveAttribute('data-variant', 'animated')
+    expect(mark?.querySelector('svg[viewBox="0 0 48 48"]')).not.toBeNull()
   })
 
   it('配了源：点"检查更新"走 updates:check，状态与推送同步（检查中 → 已是最新）', async () => {

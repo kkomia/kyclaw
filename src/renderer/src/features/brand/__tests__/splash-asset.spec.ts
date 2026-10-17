@@ -9,9 +9,9 @@ import { OTTER_STATES } from '../otter-states'
  * v5 = **32×32 栅格**（尺寸体系不变：32/64/96/128/192/256/512，最小 32）：
  * 去狗感（短须/小耳/圆脸）、胡须随头动（生成器逐帧 dy；产品消费 sprite sheet PNG，SVG 仅在
  * 设计文档/预览里，v5 已同步 32 viewBox）、去抱石（前爪并拢浮水 + 水面 + 尾卷）。
- * 子集 launch-v2：35 文件（34 资产 + manifest）45,919 B；splash 用 data URI 内联（首屏零请求）、
- * 无外链、reduced-motion 静态、旧 Kimi 蓝 mark 已退场。
- * 运行时逐帧行为见 `pixel-otter.spec.tsx`（组件 props/状态）与 `pixel-otter.css`（steps 契约，下方断言）。
+ * 子集 launch-v2：35 文件（34 资产 + manifest）45,919 B；splash 已换 **v4-pixel inline SVG**
+ * （task-96；animated/static 双份内联、零请求、无外链、reduced 静态帧；旧 v5 sprite sheet 仍保留
+ * 在 assets/pixel-otter 作回退）。运行时逐帧行为见 `pixel-otter.spec.tsx` 与下方 pixel-otter.css 断言。
  *
  * 路径用仓库根相对解析（vitest 从仓库根跑；jsdom 里的 URL 不是 Node 的 file: 实现，
  * 用 readdirSync(URL) 会报 "URL must be of scheme file"）。
@@ -31,13 +31,6 @@ const MANIFEST = JSON.parse(readFileSync(resolve(ASSET_ROOT, 'manifest.json'), '
   fileCount: number
   usage: Record<string, { sizes: number[]; states: string[] }>
   states: Record<string, { frames: number; frameMs: number; reducedFrame: number; bytes: number }>
-}
-
-/** 从 `url('data:image/png;base64,...')` 里解出 PNG 的宽高（IHDR 在固定偏移） */
-function pngSizeOf(dataUri: string): { width: number; height: number } {
-  const base64 = dataUri.slice(dataUri.indexOf('base64,') + 'base64,'.length)
-  const buffer = Buffer.from(base64, 'base64')
-  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
 }
 
 interface AssetFile {
@@ -134,48 +127,61 @@ describe('像素海獭资产子集（v5 launch-v2，35 文件 45,919 B）', () =
   })
 })
 
-describe('splash · 内联海獭 loading（index.html）', () => {
-  it('图像/结构：otter 容器 + 浅深两帧都在，aria-hidden 装饰', () => {
+describe('splash · v4-pixel 内联 SVG（index.html，task-96）', () => {
+  it('结构：otter 容器 + animated/static 两个 inline SVG，aria-hidden 装饰', () => {
     expect(INDEX_HTML).toContain('<div class="app-splash__otter" aria-hidden="true">')
-    expect(INDEX_HTML).toContain('app-splash__otter-frame--light')
-    expect(INDEX_HTML).toContain('app-splash__otter-frame--dark')
+    expect(INDEX_HTML).toContain('class="app-splash__otter--animated"')
+    expect(INDEX_HTML).toContain('class="app-splash__otter--static"')
+    // v5 sprite-sheet 的两张 @4x PNG 已退场
+    expect(INDEX_HTML).not.toContain('app-splash__otter-frame')
+    expect(INDEX_HTML).not.toContain('data:image/png;base64,')
   })
 
-  it('零请求：sprite 用 data URI 内联（浅/深各一条），没有外链图片/字体', () => {
-    const dataUris = INDEX_HTML.match(/data:image\/png;base64,/g) ?? []
-    expect(dataUris.length).toBe(2)
-    // base64 两条 v5 loading sheet（@4x，6 帧 ×128）≈ 6.6 KB；index.html 总大小受控
-    expect(statSync(INDEX_PATH).size).toBeLessThan(20 * 1024)
+  it('尺寸/字节：48 栅格 viewBox、显示 128；index.html 预算 ≤ 28KB（比两张 base64 PNG 省请求）', () => {
+    const svgs = INDEX_HTML.match(/<svg[\s\S]*?<\/svg>/g) ?? []
+    expect(svgs).toHaveLength(2)
+    for (const svg of svgs) {
+      expect(svg).toContain('viewBox="0 0 48 48"')
+      expect(svg).toContain('width="128"')
+      expect(svg).toContain('height="128"')
+      expect(svg).toContain('shape-rendering="crispEdges"')
+    }
+    const animated = svgs.find((svg) => (svg.match(/<g transform=/g) ?? []).length === 3)
+    const staticFrame = svgs.find((svg) => (svg.match(/<g transform=/g) ?? []).length === 1)
+    expect(animated, '缺 3 帧 animated SVG').toBeTruthy()
+    expect(staticFrame, '缺单帧 static SVG').toBeTruthy()
+    // 设计资产：animated 9,081 B / static 3,725 B（strip 内联部分 7,667 / 2,646 字符）
+    expect(animated?.length ?? 0).toBeGreaterThan(7000)
+    expect(staticFrame?.length ?? 0).toBeGreaterThan(2500)
+    expect(statSync(INDEX_PATH).size).toBeLessThan(28 * 1024)
+  })
+
+  it('零请求：全部 inline SVG；无 data URI 图片、无外链字体/图片、无 @import', () => {
     expect(INDEX_HTML).not.toMatch(/url\(\s*['"]?https?:/i)
     expect(INDEX_HTML).not.toMatch(/<img[^>]+src=["']https?:/i)
     expect(INDEX_HTML).not.toContain('@import')
+    expect(INDEX_HTML).not.toContain('data:font')
   })
 
-  it('内联的是 v5 @4x loading sheet：768×128（6 帧 ×128）、字节数与 v5 资产一致', () => {
-    const uris = INDEX_HTML.match(/url\('(data:image\/png;base64,[^']+)'\)/g) ?? []
-    expect(uris).toHaveLength(2)
-    const decodedSizes: number[] = []
-    for (const uri of uris) {
-      expect(pngSizeOf(uri)).toEqual({ width: 768, height: 128 })
-      const base64 = uri.slice(uri.indexOf('base64,') + 'base64,'.length, -2)
-      decodedSizes.push(Buffer.from(base64, 'base64').length)
-    }
-    // v5 是 2,461 / 2,457 B（v4 是 2,494/2,490 B）—— 换装后旧串必须已被替换
-    expect(decodedSizes.sort()).toEqual([2457, 2461])
-  })
-
-  it('逐帧：6 帧 ×80ms steps(6) loop + 最近邻放大', () => {
-    expect(INDEX_HTML).toContain('image-rendering: pixelated')
-    expect(INDEX_HTML).toContain('animation: app-splash-otter 480ms steps(6) infinite')
-    expect(INDEX_HTML).toContain('background-size: 768px 128px')
-    expect(INDEX_HTML).toContain('@keyframes app-splash-otter')
-  })
-
-  it('reduced-motion：停动画（静态 reducedFrame #0），主题跟随 prefers-color-scheme', () => {
+  it('动效：4s steps(1,end) sprite 整数位移；reduced 切静态帧 A（不隐藏）', () => {
+    expect(INDEX_HTML).toContain('animation: app-splash-otter-frames 4s steps(1, end) infinite')
+    expect(INDEX_HTML).toContain('translateX(-48px)')
+    expect(INDEX_HTML).toContain('translateX(-96px)')
+    // 静态帧在有 reduced 时显示、animated 隐藏（不是把海獭整体隐藏）
     expect(INDEX_HTML).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.app-splash__otter-frame \{\s*animation: none;/
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?svg\.app-splash__otter--animated \{\s*display: none;/
     )
-    expect(INDEX_HTML).toContain('@media (prefers-color-scheme: dark)')
+    expect(INDEX_HTML).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?svg\.app-splash__otter--static \{\s*display: block;/
+    )
+  })
+
+  it('浅深：同一份 SVG 只换 --om-* 变量（跟随 prefers-color-scheme，无 sheet 换载空窗）', () => {
+    expect(INDEX_HTML).toContain('--om-page: #ffffff')
+    expect(INDEX_HTML).toMatch(
+      /@media \(prefers-color-scheme: dark\)[\s\S]*?\.app-splash__otter \{[\s\S]*?--om-page: #1e1e1d/
+    )
+    expect((INDEX_HTML.match(/class="app-splash__otter"/g) ?? []).length).toBe(1)
   })
 
   it('沿用现有 splash 离场逻辑（id/leaving/阶段推进标记不动），旧 Kimi 蓝 mark 退场', () => {

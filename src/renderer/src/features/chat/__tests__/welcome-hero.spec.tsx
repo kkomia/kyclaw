@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage } from 'ai'
@@ -92,11 +92,12 @@ describe('空会话的初始页', () => {
       expect(bracket).toHaveClass('welcome-bracket')
     }
 
-    // A · 信笺（task-50）：报头 lockup = 海獭印章 96 │ 1px 竖线 │ 字标；字标下 26px 一条 552 细线
+    // A · 信笺（task-50）：报头 lockup = 海獭印章 96（task-96 起 v4-pixel inline SVG）│ 1px 竖线 │ 字标
     expect(hero.querySelector('.welcome-lockup')).not.toBeNull()
     const seal = hero.querySelector('.welcome-seal')
     expect(seal).not.toBeNull()
     expect(seal).toHaveAttribute('data-size', '96')
+    expect(seal).toHaveAttribute('data-testid', 'otter-mark')
     expect(hero.querySelectorAll('.welcome-mark-rule')).toHaveLength(1)
     const hair = screen.getByTestId('welcome-hair')
     expect(hair).toHaveClass('welcome-hair')
@@ -123,16 +124,16 @@ describe('空会话的初始页', () => {
     expect(paper).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByTestId('welcome-project-rule')).toBeInTheDocument()
 
-    // task-62「一屏一只」：初始页只有报头 lockup 那只 ——
-    // 状态海獭已挪到输入卡右上角（hero 时不渲染），ChatHeader 也不再渲染海獭：全页 pixel-otter 计数 = 1。
+    // task-96 收口「一屏一只」：初始页 = 报头 lockup 那只（v4 inline SVG）；
+    // 顶栏品牌位（TitleBar，全局）在 /chat 路由不渲染（见 title-bar.spec）；
+    // ChatHeader 不出海獭；Composer 状态海獭 hero 时不渲染。
     expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
     expect(document.querySelector('.welcome-corner-slot')).toBeNull()
     expect(screen.queryByTestId('composer-otter')).not.toBeInTheDocument()
-    expect(
-      screen.getByTestId('chat-header').querySelector('[data-testid="pixel-otter"]')
-    ).toBeNull()
-    expect(document.querySelectorAll('[data-testid="pixel-otter"]')).toHaveLength(1)
-    expect(hero.querySelector('.welcome-lockup [data-testid="pixel-otter"]')).not.toBeNull()
+    expect(document.querySelectorAll('[data-testid="pixel-otter"]')).toHaveLength(0)
+    expect(document.querySelectorAll('[data-testid="otter-mark"]')).toHaveLength(1)
+    expect(hero.querySelectorAll('[data-testid="otter-mark"]')).toHaveLength(1)
+    expect(screen.getByTestId('chat-header').querySelector('[data-testid="otter-mark"]')).toBeNull()
 
     // round 66：初始页「选择项目」行在卡片上方、输入卡在流内、能力行在卡片下方。
     // 2026-10-18 用户口径（"chat页面下面这一排按钮可以去掉了"）：卡片下方那排能力/PPT 胶囊
@@ -313,47 +314,35 @@ describe('首条消息发出：标题离场、布局落到常规', () => {
     expect(screen.getByTestId('message-list')).toHaveTextContent('第二个问题')
     expect(screen.getByTestId('welcome-hero')).toHaveAttribute('data-active', 'false')
 
-    // task-62「一屏一只」：进对话后唯一的海獭 = 输入卡右上角那只（hero 期间不渲染）；
-    // ChatHeader 已不再渲染海獭（header 右端只剩页签 + 工作台走廊）。
+    // task-96 收口「一屏一只」：进对话后 /chat 的唯一海獭 = 输入卡右上角状态灯（task-62）；
+    // ChatHeader 不出海獭；顶栏品牌位在 TitleBar 且 /chat 路由不渲染（title-bar.spec 钉）。
     expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
     expect(screen.queryByTestId('welcome-local-note')).not.toBeInTheDocument()
     expect(screen.getByTestId('composer-otter')).toBeInTheDocument()
-    expect(
-      screen.getByTestId('chat-header').querySelector('[data-testid="pixel-otter"]')
-    ).toBeNull()
+    expect(screen.getByTestId('chat-header').querySelector('[data-testid="otter-mark"]')).toBeNull()
   })
 })
 
 /**
- * 像素海獭欢迎 logo（A · 信笺报头印章）：
+ * v4-pixel 守护海獭欢迎 logo（A · 信笺报头印章，task-96）：inline SVG，首帧即完整（无 sheet 空窗）。
  */
-function stubReducedMotion(): void {
-  vi.stubGlobal(
-    'matchMedia',
-    vi.fn((query: string) => ({
-      matches: true,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn()
-    }))
-  )
-}
-
-describe('像素海獭欢迎 logo（A · 信笺报头印章）', () => {
-  it('报头左侧印章：96 档 + aria-hidden + 装饰性，不动 <kyclaw> 结构', () => {
+describe('v4-pixel 守护海獭欢迎 logo（A · 信笺报头印章，task-96）', () => {
+  it('报头左侧印章：96 档 inline SVG + aria-hidden + 装饰性，不动 <kyclaw> 结构', () => {
     render(<WelcomeHero active />)
 
     const hero = screen.getByTestId('welcome-hero')
-    const otter = screen.getByTestId('pixel-otter')
+    const otter = screen.getByTestId('otter-mark')
     expect(hero).toContainElement(otter)
     expect(otter).toHaveAttribute('aria-hidden', 'true')
     expect(otter).toHaveAttribute('data-size', '96')
+    expect(otter).toHaveAttribute('data-variant', 'animated')
     expect(otter).toHaveClass('welcome-otter', 'welcome-seal')
     expect(otter).toHaveAttribute('title', 'kyclaw')
+    // inline SVG：首帧同步就有真实 path（不是等图片/sheet 加载的空窗）
+    const svg = otter.querySelector('svg')
+    expect(svg).toHaveAttribute('viewBox', '0 0 48 48')
+    expect(svg?.querySelectorAll('path').length ?? 0).toBeGreaterThan(10)
+    expect(otter.querySelector('img, image')).toBeNull()
     // 印章在字标左侧（DOM 里先于 h1，与竖线同属 lockup）；字标结构没被改动
     expect(otter.closest('.welcome-lockup')).not.toBeNull()
     expect(
@@ -363,27 +352,9 @@ describe('像素海獭欢迎 logo（A · 信笺报头印章）', () => {
     expect(screen.getByTestId('welcome-title').textContent).toBe('<kyclaw>')
   })
 
-  it('首挂载 wave（播 2 遍 ≈1.2s）→ float loop', async () => {
-    render(<WelcomeHero active />)
-    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'wave')
-
-    await waitFor(
-      () => expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'float'),
-      { timeout: 2200 }
-    )
-  })
-
-  it('reduced-motion：不播 wave，直接 float（静态帧由 CSS 停在 reducedFrame#0）', () => {
-    stubReducedMotion()
-    render(<WelcomeHero active />)
-
-    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'float')
-    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-reduced', 'true')
-  })
-
   it('离场：整块淡出、otter 暂停在当帧（不卸载、不挡输入框）', () => {
     const view = render(<WelcomeHero active />)
-    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-paused', 'false')
+    expect(screen.getByTestId('otter-mark')).toHaveAttribute('data-paused', 'false')
 
     view.rerender(<WelcomeHero active={false} />)
 
@@ -392,6 +363,6 @@ describe('像素海獭欢迎 logo（A · 信笺报头印章）', () => {
     expect(hero).toHaveClass('animate-fade-out')
     // 离场 ≠ 卸载：内容还在（有对象可动），只是暂停
     expect(screen.getByTestId('welcome-title')).toBeInTheDocument()
-    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-paused', 'true')
+    expect(screen.getByTestId('otter-mark')).toHaveAttribute('data-paused', 'true')
   })
 })
