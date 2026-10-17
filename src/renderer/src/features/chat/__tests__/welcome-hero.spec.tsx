@@ -9,13 +9,14 @@ import type { ThreadChatRuntime } from '@renderer/features/chat/thread-chats'
 import { createMockTransport, type MockTransport } from './mock-transport'
 
 /**
- * round 59 · 对话初始页（空会话）：品牌标题 + 输入框竖直居中。
+ * round 59 · 对话初始页（空会话）：品牌标题 + 输入框竖直居中；task-50 起为 A · 信笺报头，task-53 收口。
  *
  * 触发：当前会话消息为空、没有错误、没有待审批（草稿与空会话都算）。
  * 布局：标题 `absolute bottom-full` 挂在页脚（输入框那一格）之上、**不占布局高度** ——
  *   消息区与 welcome-spacer 等分剩余高度，输入框因此是真·竖直居中（用户实拍"偏下"的修正）。
- * 标题形态：`<kyclaw>`（尖括号强调色 / 中间主文字色）+ 英文 tagline
- *   「What needs doing, done.」（衬线 16/1.6）+ 一行中文小字「本地运行，文件不出这台机器」。
+ * 标题形态：报头 lockup（海獭印章 96 │ 竖线 │ `<kyclaw>` 56）+ 552 细线 + tagline
+ *   「What needs doing, done.」（17/1.6）；task-53 删掉了「本地运行，文件不出这台机器」小字，
+ *   并删除初始页角落的第二只海獭（一屏一只：初始页只有报头那只，进对话后只有 header 状态灯）。
  * 动效：进场淡入 + 上浮（`animate-message-in`；页脚晚 80ms 起步）；离场换 `animate-fade-out`
  *   —— 绝对定位没有高度可收合，"收过"内容仍在 DOM（不硬切、也不重挂，输入框全程可用）。
  * 有历史消息的会话（挂载时就没有初始页）压根不渲染它。
@@ -79,29 +80,57 @@ describe('空会话的初始页', () => {
 
     const title = screen.getByTestId('welcome-title')
     expect(title.textContent).toBe('<kyclaw>')
-    expect(title).toHaveClass('welcome-title') // 展示级字号（tailwind.css 的配方，跟着 UI 字号档缩放）
+    expect(title).toHaveClass('welcome-title') // 报头 display 档（welcome.css：56px，900 以下 ×0.85）
     expect(title).toHaveClass('text-ink') // 中间的品牌名用主文字色
-    // 尖括号用强调色（双色法从 claw 移到括号上，对齐 KIMI <Code>）
+    // 尖括号用强调色（双色法从 claw 移到括号上，对齐 KIMI <Code>）；A 起走衬线细尖括号声部
     const brackets = title.querySelectorAll('span')
     expect(brackets).toHaveLength(2)
     expect(brackets[0]?.textContent).toBe('<')
     expect(brackets[1]?.textContent).toBe('>')
-    for (const bracket of brackets) expect(bracket).toHaveClass('text-accent-text')
+    for (const bracket of brackets) {
+      expect(bracket).toHaveClass('text-accent-text')
+      expect(bracket).toHaveClass('welcome-bracket')
+    }
+
+    // A · 信笺（task-50）：报头 lockup = 海獭印章 96 │ 1px 竖线 │ 字标；字标下 26px 一条 552 细线
+    expect(hero.querySelector('.welcome-lockup')).not.toBeNull()
+    const seal = hero.querySelector('.welcome-seal')
+    expect(seal).not.toBeNull()
+    expect(seal).toHaveAttribute('data-size', '96')
+    expect(hero.querySelectorAll('.welcome-mark-rule')).toHaveLength(1)
+    const hair = screen.getByTestId('welcome-hair')
+    expect(hair).toHaveClass('welcome-hair')
+    expect(hair).toHaveAttribute('aria-hidden', 'true')
+    // 顺序：报头 → 细线 → tagline（细线在字标之后）
+    expect(hair.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
 
     expect(screen.getByTestId('welcome-tagline')).toHaveTextContent('What needs doing, done.')
-    // P0（章程 §9.2/D-25）：英文 tagline 走阅读声部（衬线 16/1.6）+ 次墨色
+    // A：英文 tagline 走阅读声部 17/1.6（welcome.css 覆盖 P0 的 16 档）+ 次墨色
     expect(screen.getByTestId('welcome-tagline')).toHaveClass(
       'welcome-tagline',
       'text-ink-secondary'
     )
-    // 字标下保留中文小字「本地运行，文件不出这台机器」（sans 12、三级可读档）
-    expect(screen.getByTestId('welcome-local-note')).toHaveTextContent('本地运行，文件不出这台机器')
-    expect(screen.getByTestId('welcome-local-note')).toHaveClass(
-      'text-c1',
-      'text-ink-tertiary-readable'
-    )
-    // 不多加任何小字/提示/菜单：标题块里只有字标 + 两行文案（tagline / 本地小字）
-    expect(hero.querySelectorAll('h1, p')).toHaveLength(3)
+    // task-53（用户口径「把本地运行文件不出这台机器的文字干掉」）：那一行小字整行删除
+    expect(screen.queryByTestId('welcome-local-note')).not.toBeInTheDocument()
+    expect(hero.textContent).not.toContain('本地运行')
+    // 不多加任何小字/提示/菜单：标题块里只有字标 + 一行 tagline
+    expect(hero.querySelectorAll('h1, p')).toHaveLength(2)
+
+    // A 的纸感底（点阵 + 暖光两层伪元素，可一键关）与项目行引线
+    const paper = screen.getByTestId('welcome-paper')
+    expect(paper).toHaveClass('welcome-paper')
+    expect(paper).toHaveAttribute('data-active', 'true')
+    expect(paper).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByTestId('welcome-project-rule')).toBeInTheDocument()
+
+    // task-53「一屏一只」：初始页**没有**第二只海獭（角落氛围位整块删除）；
+    // hero 里只有报头 lockup 那只（header 状态灯 DOM 仍在，但由 welcome.css 的 :has 规则隐起 ——
+    // jsdom 不应用样式，这里不把它算作可见的第二只；CSS 契约在 welcome-letterhead.spec）。
+    expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
+    expect(document.querySelector('.welcome-corner-slot')).toBeNull()
+    expect(document.querySelector('.welcome-ambient-otter')).toBeNull()
+    expect(hero.querySelectorAll('[data-testid="pixel-otter"]')).toHaveLength(1)
+    expect(hero.querySelector('.welcome-lockup [data-testid="pixel-otter"]')).not.toBeNull()
 
     // round 66：初始页「选择项目」行在卡片上方、输入卡在流内、能力行在卡片下方。
     // 2026-10-18 用户口径（"chat页面下面这一排按钮可以去掉了"）：卡片下方那排能力/PPT 胶囊
@@ -111,28 +140,6 @@ describe('空会话的初始页', () => {
     expect(screen.queryByTestId('composer-capabilities')).not.toBeInTheDocument()
     expect(screen.queryByTestId('composer-capability-row')).not.toBeInTheDocument()
     expect(screen.queryByTestId('composer-ppt-template')).not.toBeInTheDocument()
-  })
-
-  it('rev3 第四落点：初始页右上角氛围小海獭在（idle/装饰性），header 状态灯让位（一屏一只）', async () => {
-    const control = createMockTransport()
-    await renderSession(control, runtimeOf(control))
-
-    const ambient = screen.getByTestId('welcome-ambient-otter')
-    expect(ambient).toHaveAttribute('aria-hidden', 'true')
-    expect(ambient).toHaveClass('welcome-ambient-otter')
-    expect(ambient).toHaveClass('opacity-100')
-    const ambientOtter = ambient.querySelector('[data-testid="pixel-otter"]')
-    expect(ambientOtter).toHaveAttribute('data-state', 'idle')
-    expect(ambientOtter).toHaveAttribute('data-size', '32')
-    // 它不是欢迎页 logo（那只在 hero 里、class welcome-otter），也不是 header 状态灯（chat-otter）
-    expect(ambientOtter).not.toHaveClass('welcome-otter')
-    expect(ambientOtter).not.toHaveClass('chat-otter')
-
-    // 初始页期间 header 的状态灯让位（hero 时只有氛围位）；header 就绪后才出现，按判据不渲染
-    await waitFor(() => expect(screen.getByTestId('chat-header')).toBeInTheDocument())
-    expect(screen.getByTestId('chat-header').querySelector('.chat-otter')).toBeNull()
-    // 欢迎页 logo 仍在（task-41 三处保持，与氛围位是两个位置）
-    expect(screen.getByTestId('welcome-hero').querySelector('.welcome-otter')).not.toBeNull()
   })
 
   it('初始页的竖排顺序：选择项目行 → 输入卡（卡片下方不再有任何行）', async () => {
@@ -205,10 +212,11 @@ describe('空会话的初始页', () => {
     expect(screen.getByTestId('message-list')).toBeInTheDocument()
     const spacer = screen.getByTestId('welcome-spacer')
     expect(spacer).toHaveClass('grow')
-    // 2026-10-18：卡片下方那排能力/PPT 胶囊移除后 below 从 64 降到 24，上提偏移重推成
-    // mt-28（112px）：(above 56 − below 24 − 112) / 2 = −40 —— 卡片中心仍落在窗口中心上方 40px
-    // （与 round 64/65 用户看过、未再提"偏下"的位置逐像素一致；推导见 ChatPage 注释）
-    expect(spacer).toHaveClass('mt-28')
+    // 2026-10-18 A · 信笺重定基线（task-50）：mock 卡片中心 ≈478，现状实拍 ≈445（mt-28/112 时），
+    // 下移 ~33px ⇒ mt 减 ~66 ⇒ 112 − 66 = 46，取整到 16 的倍数 = mt-12（48px）
+    // （A 版 hero 绝对定位、不占布局高度，换报头/字号不改 above/below；推导见 ChatPage 注释）
+    expect(spacer).toHaveClass('mt-12')
+    expect(spacer).not.toHaveClass('mt-28')
     expect(spacer).not.toHaveClass('mt-18')
     expect(spacer).not.toHaveClass('mt-8')
     expect(spacer).toHaveClass('transition-[flex-grow,margin-top]')
@@ -228,6 +236,7 @@ describe('空会话的初始页', () => {
     const spacer = screen.getByTestId('welcome-spacer')
     expect(spacer).toHaveClass('grow-0')
     // round 64/66：常规布局不带那段上提偏移（输入框贴底、消息区占满剩余高度）
+    expect(spacer).not.toHaveClass('mt-12')
     expect(spacer).not.toHaveClass('mt-28')
     expect(spacer).not.toHaveClass('mt-18')
     // round 66（用户口径："进入到对话之后就不要显示这个「选择项目」了"）：
@@ -284,6 +293,8 @@ describe('首条消息发出：标题离场、布局落到常规', () => {
     // 选择项目 chip 跟着整行一起收着（不卸载）；输入卡照旧
     expect(screen.getByTestId('composer-project')).toBeInTheDocument()
     expect(screen.getByTestId('composer')).toBeInTheDocument()
+    // A 纸感底：hero 离场后只淡出（DOM 保留、data-active=false），不残留可见纹理
+    expect(screen.getByTestId('welcome-paper')).toHaveAttribute('data-active', 'false')
     // 消息正常渲染
     expect(screen.getByTestId('message-list')).toHaveTextContent('第一个问题')
     expect(control.requests).toHaveLength(1)
@@ -300,21 +311,16 @@ describe('首条消息发出：标题离场、布局落到常规', () => {
     expect(screen.getByTestId('message-list')).toHaveTextContent('第二个问题')
     expect(screen.getByTestId('welcome-hero')).toHaveAttribute('data-active', 'false')
 
-    // rev3（task-49）：氛围位离场 —— 150ms 淡出后卸载；header 状态灯接棒（一屏一只，不重复）
-    await waitFor(
-      () => expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument(),
-      { timeout: 1500 }
-    )
-    await waitFor(() =>
-      expect(screen.getByTestId('chat-header').querySelector('.chat-otter')).not.toBeNull()
-    )
+    // task-53「一屏一只」：初始页那只角落海獭已不存在（没有第二只可离场）；
+    // 进对话后唯一的海獭是 ChatHeader 状态灯（hero 离场后由 :has 规则自然露出，DOM 一直都在）。
+    expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('welcome-local-note')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-header').querySelector('.chat-otter')).not.toBeNull()
   })
 })
 
 /**
- * 像素海獭欢迎 logo（2026-10-18 v1 / 设计稿 §5.3 / D-32）：
- * 字标上方 16px（mb-4）、128 档（<1280 由 CSS 降 96）、首挂载 wave 播 2 遍 → float loop、
- * reduced-motion 直接 float 静态帧、离场暂停但随整块淡出（不重挂、不挡输入框）。
+ * 像素海獭欢迎 logo（A · 信笺报头印章）：
  */
 function stubReducedMotion(): void {
   vi.stubGlobal(
@@ -332,18 +338,19 @@ function stubReducedMotion(): void {
   )
 }
 
-describe('像素海獭欢迎 logo（v1）', () => {
-  it('字标上方：128 档 + aria-hidden + 装饰性，不动 <kyclaw> 结构', () => {
+describe('像素海獭欢迎 logo（A · 信笺报头印章）', () => {
+  it('报头左侧印章：96 档 + aria-hidden + 装饰性，不动 <kyclaw> 结构', () => {
     render(<WelcomeHero active />)
 
     const hero = screen.getByTestId('welcome-hero')
     const otter = screen.getByTestId('pixel-otter')
     expect(hero).toContainElement(otter)
     expect(otter).toHaveAttribute('aria-hidden', 'true')
-    expect(otter).toHaveAttribute('data-size', '128')
-    expect(otter).toHaveClass('welcome-otter')
+    expect(otter).toHaveAttribute('data-size', '96')
+    expect(otter).toHaveClass('welcome-otter', 'welcome-seal')
     expect(otter).toHaveAttribute('title', 'kyclaw')
-    // otter 在字标上方（DOM 里先于 h1）；字标结构没被改动
+    // 印章在字标左侧（DOM 里先于 h1，与竖线同属 lockup）；字标结构没被改动
+    expect(otter.closest('.welcome-lockup')).not.toBeNull()
     expect(
       otter.compareDocumentPosition(screen.getByTestId('welcome-title')) &
         Node.DOCUMENT_POSITION_FOLLOWING

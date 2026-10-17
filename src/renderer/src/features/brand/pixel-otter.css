@@ -126,39 +126,3 @@
     display: none;
   }
 }
-
-/* ── 初始页右上角氛围小海獭（rev3 第四落点，task-49）──────────────────────────────
-   绝对定位相对「chat 页内容层」（顶部栏之下）。right 用 --content-max-width 折算到**内容列右缘**
-   （宽窗内容列 800 居中，不能钉在页面右缘），内缩 12px；<900 内缩 8 且尺寸 32→24；
-   <720 整个隐藏（空间不够时优先保证文案）。pointer-events:none / aria-hidden 由组件给。 */
-.welcome-ambient-otter {
-  position: absolute;
-  top: 12px;
-  right: calc(max(0px, (100% - var(--content-max-width, 800px)) / 2) + 12px);
-  z-index: 1;
-  pointer-events: none;
-  transition: opacity var(--motion-reveal, 150ms) var(--motion-ease-glide, ease-out);
-}
-
-@media (max-width: 899px) {
-  .welcome-ambient-otter {
-    top: 8px;
-    right: calc(max(0px, (100% - var(--content-max-width, 800px)) / 2) + 8px);
-  }
-
-  .welcome-ambient-otter .pixel-otter {
-    --otter-size: 24px !important;
-  }
-}
-
-@media (max-width: 719px) {
-  .welcome-ambient-otter {
-    display: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .welcome-ambient-otter {
-    transition: none;
-  }
-}

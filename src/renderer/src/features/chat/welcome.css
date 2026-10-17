@@ -1,0 +1,192 @@
+/**
+ * 初始页 A · 信笺（task-50；task-53 收口）。
+ *
+ * 只服务初始页 hero 与它周边（纸感背景 / 报头 lockup / 项目行引线）。
+ * 不改 token 层：颜色/边框/动效全部读现有 `--k-*` / 语义 token 与 motion 角色档；
+ * 唯一新字号 `--text-welcome-size`（56px，900 以下 ×0.85）是本文件的局部变量，
+ * 将来若升成全局 display 档再迁 semantic。
+ *
+ * 纸感是**有意的、可一键关闭的例外**（章程 §4.4 红线⑤的豁免，见 MOCKS.md §2.4）：
+ * 两个伪元素各管一层 —— 点阵（中心亮、四周收的 radial 蒙版）与暖光；
+ * 把 `--welcome-texture` / `--welcome-glow` 置 `none` 就完全退回纯底色，版式不依赖它们。
+ * 强调色用量压在 6%（浅）/ 8.5%（深）以内，不做暗角/网格/ASCII/背景动画。
+ */
+
+/* ── 1. 纸感背景（task-53 收口）：中心亮点阵 + 暖光 ────────────────────────────
+   点阵：18px 一格、1px 的点；用 radial 蒙版做成「报头周围亮、越往边缘越淡」——
+   不铺满全屏的点，只在视线中心附近透气。暖光 640×430、浅 6% / 深 8.5% accent。
+   两层分别由 --welcome-texture / --welcome-glow 控制（--welcome-fade 管点阵的可见范围），
+   任何一个置 none 都能单独/整体关掉。纯静态；900/720 不溢出（父层 overflow:hidden）。 */
+.welcome-paper {
+  position: absolute;
+  inset: 0;
+  /* 垫底：挂在 chat 内容层（ChatPage 给该层 `isolate` 建局部层叠上下文）里，z-index:-1 只压到
+     内容层背景之上、所有正文/输入卡之下 —— 不靠给正文加 z-index 来抢层。 */
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  /* 与 hero 的淡入/淡出同拍（不是背景动画，只是整层随欢迎态显隐） */
+  transition: opacity var(--motion-reveal, 150ms) var(--motion-ease-glide, ease-out);
+  /* 一键关：把 --welcome-texture / --welcome-glow 改成 none 即可（版式/文字全部不受影响） */
+  --welcome-texture: radial-gradient(
+    circle 1px at 1px 1px,
+    rgba(20, 20, 19, 0.085),
+    rgba(20, 20, 19, 0) 1.4px
+  );
+  /* 点阵的可见范围：中心亮 → 55% 起衰减 → 88% 完全透明（只在报头周围看得见点） */
+  --welcome-fade: radial-gradient(
+    ellipse 58% 46% at 50% 30%,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.45) 55%,
+    rgba(0, 0, 0, 0) 88%
+  );
+  --welcome-glow: radial-gradient(
+    closest-side,
+    rgba(217, 119, 87, 0.06),
+    rgba(217, 119, 87, 0) 72%
+  );
+}
+
+.welcome-paper[data-active='true'] {
+  opacity: 1;
+}
+
+/* 点阵层：radial 蒙版收边缘（中心亮、四周淡）；蒙版也走变量，方便换中心点 */
+.welcome-paper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--welcome-texture);
+  background-size: 18px 18px;
+  mask-image: var(--welcome-fade);
+  -webkit-mask-image: var(--welcome-fade);
+}
+
+/* 暖光层：只落在报头附近，边缘完全透明；窄窗收在 92% 以内防溢出 */
+.welcome-paper::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 60px;
+  width: 640px;
+  max-width: 92%;
+  height: 430px;
+  transform: translateX(-50%);
+  background-image: var(--welcome-glow);
+}
+
+/* 深色各调一档：点用亮墨（白点 .10，与暗色「边=高光」同一逻辑）、暖光略抬到 8.5% */
+:root[data-theme='dark'] .welcome-paper {
+  --welcome-texture: radial-gradient(
+    circle 1px at 1px 1px,
+    rgba(250, 249, 245, 0.1),
+    rgba(250, 249, 245, 0) 1.4px
+  );
+  --welcome-glow: radial-gradient(
+    closest-side,
+    rgba(217, 119, 87, 0.085),
+    rgba(217, 119, 87, 0) 72%
+  );
+}
+
+/* ── 2. 报头 lockup：海獭印章（96）+ 1px 竖线 + 字标 56 ───────────────────────── */
+.welcome-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+}
+
+/* 像素图的光学重心比几何中心略偏下偏右：印章整体往上/往左 3–8px 才和字标对齐 */
+.welcome-seal {
+  transform: translate(-3px, -8px);
+}
+
+.welcome-mark-rule {
+  flex: none;
+  width: 1px;
+  height: 54px;
+  background: var(--border-hairline);
+}
+
+/* 字标 56 是本页的 display 档（A 的唯一新字号）；900 以下 ×0.85，行高 1 让细线与它贴齐 */
+.welcome-title {
+  --text-welcome-size: 56px;
+  font-size: var(--text-welcome-size);
+  line-height: 1;
+  letter-spacing: -0.028em;
+  white-space: nowrap;
+}
+
+/* 尖括号用衬线的细尖括号（weight 400），与 600 的字干形成声部内对比 */
+.welcome-title .welcome-bracket {
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 900px) {
+  .welcome-title {
+    font-size: calc(var(--text-welcome-size) * 0.85);
+  }
+}
+
+/* ── 3. 报头下的细线 / tagline ─────────────────────────────────────────────────
+   节奏（A mock）：报头 → 26 → 细线 → 18 → tagline；task-53 删掉「本地运行…」小字后
+   到 tagline 收尾，不再有 8px 的第三段（也不留孤零零的大空）。 */
+.welcome-hair {
+  width: 552px;
+  max-width: calc(100% - 32px);
+  height: 1px;
+  margin: 26px auto 0;
+  background: var(--border-hairline);
+  transform-origin: center;
+  /* 唯一的额外动效：线从中间向两边展开（320ms 一次；reduced-motion 直接终态） */
+  animation: welcome-hair-in var(--motion-enter, 320ms) var(--motion-ease-glide, ease-out) both;
+}
+
+@keyframes welcome-hair-in {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.welcome-tagline {
+  margin: 18px 0 0;
+  font-size: 17px;
+  line-height: 1.6;
+  letter-spacing: 0.002em;
+}
+
+/* ── 4. 项目行引线（「收件人行」）：行尾一根 1px l1 拉满剩余宽度 ───────────────── */
+.welcome-project-rule {
+  flex: 1;
+  height: 1px;
+  margin-left: 7px;
+  background: var(--border-field);
+}
+
+/* ── 5. 一屏一只（task-53）：初始页 hero 活跃时，ChatHeader 的状态灯隐起 ────────
+   初始页只有报头 lockup 那只海獭；进对话（hero data-active=false）后状态灯自然露出。
+   纯 CSS 判定（`:has`），不再有 JS presence 让位逻辑；hero 是 chat-page 的后代，选择器稳定。 */
+[data-testid='chat-page']:has([data-testid='welcome-hero'][data-active='true'])
+  [data-testid='chat-header']
+  .chat-otter {
+  display: none;
+}
+
+/* ── 6. reduced-motion：细线/纸感全部静态（不新增 animate-none） ───────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .welcome-paper {
+    transition: none;
+  }
+
+  .welcome-hair {
+    animation: none;
+    transform: none;
+  }
+}

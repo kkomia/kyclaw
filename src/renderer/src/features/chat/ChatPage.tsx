@@ -50,7 +50,6 @@ import { hasPendingAskUser, chatStreamActive } from './ask-user'
 import { askUserResumeBody } from '@renderer/lib/ask-user-api'
 import { askUserAcceptedMetadata } from '@renderer/lib/agent'
 import { mapStoredMessages } from '@renderer/lib/message-map'
-import { WelcomeAmbientOtter } from '@renderer/features/brand/WelcomeAmbientOtter'
 import { ChatHeader } from './ChatHeader'
 import type { ChatView } from './ChatHeader'
 import { CollapsibleRow } from './CollapsibleRow'
@@ -156,7 +155,10 @@ function ChatFrame({
       {header === undefined ? null : (
         <div className="ml-(--content-safe-left) shrink-0">{header}</div>
       )}
-      <div className="[position:relative] flex min-h-0 flex-1 flex-col">
+      {/* `isolate`（task-50）：给 A 的纸感层（.welcome-paper，z-index:-1）一个**局部层叠上下文** ——
+          纸感只落在 chat 内容层内、垫在所有内容之下，不会跑到壳/内容卡背景后面。
+          刻意仍不写 `.relative` 类：消息导览轨按 `closest('.relative')` 认整幅 chat 页根。 */}
+      <div className="[position:relative] isolate flex min-h-0 flex-1 flex-col">
         {/* 这一层是**覆盖层的定位基准**（与限宽列同级、比 chat-page 少一条顶部栏）。
             它刻意**不写 `.relative` 这个类**、而是用等价的 `[position:relative]`：对话页的
             消息导览轨按 `closest('.relative')` 认"整幅 chat 页根"（round 21 的既定口径），
@@ -1404,17 +1406,26 @@ function ActiveChat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* rev3 第四落点（task-49）：初始页右上角氛围小海獭 —— 只在 hero 时渲染，首条消息发出后
-          150ms 淡出再卸载（不硬切）；绝对定位/内缩/尺寸由 `.welcome-ambient-otter` 负责，不参与布局。
-          它和 ChatHeader 的状态灯互斥（hero 时只有它；进对话后只有 header 状态灯），见 ChatHeader。 */}
-      <WelcomeAmbientOtter active={hero} />
+      {/* A · 信笺（task-50；task-53 收口）：内容区极淡纸感 —— 点阵（中心亮、四周收）
+          + 640×430 暖光，两层两个伪元素；铺满 chat 内容层、`pointer-events:none`、z-index:-1
+          （靠上一层 `isolate` 垫底，永不压正文）。hero 时 data-active=true 淡入，进对话后只淡出
+          （DOM 保留，两个伪元素没有成本）。一键关：welcome.css 的 `--welcome-texture/--welcome-glow` 置 none。
+          task-53 已移除初始页角落的第二只海獭：一屏一只，初始页只有报头 lockup 那只、
+          进对话后只有 ChatHeader 状态灯（hero 时 header 灯由 welcome.css 的 :has 规则隐起）。 */}
+      <div
+        data-testid="welcome-paper"
+        data-active={hero ? 'true' : 'false'}
+        aria-hidden="true"
+        className="welcome-paper"
+      />
       {/* 消息区：常规布局里占满剩余高度；初始页里消息为空，它只是上半格的弹性占位。
           **必须自带 flex 列身份**（round 59 用户实拍回归）：MessageList 的 frame 是
           `flex min-h-0 flex-1 flex-col`，包在块级父级里 flex-1 不生效、滚动区不受高度约束，
           消息内容会溢到页脚（输入框）下面。
           round 27：对话顶部栏已外提到 ChatFrame 的 header 带（脱离限宽列）——这里只剩内容列
           round 76：就绪之前这一格画占位/错误卡（PendingNotice），**页脚那一格照常挂着** ——
-          输入卡因此从第一帧就在，载入过程中也能聚焦、能打字。 */}
+          输入卡因此从第一帧就在，载入过程中也能聚焦、能打字。
+          task-50：A 的纸感层用 z-index:-1 + 上一层 `isolate`，本格保持原样 —— 消息永远压不住也压不到纸感。 */}
       <div className="flex min-h-0 flex-1 flex-col">
         {pending === null ? (
           <MessageList
@@ -1621,6 +1632,13 @@ function ActiveChat({
             className="mx-auto mb-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
           >
             <ProjectChip threadId={threadId} />
+            {/* A · 信笺：行尾一根 1px 引线（l1）拉满剩余宽度，把这一行做成「收件人行」；
+                纯装饰，进对话随整行一起收合。 */}
+            <span
+              data-testid="welcome-project-rule"
+              aria-hidden="true"
+              className="welcome-project-rule"
+            />
           </CollapsibleRow>
           {/* 就绪之前：`threadId` 给 null（会话级控件——权限 chip、@ 文件、上下文环——在那一刻
               没有可动的对象，与其拿占位 id 去问服务端要个 404，不如先不出现），发送被 `pending` 挡住。 */}
@@ -1658,21 +1676,23 @@ function ActiveChat({
           输入框平滑落到常规底部，不硬切。
           round 64 修正（用户实拍"对话框有些偏下，居中一点好"）：等分只让**页脚**居中，页脚里卡片
           上下还有别的件，卡片的实际中心并不在窗口中心上。
-          round 66 推导 + 2026-10-18 重算（卡片下方那排能力/PPT 胶囊整行移除后）：
+          结构关系（round 66 推导，仍然成立）：
             记 above = 卡上方那段（pt-4 16 + 选择行 8+32 = 56）
                below = 卡下方那段（现在只剩 pb-6 24）
-            自由高度在「消息区」与「本占位」之间等分，于是
+             自由高度在「消息区」与「本占位」之间等分，于是
               卡片中心 − 窗口中心 = (above − below − mt) / 2     ← 卡片高度在两边约掉，与它无关
-            要保持卡片中心在窗口中心上方 40px（round 64/65 用户看过、未再提"偏下"的位置）：
-              (56 − 24 − mt) / 2 = −40 ⇒ mt = 112px = **mt-28（临时值）**
-            将来「选择项目」行收进卡片后：above 回到 16、below 仍是 24 ⇒ mt = 72px = **mt-18**
-            （那一步落地时恢复 mt-18，两处注释一起改）。margin 与 flex-grow 一起过渡，
+          2026-10-18 A · 信笺重定基线（task-50）：mock 里卡片中心 ≈478，现状实拍 ≈445（mt-28/112 时），
+            要下移 ~33px ⇒ mt 减 ~66 ⇒ 112 − 66 = 46，取整到 16 的倍数 = **mt-12（48px）**。
+            公式代数是"等分参考点"的相对量（真实窗口还含顶栏等偏移），以真机实拍为准；
+            A 版 hero 是绝对定位、不占布局高度，所以换报头/换字号**不会**改这里的 above/below。
+            将来若把「选择项目」行收进卡片，above 会变 16，必须按当时实拍重测（早前
+            "收进卡片后恢复 mt-18"的口径随 A 重定基线作废）。margin 与 flex-grow 一起过渡，
             首条消息到达时与占位收合同步落回（不硬切）。要再上提/下移，旋钮就是这条 mt。 */}
       <div
         data-testid="welcome-spacer"
         className={cn(
           'h-0 basis-0 transition-[flex-grow,margin-top] duration-(--motion-main) ease-main motion-reduce:transition-none',
-          hero ? 'grow mt-28' : 'grow-0'
+          hero ? 'grow mt-12' : 'grow-0'
         )}
       />
     </div>

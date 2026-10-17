@@ -222,9 +222,9 @@ describe('历史回灌之前：输入卡就在，发送挡着', () => {
     await waitFor(() => {
       expect(screen.getByTestId('welcome-hero')).toHaveAttribute('data-active', 'true')
     })
-    // 落位：标题进场、占位撑开、选择项目行展开（2026-10-18 起卡片下方的能力/PPT 行已整行移除，
-    // 初始页只剩「选择项目」这一行卡外控件，因此 mt 重算为 112px = mt-28）
-    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow', 'mt-28')
+    // 落位：标题进场、占位撑开、选择项目行展开（2026-10-18 A · 信笺重定基线，
+    // 卡片中心下移到 mock 的 ≈478 ⇒ mt-28/112 收到 mt-12/48；推导见 ChatPage 注释）
+    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow', 'mt-12')
     expect(screen.getByTestId('composer-project-row-collapse')).toHaveAttribute(
       'data-active',
       'true'

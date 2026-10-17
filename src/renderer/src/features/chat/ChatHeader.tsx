@@ -4,7 +4,6 @@ import { Segmented } from '@renderer/components/ui/segmented'
 import { PixelOtter } from '@renderer/features/brand/PixelOtter'
 import { CHAT_MASCOT_STATE } from '@renderer/features/brand/otter-states'
 import { useChatMascotState } from '@renderer/features/brand/chat-mascot-state'
-import { useWelcomeHeroVisible } from '@renderer/features/brand/welcome-presence'
 import { SessionActionsMenu } from '@renderer/features/sessions/SessionActionsMenu'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 
@@ -31,10 +30,12 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
  * 状态由 `features/brand/chat-mascot-state` 从 run-store + 工具卡 DOM 推导（ChatPage 不在本任务写域），
  * 本轮结束后 1.2s 回 idle。它不是第二个 logo，是"这一轮在干嘛"的状态灯。
  *
- * 2026-10-18 rev3（task-49）：**初始页（hero）在场时这一枚让位给右上角的氛围小海獭**——
- * 同一位置不能一屏两只（用户口径：hero 时只有氛围位，进对话后只有 header 状态灯）。
- * 判据是 DOM 里欢迎页的 `data-active` 事实（`useWelcomeHeroVisible`，ChatPage 内部状态不传 prop）；
- * 英雄离场后状态灯自动接棒，不重挂 header。
+ * 2026-10-18 task-53（用户：「chat页面同时出现了俩海獭」→ 一屏一只）：
+ *   - 初始页**只剩报头 lockup 里那只**（角落氛围位已删除，WelcomeAmbientOtter/presence 已删）；
+ *   - 本组件照常渲染状态灯，但初始页（hero 活跃）时由 `welcome.css` 的 `:has` 规则
+ *     把它 CSS 隐起（`[data-testid="chat-page"]:has([data-testid="welcome-hero"][data-active="true"])
+ *     [data-testid="chat-header"] .chat-otter { display:none }`）—— 英雄离场后状态灯自然露出；
+ *   - 纯 CSS 判定、无 JS presence，也不在 header 里读欢迎页状态。
  */
 export type ChatView = 'chat' | 'trajectory'
 
@@ -56,8 +57,6 @@ export function ChatHeader({ threadId, view, onViewChange }: ChatHeaderProps): R
   const [error, setError] = useState<string | null>(null)
   // 像素海獭状态灯（24/32，idle/think/type）；窗口 <720 由 CSS 隐藏
   const mascotState = useChatMascotState(threadId)
-  // 初始页在场时让位给右上角的氛围小海獭（一屏一只；hero 结束自动接棒）
-  const welcomeActive = useWelcomeHeroVisible()
 
   return (
     <>
@@ -87,15 +86,14 @@ export function ChatHeader({ threadId, view, onViewChange }: ChatHeaderProps): R
         </div>
         {/* 状态灯：装在这里而不是 new row —— 与 segmented 同一行、间距 8（header 的 gap-2），
             不改变左侧标题对齐；纯装饰（aria-hidden/pointer-events:none），title 只做 hover 提示。
-            rev3：初始页（hero 在场）时**整个不渲染**，让位给右上角氛围位（一屏一只）。 */}
-        {welcomeActive ? null : (
-          <PixelOtter
-            state={CHAT_MASCOT_STATE[mascotState]}
-            size={32}
-            title="kyclaw"
-            className="chat-otter"
-          />
-        )}
+            task-53：初始页（hero 活跃）时由 welcome.css 的 :has 规则隐起（一屏一只，初始页只有报头海獭）；
+            DOM 上照常渲染，hero 离场后自然露出，无 JS 让位逻辑。 */}
+        <PixelOtter
+          state={CHAT_MASCOT_STATE[mascotState]}
+          size={32}
+          title="kyclaw"
+          className="chat-otter"
+        />
         {/* 对话 / 轨迹：固定在头部右侧，避开工作台按钮走廊；标题占剩余空间并可收缩。 */}
         {view === undefined || onViewChange === undefined ? null : (
           <Segmented

@@ -79,8 +79,6 @@ beforeEach(() => {
 afterEach(() => {
   clearKyclawBridge()
   resetThreadRunStore()
-  // 状态灯让位用例会伪造「欢迎页在场」的 DOM 事实：每个用例后清干净
-  for (const node of document.querySelectorAll('[data-testid="welcome-hero"]')) node.remove()
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
 })
 
@@ -251,23 +249,7 @@ describe('ChatHeader · 像素海獭状态灯（v1）', () => {
     )
   })
 
-  it('初始页（hero 在场）状态灯让位给右上角氛围位：hero 时不渲染、离场后接棒（一屏一只）', async () => {
-    mount()
-    expect(screen.getByTestId('pixel-otter')).toBeInTheDocument()
-
-    // 欢迎页在场（其它 spec 的 DOM 事实；ChatPage 不传 prop，靠这个判据让位）
-    const hero = document.createElement('div')
-    hero.setAttribute('data-testid', 'welcome-hero')
-    hero.setAttribute('data-active', 'true')
-    act(() => {
-      document.body.appendChild(hero)
-    })
-    await waitFor(() => expect(screen.queryByTestId('pixel-otter')).not.toBeInTheDocument())
-
-    // 首条消息发出：欢迎页离场（data-active=false）→ header 状态灯立刻回来
-    act(() => {
-      hero.setAttribute('data-active', 'false')
-    })
-    await waitFor(() => expect(screen.getByTestId('pixel-otter')).toBeInTheDocument())
-  })
+  // task-53：初始页一屏一只改由 **CSS** 判定（welcome.css 的 :has 规则把 hero 期间的状态灯隐起），
+  // 不再有 JS presence 让位逻辑 —— 对应的 DOM 行为契约在 welcome-letterhead.spec 里对 CSS 文件断言；
+  // 本组件永远渲染状态灯（hero 离场后自然露出）。
 })
