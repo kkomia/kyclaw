@@ -1011,7 +1011,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
           type="button"
           data-testid="composer-model"
           disabled={pending}
-          className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+          className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
         >
           <span className="truncate">{triggerLabel}</span>
         </button>
@@ -1095,7 +1095,10 @@ function QuoteCard({
           </span>
           <span className="min-w-0 truncate text-ink">{label}</span>
           {attachment.lines === undefined ? null : (
-            <span data-testid="composer-quote-lines" className="shrink-0 text-ink-tertiary">
+            <span
+              data-testid="composer-quote-lines"
+              className="shrink-0 font-mono text-ink-tertiary tabular-nums"
+            >
               第 {attachment.lines.start}–{attachment.lines.end} 行
             </span>
           )}
@@ -1128,7 +1131,7 @@ function QuoteCard({
               )}
             />
           </button>
-          <span data-testid="composer-quote-count" className="shrink-0">
+          <span data-testid="composer-quote-count" className="shrink-0 font-mono tabular-nums">
             共 {[...text].length} 字
           </span>
           <span
@@ -1217,13 +1220,15 @@ export function PendingChips({
             <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
             <span className="min-w-0 truncate">{attachment.name}</span>
             {attachment.pdf === undefined ? null : (
-              <span className="shrink-0 text-ink-tertiary">
+              <span className="shrink-0 font-mono text-ink-tertiary tabular-nums">
                 {attachment.pdf.truncated
                   ? `${attachment.pdf.pages} 页（已截断）`
                   : `${attachment.pdf.pages} 页`}
               </span>
             )}
-            <span className="shrink-0 text-ink-tertiary">{formatBytes(attachment.size)}</span>
+            <span className="shrink-0 font-mono text-ink-tertiary tabular-nums">
+              {formatBytes(attachment.size)}
+            </span>
             <button
               type="button"
               aria-label={`移除 ${attachment.name}`}

@@ -341,8 +341,9 @@ export function TextPart({
     <CitationHintsContext.Provider value={sources}>
       <div
         data-testid="message-text"
+        data-font-role="reading"
         data-streaming={live ? 'true' : undefined}
-        className="markdown-body"
+        className="markdown-body font-serif"
       >
         {live ? (
           <StreamingMarkdown text={shown} tables={withTables} />

@@ -556,7 +556,8 @@ export function Message({
       sentAt === null ? null : (
         <span
           data-testid="message-sent-at"
-          className="shrink-0 whitespace-nowrap text-c1 text-ink-tertiary opacity-0 transition-opacity duration-(--motion-fast) ease-main group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
+          data-font-role="code"
+          className="shrink-0 font-mono whitespace-nowrap text-c1 text-ink-tertiary tabular-nums opacity-0 transition-opacity duration-(--motion-fast) ease-main group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none"
         >
           {sentAtLabel(sentAt)}
         </span>
@@ -568,7 +569,11 @@ export function Message({
         {...(sentAt === null ? {} : { tabIndex: 0 })}
       >
         {bodyText === '' && visible ? null : (
-          <div className="max-w-[85%] rounded-panel bg-secondary px-4 py-2 text-b1 break-words whitespace-pre-wrap text-ink">
+          <div
+            data-testid="message-bubble"
+            data-font-role="ui"
+            className="max-w-[65%] rounded-[12px] rounded-br-[4px] bg-(--bg-bubble) px-4 py-2 font-sans text-b2 break-words whitespace-pre-wrap text-ink"
+          >
             {/* 引用标记画成内联 chip（round 14 起；round 21 换图3 观感：细描边圆角 + 图标，
                 `【引用】` 前缀不进可见层）。底层消息文本不变——编辑重发仍是原文；
                 0.1.3 / 006：只画**看得见的那部分**（附件追加段经核验后被扣掉，见上面的 display）。 */}
@@ -820,63 +825,75 @@ export function Message({
         className="animate-message-in group flex flex-col gap-2 focus:outline-none"
         onContextMenu={onQuoteSelection === undefined ? undefined : handleSelectionMenu}
       >
-        {chunks.map((chunk, chunkIndex) => {
-          if (chunk.kind === 'text') {
-            return (
-              <TextPart
-                key={`text-${chunk.index}`}
-                text={chunk.part.text}
-                streaming={streaming && chunk.index === lastIndex}
-                knownSources={knownSources}
-              />
-            )
-          }
-          const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
-          if (toolCount === 0) {
-            // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块。
-            // `live` 传的是"这一轮还在跑"而不是这一条自己的 `streaming`：正文刚开个头（SSE 先落一枚
-            // 空 text part）时最后可渲染的已经不是这段思考了，`streaming` 早就翻假 —— 光看它会在
-            // 正文还没写出一个字的时候就把思考收掉。真收的时机由 `settled`（后面有**看得见的内容**）管。
-            // 手动开合走受控（overrides/onToggle）：工具到达把这一块换成过程块时整棵重挂，
-            // 本地 state 会丢，选择得存在这一层才不会被自动折叠再压回去。
-            return chunk.entries.map((entry) => {
-              const text = reasoningTextOf(entry.part)
-              const ordinal = reasoningOrdinals.get(entry.index)
-              if (text === null || ordinal === undefined) return null
+        {/*
+          P1a · 阅读车道（章程 §9.2 Must#2 / 标志性细节）：
+          AI 回复整体进叙事声部 —— 44em 行宽 + 左侧 1px 暖灰页边线 + 18px 缩进。
+          `max-width` 用 prose-measure + 18px：扣掉缩进后正文行宽仍是 44em。
+          lane 包住正文/思考/工具记录/交付卡；来源面板与动作行留在右侧（操作区）。
+        */}
+        <div
+          data-testid="message-reading-lane"
+          data-font-role="reading"
+          className="flex max-w-[calc(var(--prose-measure)+18px)] flex-col gap-2 border-l border-(--hairline-soft) pl-[18px]"
+        >
+          {chunks.map((chunk, chunkIndex) => {
+            if (chunk.kind === 'text') {
               return (
-                <ReasoningPart
-                  key={`reasoning-${entry.index}`}
-                  text={text}
-                  streaming={entry.streaming}
-                  live={streaming}
-                  settled={entry.settled}
-                  override={reasoningOverrideAt(ordinal, text)}
-                  onToggle={(nextOpen) => rememberReasoningChoice(ordinal, text, nextOpen)}
+                <TextPart
+                  key={`text-${chunk.index}`}
+                  text={chunk.part.text}
+                  streaming={streaming && chunk.index === lastIndex}
+                  knownSources={knownSources}
                 />
               )
-            })
-          }
-          return (
-            <TraceBlock
-              key={`process-${chunkIndex}`}
-              entries={chunk.entries}
-              running={streaming}
-              overrides={reasoningOverrides}
-              reasoningOrdinals={reasoningOrdinals}
-              onReasoningToggle={rememberReasoningChoice}
-            />
-          )
-        })}
-        {/* 整轮最终交付区（0.1.3 / 014）：所有交付卡统一收在这里，不随 deliver 在 part 流里的位置走。
+            }
+            const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
+            if (toolCount === 0) {
+              // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块。
+              // `live` 传的是"这一轮还在跑"而不是这一条自己的 `streaming`：正文刚开个头（SSE 先落一枚
+              // 空 text part）时最后可渲染的已经不是这段思考了，`streaming` 早就翻假 —— 光看它会在
+              // 正文还没写出一个字的时候就把思考收掉。真收的时机由 `settled`（后面有**看得见的内容**）管。
+              // 手动开合走受控（overrides/onToggle）：工具到达把这一块换成过程块时整棵重挂，
+              // 本地 state 会丢，选择得存在这一层才不会被自动折叠再压回去。
+              return chunk.entries.map((entry) => {
+                const text = reasoningTextOf(entry.part)
+                const ordinal = reasoningOrdinals.get(entry.index)
+                if (text === null || ordinal === undefined) return null
+                return (
+                  <ReasoningPart
+                    key={`reasoning-${entry.index}`}
+                    text={text}
+                    streaming={entry.streaming}
+                    live={streaming}
+                    settled={entry.settled}
+                    override={reasoningOverrideAt(ordinal, text)}
+                    onToggle={(nextOpen) => rememberReasoningChoice(ordinal, text, nextOpen)}
+                  />
+                )
+              })
+            }
+            return (
+              <TraceBlock
+                key={`process-${chunkIndex}`}
+                entries={chunk.entries}
+                running={streaming}
+                overrides={reasoningOverrides}
+                reasoningOrdinals={reasoningOrdinals}
+                onReasoningToggle={rememberReasoningChoice}
+              />
+            )
+          })}
+          {/* 整轮最终交付区（0.1.3 / 014）：所有交付卡统一收在这里，不随 deliver 在 part 流里的位置走。
             流式中已经出结果的卡也当场落在这里，后续工具 / 正文不会把它挤回中间。 */}
-        {cards.length === 0 ? null : (
-          <div data-testid="message-deliverables" className="flex flex-col gap-2">
-            {cards.map((deliverable, index) => (
-              // 同路径可以是两个独立调用（多工作区同名）：key 不能只取 path
-              <DeliverableCard key={`${deliverable.path}-${index}`} deliverable={deliverable} />
-            ))}
-          </div>
-        )}
+          {cards.length === 0 ? null : (
+            <div data-testid="message-deliverables" className="flex flex-col gap-2">
+              {cards.map((deliverable, index) => (
+                // 同路径可以是两个独立调用（多工作区同名）：key 不能只取 path
+                <DeliverableCard key={`${deliverable.path}-${index}`} deliverable={deliverable} />
+              ))}
+            </div>
+          )}
+        </div>
         {/* 网页引用的来源展开列表（0.1.3 返工）：入口在动作行；列表留在消息末尾、
             交付卡之后，不在正文后面重复一枚入口。流式期间 sources 为空，整段不出现。 */}
         {sources.length === 0 ? null : (

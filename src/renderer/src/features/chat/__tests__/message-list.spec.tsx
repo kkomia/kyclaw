@@ -202,3 +202,43 @@ describe('流式逐段呈现（mock transport）', () => {
     expect(screen.queryByTestId('composer-stop')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * P1a · 三声部落点（章程 §2 / §9.2）：
+ * AI 回复进「阅读车道」（衬线 markdown + 44em + 左侧 1px 页边线 + 18px 缩进），
+ * 用户消息是右侧便条（UI 声部 14、气泡底、12/4 圆角、65% 上限）。
+ */
+describe('消息声部（P1a）', () => {
+  it('AI 回复：阅读车道 + markdown 阅读声部', () => {
+    render(<MessageList messages={[assistantWith('**结论**：先跑测试。')]} status="ready" />)
+
+    const lane = screen.getByTestId('message-reading-lane')
+    expect(lane).toHaveAttribute('data-font-role', 'reading')
+    expect(lane).toHaveClass('border-l', 'pl-[18px]', 'max-w-[calc(var(--prose-measure)+18px)]')
+
+    const text = screen.getByTestId('message-text')
+    expect(text).toHaveAttribute('data-font-role', 'reading')
+    expect(text).toHaveClass('markdown-body', 'font-serif')
+  })
+
+  it('用户消息：右侧便条（UI 声部、气泡底、12/4 圆角、65% 上限），不带阅读页边线', () => {
+    render(
+      <MessageList
+        messages={[{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '重复一遍' }] }]}
+        status="ready"
+      />
+    )
+
+    const bubble = screen.getByTestId('message-bubble')
+    expect(bubble).toHaveAttribute('data-font-role', 'ui')
+    expect(bubble).toHaveClass(
+      'bg-(--bg-bubble)',
+      'font-sans',
+      'text-b2',
+      'rounded-[12px]',
+      'rounded-br-[4px]',
+      'max-w-[65%]'
+    )
+    expect(screen.queryByTestId('message-reading-lane')).not.toBeInTheDocument()
+  })
+})

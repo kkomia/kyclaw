@@ -270,7 +270,9 @@ export function MessageRail({
                   )}
                 >
                   {/* 轮次号只在展开态显示（压缩态下几十个 10px 的行里，"第几轮"是唯一的方位感） */}
-                  <span className="shrink-0 text-ink-tertiary tabular-nums">{position + 1}.</span>
+                  <span className="shrink-0 font-mono text-ink-tertiary tabular-nums">
+                    {position + 1}.
+                  </span>
                   {summary}
                 </span>
               </span>

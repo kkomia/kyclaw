@@ -24,9 +24,9 @@ export function ErrorCard({ error, onRetry }: ErrorCardProps): React.JSX.Element
     <div
       data-testid="error-card"
       role="alert"
-      className="animate-fade-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-danger bg-danger-bg px-4 py-3"
+      className="animate-fade-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-hairline border-l-2 border-l-danger bg-(--bg-primary) px-4 py-3"
     >
-      <div className="flex items-center gap-2 text-b2 font-medium text-ink">
+      <div className="flex items-center gap-2 font-sans text-b2 font-semibold text-ink">
         <AlertTriangle aria-hidden="true" className="size-4 shrink-0 text-danger" />
         这一轮没有完成
       </div>

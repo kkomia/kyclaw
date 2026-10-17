@@ -125,7 +125,7 @@ describe('006 · 用户气泡：验过才藏，图标项排在下方', () => {
 
     // 图标项在气泡**下方**：气泡与它在同一列里，且它排在气泡之后
     const item = screen.getByTestId('message-context-item')
-    const bubble = screen.getByTestId('message-body').querySelector('.bg-secondary')
+    const bubble = screen.queryByTestId('message-bubble')
     expect(bubble).not.toBeNull()
     if (bubble === null) return
     expect(bubble.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -275,11 +275,11 @@ describe('006 · 用户气泡：验过才藏，图标项排在下方', () => {
     render(<MessageList messages={[message]} status="ready" />)
 
     expect(screen.getByTestId('message-u1')).toHaveTextContent('【附件】')
-    expect(screen.getByTestId('message-body').querySelector('.bg-secondary')).not.toBeNull()
+    expect(screen.queryByTestId('message-bubble')).not.toBeNull()
 
     await waitFor(() => expect(screen.getByTestId('message-context-item')).toBeInTheDocument())
     expect(screen.getByTestId('message-u1')).not.toHaveTextContent('【附件】')
-    expect(screen.getByTestId('message-body').querySelector('.bg-secondary')).toBeNull()
+    expect(screen.queryByTestId('message-bubble')).toBeNull()
   })
 
   it('没有 metadata（用户自己手写【附件】）：原文照旧，不误吃、不画图标项', async () => {

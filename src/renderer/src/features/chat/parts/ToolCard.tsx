@@ -163,17 +163,21 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
       <span aria-hidden="true" className="inline-flex size-5 shrink-0 items-center justify-center">
         <ToolIcon toolName={part.toolName} className="size-[15px] text-ink-tertiary" />
       </span>
-      <span className="shrink-0 font-mono text-c1">{displayName}</span>
+      <span data-font-role="code" className="shrink-0 font-mono text-c1">
+        {displayName}
+      </span>
       {shownDetail === null ? null : (
         <span
           data-testid="tool-detail"
-          className="min-w-0 truncate font-mono text-c1 text-ink-tertiary"
+          data-font-role="code"
+          className="min-w-0 truncate font-mono text-c1 text-ink-tertiary tabular-nums"
         >
           {shownDetail}
         </span>
       )}
       <span
         data-testid="tool-state"
+        data-font-role="ui"
         className={cn(
           'ml-auto shrink-0 text-c1',
           live ? 'trace-live' : TONE_CLASS[tone],

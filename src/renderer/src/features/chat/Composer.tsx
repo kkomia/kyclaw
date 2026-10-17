@@ -744,7 +744,7 @@ export function Composer({
     <div
       data-testid="composer"
       className={cn(
-        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) shadow-(--shadow-input) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) font-sans shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
         // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
         dragging && 'border-(--accent)'
       )}
@@ -817,7 +817,7 @@ export function Composer({
           data-testid="composer-mirror"
           className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-transparent"
         >
-          <div className="w-full px-4 py-3 text-b1 break-words whitespace-pre-wrap">
+          <div className="w-full px-4 py-3 font-sans text-b1 break-words whitespace-pre-wrap">
             {parseReferenceMarkers(draft).map((segment, index) =>
               segment.kind === 'text' ? (
                 <span key={index}>{segment.text}</span>
@@ -914,7 +914,7 @@ export function Composer({
           }}
           placeholder="输入你的问题"
           className={cn(
-            'relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-quaternary) focus-visible:shadow-none motion-reduce:transition-none',
+            'relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
             // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
             hero
               ? 'min-h-(--composer-input-min-height-hero)'
@@ -1010,7 +1010,7 @@ export function Composer({
             data-testid="composer-stop"
             aria-label="停止生成"
             onClick={onStop}
-            className="flex size-9 items-center justify-center rounded-pill bg-(--button-primary-bg) text-(--button-primary-fg) transition-colors duration-(--motion-fast) ease-main hover:bg-(--button-primary-bg-hover) motion-reduce:transition-none"
+            className="flex size-8 items-center justify-center rounded-pill bg-(--button-primary-bg) text-(--button-primary-fg) transition-colors duration-(--motion-fast) ease-main hover:bg-(--button-primary-bg-hover) motion-reduce:transition-none"
           >
             <Square aria-hidden="true" className="size-4 fill-current" />
           </button>
@@ -1022,14 +1022,11 @@ export function Composer({
             disabled={!sendable}
             onClick={submit}
             className={cn(
-              'flex size-9 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+              'flex size-8 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
               sendable
                 ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
-                : // round 17（用户实拍"禁用态糊"）：图标从 Labels-Quaternary（30% 黑，糊在浅灰底上）
-                  // 提到 Labels-Tertiary（55% 黑）——干净可辨、又不至于像可用（可用的墨色圆底完全另一档）。
-                  // 线宽保持 2.4：20px 渲染时正好是 device 2px（2.4 × 20/24），在像素网格上不发虚。
-                  // round 76：实例未就绪时也走这一档（禁用态与"空输入"同一个观感：按不动）
-                  'bg-(--fill-disabled) text-(--text-tertiary)'
+                : // 章程 §9.2#6 / P1a：禁用态用 quaternary/opacity（不用旧的三级墨），可辨但明确不可点
+                  'bg-(--fill-disabled) text-(--text-quaternary) opacity-60'
             )}
           >
             <ArrowUp aria-hidden="true" className="size-5" strokeWidth={2.4} />

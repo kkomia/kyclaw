@@ -77,7 +77,9 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(screen.getByTestId('composer')).toHaveClass(
       'max-w-(--chat-input-max-width)',
       'rounded-input',
-      'border-surface-border'
+      'border-surface-border',
+      'font-sans',
+      'shadow-(--shadow-composer)'
     )
     expect(screen.getByTestId('composer-input')).toHaveClass(
       'field-sizing-content',
@@ -86,7 +88,7 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
       'overflow-y-auto'
     )
     expect(screen.getByTestId('composer-footer')).toHaveClass('h-(--composer-toolbar-height)')
-    expect(screen.getByTestId('composer-send')).toHaveClass('size-9')
+    expect(screen.getByTestId('composer-send')).toHaveClass('size-8')
   })
 
   it('焦点指示由卡片给（跟圆角），输入框自己不再画方框（雷点 6）', () => {
@@ -117,12 +119,12 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(send).toBeEnabled()
   })
 
-  it('发送钮禁用态（round 17）：图标用 Labels-Tertiary 一档（干净可辨、不显得可用）', () => {
+  it('发送钮禁用态（P1a / 章程 §9.2#6）：quaternary + opacity，可辨但不可点', () => {
     setup()
 
     const send = screen.getByTestId('composer-send')
     expect(send).toBeDisabled()
-    expect(send).toHaveClass('bg-(--fill-disabled)', 'text-(--text-tertiary)')
+    expect(send).toHaveClass('bg-(--fill-disabled)', 'text-(--text-quaternary)', 'opacity-60')
     // 线宽 2.4：20px 渲染时正好 device 2px（2.4 × 20/24），像素网格上不发虚
     expect(send.querySelector('svg')?.getAttribute('stroke-width')).toBe('2.4')
 
@@ -227,7 +229,7 @@ describe('输入卡流式态', () => {
 
     expect(screen.queryByTestId('composer-send')).not.toBeInTheDocument()
     const stop = screen.getByTestId('composer-stop')
-    expect(stop).toHaveClass('size-9')
+    expect(stop).toHaveClass('size-8')
 
     fireEvent.click(stop)
     expect(onStop).toHaveBeenCalledTimes(1)
