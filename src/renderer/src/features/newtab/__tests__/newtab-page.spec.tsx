@@ -126,7 +126,7 @@ describe('NewTabPage · 结构与文案（v1 能力边界）', () => {
     fireEvent.click(toggle)
     expect(page).toHaveAttribute('data-future', 'off')
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(toggle).toHaveTextContent('显示 v2 灰格')
+    expect(toggle).toHaveTextContent('显示未来位')
     // DOM 仍在（CSS 隐藏，便于窄窗/可访问性语义一致）
     expect(screen.getByTestId('npw-future-xlsx')).toBeInTheDocument()
     const css = readFileSync(

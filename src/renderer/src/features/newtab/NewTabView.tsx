@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { SectionTitle } from '@renderer/components/ui/page-chrome'
 import { useNewTabPointer } from './use-newtab-pointer'
 import { CircleAlert, TriangleAlert } from 'lucide-react'
 import type { NewTabController } from './use-newtab-controller'
@@ -221,9 +222,9 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
         >
           <div className="lt-sec-head-wrap">
             <div className="lt-sec-head">
-              <h1 className="lt-sec-title" id="npw-start-title">
+              <SectionTitle className="lt-sec-title" id="npw-start-title">
                 开始
-              </h1>
+              </SectionTitle>
               <button
                 type="button"
                 className="lt-future-toggle"
@@ -231,7 +232,7 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
                 aria-expanded={showFuture}
                 onClick={() => setShowFuture((value) => !value)}
               >
-                {showFuture ? '收起 v2 灰格' : '显示 v2 灰格'}
+                {showFuture ? '收起未来位' : '显示未来位'}
               </button>
             </div>
           </div>
@@ -342,9 +343,9 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
 
         <aside className="lt-rail" data-testid="npw-recent" aria-labelledby="npw-recent-title">
           <div className="lt-rail-head">
-            <h2 className="lt-rail-title" id="npw-recent-title">
+            <SectionTitle className="lt-rail-title" id="npw-recent-title">
               继续
-            </h2>
+            </SectionTitle>
           </div>
           <p className="lt-rail-sub">开着的文档 · 按上次打开排序</p>
 
@@ -407,9 +408,9 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
       </div>
 
       <footer className="lt-foot">
-        <span className="lt-foot-hint">
+        <span className="lt-foot-hint" aria-label="关闭新标签页">
           <kbd className="lt-kbd">Esc</kbd>
-          <span>关闭新标签页</span>
+          <span className="sr-only">关闭新标签页</span>
         </span>
       </footer>
     </section>
