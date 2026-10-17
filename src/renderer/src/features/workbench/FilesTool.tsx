@@ -31,8 +31,12 @@
  * round 77：文件的右键菜单多一项「用本地应用打开」（`workbench:open`）—— 个人 PC 上通常装了
  * Word / WPS / Excel 之一，把产出交回用户熟悉的那件应用；目录不给这一项（打开文件夹是 reveal 的事），
  * 失败的话露在预览层的错误态里（与 reveal 同一个收口）。
+ *
+ * M3-S4：文件的右键菜单再多一档「在 Office 中编辑」（仅 .docx）—— 与聊天交付卡共用
+ * `office-open.ts` 的同一份打开/去重逻辑；失败同样露在预览层错误态里。双击仍是预览标签（契约不变）。
  */
 import {
+  Briefcase,
   ChevronRight,
   Copy,
   FileText,
@@ -61,6 +65,7 @@ import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { BottomSheet, RefreshButton, ToolBar, ToolEmpty, ToolError } from './bits'
 import { ContextMenu, type ContextMenuState } from './ContextMenu'
+import { goToOffice, isOfficeEditablePath, openOfficeFromSession } from './office-open'
 import { PreviewBody } from './preview/PreviewBody'
 import { previewNeedsFixedHeight } from './preview/host-size'
 import { baseNameOf, readPreviewState, sourceTextOf, type PreviewState } from './preview/fetch'
@@ -276,6 +281,30 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     [threadId, workbench]
   )
 
+  /**
+   * M3-S4：在 Office 标签里编辑这份文件（只对 .docx 的入口显示，与交付卡共用 office-open 的
+   * 同一份逻辑）。成功才跳 `/office`；失败与「用本地应用打开」同一个收口——把主进程的人话露在
+   * 预览层里（不静默、不假装打开）。双击语义不变（仍是预览标签）。
+   */
+  const openInOffice = useCallback(
+    (relative: string): void => {
+      if (threadId === null) return
+      void openOfficeFromSession(threadId, relative).then(
+        () => goToOffice(),
+        (error: unknown) => {
+          setPreview({
+            threadId,
+            relative,
+            mode: previewModeOf(relative),
+            status: 'error',
+            error: unwrapIpcError(error)
+          })
+        }
+      )
+    },
+    [threadId]
+  )
+
   const copyPath = useCallback(
     (relative: string): void => {
       if (rootPath === null) return
@@ -410,6 +439,17 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
                           icon: <FileText />,
                           onSelect: () => openInTab(relative)
                         },
+                        // M3-S4：在 Office 标签里编辑（第一步只接 .docx，非 docx 不给假入口）
+                        ...(isOfficeEditablePath(relative)
+                          ? [
+                              {
+                                id: 'office',
+                                label: '在 Office 中编辑',
+                                icon: <Briefcase />,
+                                onSelect: () => openInOffice(relative)
+                              }
+                            ]
+                          : []),
                         // 用本机装了的那件应用打开（目录不进——"打开文件夹"是下面 reveal 的事）
                         {
                           id: 'open',

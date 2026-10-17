@@ -1,7 +1,12 @@
-import { ChevronDown, Copy, FolderSearch, SquareArrowOutUpRight } from 'lucide-react'
+import { Briefcase, ChevronDown, Copy, FolderSearch, SquareArrowOutUpRight } from 'lucide-react'
 import { createElement, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
+import {
+  goToOffice,
+  isOfficeEditablePath,
+  openOfficeFromSession
+} from '@renderer/features/workbench/office-open'
 import { absoluteOf, useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatBytes } from '@renderer/features/workbench/format'
 import { fileIconOf } from '@renderer/features/workbench/preview/file-icon'
@@ -21,7 +26,10 @@ import type { Deliverable } from './deliverable'
  * deliver_file part 从过程块里**摘出来**；0.1.3 / 014 起整轮汇总到消息末尾统一渲染
  * （见 Message.tsx 的 chunkParts 与 deliverable.ts 的 deliverablesByTurnTail）。
  *
- * 四个动作的去处：
+ * 五个动作的去处：
+ *   - 在 Office 中编辑（M3-S4，仅 .docx 交付物）：`office:open-from-session`（只给 threadId + 相对路径）
+ *     → 标签打开/激活 → 跳 /office；**只跳转不复制聊天状态**（草稿/引用/选中都不带过去），
+ *     失败把主进程的人话落在卡下面那行红字里；
  *   - 预览：workbench-store 的 openPreviewTab（按路径去重；右栏由**调用方**打开，
  *     与文件区「在新标签页中查看」同一口径）；
  *   - 用本地应用打开：走既有 workbench:open（threadId + 相对路径，containment 在主进程）——
@@ -44,6 +52,8 @@ export function DeliverableCard({ deliverable }: DeliverableCardProps): React.JS
   const { threadId, rootPath, workbench } = useWorkbenchRoot()
   /** 打开/定位失败的人话（null = 没失败过）；换一份交付物时由 key 重挂自然清掉 */
   const [openError, setOpenError] = useState<string | null>(null)
+  /** 正在开 Office 标签（防连点；主进程来回一次通常几十毫秒） */
+  const [officeOpening, setOfficeOpening] = useState(false)
 
   const openPreview = (): void => {
     useWorkbenchStore.getState().openPreviewTab(deliverable.path)
@@ -73,10 +83,50 @@ export function DeliverableCard({ deliverable }: DeliverableCardProps): React.JS
     })
   }
 
+  /**
+   * M3-S4：在 Office 标签里编辑这份 docx（与文件树入口共用 workbench/office-open 的同一份逻辑）。
+   * 只跳转 + 激活标签：**不复制聊天状态**（草稿/引用/选中都不带过去），也不顺带开右栏预览。
+   * 成功才跳；失败把主进程的人话落在卡下面那行红字里（不弹窗、不假装打开）。
+   */
+  const openInOffice = (): void => {
+    if (threadId === null || workbench === null || officeOpening) return
+    setOpenError(null)
+    setOfficeOpening(true)
+    void (async () => {
+      try {
+        await openOfficeFromSession(threadId, deliverable.path)
+        goToOffice()
+      } catch (cause) {
+        console.error('[kyclaw] 在 Office 中编辑失败', cause)
+        setOpenError(unwrapIpcError(cause))
+      } finally {
+        setOfficeOpening(false)
+      }
+    })()
+  }
+
   /** 判不出唯一会话根时，两条"交给系统"的入口都不给（点了也到不了任何地方） */
   const noRoot = threadId === null || workbench === null || rootPath === null
+  /**
+   * Office 入口只需要会话（主进程自己按 threadId 解析根）——rootPath 判不出也可能能打开
+   * （多工作区并列时同样适用），所以不复用 `noRoot`。
+   */
+  const noOffice = threadId === null || workbench === null
 
   const items: MenuEntry[] = [
+    // M3-S4：docx 交付物在菜单首项给「在 Office 中编辑」（非 docx 不给假入口）
+    ...(isOfficeEditablePath(deliverable.path)
+      ? [
+          {
+            id: 'open-in-office',
+            label: '在 Office 中编辑',
+            icon: <Briefcase />,
+            testId: 'deliverable-open-office',
+            disabled: noOffice || officeOpening,
+            onSelect: openInOffice
+          } satisfies MenuEntry
+        ]
+      : []),
     {
       id: 'open-with-app',
       label: '用本地应用打开',

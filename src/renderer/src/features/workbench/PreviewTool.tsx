@@ -25,12 +25,19 @@
  * round 53：选中文字的自绘右键菜单与内联预览那一路**同一份共享件**
  * （`preview/SelectionContextMenu`）：整块预览区（头部 + 正文）的原生右键都拦下，
  * 「添加到上下文（摘选）」发布的路径就是本标签的 `relative`。
+ *
+ * M3-S4：同一份 docx 已在 Office 标签里开着时，头部下面多一条交叉提示（+「切到 Office 标签」）——
+ * 可编辑实例只有 Office 那边一个，预览始终只读；提示**不自动刷新正文**（保存前正文就是磁盘快照），
+ * 刷新仍走「重新读取」。匹配口径见 `office-open.ts` 的 `officeTabForPreview`。
  */
-import { FileText, FolderSearch, RotateCw, SquareArrowOutUpRight } from 'lucide-react'
+import { Briefcase, FileText, FolderSearch, RotateCw, SquareArrowOutUpRight } from 'lucide-react'
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
+import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
+import { useOfficeTabsStore } from '@renderer/features/office/office-tabs-store'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { ToolEmpty } from './bits'
+import { goToOffice, officeTabForPreview } from './office-open'
 import { PreviewBody } from './preview/PreviewBody'
 import { baseNameOf, readPreview, sourceTextOf, type LoadedPreview } from './preview/fetch'
 import { fileIconOf } from './preview/file-icon'
@@ -59,6 +66,12 @@ export function PreviewTool({
     mode: previewModeOf(relative),
     status: 'loading'
   })
+  /**
+   * M3-S4：Office 标签是同一份文件的唯一可编辑实例（预览始终只读）。这里订阅标签表，
+   * 命中同一个文件时在头部下面给一条交叉提示 + 「切到 Office 标签」；**不自动刷新预览**
+   * （保存前正文还是磁盘快照，冒充最新才是错；用户仍可用现有「重新读取」）。
+   */
+  const tabs = useOfficeTabsStore((store) => store.tabs)
 
   /** 拉数据（也用于刷新）；晚到的响应直接替换 —— 这个标签只看 `relative` 这一份文件 */
   const load = useCallback((): void => {
@@ -115,6 +128,8 @@ export function PreviewTool({
   const name = baseNameOf(relative)
   // 根目录文件（相对路径里没有分隔符）：路径与文件名逐字相同，不重复画（见头注 round 55）
   const inSubdirectory = /[\\/]/.test(relative)
+  // 同一文件在 Office 标签里开着？（只认 docx；匹配口径见 office-open.ts）
+  const officeTab = officeTabForPreview(tabs, rootPath, relative)
   const icon = createElement(fileIconOf(relative), {
     'aria-hidden': true,
     className: 'size-(--icon-size-md)'
@@ -186,6 +201,39 @@ export function PreviewTool({
             className="border-transparent hover:bg-hover"
           />
         </div>
+
+        {/* M3-S4 交叉提示：这份文件已经在 Office 标签里开着（唯一可编辑实例在那边）。
+            只在头部下面加一条，不动正文、不自动刷新 —— 保存前正文本来就是磁盘快照，
+            刷新与否交给用户点「重新读取」。 */}
+        {officeTab === undefined ? null : (
+          <div
+            data-testid="preview-office-hint"
+            role="status"
+            className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-control border-(length:--hairline-width) border-hairline bg-secondary px-2 py-1.5"
+          >
+            <Briefcase
+              aria-hidden="true"
+              className="size-(--icon-size-sm) shrink-0 text-ink-tertiary"
+            />
+            <span
+              data-testid="preview-office-hint-text"
+              className="min-w-0 flex-1 truncate text-c1 text-ink-secondary"
+            >
+              这份文件已在 Office 标签中打开{officeTab.dirty ? '（有未保存修改）' : ''}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="preview-office-hint-open"
+              onClick={() => {
+                useOfficeTabsStore.getState().activate(officeTab.id)
+                goToOffice()
+              }}
+            >
+              切到 Office 标签
+            </Button>
+          </div>
+        )}
 
         <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto pb-2">
           <PreviewBody relative={relative} state={state} mode={previewModeOf(relative)} />

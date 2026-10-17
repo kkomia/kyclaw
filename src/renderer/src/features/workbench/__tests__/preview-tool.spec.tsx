@@ -1,9 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
 import { Composer } from '@renderer/features/chat/Composer'
 import { subscribeContextItems, type ContextItem } from '@renderer/features/chat/composer-inbox'
+import {
+  resetOfficeTabsStore,
+  useOfficeTabsStore
+} from '@renderer/features/office/office-tabs-store'
 import type { WorkbenchRoot } from '../use-workbench-root'
 import { PreviewTool } from '../PreviewTool'
+import { resetOfficeOpenState } from '../office-open'
 import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
 
 /**
@@ -16,11 +22,17 @@ import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
 let bed: Bed
 
 beforeEach(() => {
+  resetOfficeTabsStore()
+  resetOfficeOpenState()
+  window.location.hash = ''
   bed = setupWorkbench()
 })
 
 afterEach(() => {
   teardownWorkbench()
+  resetOfficeTabsStore()
+  resetOfficeOpenState()
+  window.location.hash = ''
 })
 
 function rootOf(): WorkbenchRoot {
@@ -383,5 +395,91 @@ describe('round 53 · 预览标签里选中文字的自绘右键菜单', () => {
     expect(onSend.mock.calls[0]?.[0]).toMatchObject({
       text: '【引用】文件：notes.txt（第 1–1 行）\n```\nexport {}\n```'
     })
+  })
+})
+
+/* M3-S4：同一份文件已在 Office 标签里开着时的交叉提示（只提示 + 切过去，不自动刷新预览） */
+describe('PreviewTool：Office 交叉提示（M3-S4）', () => {
+  const DOCX_RELATIVE = 'docs/方案.docx'
+  const DOCX_ABSOLUTE = 'D:\\工作区\\docs\\方案.docx'
+
+  /** 在 Office store 里开一条 docx 标签（不经过主进程；模拟别的入口已经打开过） */
+  function openDocxTab(patch: Parameters<typeof officeDocumentFixture>[0] = {}): string {
+    return useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        displayPath: DOCX_RELATIVE,
+        absolutePath: DOCX_ABSOLUTE,
+        ...patch
+      })
+    )
+  }
+
+  it('没有同一文件的 Office 标签：不显示提示', () => {
+    render(<PreviewTool root={rootOf()} relative={DOCX_RELATIVE} />)
+
+    expect(screen.queryByTestId('preview-office-hint')).not.toBeInTheDocument()
+  })
+
+  it('选择器打开的标签（displayPath 是绝对路径）也命中：提示 + 文案', async () => {
+    openDocxTab({ displayPath: DOCX_ABSOLUTE })
+    render(<PreviewTool root={rootOf()} relative={DOCX_RELATIVE} />)
+
+    const hint = await screen.findByTestId('preview-office-hint')
+    expect(within(hint).getByTestId('preview-office-hint-text')).toHaveTextContent(
+      '这份文件已在 Office 标签中打开'
+    )
+    expect(within(hint).queryByText(/有未保存修改/)).not.toBeInTheDocument()
+  })
+
+  it('会话打开的标签（displayPath 是相对路径）命中；dirty 时文案带「有未保存修改」', async () => {
+    const tabId = openDocxTab()
+    useOfficeTabsStore.getState().markDirty(tabId)
+    render(<PreviewTool root={rootOf()} relative={DOCX_RELATIVE} />)
+
+    expect(await screen.findByTestId('preview-office-hint-text')).toHaveTextContent(
+      '（有未保存修改）'
+    )
+  })
+
+  it('不同文件 / 非 docx 标签：不提示', () => {
+    openDocxTab({ displayPath: 'D:\\工作区\\别的.docx', absolutePath: 'D:\\工作区\\别的.docx' })
+    useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'D:\\工作区\\汇报.pptx' })
+
+    render(<PreviewTool root={rootOf()} relative={DOCX_RELATIVE} />)
+
+    expect(screen.queryByTestId('preview-office-hint')).not.toBeInTheDocument()
+  })
+
+  it('点「切到 Office 标签」：激活那条标签 + 跳 /office；不自动刷新预览', async () => {
+    const targetId = openDocxTab()
+    // 再开一条别的 docx 并让它成为 active —— 点提示应该把激活切回 target
+    const otherId = useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        documentId: 'doc-2',
+        displayName: '别的.docx',
+        displayPath: 'D:\\工作区\\别的.docx',
+        absolutePath: 'D:\\工作区\\别的.docx'
+      })
+    )
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(otherId)
+
+    render(<PreviewTool root={rootOf()} relative={DOCX_RELATIVE} />)
+    const hint = await screen.findByTestId('preview-office-hint')
+    // 等挂载那次取数落定（docx 走 officePdf 桩，默认回"没有可用的转换引擎"）再记次数，
+    // 否则窗口里还挂着一笔在途请求，点完提示才落地会被误判成"点提示刷新了预览"。
+    await screen.findByText(/没有可用的转换引擎/)
+
+    // 点之前记下取数调用次数：点完不许再读（正文保持原样，刷新仍走「重新读取」）
+    const officePdfCalls = bed.bridge.workbench.officePdf.mock.calls.length
+    const readFileCalls = bed.bridge.workbench.readFile.mock.calls.length
+    const readBytesCalls = bed.bridge.workbench.readBytes.mock.calls.length
+
+    fireEvent.click(within(hint).getByTestId('preview-office-hint-open'))
+
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(targetId)
+    expect(window.location.hash).toBe('#/office')
+    expect(bed.bridge.workbench.officePdf.mock.calls.length).toBe(officePdfCalls)
+    expect(bed.bridge.workbench.readFile.mock.calls.length).toBe(readFileCalls)
+    expect(bed.bridge.workbench.readBytes.mock.calls.length).toBe(readBytesCalls)
   })
 })

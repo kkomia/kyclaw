@@ -1,11 +1,17 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
 import { Composer } from '@renderer/features/chat/Composer'
 import { subscribeContextItems, type ContextItem } from '@renderer/features/chat/composer-inbox'
+import {
+  resetOfficeTabsStore,
+  useOfficeTabsStore
+} from '@renderer/features/office/office-tabs-store'
 import { useShellStore } from '@renderer/lib/shell-store'
 import type { WorkbenchRoot } from '../use-workbench-root'
 import { useWorkbenchStore } from '../workbench-store'
 import { FilesTool } from '../FilesTool'
+import { resetOfficeOpenState } from '../office-open'
 import { setupWorkbench, teardownWorkbench, type Bed } from './bed'
 
 /**
@@ -73,6 +79,9 @@ function rootOf(): WorkbenchRoot {
 }
 
 beforeEach(() => {
+  resetOfficeTabsStore()
+  resetOfficeOpenState()
+  window.location.hash = ''
   bed = setupWorkbench()
   bed.bridge.workbench.listDir.mockResolvedValue({
     entries: [
@@ -120,6 +129,9 @@ afterEach(() => {
   unsubscribe = null
   vi.restoreAllMocks()
   teardownWorkbench()
+  resetOfficeTabsStore()
+  resetOfficeOpenState()
+  window.location.hash = ''
 })
 
 describe('FilesTool：目录树', () => {
@@ -1118,5 +1130,130 @@ describe('round 42 · 预览区选中文字的自绘右键菜单', () => {
     expect(onSend.mock.calls[0]?.[0]).toMatchObject({
       text: '【引用】文件：notes.txt（第 1–1 行）\n```\nexport {}\n```'
     })
+  })
+})
+
+/* M3-S4：右键「在 Office 中编辑」（仅 .docx；与聊天交付卡共用 office-open 的同一份逻辑） */
+describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
+  // 树上的根级 docx（相对路径就是文件名；主进程按会话根解析，渲染端只递这个相对路径）
+  const DOCX = '方案.docx'
+
+  function stubDocxTree(): void {
+    bed.bridge.workbench.listDir.mockResolvedValue({
+      entries: [
+        { name: 'src', kind: 'dir', size: 0 },
+        { name: 'README.md', kind: 'file', size: 9 },
+        { name: '方案.docx', kind: 'file', size: 2048 }
+      ],
+      truncated: false
+    })
+  }
+
+  function stubOpenSuccess(): void {
+    bed.bridge.office.openFromSession.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({
+        displayPath: DOCX,
+        absolutePath: 'D:\\工作区\\方案.docx'
+      }),
+      alreadyOpen: false
+    })
+  }
+
+  it('菜单：docx 才有「在 Office 中编辑」（在「用本地应用打开」之前）；md 与目录都没有', async () => {
+    stubDocxTree()
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    expect(
+      within(screen.getByTestId('workbench-context-menu'))
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      '添加到上下文',
+      '在新标签页中查看',
+      '在 Office 中编辑',
+      '用本地应用打开',
+      '在文件资源管理器中定位',
+      '复制路径'
+    ])
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    fireEvent.contextMenu(screen.getByText('README.md'))
+    expect(
+      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 中编辑')
+    ).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    fireEvent.contextMenu(screen.getByText('src'))
+    expect(
+      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 中编辑')
+    ).not.toBeInTheDocument()
+  })
+
+  it('点了：openFromSession(threadId, 相对路径) → 标签落位并切 /office；不读文件、不开预览标签', async () => {
+    stubDocxTree()
+    stubOpenSuccess()
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    fireEvent.click(screen.getByText('在 Office 中编辑'))
+
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    expect(bed.bridge.office.openFromSession).toHaveBeenCalledWith('thread-1', DOCX)
+    expect(useOfficeTabsStore.getState().tabs[0]).toMatchObject({
+      documentId: 'doc-1',
+      title: '方案.docx',
+      path: DOCX,
+      kind: 'docx'
+    })
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(
+      useOfficeTabsStore.getState().tabs[0]?.id
+    )
+    await waitFor(() => expect(window.location.hash).toBe('#/office'))
+
+    // Office 入口只碰 open-from-session：不读文件、不复制任何聊天/工作台状态
+    expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+    expect(bed.bridge.workbench.readBytes).not.toHaveBeenCalled()
+    expect(useWorkbenchStore.getState().tabs).toHaveLength(0)
+  })
+
+  it('同一文件点两次：只开一个标签（按 documentId 去重，第二次只激活）', async () => {
+    stubDocxTree()
+    stubOpenSuccess()
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    fireEvent.click(screen.getByText('在 Office 中编辑'))
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    const firstId = useOfficeTabsStore.getState().tabs[0]?.id
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    fireEvent.click(screen.getByText('在 Office 中编辑'))
+
+    await waitFor(() => expect(bed.bridge.office.openFromSession).toHaveBeenCalledTimes(2))
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(firstId)
+  })
+
+  it('失败（未授权 / 不是 docx / 文件没了）：把人话露在预览层里，标签不落、不跳转', async () => {
+    stubDocxTree()
+    bed.bridge.office.openFromSession.mockResolvedValue({
+      ok: false,
+      code: 'unreadable',
+      message: '读不了这个文件：它可能已损坏、无权限，或不是普通文件'
+    })
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    fireEvent.click(screen.getByText('在 Office 中编辑'))
+
+    expect(await screen.findByTestId('file-preview-error')).toHaveTextContent('读不了这个文件')
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
+    expect(window.location.hash).not.toBe('#/office')
   })
 })

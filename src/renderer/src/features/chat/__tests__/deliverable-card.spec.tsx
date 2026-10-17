@@ -4,11 +4,17 @@ import type { UIMessage } from 'ai'
 import {
   clearKyclawBridge,
   installKyclawBridge,
+  officeDocumentFixture,
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
+import {
+  resetOfficeTabsStore,
+  useOfficeTabsStore
+} from '@renderer/features/office/office-tabs-store'
+import { resetOfficeOpenState } from '@renderer/features/workbench/office-open'
 import {
   resetWorkbenchStore,
   useWorkbenchStore
@@ -88,6 +94,9 @@ function openMenu(): void {
 afterEach(() => {
   clearKyclawBridge()
   resetWorkbenchStore()
+  resetOfficeTabsStore()
+  resetOfficeOpenState()
+  window.location.hash = ''
 })
 
 describe('deliverableOf：只认"交付完成"的 deliver_file', () => {
@@ -350,5 +359,126 @@ describe('Message：交付卡单出（过程块之外）', () => {
     fireEvent.click(within(block).getByTestId('trace-toggle'))
     expect(within(block).getByTestId('tool-card')).toHaveAttribute('data-tool', 'deliver_file')
     expect(within(block).getByTestId('tool-state')).toHaveTextContent('已调用')
+  })
+})
+
+/* M3-S4：docx 交付物 →「在 Office 中编辑」（与文件树共用 workbench/office-open 的同一份逻辑） */
+describe('DeliverableCard：在 Office 中编辑（M3-S4）', () => {
+  const DOCX_PATH = 'docs/方案.docx'
+
+  function docxDeliverable(): Deliverable {
+    return deliverableOfOrThrow({
+      path: DOCX_PATH,
+      name: '方案.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    })
+  }
+
+  function stubOpenSuccess(bridge: KyclawBridgeStubs): void {
+    bridge.office.openFromSession.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({
+        displayPath: DOCX_PATH,
+        absolutePath: 'D:\\工作区\\docs\\方案.docx'
+      }),
+      alreadyOpen: false
+    })
+  }
+
+  it('菜单只为 .docx 出「在 Office 中编辑」；非 docx 交付物没有这一项（不给假入口）', () => {
+    setup()
+    render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
+
+    openMenu()
+    expect(screen.queryByTestId('deliverable-open-office')).not.toBeInTheDocument()
+  })
+
+  it('点了：openFromSession(threadId, 相对路径) → 标签落位并切 /office；不复制聊天状态', async () => {
+    const bed = setup()
+    stubOpenSuccess(bed.bridge)
+    render(<DeliverableCard deliverable={docxDeliverable()} />)
+
+    openMenu()
+    const item = screen.getByTestId('deliverable-open-office')
+    expect(item).toHaveTextContent('在 Office 中编辑')
+
+    fireEvent.click(item)
+
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    expect(bed.bridge.office.openFromSession).toHaveBeenCalledWith(THREAD_ID, DOCX_PATH)
+    const tab = useOfficeTabsStore.getState().tabs[0]
+    expect(tab).toMatchObject({
+      documentId: 'doc-1',
+      title: '方案.docx',
+      path: DOCX_PATH,
+      kind: 'docx'
+    })
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(tab?.id)
+    await waitFor(() => expect(window.location.hash).toBe('#/office'))
+
+    // 只跳转不复制聊天状态：不开右栏预览标签、不开面板、成功不露错误
+    expect(
+      useWorkbenchStore.getState().tabs.filter((candidate) => candidate.kind === 'preview')
+    ).toHaveLength(0)
+    expect(useShellStore.getState().workPanelOpen).toBe(false)
+    expect(screen.queryByTestId('deliverable-action-error')).not.toBeInTheDocument()
+  })
+
+  it('同一份文件点两次：只开一个标签（按 documentId 去重，第二次只激活）', async () => {
+    const bed = setup()
+    stubOpenSuccess(bed.bridge)
+    render(<DeliverableCard deliverable={docxDeliverable()} />)
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open-office'))
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    const firstId = useOfficeTabsStore.getState().tabs[0]?.id
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open-office'))
+
+    await waitFor(() => expect(bed.bridge.office.openFromSession).toHaveBeenCalledTimes(2))
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(firstId)
+  })
+
+  it('失败（文件没了 / 不是 docx / 未授权）：卡下面给主进程的人话；标签不落、不跳转', async () => {
+    const bed = setup()
+    bed.bridge.office.openFromSession.mockResolvedValue({
+      ok: false,
+      code: 'unreadable',
+      message: '读不了这个文件：它可能已损坏、无权限，或不是普通文件'
+    })
+    render(<DeliverableCard deliverable={docxDeliverable()} />)
+
+    openMenu()
+    fireEvent.click(screen.getByTestId('deliverable-open-office'))
+
+    const alert = await screen.findByTestId('deliverable-action-error')
+    expect(alert).toHaveAttribute('role', 'alert')
+    expect(alert).toHaveTextContent('读不了这个文件')
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
+    expect(window.location.hash).not.toBe('#/office')
+  })
+
+  it('会话根判不出（多工作区并列）也照样能开：Office 只依赖 threadId，rootPath 不是门槛', async () => {
+    const bed = setup({
+      workspaces: [
+        { path: 'D:\\工作区', mode: 'ask' },
+        { path: 'D:\\另一个', mode: 'ask' }
+      ]
+    })
+    stubOpenSuccess(bed.bridge)
+    render(<DeliverableCard deliverable={docxDeliverable()} />)
+
+    openMenu()
+    const item = screen.getByTestId('deliverable-open-office')
+    // 与「定位 / 用本地应用打开」不同：这一项不因 rootPath 判不出而置灰
+    expect(item).not.toHaveAttribute('data-disabled')
+
+    fireEvent.click(item)
+
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    await waitFor(() => expect(window.location.hash).toBe('#/office'))
   })
 })
