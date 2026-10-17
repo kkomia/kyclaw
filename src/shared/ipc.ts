@@ -40,6 +40,8 @@ import {
   OFFICE_IPC_CHANNELS,
   type OfficeConfig,
   type OfficeOpenResult,
+  type OfficeQuitRequestPayload,
+  type OfficeQuitResult,
   type OfficeReadResult,
   type OfficeSaveAsRequest,
   type OfficeSaveAsResult,
@@ -1188,6 +1190,23 @@ export interface KyclawOfficeApi {
   saveAs(input: OfficeSaveAsRequest): Promise<OfficeSaveAsResult>
   /** 关标签时释放注册表条目（幂等：未知 id / 非本窗口的 id 都是空操作） */
   release(documentId: string): Promise<void>
+  /**
+   * M3-S5：把当前未保存文档数推给主进程（**只传计数**；文档 id / 内容 / 路径一律不过这条通道）。
+   * 退出拦截的快速判空用：计数 0 时主进程同步放行，非 0 才向壳发退出确认请求。
+   * 壳在脏计数变化时即时推（不 debounce；计数变化本身低频）。
+   */
+  reportDirtyState(count: number): Promise<void>
+  /**
+   * M3-S5：订阅主进程的退出确认请求（托盘退出 / `app.quit()` 与点 X 关窗两条入口都会推）。
+   * 返回退订函数。壳弹三态对话框，用户决定后必须用 `respondQuitRequest` 回包：
+   * 不回 / 超时 = 主进程按 `cancelled` 处理（应用保持打开，宁可再点一次也不静默丢内容）。
+   */
+  onQuitRequest(listener: (payload: OfficeQuitRequestPayload) => void): () => void
+  /**
+   * M3-S5：回退出确认结果。主进程按 `event.sender.id + requestId` 双匹配置信——
+   * 伪造 / 过期（已取消或已超时）的回包一律忽略。
+   */
+  respondQuitRequest(result: OfficeQuitResult): Promise<void>
 }
 
 /**

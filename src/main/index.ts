@@ -5,7 +5,7 @@
  * T17 起多了两族接线：更新通道（updater.ts，源没配就是"什么都不做"的实例）与追踪通道
  * （telemetry，Langfuse 默认关）——两者都不挡窗口、失败只记日志。
  */
-import { app, autoUpdater, protocol } from 'electron'
+import { app, autoUpdater, BrowserWindow, ipcMain, protocol, webContents } from 'electron'
 import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
@@ -48,13 +48,14 @@ import {
 } from './updater'
 import { createTray } from './tray'
 import { applyThemeMode, currentResolvedTheme, showMainWindow } from './window'
-import { markQuitting } from './window-close'
+import { isQuitting, markQuitting, registerCloseAllowGuard } from './window-close'
+import { createOfficeQuitGuard, registerOfficeQuitIpc } from './office-quit'
 import { installWebviewGuard } from './webview'
 import { resolveModel } from '../mastra/model'
 import { killAllRunning } from '../mastra/tools/exec'
 import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
 import { SEARCH_KEY_SECRET_ID } from '../shared/search'
-import type { AgentEndpoint } from '../shared/ipc'
+import { IPC_CHANNELS, type AgentEndpoint } from '../shared/ipc'
 
 // R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
 // 必须在这里、在任何动态 import mastra 之前设置；main/index.ts 是应用最早的执行点。
@@ -142,6 +143,44 @@ if (!app.requestSingleInstanceLock()) {
     showMainWindow()
   })
 
+  /**
+   * M3-S5：退出确认 guard（纯状态机在 office-quit.ts）。
+   *
+   * 两个入口都接它：`app.on('before-quit', quitGuard.handleBeforeQuit)`（托盘退出 / app.quit /
+   * 窗口关完后的第二次进入）与 window-close 的 allow 分支守卫（点 X 且偏好 quit / 托盘不可用；
+   * 那条路上 renderer 在 before-quit 之前就没了，必须在关窗前问）。托盘隐藏分支不接：
+   * 窗口不销毁，内容还在内存里。
+   *
+   * 在这里创建（`whenReady` 之前）：只捕获依赖、不碰窗口对象；窗口按 owner 的 webContents
+   * 现找，窗口重建后也不会指向已销毁实例。
+   */
+  const quitGuard = createOfficeQuitGuard({
+    // 只发给**最后一次上报脏计数**的那个 webContents（owner 校验）；找不到 = 拿不到壳 → 按取消
+    sendToWindow: (ownerId, payload) => {
+      const contents = webContents.fromId(ownerId)
+      if (contents === undefined || contents.isDestroyed()) return false
+      contents.send(IPC_CHANNELS.office.quitRequest, payload)
+      return true
+    },
+    quit: () => app.quit(),
+    // close 入口：mark 已置（下一次 close 直接 allow），这里只补"真的再关一次"。
+    // 窗口按 owner 的 webContents 现找：不持窗口引用，避免窗口重建后指向已销毁实例。
+    closeWindow: (ownerId) => {
+      const contents = webContents.fromId(ownerId)
+      const win = contents === undefined ? null : BrowserWindow.fromWebContents(contents)
+      if (win === null || win.isDestroyed()) return
+      win.close()
+    },
+    markQuitting,
+    isQuitting,
+    /**
+     * Lead 决策（2026-10-17）：退出确认框要**等用户做决定**，5s 太短（用户慢慢看/点就超时=取消，
+     * 体验成"点了退出却白点一次"）。这里放宽到 60s；超时仍按取消处理（应用保持打开）。
+     * 纯状态机的默认值保持 5s 不变，单测不受影响。
+     */
+    askTimeoutMs: 60_000
+  })
+
   /** 内嵌服务当前对外暴露的端点；服务没起来（或起失败）保持 null，IPC 侧会抛错 */
   let agentEndpoint: AgentEndpoint | null = null
 
@@ -205,6 +244,13 @@ if (!app.requestSingleInstanceLock()) {
     registerOfficeIpc(userDataDir, {
       projectIdOf: (threadId) => agentProjectIdOf?.(threadId) ?? null
     })
+    // M3-S5：退出确认的两条主进程入口接线（状态机见 office-quit.ts 文件头）：
+    //   1) 两条 invoke 通道：壳上报脏计数 / 壳回退出确认结果；
+    //   2) 窗口 close 的 **allow 分支**守卫（点 X 且偏好 quit / 托盘不可用那条路；
+    //      hide 收进托盘的路径不问壳，见 window-close.ts 的 registerCloseAllowGuard 注释）。
+    // before-quit 的监听在 `whenReady` 之外统一挂（见文件末尾），保持原来的注册时机。
+    registerOfficeQuitIpc(quitGuard, ipcMain)
+    registerCloseAllowGuard((event) => quitGuard.guardCloseAllow(event))
     // 工作台（右侧边栏四项工具）：文件树 / Git 用只读通道，终端是长会话（由一个服务持有 PTY）
     const workbench = registerWorkbenchIpc(userDataDir, {
       projectIdOf: (threadId) => agentProjectIdOf?.(threadId) ?? null
@@ -391,10 +437,12 @@ if (!app.requestSingleInstanceLock()) {
     })
   })
 
-  // 退出已经开始（托盘「退出 kyclaw」、系统退出…）→ 立标记：close 事件见到一律放行，
-  // 不再把这次关闭收进托盘（口径见 window-close.ts 的"只有真退出事件才立标记"）。
-  // 标记是单向的，所以这里只接真事件、不接任何"可能要退出"的前置信号。
-  app.on('before-quit', markQuitting)
+  // M3-S5：`before-quit` 不再直接立"正在退出"标记 —— 先过 exit guard：
+  //   有未保存文档且还没决定 → preventDefault 并向壳发 `office:quit-request`（用户选取消时窗口留着）；
+  //   脏计数为 0 或壳已回 saved/discarded → guard 内部才调 markQuitting（窗口 close 见到一律放行）。
+  // 这正是原注释的硬口径"只有真退出事件才立标记"：标记是单向的，绝不能提前立
+  // （提前立会让用户取消后，之后的点 X 绕过托盘策略）。顺序与唯一调用点见 office-quit.ts。
+  app.on('before-quit', quitGuard.handleBeforeQuit)
 
   /**
    * 更新安装（quitAndInstall）那一路单独接一个真事件。

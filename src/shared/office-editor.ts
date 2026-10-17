@@ -38,7 +38,13 @@ export const OFFICE_IPC_CHANNELS = {
   /** S3：原子写 + 冲突检测（S2 仅定义，不注册） */
   save: 'office:save',
   /** S3：另存为（S2 仅定义，不注册） */
-  saveAs: 'office:save-as'
+  saveAs: 'office:save-as',
+  /** S5：壳把"当前未保存文档数"推给主进程（**只传计数**；退出拦截的快速判空用） */
+  dirtyState: 'office:dirty-state',
+  /** S5：主进程 → 壳：退出/关窗确认请求（壳据此弹三态对话框） */
+  quitRequest: 'office:quit-request',
+  /** S5：壳 → 主进程：退出确认结果（saved / discarded / cancelled） */
+  quitResult: 'office:quit-result'
 } as const
 
 /**
@@ -343,3 +349,53 @@ export const officeSaveAsResultSchema = z.discriminatedUnion('ok', [
   })
 ])
 export type OfficeSaveAsResult = z.infer<typeof officeSaveAsResultSchema>
+
+// ---------------------------------------------------------------------------------------------
+// M3-S5：退出确认（S5-1 是主进程 plumbing；壳侧对话框/保存全部是 S5-2）
+//
+// 分工：**脏真相在壳**（`office-save-machine` 的 editSeq ≠ savedSeq），主进程只持一个计数快照
+// 用于"退出时要不要问"的快速判空，以及一个请求-应答状态机。真退出/真关窗前主进程发
+// `office:quit-request`，壳依次保存后回 `office:quit-result`；主进程不能自己保存
+// （文档内容只在渲染端的 iframe 里）。
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `office:dirty-state` 入参：[count]。
+ * 只传计数——文档 id / 内容 / 路径都不过这条通道；计数为 0 时主进程同步放行退出，
+ * 非 0 才去问壳（壳的应答才是权威：保存失败时壳回 `cancelled`）。
+ */
+export const officeDirtyStateArgsSchema = z.tuple([z.number().int().nonnegative()])
+
+/**
+ * `office:quit-request` 的推送载荷（主进程 → 壳）。
+ * `requestId` 把回包和这一次请求对上（防伪造/过期回包）；`reason` 区分两条入口
+ * （`quit` = 托盘退出 / app.quit；`close` = 点 X 且偏好 quit / 托盘不可用——这条路上
+ * renderer 在 before-quit 之前就可能没了，所以必须在 close 放行前问）。
+ */
+export const officeQuitRequestPayloadSchema = z.strictObject({
+  requestId: z.string().min(1),
+  reason: z.enum(['quit', 'close']),
+  dirtyCount: z.number().int().nonnegative()
+})
+export type OfficeQuitRequestPayload = z.infer<typeof officeQuitRequestPayloadSchema>
+
+/**
+ * 壳对退出请求的应答：
+ *   - `saved`：全部未保存文档都保存成功 → 放行（主进程立"正在退出"标记后退出/关窗）；
+ *   - `discarded`：用户明确放弃修改 → 同样放行；
+ *   - `cancelled`：用户取消，**或任一保存失败停在失败项** → 不退出、不关窗（窗口原样保留，
+ *     dirty 保持；主进程超时/拿不到壳也按这一档处理）。
+ */
+export const OFFICE_QUIT_ACTIONS = ['saved', 'discarded', 'cancelled'] as const
+export const officeQuitActionSchema = z.enum(OFFICE_QUIT_ACTIONS)
+export type OfficeQuitAction = z.infer<typeof officeQuitActionSchema>
+
+/** `office:quit-result` 的回包形状 */
+export const officeQuitResultSchema = z.strictObject({
+  requestId: z.string().min(1),
+  action: officeQuitActionSchema
+})
+export type OfficeQuitResult = z.infer<typeof officeQuitResultSchema>
+
+/** `office:quit-result` 入参：[result]（主进程按 sender.id + requestId 双匹配后采信） */
+export const officeQuitResultArgsSchema = z.tuple([officeQuitResultSchema])

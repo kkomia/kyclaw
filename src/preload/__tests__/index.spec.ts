@@ -1113,14 +1113,17 @@ describe('preload：window.kyclaw.office（M3-S2 文档面）', () => {
     readOnly: false
   }
 
-  it('暴露 office 一族（config / openDialog / openFromSession / read / release）', async () => {
+  it('暴露 office 一族（config / openDialog / openFromSession / read / release / S5 退出确认三件）', async () => {
     const { kyclawApi } = await loadPreload()
     expect(Object.keys(kyclawApi.office).sort()).toEqual([
       'config',
+      'onQuitRequest',
       'openDialog',
       'openFromSession',
       'read',
       'release',
+      'reportDirtyState',
+      'respondQuitRequest',
       'save',
       'saveAs'
     ])
@@ -1211,6 +1214,51 @@ describe('preload：window.kyclaw.office（M3-S2 文档面）', () => {
     const { kyclawApi } = await loadPreload()
     await kyclawApi.office.release('doc-1')
     expect(mocks.invoke).toHaveBeenLastCalledWith('office:release', 'doc-1')
+  })
+
+  // ── M3-S5：退出确认（dirty 上报 / 退出请求订阅 / 结果回包） ──────────────────────────────
+
+  it('reportDirtyState：只发计数（走 office:dirty-state，无回包）', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(undefined)
+    await expect(kyclawApi.office.reportDirtyState(2)).resolves.toBeUndefined()
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:dirty-state', 2)
+  })
+
+  it('respondQuitRequest：回包原样发出（走 office:quit-result，无回包）', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce(undefined)
+    const result = { requestId: 'req-1', action: 'saved' as const }
+    await expect(kyclawApi.office.respondQuitRequest(result)).resolves.toBeUndefined()
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:quit-result', result)
+  })
+
+  it('onQuitRequest：合法推送转给监听方、脏 payload 丢掉、退订摘同一个监听器', async () => {
+    const { kyclawApi } = await loadPreload()
+    const listener = vi.fn()
+    const unsubscribe = kyclawApi.office.onQuitRequest(listener)
+
+    expect(mocks.on).toHaveBeenCalledTimes(1)
+    const [channel, handler] = mocks.on.mock.calls[0] as [
+      string,
+      (event: unknown, payload: unknown) => void
+    ]
+    expect(channel).toBe('office:quit-request')
+
+    // 合法载荷：转给监听方（reason 决定壳显示"退出"还是"关窗"文案）
+    handler({}, { requestId: 'req-1', reason: 'quit', dirtyCount: 1 })
+    expect(listener).toHaveBeenCalledWith({ requestId: 'req-1', reason: 'quit', dirtyCount: 1 })
+
+    // 脏 payload（缺字段 / reason 认不出 / 负计数）：丢掉，不交给上层
+    listener.mockClear()
+    handler({}, { requestId: 'req-1', reason: 'maybe', dirtyCount: 1 })
+    handler({}, { requestId: 'req-1', reason: 'quit', dirtyCount: -1 })
+    handler({}, null)
+    expect(listener).not.toHaveBeenCalled()
+
+    // 退订：摘掉的是同一个 handler
+    unsubscribe()
+    expect(mocks.removeListener).toHaveBeenCalledWith('office:quit-request', handler)
   })
 })
 

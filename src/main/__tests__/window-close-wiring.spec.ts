@@ -4,8 +4,9 @@
  * `index.ts` / `window.ts` / `tray.ts` 都 import electron（或 `icon.png?asset`），在 vitest 里装不进来，
  * 所以这里读源码把三条硬口径钉死（独立审核 135 的收口点）：
  *
- *   1. **退出标记只由真事件立**：`app.on('before-quit')`、更新安装的
- *      `autoUpdater.on('before-quit-for-update')`、Windows 会话结束的窗口 `session-end`；
+ *   1. **退出标记只由真事件立**：`app.on('before-quit')`（M3-S5 起先过退出确认 guard，见
+ *      office-quit-wiring.spec.ts）、更新安装的 `autoUpdater.on('before-quit-for-update')`、
+ *      Windows 会话结束的窗口 `session-end`；
  *      可被取消的 `query-session-end` **不许接**；`index.ts` 里不许有直接调用（标记只能被事件触发）。
  *   2. **安装路径不预立标记**（回归点：提前立 = 安装失败 / 静默 false 之后点 X 直接退出）：
  *      `updater.ts` 与"退出标记"零耦合，`index.ts` 里没有安装前的钩子。
@@ -22,13 +23,17 @@ const traySource = readFileSync(new URL('../tray.ts', import.meta.url), 'utf8')
 const updaterSource = readFileSync(new URL('../updater.ts', import.meta.url), 'utf8')
 
 describe('退出标记的接线（源码级）', () => {
-  it('index.ts：before-quit 与 before-quit-for-update 两处真事件立标记；没有安装前的提前闩', () => {
-    expect(indexSource).toContain("app.on('before-quit', markQuitting)")
+  it('index.ts：before-quit 挂退出确认 guard（M3-S5），更新安装那条真事件保持原样；没有安装前的提前闩', () => {
+    // M3-S5 起 before-quit 不再直挂 markQuitting：先过退出确认 guard（有未保存文档时它会先拦下问壳），
+    // 只有"干净放行"或"壳回 saved/discarded"这两条路才在 guard 内部 markQuitting。
+    expect(indexSource).toContain("app.on('before-quit', quitGuard.handleBeforeQuit)")
+    expect(indexSource).not.toContain("app.on('before-quit', markQuitting)")
     // 更新安装那条路：在**发事件的那个对象**上接（Electron 原生 autoUpdater）。
     // electron-updater 6.8.9 的 BaseUpdater.js 只在 install() 真成功后才 emit 它再 app.quit()；
     // 失败 / 静默 false / 重复点安装都不会发（也不会退出）。
     expect(indexSource).toContain("autoUpdater?.on('before-quit-for-update', markQuitting)")
-    // 不许有第三种立标记的方式：标记只能被上面两个事件触发，跨字段的"提前闩"一律不要
+    // 不许有第三种立标记的方式：标记只能被真事件触发、或由 exit guard 的放行分支调用
+    // （index.ts 里没有直接调用；guard 模块的唯一落点由 office-quit-wiring.spec.ts 钉）
     expect(indexSource).not.toMatch(/markQuitting\(\)/)
     expect(indexSource).not.toContain('onInstall')
   })

@@ -193,11 +193,38 @@ export interface CloseControllerOptions {
   platform?: NodeJS.Platform
   isQuitting?: () => boolean
   trayAvailable?: () => boolean
+  /**
+   * allow 分支的额外守卫（M3-S5 退出确认）：返回 true = 已接管（它自己 preventDefault、
+   * 稍后异步放行或保持窗口），调用方不要再放行。**只在 allow 分支执行**——hide（收进托盘）
+   * 不销毁窗口、内容还在内存里，不需要问；prompt 分支自己会弹原生框。
+   * 缺省 = `index.ts` 通过 `registerCloseAllowGuard` 注册的那一个（单测可直接注入这里）。
+   */
+  allowGuard?: CloseAllowGuard
 }
 
 /** close 事件只要这么一点面（Electron 的 Event 天然满足） */
 export interface WindowCloseEvent {
   preventDefault: () => void
+}
+
+/**
+ * "真要关窗/退出"之前的额外守卫（M3-S5 退出确认）：
+ * 返回 true = 已接管（它自己 `preventDefault()`，稍后由壳的退出确认结果决定放行还是保持窗口）。
+ *
+ * 为什么只有 allow 分支有、hide 分支没有：收进托盘**不销毁窗口**（webContents / iframe /
+ * 未保存内容都还活着，随时能从托盘回来保存），没有"丢数据"的可能，也就不该弹保存框；
+ * prompt 分支自己会弹原生三选一。只有 allow = 窗口真的要销毁 → 才需要先问壳。
+ *
+ * 用注册表而不是构造参数接线：注册方是 `index.ts`（guard 用 webContents / BrowserWindow
+ * 定位窗口），window.ts 完全不需要知道 S5 的存在；与上面的 `registerTrayAvailability` 同风格。
+ */
+export type CloseAllowGuard = (event: WindowCloseEvent) => boolean
+
+/** 模块级注册的 allow 守卫（index.ts 注册；缺省 null = 不拦截，保持 0.1.3 原行为） */
+let registeredAllowGuard: CloseAllowGuard | null = null
+
+export function registerCloseAllowGuard(guard: CloseAllowGuard | null): void {
+  registeredAllowGuard = guard
 }
 
 export interface CloseController {
@@ -276,7 +303,13 @@ export function createCloseController(options: CloseControllerOptions): CloseCon
         // 偏好也是现读：设置页刚改过 / 上一次勾了"记住"立刻生效
         mode: options.mode()
       })
-      if (decision.kind === 'allow') return
+      if (decision.kind === 'allow') {
+        // M3-S5：真退出 / 真关窗之前的最后一道守卫（有未保存文档 → 拦下先问壳）。
+        // 优先用构造参数（单测注入），否则用 index.ts 注册的那一个；没注册 = 不拦截（原行为）。
+        const allowGuard = options.allowGuard ?? registeredAllowGuard
+        if (allowGuard !== null && allowGuard(event)) return
+        return
+      }
       event.preventDefault()
       if (decision.kind === 'hide') {
         options.actions.hide()

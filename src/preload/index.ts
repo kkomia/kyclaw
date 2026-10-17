@@ -108,6 +108,7 @@ import {
 import {
   officeConfigSchema,
   officeOpenResultSchema,
+  officeQuitRequestPayloadSchema,
   officeReadResultSchema,
   officeSaveAsResultSchema,
   officeSaveResultSchema
@@ -739,7 +740,8 @@ const terminalApi: KyclawTerminalApi = {
 }
 
 /**
- * Office 文档面（M3-S2）：打开（选择器 / 会话相对路径）/ 按 id 读字节 / 释放。
+ * Office 文档面（M3-S2 打开/读/保存 + M3-S5 退出确认）：
+ * 打开（选择器 / 会话相对路径）/ 按 id 读字节 / 释放 / 脏计数上报 / 退出请求订阅与回包。
  * 规则与其它面一致：回包过同一份 schema 才交给上层；**取消/格式不支持/太大/读不了都是
  * `ok:false` 的判断结果，不抛**（只有结构不合法与主进程抛的人话错误才 reject）。
  */
@@ -788,6 +790,23 @@ const officeApi: KyclawOfficeApi = {
   },
   release: async (documentId) => {
     await ipcRenderer.invoke(IPC_CHANNELS.office.release, documentId)
+  },
+  // M3-S5：退出确认。脏计数只上报数字；退出请求是主进程推来的，过同一份 schema 才转给上层
+  reportDirtyState: async (count) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.office.dirtyState, count)
+  },
+  onQuitRequest: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = officeQuitRequestPayloadSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.office.quitRequest, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.office.quitRequest, handler)
+    }
+  },
+  respondQuitRequest: async (result) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.office.quitResult, result)
   }
 }
 
