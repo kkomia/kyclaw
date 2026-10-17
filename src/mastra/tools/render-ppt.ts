@@ -78,7 +78,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
-import { basename, dirname, join, relative, sep } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import { extractPptx } from '../../main/workbench-office'
@@ -87,6 +87,7 @@ import { runProcess } from './exec'
 import {
   approvalSessionOf,
   needsApproval,
+  relativeInside,
   sessionKey,
   statOrNull,
   toolTarget,
@@ -814,7 +815,7 @@ export async function createRenderPptTool(
       needsApproval(ctx, 'render_ppt', input, approvalSessionOf(approval)),
     execute: async (input, context): Promise<RenderPptResult> => {
       const session = sessionKey(context)
-      const { abs: deck, workspace } = toolTarget(ctx, input.path, session)
+      const { abs: deck, root } = toolTarget(ctx, input.path, session)
 
       if (!/\.pptx$/i.test(deck)) {
         throw new Error(`render_ppt 只渲染 .pptx（给的是 ${basename(deck)}）`)
@@ -824,7 +825,7 @@ export async function createRenderPptTool(
         throw new Error(`render_ppt 失败：${input.path} 不存在（先确认产出落在哪个路径）`)
       }
 
-      const rel = (target: string): string => relative(workspace.path, target).split(sep).join('/')
+      const rel = (target: string): string => relativeInside(root, target)
 
       // 结构自检的底稿：渲染成不成功都读（措辞与空值只有文字能核）
       let outline: RenderPptResult['outline'] = []
@@ -860,7 +861,7 @@ export async function createRenderPptTool(
         dirname(deck),
         `${basename(deck).replace(/\.pptx$/i, '')}${PAGES_DIR_SUFFIX}`
       )
-      const outDirResolved = resolveInsideWorkspace(workspace.path, outDirCandidate)
+      const outDirResolved = resolveInsideWorkspace(root, outDirCandidate)
       if (!outDirResolved.ok) {
         throw new Error(
           `render_ppt 拒绝写页图：派生目录不在工作区内（${outDirResolved.reason}）——` +

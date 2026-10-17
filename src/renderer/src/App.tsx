@@ -1,5 +1,8 @@
+import { useLayoutEffect } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { AppShell } from './components/shell/AppShell'
+import { advanceStartupSplash, dismissStartupSplash } from './lib/startup-splash'
+import { startupMark } from './lib/startup-timing'
 import { ChatPage } from './features/chat/ChatPage'
 import { MemoryPage } from './features/memory/MemoryPage'
 import { PluginsPage } from './features/plugins/PluginsPage'
@@ -32,6 +35,15 @@ export function AppRoutes(): React.JSX.Element {
  * 在刷新/深链时不可靠，hash 路由不需要主进程配合改写 URL。
  */
 function App(): React.JSX.Element {
+  // layout effect 在 DOM 提交后、浏览器绘制前跑：记首屏提交，并只写到 80%。
+  // 100% 与退场由 dismissStartupSplash 排到下一绘制之后（见 lib/startup-splash.ts），
+  // 否则同一个 layout effect 里的 80 → 100 会只剩 100 被画出来。
+  useLayoutEffect(() => {
+    startupMark('首屏已提交')
+    advanceStartupSplash('react-committed')
+    dismissStartupSplash()
+  }, [])
+
   return (
     <HashRouter>
       <AppRoutes />

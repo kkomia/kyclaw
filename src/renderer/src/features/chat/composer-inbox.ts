@@ -62,21 +62,41 @@ export function subscribeContextItems(listener: ContextItemListener): () => void
  * 它要的是**追加**而不是替换 —— 用户可能已经敲了半句话，点胶囊不该把它抹掉。于是多一个 `mode`
  * 参数：缺省 `'replace'`（撤回回填的既有语义，**不能动**），`'append'` 由能力入口显式要。
  * 两种语义的落点都在订阅方（Composer）：那里才知道输入框里现在有什么。
+ *
+ * 0.1.3 / 013 返工：选中 AI 回复的「引用」不再把 Markdown 引用块塞进输入框，而是走同一条
+ * 草稿通道把**原文**作为一条**草稿附件**交给输入卡（见下面的 `ComposerDraft.quote`）——
+ * 输入框里一个字都不占，附件条上是可展开 / 可编辑的摘要卡；发送时仍带完整原文。
  */
-export interface ComposerDraft {
-  threadId: string
-  /** 要放进输入框的文本（撤回时 = 被撤回那条用户消息的原文） */
+export interface ComposerQuoteDraft {
+  /** 选中的原文（不截断成摘要；发送时模型拿到的是它） */
   text: string
-  /** `'replace'` = 整段替换（缺省，撤回那条路）；`'append'` = 空框填入、非空则追加到末尾 */
-  mode?: 'replace' | 'append'
+  /** 来源消息 id（可追溯：气泡下方图标项的 tooltip / metadata source 用它） */
+  messageId?: string
 }
+
+export type ComposerDraft =
+  | {
+      threadId: string
+      /** 要放进输入框的文本（撤回 / 能力入口） */
+      text: string
+      /** `'replace'` = 整段替换（缺省，撤回那条路）；`'append'` = 空框填入、非空则追加到末尾 */
+      mode?: 'replace' | 'append'
+      quote?: never
+    }
+  | {
+      threadId: string
+      /** 引用选段：只进附件条，不碰输入框 */
+      quote: ComposerQuoteDraft
+      text?: never
+      mode?: never
+    }
 
 type ComposerDraftListener = (draft: ComposerDraft) => void
 
 /** 当前挂着的订阅者（同时最多一个 Composer；与上面同理，Set 更省心） */
 const draftListeners = new Set<ComposerDraftListener>()
 
-/** 发布一次「把这段原文放回输入框」（同步派发；没人在听就等于没发生） */
+/** 发布一次草稿（回填文本或引用选段；同步派发，没人在听就等于没发生） */
 export function publishDraft(draft: ComposerDraft): void {
   for (const listener of [...draftListeners]) listener(draft)
 }

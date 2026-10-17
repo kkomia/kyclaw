@@ -21,16 +21,16 @@
   flex-direction: column;
 }
 
-/* 一列内容：宽度跟着滚动口走（图按面板宽适应，不会横向滚）；更高的图把它撑高、纵向滚 */
+/* 一列内容：宽度跟着滚动口走（图按面板宽适应，不会横向滚）；更高的图把它撑高、纵向滚。
+   `min-height: 100%` 让"适应窗口"的小图在视口里居中（内联 / 右栏 / 整屏三处宿主都给确定高度）。 */
 .dsh-media-frame {
   display: flex;
   box-sizing: border-box;
   width: 100%;
   min-width: 100%;
   height: max-content;
-  /* 内联预览（BottomSheet）那侧宿主由内容撑高：给一条下限，免得"适应宽度"把图缩成火柴盒 */
-  min-height: max(100%, min(45vh, 320px));
-  padding: 12px;
+  min-height: 100%;
+  padding: 16px;
   white-space: normal;
 }
 
@@ -46,11 +46,24 @@
   border-radius: var(--radius-panel);
 }
 
-/* 缩放面：宽度由 dsh-document.css 的两条规则给（适应宽度 = min(原始宽, 100%)；固定倍率 = 原始宽 × 倍率） */
+/* 缩放面：宽度由 dsh-document.css 的两条规则给（适应宽度 = min(原始宽, 100%)；固定倍率 = 原始宽 × 倍率），
+   "适应窗口"（contain）那条在下面（面宽 = 原始宽 × fit 倍率）。
+   `position: relative` 是 2026-10-16 的**根因修复**：里面的 img 是绝对定位 + 百分比宽高，
+   面不定位（position: static）时百分比会落到最近定位祖先 `.dsh-zoom-frame`（视口）上 ——
+   JPG 被按视口宽高拉伸变形（反馈 001）。定位在面这一层，百分比才相对"面"解，
+   面的宽高由 `--dsh-zoom-width` × `aspect-ratio` 给，永远与图片同比例。 */
 .dsh-media-surface {
+  position: relative;
   display: block;
   flex: none;
   margin: auto;
+}
+
+/* 适应窗口（contain，图片口径）：面宽 = 原始宽 × fit 倍率。fit 模式下 `--dsh-zoom` 就是这个倍率
+   （由 ZoomViewport 写），高度由面自己的 `aspect-ratio` 给 —— 宽、高同比例，永不拉伸。
+   文档 / 办公档不传 `fit='contain'`，不吃这条规则（仍是上面那条"适应宽度"）。 */
+.dsh-zoom-frame[data-dsh-zoom-fit='contain'][data-dsh-zoom-mode='fit-width'] .dsh-media-surface {
+  width: calc(var(--dsh-zoom-width, 0px) * var(--dsh-zoom, 1));
 }
 
 .dsh-media-image {

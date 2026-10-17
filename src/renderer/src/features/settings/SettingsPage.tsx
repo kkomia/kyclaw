@@ -3,7 +3,14 @@ import { cn } from '@renderer/components/ui/cn'
 import { MemorySpaceEntry } from '@renderer/features/memory/MemoryPage'
 import { UsagePanel } from '@renderer/features/usage/UsagePage'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { fontTierSchema, themeModeSchema, type FontTier, type ThemeMode } from '@shared/settings'
+import {
+  closeToTrayModeSchema,
+  fontTierSchema,
+  themeModeSchema,
+  type CloseToTrayMode,
+  type FontTier,
+  type ThemeMode
+} from '@shared/settings'
 import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
@@ -38,6 +45,13 @@ const FONT_LABELS: Record<FontTier, string> = {
   small: '小',
   default: '默认',
   large: '大'
+}
+
+/** 关闭窗口偏好的三档（0.1.3 托盘驻留；取值来自 shared/settings 的 schema，这里只给文案） */
+const CLOSE_MODE_LABELS: Record<CloseToTrayMode, string> = {
+  ask: '每次询问',
+  tray: '最小化到托盘',
+  quit: '直接退出'
 }
 
 /** 一行选项：左边标签，右边一组 chip（选中用 Fills-F2 填充，与导航项同一套"当前项"口径） */
@@ -96,6 +110,35 @@ function AppearanceOptions(): React.JSX.Element {
   )
 }
 
+/**
+ * 关闭窗口行为（0.1.3 托盘驻留）：三档偏好，走 settings:update 的补丁
+ * （`closeToTrayMode` 就是渲染端可改的字段之一），随时能改、也能改回「每次询问」。
+ * 说明只讲适用范围：Windows / Linux 才有效，macOS 沿 Dock、托盘不可用时不硬藏。
+ */
+function CloseWindowOptions(): React.JSX.Element {
+  const settings = useSettingsStore((state) => state.settings)
+  const update = useSettingsStore((state) => state.update)
+
+  return (
+    <div className="flex flex-col gap-4">
+      <OptionRow
+        label="关闭窗口时"
+        options={closeToTrayModeSchema.options.map((mode) => ({
+          key: `close-mode-${mode}`,
+          label: CLOSE_MODE_LABELS[mode],
+          selected: settings.closeToTrayMode === mode,
+          onSelect: () => void update({ closeToTrayMode: mode })
+        }))}
+      />
+      <p data-testid="close-mode-hint" className="text-c1 text-ink-tertiary">
+        {
+          'Windows / Linux 有效：选「直接退出」时点关闭立即退出，选「最小化到托盘」时窗口收进托盘、后台任务继续跑。macOS 的关闭行为跟随 Dock（不受这里影响）；托盘不可用时一律按正常关闭处理。'
+        }
+      </p>
+    </div>
+  )
+}
+
 export function SettingsPage(): React.JSX.Element {
   const section = settingsSectionFromPath(useLocation().pathname)
   const meta = findSettingsSection(section) ?? SETTINGS_SECTIONS[0]
@@ -112,9 +155,15 @@ export function SettingsPage(): React.JSX.Element {
         {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
         <div key={meta.id} className="animate-page-in flex flex-col gap-6">
           {meta.id === 'appearance' ? (
-            <SettingsGroup title="主题与字号" testId="settings-group-appearance">
-              <AppearanceOptions />
-            </SettingsGroup>
+            <>
+              <SettingsGroup title="主题与字号" testId="settings-group-appearance">
+                <AppearanceOptions />
+              </SettingsGroup>
+              {/* 0.1.3 托盘驻留：关闭窗口行为（三档偏好；win/linux 适用） */}
+              <SettingsGroup title="关闭窗口" testId="settings-group-close-window">
+                <CloseWindowOptions />
+              </SettingsGroup>
+            </>
           ) : null}
           {meta.id === 'model' ? (
             <>

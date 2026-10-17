@@ -135,6 +135,41 @@ describe('initTheme', () => {
   })
 })
 
+describe('主进程解析主题（system 模式）', () => {
+  it('解析值覆盖 matchMedia；matchMedia 滞后不会改写它', async () => {
+    const media = installMatchMedia(false)
+    const { initTheme, setResolvedNativeTheme } = await loadTheme()
+
+    initTheme()
+    expect(html().getAttribute('data-theme')).toBe('light')
+
+    setResolvedNativeTheme('dark')
+    expect(html().getAttribute('data-theme')).toBe('dark')
+
+    // 运行时切 themeSource 后 matchMedia 可能仍是旧值；以主进程推送为准
+    media.emit(false)
+    expect(html().getAttribute('data-theme')).toBe('dark')
+
+    setResolvedNativeTheme('light')
+    expect(html().getAttribute('data-theme')).toBe('light')
+  })
+
+  it('显式档忽略解析值；切回 system 后用最近一次解析值', async () => {
+    installMatchMedia(false)
+    const { setTheme, setResolvedNativeTheme } = await loadTheme()
+
+    setTheme('dark')
+    setResolvedNativeTheme('light')
+    expect(html().getAttribute('data-theme')).toBe('dark')
+
+    setTheme('system')
+    expect(html().getAttribute('data-theme')).toBe('light')
+
+    setResolvedNativeTheme('dark')
+    expect(html().getAttribute('data-theme')).toBe('dark')
+  })
+})
+
 describe('setTheme', () => {
   it('显式档不跟随系统：setTheme("dark") 后系统变化不改写', async () => {
     const media = installMatchMedia(false)

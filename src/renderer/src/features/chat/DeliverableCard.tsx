@@ -18,7 +18,8 @@ import type { Deliverable } from './deliverable'
  *
  * 为什么单开一张卡、而不是留在工具行里：交付是**给用户看东西**的动作，产出物不该埋在
  * "使用 N 个工具"的折叠块里（那一块这一轮跑完就自动收起了）。所以 Message 把交付完成的
- * deliver_file part 从过程块里**摘出来**单独渲染（见 Message.tsx 的 chunkParts）。
+ * deliver_file part 从过程块里**摘出来**；0.1.3 / 014 起整轮汇总到消息末尾统一渲染
+ * （见 Message.tsx 的 chunkParts 与 deliverable.ts 的 deliverablesByTurnTail）。
  *
  * 四个动作的去处：
  *   - 预览：workbench-store 的 openPreviewTab（按路径去重；右栏由**调用方**打开，

@@ -19,6 +19,7 @@ import {
   type ProviderConfig,
   type ProviderType
 } from '@shared/providers'
+import { SecretField } from './SecretField'
 
 /**
  * 「新增模型」弹窗（round 48 用户口径：**先出弹窗，再选渠道**）。
@@ -27,8 +28,8 @@ import {
  * 渠道收进下拉 —— 内置渠道 + 两条「自定义」。
  *
  * 两种落法（用户反馈 001：**同一条端点可以有多个模型**）：
- *   - **新通道**：这条 baseUrl / 这个内置渠道还没有配过 —— 问三件事：模型（预设带默认名）、
- *     Base URL（openai 兼容型要填）、可选渠道名 + API Key（可以留空，之后在展开行里补）。
+ *   - **新通道**：这条 baseUrl / 这个内置渠道还没有配过 —— 问三件事：模型 ID（预设带默认名）、
+ *     Base URL（openai 兼容型要填）、可选渠道名称 + API Key（可以留空，之后在展开行里补）。
  *     这一档还有**「发现模型」**（用户反馈 007）：点一下就用**刚填的**地址与密钥列一次
  *     端点上的模型（`settings:discover-provider-models`，**只读、不落盘**）。显式按钮而不是
  *     "每次键入就发请求"；密钥只在这一次调用里过桥（用完即弃，不进日志、不落盘）；
@@ -43,6 +44,18 @@ import {
  * 失败一律**留在弹窗里**（人话：缺什么说什么 / 主进程剥壳后的原因），不关窗、不清空已填内容。
  * 表单**不随开合卸载**（关窗那一下还要跑退场动效）；重开时按 `open` 的上升沿清成空白表单
  * —— 用 render 期间的条件 setState（与 chat/parts/TraceFold 的 everOpened 同一手法）。
+ *
+ * 009（用户反馈）：输入框里的 placeholder 说明/示例（模型名如…、地址、显示名、key 可留空…）
+ * 全部拿掉 —— 字段靠**标签**识别，输入框自己只装输入；渠道选择器的"选一个渠道"未选态与
+ * 动态面（正在读清单 / 读不到给原因 / 端点没给清单手填 / 提交报错）一字不动。
+ *
+ * 009 返工：注册与行内编辑用同一套字段名 —— 「渠道名称」「模型 ID」；落盘字段仍是
+ * provider.name / provider.model，语义不变。行内编辑的“模型名称”是另一张表里的模型显示名
+ * （settings.modelOverrides.displayName），注册弹窗不新增该字段。
+ *
+ * API Key 显隐与行内编辑共用 SecretField：眼睛不抢输入框焦点（点完可直接键入）。
+ * 弹窗里没有已存密钥，因此不出现圆点占位、也不会调用 `settings:reveal-provider-key`
+ * （显式回显那一档只在行内编辑的"已配置"状态用）；取消/关闭弹窗会立即清空 key 草稿。
  */
 type ChannelKey = ProviderType | `preset:${string}`
 
@@ -154,6 +167,8 @@ export function ModelAddDialog({
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [key, setKey] = useState('')
+  /** 只影响这个输入框的临时显示：默认掩码，切换不落盘、不进状态/日志 */
+  const [keyVisible, setKeyVisible] = useState(false)
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState<string | undefined>(undefined)
   /** 端点上读到的可选模型（null = 还没读到 / 这一档不需要；空数组 = 读不到，手填） */
@@ -161,17 +176,20 @@ export function ModelAddDialog({
   /** 新渠道那一档"发现模型"的结果：失败与"清单是空的"要分开说（007 的要求） */
   const [discover, setDiscover] = useState<DiscoverState | null>(null)
 
-  // 开窗的那一帧把上一次的内容清干净（关窗期间清也一样，看不见）
+  // 开窗的那一帧把上一次的内容清干净（关窗期间清也一样，看不见）。
+  // 密钥例外：开关窗都**立即**复位并清空草稿——取消 / 保存关闭后不能把明文留在 state/DOM
+  // 到下一次打开（卸载前也不会把用户输入的 key 挂着）。
   const [wasOpen, setWasOpen] = useState(open)
   if (open !== wasOpen) {
     setWasOpen(open)
+    setKeyVisible(false)
+    setKey('')
     if (open) {
       setChannel(null)
       setSetup(null)
       setName('')
       setModel('')
       setBaseUrl('')
-      setKey('')
       setBusy(false)
       setFormError(undefined)
       setOptions(null)
@@ -231,6 +249,7 @@ export function ModelAddDialog({
     setModel(chosen.provider.model)
     setBaseUrl(chosen.provider.baseUrl ?? '')
     setKey('')
+    setKeyVisible(false)
     setFormError(undefined)
     setOptions(null)
     setDiscover(null)
@@ -312,6 +331,8 @@ export function ModelAddDialog({
 
     setBusy(true)
     setFormError(undefined)
+    // 点「添加 / 保存」就先把密钥明文收回掩码（失败时草稿仍在，可继续重试）
+    setKeyVisible(false)
     try {
       if (appendTarget !== undefined) {
         // 给这条端点加模型（001）：清单去重追加、`model` 选中新模型；**不动密钥、不新建 provider**
@@ -408,11 +429,10 @@ export function ModelAddDialog({
             </p>
 
             <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">模型</span>
+              <span className="text-b2 text-ink-secondary">模型 ID</span>
               <Input
                 data-testid="model-add-model"
                 value={model}
-                placeholder="模型名，如 deepseek-v4-pro"
                 onChange={(event) => setModel(event.target.value)}
               />
             </label>
@@ -442,11 +462,10 @@ export function ModelAddDialog({
         ) : (
           <>
             <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">模型</span>
+              <span className="text-b2 text-ink-secondary">模型 ID</span>
               <Input
                 data-testid="model-add-model"
                 value={model}
-                placeholder="模型名，如 deepseek-flash"
                 onChange={(event) => setModel(event.target.value)}
               />
             </label>
@@ -457,7 +476,6 @@ export function ModelAddDialog({
                 <Input
                   data-testid="model-add-base-url"
                   value={baseUrl}
-                  placeholder="https://…/v1"
                   onChange={(event) => {
                     setBaseUrl(event.target.value)
                     // 地址变了，上一次的清单就是别的端点的：作废（免得挑到那条端点上的模型名）
@@ -468,29 +486,32 @@ export function ModelAddDialog({
             ) : null}
 
             <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">名称</span>
+              <span className="text-b2 text-ink-secondary">渠道名称</span>
               <Input
                 data-testid="model-add-name"
                 value={name}
-                placeholder="渠道显示名（可留空）"
                 onChange={(event) => setName(event.target.value)}
               />
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">API Key</span>
-              <Input
-                type="password"
-                autoComplete="off"
-                data-testid="model-add-key"
+            <div className="flex flex-col gap-1">
+              <label htmlFor="model-add-key-input" className="text-b2 text-ink-secondary">
+                API Key
+              </label>
+              <SecretField
+                id="model-add-key-input"
+                testId="model-add-key"
+                toggleTestId="model-add-key-toggle"
                 value={key}
-                placeholder="可以留空，之后在列表里补"
-                onChange={(event) => {
-                  setKey(event.target.value)
+                onValueChange={(value) => {
+                  setKey(value)
                   setDiscover(null)
                 }}
+                visible={keyVisible}
+                onVisibleChange={setKeyVisible}
+                saved={false}
               />
-            </label>
+            </div>
 
             {setup.needsBaseUrl ? (
               <div className="flex flex-col gap-1">

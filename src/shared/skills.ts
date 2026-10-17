@@ -1,6 +1,6 @@
-import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 /**
  * 技能（Agent Skills 约定）的**跨进程共用面**：技能来源的形状、SKILL.md 的 frontmatter 解析、
@@ -225,6 +225,30 @@ export const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 export const SKILL_NAME_PROBLEM =
   '技能名只能用 1-64 位小写字母、数字或短横线，且首字符是字母或数字（它同时是目录名与引用名）'
 
+/**
+ * Windows 保留设备名（`con` / `nul` / `com1`… + `conin$` / `conout$` / `clock$`）：
+ * **目录名与包内路径段都不能用** —— 落盘在 Windows 上会被当成设备（打不开，或被静默改写），
+ * 于是"校验过的名字"与"真落盘的名字"分叉 —— 路径类漏洞最常见的那种形状。带扩展名一样危险
+ * （`nul.txt` 也是空设备），所以比的是第一个点之前的 stem。
+ */
+export const WINDOWS_RESERVED_NAMES: ReadonlySet<string> = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  'conin$',
+  'conout$',
+  'clock$',
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`)
+])
+
+/** 一个名字段（目录名 / zip 条目的某一段）是不是 Windows 保留名 */
+export function isWindowsReservedName(segment: string): boolean {
+  const stem = (segment.split('.')[0] ?? '').trim().toLowerCase()
+  return WINDOWS_RESERVED_NAMES.has(stem)
+}
+
 /** 名字能用作技能目录名吗？不合规回原因，合规回 null */
 export function skillNameProblem(name: string): string | null {
   const trimmed = name.trim()
@@ -277,6 +301,36 @@ export function skillEntryPath(source: Pick<SkillSource, 'path'>): string {
   return join(source.path, SKILL_FILE)
 }
 
+/**
+ * `SKILL.md` 的**可读真实路径**（011 只读防线）：拿不到就 null。
+ *
+ * 两道检查（扫描、header、全文三处共用这一份口径，避免各写一套）：
+ *   1. 技能目录本身必须是真实目录 —— `lstat` 是符号链接 / junction 就拒绝；
+ *   2. `SKILL.md` 的 realpath 必须仍在技能目录内 —— 入口文件是链接指向外部时，
+ *      不把链接目标的内容当成技能正文读出来；指向技能目录**内部**的链接无害（realpath 仍在根内，放行）。
+ *
+ * 不抛：调用方按"没有可读的 SKILL.md"处理（与坏技能的容错口径一致）。
+ */
+export function resolveSkillEntryFile(source: Pick<SkillSource, 'path'>): string | null {
+  try {
+    // 先词法归一（去掉尾部分隔符 / `.`）：Windows 上 `link\` 会跟随链接，lstat 就看不出来了
+    const dirPath = resolve(source.path)
+    const dir = lstatSync(dirPath)
+    if (dir.isSymbolicLink() || !dir.isDirectory()) return null
+
+    const rootReal = realpathSync.native(dirPath)
+    const fileReal = realpathSync.native(join(dirPath, SKILL_FILE))
+    if (!statSync(fileReal).isFile()) return null
+
+    const rel = relative(rootReal, fileReal)
+    if (rel === '' || isAbsolute(rel)) return null
+    if (rel.split(/[\\/]/)[0] === '..') return null
+    return fileReal
+  } catch {
+    return null
+  }
+}
+
 /** 一份技能的头部信息（清单/指令里只需要名字与描述，不必读全文） */
 export interface SkillHeader {
   name: string
@@ -302,14 +356,30 @@ export type SkillHeaderRead =
   | { ok: true; header: SkillHeader }
   | { ok: false; file: string; kind: 'missing' | 'invalid'; why: string }
 
+interface SkillHeaderDocs {
+  data: Record<string, string>
+  frontmatter: boolean
+  bytes: number
+}
+
+/** 入口真实文件 → frontmatter 解析结果；拿不到 = null（不抛、不记日志） */
+function readSkillDocs(path: string): SkillHeaderDocs | null {
+  // 011：链接目录 / 指向目录外的链接入口当"没有可读的 SKILL.md"（head 不泄露链接目标；
+  // 指向技能目录内部的链接仍可读，见 resolveSkillEntryFile 的 containment）
+  const file = resolveSkillEntryFile({ path })
+  const read = file === null ? null : readBounded(file, HEADER_READ_MAX_BYTES)
+  if (read === null) return null
+  const docs = parseSkillFrontmatter(read.text)
+  return { data: docs.data, frontmatter: docs.frontmatter, bytes: read.bytes }
+}
+
 export function readSkillSource(source: SkillSource): SkillHeaderRead {
   const file = skillEntryPath(source)
-  const read = readBounded(file, HEADER_READ_MAX_BYTES)
-  if (read === null) {
+  const docs = readSkillDocs(source.path)
+  if (docs === null) {
     return { ok: false, file, kind: 'missing', why: `没有可读的 ${SKILL_FILE}` }
   }
-  const { data, frontmatter } = parseSkillFrontmatter(read.text)
-  if (!frontmatter) {
+  if (!docs.frontmatter) {
     return {
       ok: false,
       file,
@@ -320,13 +390,23 @@ export function readSkillSource(source: SkillSource): SkillHeaderRead {
   return {
     ok: true,
     header: {
-      name: skillNameOf(source, data.name ?? ''),
-      description: (data.description ?? '').trim(),
-      license: (data.license ?? '').trim(),
+      name: skillNameOf(source, docs.data.name ?? ''),
+      description: (docs.data.description ?? '').trim(),
+      license: (docs.data.license ?? '').trim(),
       file,
-      bytes: read.bytes
+      bytes: docs.bytes
     }
   }
+}
+
+/**
+ * 目录当前是否仍是一份**有效技能**（011 的运行时复查）：与 `readSkillSource` / `discoverSkills`
+ * 同一判据 —— 目录真实、SKILL.md 可读且 realpath 不越出根、带闭合 frontmatter。
+ * 不记日志：`read` 的信任根每次工具调用都会现算，坏技能不能因此刷屏。
+ */
+export function isValidSkillSource(source: Pick<SkillSource, 'path'>): boolean {
+  const docs = readSkillDocs(source.path)
+  return docs !== null && docs.frontmatter
 }
 
 /**

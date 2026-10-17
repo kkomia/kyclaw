@@ -20,17 +20,23 @@
  * 纯函数 + 同步 fs（口径与 settings/插件目录扫描一致）：技能目录就几十 KB 级，
  * 每轮现读能保证"用户刚装的插件下一轮就能用"，不必重启、也不用缓存失效逻辑。
  */
-import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
+import { closeSync, lstatSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { readSkillSource, type SkillSource, type SkillSummary } from '../../shared/skills'
+import {
+  readSkillSource,
+  resolveSkillEntryFile,
+  SKILL_FILE,
+  type SkillSource,
+  type SkillSummary
+} from '../../shared/skills'
 import { skillRuntimeFactsText, type SkillRuntimeFacts } from './runtime'
 
 /** 技能的完整描述（清单用头部，读全文时才用这里的 file） */
 export interface SkillEntry extends SkillSummary {
   /** SKILL.md 的绝对路径 */
   file: string
-  /** SKILL.md 的字节数 */
+  /** SKILL.md 的字节数（发现时快照；readSkill 按当前长度重新判断，见该函数） */
   bytes: number
   /** frontmatter 里的 license（没有 = 空串）；第三方技能的来源声明靠它 */
   license: string
@@ -55,13 +61,24 @@ export const SKILL_FILE_DEPTH_MAX = 3
  *   - 文件读不出来 / 解析过程里任何异常一律被吞成"跳过"（见 readSkillSource 与 readBounded）。
  * 无论哪一条，都**不抛**：技能是加法，一份写坏的技能不该让这一轮对话倒下。
  */
-export function discoverSkills(sources: readonly SkillSource[]): SkillEntry[] {
+export interface DiscoverSkillsOptions {
+  /**
+   * 坏 frontmatter 是否记警告（缺省 true）。`read({ skill })` 的信任根每次工具调用都要现算，
+   * 用 `warn: false` 复用同一份"有效技能"判据，但不在每次 read 时重复刷日志。
+   */
+  warn?: boolean
+}
+
+export function discoverSkills(
+  sources: readonly SkillSource[],
+  options: DiscoverSkillsOptions = {}
+): SkillEntry[] {
   const seen = new Set<string>()
   const entries: SkillEntry[] = []
   for (const source of sources) {
     const read = readSkillSource(source)
     if (!read.ok) {
-      if (read.kind === 'invalid') {
+      if (read.kind === 'invalid' && options.warn !== false) {
         console.warn(`[kyclaw] 技能被忽略：${read.file} —— ${read.why}`)
       }
       continue
@@ -137,6 +154,8 @@ export function skillsGuidance(entries: readonly SkillEntry[]): string {
     'until use_skill loads one, never infer what it says from its name or description, and never act as if you had followed it. ' +
     'The moment a task matches one of these, read its full manual with use_skill **before the first step of that task**, not halfway through. ' +
     'Never load the same manual twice in one turn: it is already in your context. ' +
+    'To read a file inside a skill directory (the list use_skill returns; hidden paths and node_modules are not readable), call `read` with `skill` set to the ' +
+    'skill directory ID that use_skill prints and `path` set to the relative file path — never use bash, glob or grep for skill files. ' +
     'A `【引用】技能：<name>` in the user message names the skill to use:' +
     `\n${lines}` +
     '\n  (names and descriptions only; the procedure, parameter rules, pitfalls and pre-delivery self-check are all in the full text use_skill returns.)'
@@ -152,7 +171,11 @@ export interface SkillReading {
    */
   text: string
   truncated: boolean
-  /** 技能目录下的文件（相对路径、正斜杠；含 SKILL.md 自己；最多 100 条） */
+  /**
+   * 技能目录下的**真实文件**（相对路径、正斜杠；最多 100 条）。
+   * 入口是真实文件时包含 SKILL.md 自己；符号链接条目（含指向目录内部的 SKILL.md 链接）不进清单 ——
+   * 清单只列 `lstat` 认为是普通文件的东西，隐藏段与 node_modules 也已排除。
+   */
   files: string[]
   filesTruncated: boolean
 }
@@ -167,13 +190,42 @@ export interface SkillReading {
  *
  * 截断口径：上界 `SKILL_TEXT_MAX_BYTES` 算的是**返回的全部文本**，所以正文先让出尾部那段的
  * 字节数再截 —— 结果就是"手册可能被切，但部署事实永远看得见"。
+ *
+ * 011：入口不可读（目录/入口消失、根变成链接、入口链接指向目录外）时**抛错**，不返回成功形状的
+ * 空正文，也不列目录（否则链接根会把外部文件名带出去）。截断按**当前文件长度**算，不信任
+ * discovery 时的 `entry.bytes` 快照；无论是否截断都只读 budget 字节。
  */
 export function readSkill(entry: SkillEntry, facts?: SkillRuntimeFacts | null): SkillReading {
+  // 011：discovery 之后入口可能被删 / 改成坏 frontmatter / 换成链接；这里按当前盘面再判一次，
+  // 不把"入口已经不是一个技能"当成成功形状的空正文（use_skill 会把它翻成明确失败）
+  const readable = readSkillSource(entry.source)
+  if (!readable.ok) {
+    throw new Error(
+      `技能「${entry.name}」的 ${SKILL_FILE} 不可读：` +
+        (readable.kind === 'invalid'
+          ? '缺少有效的 frontmatter'
+          : '入口不存在，或不是技能目录内的真实文件')
+    )
+  }
+
   const tail = skillRuntimeFactsText(facts ?? null)
   const tailBytes = Buffer.byteLength(tail, 'utf8')
   const budget = Math.max(1024, SKILL_TEXT_MAX_BYTES - tailBytes)
-  const limited = entry.bytes > budget
-  const text = limited ? readPrefix(entry.file, budget) : readWhole(entry.file)
+  const file = resolveSkillEntryFile(entry.source)
+  if (file === null) {
+    throw new Error(
+      `技能「${entry.name}」的 ${SKILL_FILE} 不可读：入口不存在，或不是技能目录内的真实文件`
+    )
+  }
+  const size = skillEntrySize(file, entry.name)
+  const limited = size > budget
+  let text = ''
+  try {
+    if (size > 0) text = readPrefix(file, Math.min(size, budget))
+  } catch {
+    throw new Error(`技能「${entry.name}」的 ${SKILL_FILE} 读取失败`)
+  }
+
   const listing = listSkillFiles(entry.source.path)
   return {
     name: entry.name,
@@ -184,27 +236,23 @@ export function readSkill(entry: SkillEntry, facts?: SkillRuntimeFacts | null): 
   }
 }
 
-function readWhole(file: string): string {
+/** 当前入口文件的字节数；不是普通文件 / 拿不到 → 明确失败（不返回空正文） */
+function skillEntrySize(file: string, name: string): number {
   try {
-    return readFileSync(file, 'utf8')
+    const stat = statSync(file)
+    if (!stat.isFile()) throw new Error('not a regular file')
+    return stat.size
   } catch {
-    return ''
+    throw new Error(`技能「${name}」的 ${SKILL_FILE} 不可读：文件不存在或不是普通文件`)
   }
 }
 
 function readPrefix(file: string, maxBytes: number): string {
-  let fd: number
-  try {
-    fd = openSync(file, 'r')
-  } catch {
-    return ''
-  }
+  const fd = openSync(file, 'r')
   try {
     const buffer = Buffer.allocUnsafe(maxBytes)
     const read = readSync(fd, buffer, 0, maxBytes, 0)
     return new StringDecoder('utf8').write(buffer.subarray(0, read))
-  } catch {
-    return ''
   } finally {
     closeSync(fd)
   }
@@ -214,10 +262,24 @@ function readPrefix(file: string, maxBytes: number): string {
  * 技能目录下的文件清单（递归、按路径排序、条数与深度都有上界）。
  * 只列文件不列目录：模型关心的是"还有哪些资料可读"，不是目录树。
  * 隐藏目录（`.git` 之类）与 `node_modules` 不进清单（技能包里偶尔混进这些）。
+ *
+ * 011：**不跟随链接** —— 根目录本身与每个目录项都用 `lstat`（不是 `stat`）判断：
+ * 根是符号链接 / junction（技能目录在扫描后被替换）时直接返回空清单，子项链接也跳过。
+ * 否则清单会把链接指向的外部文件名列给模型，等于泄露一份可探测的目录
+ * （而且那些名字随后也过不了 `read` 的 containment）。
+ *
+ * 为什么不用 `readdirSync(..., { withFileTypes: true }).isFile()`：部分网络盘 / 文件系统返回
+ * `DT_UNKNOWN`，Dirent 的 is* 全是 false，会把正常文件整批漏掉。`lstat` 在两边都可靠。
  */
 export function listSkillFiles(root: string): { files: string[]; truncated: boolean } {
   const files: string[] = []
   let truncated = false
+  try {
+    const rootStat = lstatSync(root)
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { files, truncated }
+  } catch {
+    return { files, truncated }
+  }
   const walk = (dir: string, depth: number): void => {
     if (depth > SKILL_FILE_DEPTH_MAX) return
     let names: string[]
@@ -231,18 +293,20 @@ export function listSkillFiles(root: string): { files: string[]; truncated: bool
         truncated = true
         return
       }
-      if (name.startsWith('.') || name === 'node_modules') continue
+      if (name.startsWith('.') || name.toLowerCase() === 'node_modules') continue
       const full = join(dir, name)
-      let isDir = false
+      let stat: ReturnType<typeof lstatSync>
       try {
-        isDir = statSync(full).isDirectory()
+        stat = lstatSync(full)
       } catch {
         continue
       }
-      if (isDir) {
+      if (stat.isSymbolicLink()) continue
+      if (stat.isDirectory()) {
         walk(full, depth + 1)
         continue
       }
+      if (!stat.isFile()) continue
       files.push(relative(root, full).split(sep).join('/'))
     }
   }

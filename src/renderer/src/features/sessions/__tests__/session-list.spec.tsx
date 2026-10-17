@@ -28,6 +28,7 @@ function renderList(
     activeId?: string | null
     notices?: Record<string, true>
     pinnedIds?: ReadonlySet<string>
+    runningIds?: ReadonlySet<string>
   } = {},
   path = '/chat'
 ): { onSelect: ReturnType<typeof vi.fn> } {
@@ -39,6 +40,7 @@ function renderList(
         activeId={options.activeId ?? null}
         notices={options.notices}
         pinnedIds={options.pinnedIds}
+        runningIds={options.runningIds}
         onSelect={onSelect}
       />
       <LocationProbe />
@@ -135,6 +137,37 @@ describe('会话列表：平铺与选中', () => {
     renderList([entry('t1', '甲'), entry('t2', '乙')], { notices: { t2: true } })
 
     expect(screen.queryByTestId('session-done-t1')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-done-t2')).toBeInTheDocument()
+  })
+
+  it('010：在跑的会话在完成槽位画灰色圆环（Spinner），优先于完成点；跑完完成点按未读语义回来', () => {
+    const tree = (runningIds: ReadonlySet<string>): React.JSX.Element => (
+      <MemoryRouter initialEntries={['/chat']}>
+        <SessionList
+          sessions={[entry('t1', '甲'), entry('t2', '乙')]}
+          activeId={null}
+          notices={{ t2: true }}
+          runningIds={runningIds}
+          onSelect={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+    const view = render(tree(new Set(['t2'])))
+
+    const spinner = screen.getByTestId('session-running-t2')
+    // 灰色圆环：跟 currentColor（text-ink-tertiary = 三级灰）；reduced-motion 下不转、
+    // 读屏仍有一句运行说明（role=status）
+    expect(spinner).toHaveClass('animate-spin', 'text-ink-tertiary', 'motion-reduce:animate-none')
+    expect(spinner).toHaveAttribute('role', 'status')
+    expect(spinner).toHaveAccessibleName('正在生成回复')
+    // 运行优先完成点：同一个槽只画一个（灰圈），圆点的数据不被运行态动到
+    expect(screen.queryByTestId('session-done-t2')).not.toBeInTheDocument()
+    // 没在跑的行没有灰圈
+    expect(screen.queryByTestId('session-running-t1')).not.toBeInTheDocument()
+
+    // 跑完（running 撤下）：完成点原样回来（未读语义没被运行态破坏）
+    view.rerender(tree(new Set()))
+    expect(screen.queryByTestId('session-running-t2')).not.toBeInTheDocument()
     expect(screen.getByTestId('session-done-t2')).toBeInTheDocument()
   })
 

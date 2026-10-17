@@ -393,7 +393,7 @@ test.describe.serial('R90 · 预览发布验收（真应用：文件树 → IPC 
     expect(has('压力.pptx')).toBe(true)
     // 放在 office 用例最前面：引擎冷启动那一下最长，取消窗口最稳
     await clickFile(app.page, '压力.pptx', 'inline')
-    // 转换真发起了（组件进的是"正在把这份文档转成可翻页的 PDF…"，不是错误态）
+    // 转换真发起了（组件进的是"正在加载预览…"，不是错误态）
     await expect(app.page.getByTestId('dsh-office-loading')).toBeVisible({ timeout: 30_000 })
     await expect(app.page.getByTestId('dsh-office-error')).toHaveCount(0)
 

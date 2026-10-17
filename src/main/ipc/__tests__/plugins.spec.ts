@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,7 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
-  return { handlers: new Map<string, Handler>() }
+  return {
+    handlers: new Map<string, Handler>(),
+    /** round 94：原生选择器（技能导入的 file/folder 入口） */
+    dialog: vi.fn(),
+    /** BrowserWindow.fromWebContents 的返回值：null = 没有父窗口 */
+    window: null as unknown
+  }
 })
 
 vi.mock('electron', () => ({
@@ -19,7 +26,9 @@ vi.mock('electron', () => ({
     handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => {
       mocks.handlers.set(channel, handler)
     }
-  }
+  },
+  BrowserWindow: { fromWebContents: () => mocks.window },
+  dialog: { showOpenDialog: mocks.dialog }
 }))
 
 import { IPC_CHANNELS, IpcInputError } from '../../../shared/ipc'
@@ -39,6 +48,8 @@ let dir: string
 
 beforeEach(() => {
   mocks.handlers.clear()
+  mocks.dialog.mockReset()
+  mocks.window = null
   dir = mkdtempSync(join(tmpdir(), 'kyclaw-plugins-ipc-'))
   registerPluginIpc(dir)
 })
@@ -77,10 +88,12 @@ function makeMarket(base: string): string {
 }
 
 describe('plugins 通道 handler：注册与入参闸门', () => {
-  it('七条通道都注册了', () => {
+  it('九条通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'plugins:add-marketplace',
+      'plugins:add-skill-url',
       'plugins:icon',
+      'plugins:import-skill-local',
       'plugins:install',
       'plugins:overview',
       'plugins:refresh-marketplace',
@@ -207,7 +220,8 @@ describe('plugins:install / uninstall', () => {
         dir: 'market-p-relative-demo',
         name: 'demo',
         pluginId: 'market-p-relative',
-        pluginName: 'p-relative'
+        pluginName: 'p-relative',
+        source: 'plugin'
       }
     ])
   })
@@ -393,7 +407,8 @@ describe('round 64 · 内置技能进总览（插件页「技能」面板 / comp
         dir: 'market-p-relative-demo',
         name: 'demo',
         pluginId: 'market-p-relative',
-        pluginName: 'p-relative'
+        pluginName: 'p-relative',
+        source: 'plugin'
       }
     ])
   })
@@ -446,5 +461,135 @@ describe('plugins:icon（round 23：插件图标）', () => {
     expect(await handlerOf(IPC_CHANNELS.plugins.icon)(EVENT, 'market', '不存在')).toEqual({
       dataUrl: null
     })
+  })
+})
+
+/**
+ * round 94（用户反馈 004）：**单独注册一个技能**的两条通道。
+ * 重点：① 入参先过闸门；② 本地文件/文件夹走原生选择器（渲染端递不了路径），
+ * 取消 = `added: null` 什么都不落盘；③ URL 导入跑真后端（本机 HTTP 服务 + 真 fetch +
+ * 真逐跳出站校验），白名单**现读** `settings.network.allowLocalHosts`；
+ * ④ 导入后的技能进总览的「我的技能」一组（source: 'user'），并能在 agents 侧被扫到（同一目录）。
+ */
+describe('plugins:add-skill-url / import-skill-local（round 94）', () => {
+  /** 一个本机 HTTP 服务（回固定内容）；回它的地址与白名单条目 */
+  async function serve(body: Buffer | string, type = 'text/markdown'): Promise<string> {
+    const started = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': type })
+      response.end(body)
+    })
+    await new Promise<void>((resolve) => started.listen(0, '127.0.0.1', resolve))
+    servers.push(started)
+    const address = started.address()
+    if (address === null || typeof address === 'string') throw new Error('服务没起来')
+    return `http://127.0.0.1:${address.port}/demo/SKILL.md`
+  }
+
+  const servers: Server[] = []
+
+  afterEach(() => {
+    for (const server of servers.splice(0)) server.close()
+  })
+
+  it('入参先过闸门（非法调用不碰磁盘、不弹选择器）', async () => {
+    const url = handlerOf(IPC_CHANNELS.plugins.addSkillUrl)
+    const local = handlerOf(IPC_CHANNELS.plugins.importSkillLocal)
+    for (const args of [[], [{}], [{ url: '' }], [{ url: 1 }], ['https://x/y', 1]]) {
+      await expect(url(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
+    }
+    for (const args of [[], ['path'], ['md'], [1], ['file', 'x']]) {
+      await expect(local(EVENT, ...args), JSON.stringify(args)).rejects.toThrow(IpcInputError)
+    }
+    expect(mocks.dialog).not.toHaveBeenCalled()
+    expect(existsSync(join(dir, 'skills'))).toBe(false)
+  })
+
+  it('本地文件导入：走原生选择器 + 真读真写，落进「我的技能」（source: user）', async () => {
+    const file = join(dir, 'invoice-helper.md')
+    writeFileSync(file, '---\nname: invoice-helper\ndescription: 开发票\n---\n正文\n', 'utf8')
+    mocks.dialog.mockResolvedValue({ canceled: false, filePaths: [file] })
+
+    const result = (await handlerOf(IPC_CHANNELS.plugins.importSkillLocal)(EVENT, 'file')) as {
+      overview: PluginsOverview
+      added: { name: string; dir: string } | null
+    }
+
+    expect(mocks.dialog).toHaveBeenCalledWith(expect.objectContaining({ properties: ['openFile'] }))
+    expect(result.added).toEqual({ name: 'invoice-helper', dir: 'invoice-helper' })
+    expect(existsSync(join(dir, 'skills', 'invoice-helper', 'SKILL.md'))).toBe(true)
+    expect(result.overview.installedSkills).toEqual([
+      {
+        dir: 'invoice-helper',
+        name: 'invoice-helper',
+        pluginId: null,
+        pluginName: null,
+        source: 'user'
+      }
+    ])
+  })
+
+  it('本地文件夹导入：取消（原生选择器回 canceled）= added null，什么都不落盘', async () => {
+    mocks.dialog.mockResolvedValue({ canceled: true, filePaths: [] })
+
+    const result = (await handlerOf(IPC_CHANNELS.plugins.importSkillLocal)(EVENT, 'folder')) as {
+      overview: PluginsOverview
+      added: unknown
+    }
+
+    expect(mocks.dialog).toHaveBeenCalledWith(
+      expect.objectContaining({ properties: ['openDirectory'] })
+    )
+    expect(result.added).toBeNull()
+    expect(result.overview.installedSkills).toEqual([])
+    expect(existsSync(join(dir, 'skills'))).toBe(false)
+  })
+
+  it('目录里没有 SKILL.md：抛人话（界面行内显示），仍不落盘', async () => {
+    const empty = join(dir, 'empty-dir')
+    mkdirSync(empty, { recursive: true })
+    mocks.dialog.mockResolvedValue({ canceled: false, filePaths: [empty] })
+    await expect(handlerOf(IPC_CHANNELS.plugins.importSkillLocal)(EVENT, 'folder')).rejects.toThrow(
+      /SKILL\.md/
+    )
+    expect(existsSync(join(dir, 'skills'))).toBe(false)
+  })
+
+  it('URL 导入：环回默认拒（结构化 blocked，含精确 host:port 与人话），白名单现读放行', async () => {
+    const href = await serve('---\nname: from-url\ndescription: 来自网址\n---\n')
+
+    // 本机/内网这一档**不抛**：回结构化的"要你确认"（界面据此给"允许访问 <host:port>"按钮），
+    // 且一个字节都没落盘
+    const blocked = (await handlerOf(IPC_CHANNELS.plugins.addSkillUrl)(EVENT, { url: href })) as {
+      overview: PluginsOverview
+      added: unknown
+      blocked: { host: string; url: string; message: string } | null
+    }
+    const host = new URL(href).host
+    expect(blocked.added).toBeNull()
+    expect(blocked.blocked?.host).toBe(host)
+    expect(blocked.blocked?.message).toContain('本机（环回）地址')
+    expect(blocked.blocked?.message).toContain('允许这台主机')
+    expect(existsSync(join(dir, 'skills'))).toBe(false)
+
+    // 白名单现读：改完设置（这里直接写落盘文件，等于用户点了"允许"）再点一次就通了
+    writeJson(settingsPath(dir), { ...settings(), network: { allowLocalHosts: [host] } })
+
+    const result = (await handlerOf(IPC_CHANNELS.plugins.addSkillUrl)(EVENT, { url: href })) as {
+      overview: PluginsOverview
+      added: { name: string; dir: string } | null
+      blocked: unknown
+    }
+    expect(result.blocked).toBeNull()
+    expect(result.added).toEqual({ name: 'from-url', dir: 'from-url' })
+    expect(readFileSync(join(dir, 'skills', 'from-url', 'SKILL.md'), 'utf8')).toContain('来自网址')
+    expect(result.overview.installedSkills).toEqual([
+      {
+        dir: 'from-url',
+        name: 'from-url',
+        pluginId: null,
+        pluginName: null,
+        source: 'user'
+      }
+    ])
   })
 })

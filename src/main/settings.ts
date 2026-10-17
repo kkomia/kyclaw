@@ -40,7 +40,9 @@ export function settingsPath(userDataDir: string): string {
  * round 28 的 semanticRecall（含 v1 形状 → v2 形状的迁移）、round 32 的 reasoningTranslate、
  * round 45 的 webSearch、round 63 的 updateUrl、round 67 的 langfuse.proxyUrl、
  * round 75 的 outsideWorkspaceMode（"工作区之外"那一档，缺了补 `ask`：保守档）、
- * round 86 的 langfuse.enabled（010 的显式开关，缺了补 `true`：没显式关过 = 开着）。
+ * round 86 的 langfuse.enabled（010 的显式开关，缺了补 `true`：没显式关过 = 开着）、
+ * 0.1.3 的 closeToTrayMode（托盘驻留的三档关闭偏好；老文件的旧提示标记 true 迁成 `tray` 保旧行为，
+ * 其余补 `ask`，旧键 closeToTrayHintShown 一并剥掉）。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  *
@@ -61,6 +63,15 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.mcpServers === undefined) next.mcpServers = []
   if (next.defaultWorkspace === undefined) next.defaultWorkspace = null
   if (next.defaultWorkspaceInitialized === undefined) next.defaultWorkspaceInitialized = false
+  // 0.1.3 托盘驻留：关闭偏好从"首次提示标记"（旧 boolean closeToTrayHintShown）迁到三档 mode：
+  //   - 合法的新值优先（用户在新设置页改过 / 弹窗勾过"记住"就是它）；
+  //   - 旧标记 true = 旧行为下"点关闭直接收进托盘"→ 迁成 'tray' 保持旧行为（旧标记里没有按钮
+  //     信息，这不是"还原过去的选择"）；缺失 / false / 坏值 → 'ask'（照旧每次询问）；
+  //   - 旧键一律删掉：strict schema 里已经没有它，留着会让整份设置当坏文件丢回默认。
+  if (next.closeToTrayMode !== 'tray' && next.closeToTrayMode !== 'quit') {
+    next.closeToTrayMode = next.closeToTrayHintShown === true ? 'tray' : 'ask'
+  }
+  delete next.closeToTrayHintShown
   if (next.projects === undefined) next.projects = []
   if (next.langfuse === undefined) {
     next.langfuse = { enabled: true, endpoint: LANGFUSE_PRESET.endpoint, proxyUrl: '' }

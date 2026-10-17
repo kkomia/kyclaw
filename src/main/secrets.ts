@@ -1,7 +1,9 @@
 /**
  * 密钥存储（唯一一份：userData/secrets.json）——provider 的 API Key 只在这里落盘，且是
- * safeStorage 的密文（base64）。明文只存在于两个短暂窗口：写入的那一刻、解密后交给模型解析的那一刻；
- * 任何回渲染端的数据都不带明文（契约见 shared/ipc.ts，测试在 main/ipc/__tests__/settings.spec.ts）。
+ * safeStorage 的密文（base64）。明文只存在于三个短暂窗口：写入的那一刻、解密后交给模型解析的
+ * 那一刻、以及用户**显式点击眼睛**时经 `settings:reveal-provider-key` 回一次渲染端的那一刻
+ * （不自动推送、不缓存、不落盘、不写日志；契约见 shared/ipc.ts，测试在
+ * main/ipc/__tests__/settings.spec.ts）。
  *
  * 解密失败（换机、迁移、系统账户变了）不是"错误"，而是"没有密钥"：
  * `providerKeyState` 回 `{hasKey:false, needsReentry:true}`，UI 引导重录（Review Focus #5）。
@@ -72,7 +74,7 @@ export function clearProviderKey(file: string, id: string): void {
   writeSecretsFile(file, secrets)
 }
 
-/** 取密钥明文：**仅主进程内部使用**（模型解析 / 连接测试）；解不开或没配过都回 null */
+/** 取密钥明文：**仅在主进程内取**（模型解析 / 连接测试；用户显式点眼睛的 reveal 通道也经这里）；解不开或没配过都回 null */
 export function getProviderKey(file: string, id: string): string | null {
   const encrypted = readSecretsFile(file).keys[id]
   if (encrypted === undefined) return null

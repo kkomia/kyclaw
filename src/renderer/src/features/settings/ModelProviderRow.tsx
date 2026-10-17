@@ -1,4 +1,5 @@
 import { ChevronRight, Eye } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Input } from '@renderer/components/ui/input'
@@ -27,22 +28,23 @@ import {
   CONNECTION_TEST_STEP_LABELS,
   connectionTestHeadline
 } from './status-text'
+import { SecretField } from './SecretField'
 
 /** 视觉能力的标记文案（与 composer 模型菜单的 VISION_MARK 同口径，见 ComposerControls） */
 const VISION_MARK = '看图'
 
 export interface ProviderDraft {
-  /** 002：渠道显示名（空 = 按 id 猜，见 providerLabel） */
+  /** 002：渠道名称（空 = 按 id 猜，见 providerLabel） */
   name: string
   model: string
   /** 001：这条端点已注册的模型清单（草稿；保存时落盘。空/只有当前这个 = 不写 models 字段） */
   models: string[]
-  /** 004：模型显示名（只影响展示；空 = 用模型名原文） */
+  /** 004：模型名称（只影响展示；空 = 用模型 ID 原文） */
   displayName: string
   /** 003：手动上下文长度（tokens，文本形态；空/非法 = 不动手动值） */
   contextWindow: string
   baseUrl: string
-  /** 待写入的新密钥；保存成功后立刻清空（已存的密钥不回显） */
+  /** 待写入的新密钥；保存成功后立刻清空（已存密钥只在用户点眼睛时临时回显） */
   key: string
 }
 
@@ -78,18 +80,39 @@ export interface ProviderRowProps {
   onUseRegisteredModel: (model: string) => void
   /** 001：把一个模型从这条端点的注册清单里摘掉（当前选中的那个不给摘，见下） */
   onDropRegisteredModel: (model: string) => void
+  /**
+   * 密钥显隐的复位序号：父级在展开/收起任一行、任一行开始保存 / 保存成功时 +1。
+   * 行内只把明文展示（本次输入或显式回显的已存 key）保留到"这一次展开 / 这一次保存"为止
+   * （只复位显示态，不动草稿）。
+   */
+  revealEpoch: number
 }
 
 /**
  * 已配置模型的一行（round 48 用户口径）：**默认折叠**，只留最基本信息——
- * 名字（渠道名 + 模型名）、上下文（连带**来源**标注：实测 / 回退 / 手动）、能力图标、是不是默认；
+ * 渠道名 + 模型名称、上下文（连带**来源**标注：实测 / 回退 / 手动）、能力图标、是不是默认；
  * 点整行才展开编辑。
  *
  * 折叠行**不描边**（上一版每行一张卡都有框线，近距堆好几层；这里只用 hover 填充），
  * 展开区沿用全局折叠配方 `.trace-fold`（grid-template-rows 双向过渡，不硬切）。
- * 编辑能力与上一版**逐项照旧**（模型 / Base URL / API Key / 保存 / 测试连接 / 设为默认 / 删除），
- * 另加用户反馈的几项：渠道名（002）、模型显示名（004）、手动上下文长度 + 来源 + 恢复探测值（003）；
+ * 编辑能力与上一版**逐项照旧**（模型 ID / Base URL / API Key / 保存 / 测试连接 / 设为默认 / 删除），
+ * 另加用户反馈的几项：渠道名称（002）、模型名称（004）、手动上下文长度 + 来源 + 恢复探测值（003）；
  * 密钥状态 + 重录引导 + 半截配置提示一起收进展开区（折叠行上不再用文字解释）。
+ *
+ * 009 返工（用户验收口径）：
+ *   - 输入框的说明/示例 placeholder 全删（与注册弹窗同一口径）；输入说明小字也删
+ *     （模型名称下面那句"只影响显示…"不再占位；已存 API Key 的圆点占位是状态提示，不在删除之列）；
+ *   - 身份字段收成一组：**渠道名称**独占一行，**模型名称与模型 ID 同一行**；
+ *   - 注册与编辑用同一套字段名；落盘字段仍是 provider.name / provider.model /
+ *     settings.modelOverrides，语义不动；
+ *   - 动态面照留：密钥状态、上下文来源与实测/回退值、缺项/重录/保存反馈/测试连接结果。
+ *
+ * API Key 显隐（用户复验 2026-10-17）：输入框默认 `password`；本次有新输入时眼睛只切换
+ * 掩码/明文；本次没有输入但已有可用密钥时，**点眼睛才**经 `settings:reveal-provider-key`
+ * 回显真实 key（掩码态的固定圆点串只是占位视觉）。收起折叠、切到别的 provider、开始保存 /
+ * 保存成功都立即复位并清掉本地明文（父级 `revealEpoch` + SecretField 内的展示态复位）；
+ * 未配置 / needsReentry 不调用回显通道。眼睛按钮不在 label 内，且点击时把焦点送回输入框
+ * ——否则"点眼睛再直接键入"会落在按钮上，输入框一直空白（见 SecretField）。
  */
 export function ProviderRow({
   provider,
@@ -110,8 +133,23 @@ export function ProviderRow({
   onRemove,
   onResetContext,
   onUseRegisteredModel,
-  onDropRegisteredModel
+  onDropRegisteredModel,
+  revealEpoch
 }: ProviderRowProps): React.JSX.Element {
+  /**
+   * 只影响这个输入框的临时显示：默认掩码，切换不落草稿、不落盘、不进状态/日志。
+   * 显隐只属于"这一次展开 + 这个复位序号"：收起、切到别的 provider（父级展开另一行）、
+   * 开始保存 / 保存成功（父级 +1）都立即回到掩码；已存密钥只在用户显式点眼睛时临时回显，
+   * 由 SecretField 在 visible 复位时立即清掉（见 SecretField 的 reveal 状态）。
+   */
+  const [reveal, setReveal] = useState({ open, epoch: revealEpoch, visible: false })
+  if (reveal.open !== open || reveal.epoch !== revealEpoch) {
+    setReveal({ open, epoch: revealEpoch, visible: false })
+  }
+  const keyVisible = reveal.visible
+  // 已有密钥（且这台机器读得到）：掩码态给圆点占位。needsReentry 不算"可用"，不给圆点。
+  const savedKey = keyState?.hasKey === true && keyState.needsReentry !== true
+  const keyInputId = `provider-${provider.id}-key-input`
   // 密钥状态未知时按"有密钥"算（读不到宁可不说；配置层面的缺项照报）。
   // 另外 openai 兼容渠道本来就不把"没有密钥"算缺项（本机 / 自建端点常这样，见 providerKeyOptional）
   const problems = providerConfigProblems(provider, keyState === undefined ? true : keyState.hasKey)
@@ -204,34 +242,37 @@ export function ProviderRow({
 
       <TraceFold open={open}>
         <div className="flex flex-col gap-3 px-3 pt-2 pb-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              data-testid={`provider-${provider.id}-key-status`}
-              className="text-c1 text-ink-tertiary"
-            >
-              {keyStatusText(keyState)}
-            </span>
+          <div
+            data-testid={`provider-${provider.id}-identity`}
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          >
+            <label className="flex flex-col gap-1 sm:col-span-2">
+              <span className="text-b2 text-ink-secondary">渠道名称</span>
+              <Input
+                data-testid={`provider-${provider.id}-name`}
+                value={draft.name}
+                onChange={(event) => onDraftChange({ name: event.target.value })}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-b2 text-ink-secondary">模型名称</span>
+              <Input
+                data-testid={`provider-${provider.id}-display-name`}
+                value={draft.displayName}
+                onChange={(event) => onDraftChange({ displayName: event.target.value })}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-b2 text-ink-secondary">模型 ID</span>
+              <Input
+                data-testid={`provider-${provider.id}-model`}
+                value={draft.model}
+                onChange={(event) => onDraftChange({ model: event.target.value })}
+              />
+            </label>
           </div>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">名称</span>
-            <Input
-              data-testid={`provider-${provider.id}-name`}
-              value={draft.name}
-              placeholder={providerLabel(provider)}
-              onChange={(event) => onDraftChange({ name: event.target.value })}
-            />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">模型</span>
-            <Input
-              data-testid={`provider-${provider.id}-model`}
-              value={draft.model}
-              placeholder="模型名，如 deepseek-flash"
-              onChange={(event) => onDraftChange({ model: event.target.value })}
-            />
-          </label>
 
           {registered.length <= 1 ? null : (
             <div className="flex flex-wrap items-center gap-2 text-c1 text-ink-tertiary">
@@ -255,75 +296,78 @@ export function ProviderRow({
             </div>
           )}
 
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">显示名</span>
-            <Input
-              data-testid={`provider-${provider.id}-display-name`}
-              value={draft.displayName}
-              placeholder="只影响显示；空 = 用模型名"
-              onChange={(event) => onDraftChange({ displayName: event.target.value })}
-            />
-            {/* 004 的红线写在字段旁：展示名不进任何 key / 请求 / 探测 */}
-            <span className="text-c1 text-ink-tertiary">
-              只影响显示：不进任何请求、密钥或探测（发送时用的仍是上面的模型名）
-            </span>
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="flex items-baseline gap-2 text-b2 text-ink-secondary">
-              上下文长度（tokens）
-              <span
-                data-testid={`provider-${provider.id}-context-window-source`}
-                className="text-c1 text-ink-tertiary"
-              >
-                {CONTEXT_WINDOW_SOURCE_LABELS[source]}
-              </span>
-            </span>
-            <Input
-              inputMode="numeric"
-              data-testid={`provider-${provider.id}-context-window`}
-              value={draft.contextWindow}
-              placeholder="留空 = 用实测 / 回退值"
-              onChange={(event) => onDraftChange({ contextWindow: event.target.value })}
-            />
-            <span className="flex items-center gap-2 text-c1 text-ink-tertiary">
-              <span>实测/回退值：{formatTokens(contextWindowOf(provider.model, probed))}</span>
-              {override?.contextWindow === undefined ? null : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid={`provider-${provider.id}-reset-context`}
-                  onClick={onResetContext}
-                >
-                  恢复探测值
-                </Button>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label
+              className={cn(
+                'flex flex-col gap-1',
+                provider.type === 'openai-compatible' ? undefined : 'sm:col-span-2'
               )}
-            </span>
-          </label>
-
-          {provider.type === 'openai-compatible' ? (
-            <label className="flex flex-col gap-1">
-              <span className="text-b2 text-ink-secondary">Base URL</span>
+            >
+              <span className="flex items-baseline justify-between gap-2 text-b2 text-ink-secondary">
+                <span>上下文长度（tokens）</span>
+                <span
+                  data-testid={`provider-${provider.id}-context-window-source`}
+                  className="text-c1 text-ink-tertiary"
+                >
+                  {CONTEXT_WINDOW_SOURCE_LABELS[source]}
+                </span>
+              </span>
               <Input
-                data-testid={`provider-${provider.id}-base-url`}
-                value={draft.baseUrl}
-                placeholder="https://…/v1"
-                onChange={(event) => onDraftChange({ baseUrl: event.target.value })}
+                inputMode="numeric"
+                data-testid={`provider-${provider.id}-context-window`}
+                value={draft.contextWindow}
+                onChange={(event) => onDraftChange({ contextWindow: event.target.value })}
               />
+              <span className="flex items-center gap-2 text-c1 text-ink-tertiary">
+                <span>实测/回退值：{formatTokens(contextWindowOf(provider.model, probed))}</span>
+                {override?.contextWindow === undefined ? null : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid={`provider-${provider.id}-reset-context`}
+                    onClick={onResetContext}
+                  >
+                    恢复探测值
+                  </Button>
+                )}
+              </span>
             </label>
-          ) : null}
 
-          <label className="flex flex-col gap-1">
-            <span className="text-b2 text-ink-secondary">API Key</span>
-            <Input
-              type="password"
-              autoComplete="off"
-              data-testid={`provider-${provider.id}-key`}
+            {provider.type === 'openai-compatible' ? (
+              <label className="flex flex-col gap-1">
+                <span className="text-b2 text-ink-secondary">Base URL</span>
+                <Input
+                  data-testid={`provider-${provider.id}-base-url`}
+                  value={draft.baseUrl}
+                  onChange={(event) => onDraftChange({ baseUrl: event.target.value })}
+                />
+              </label>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            {/* label 不包住眼睛按钮：按钮不参与 label 激活，点击只做显隐（组件内还会把焦点送回输入框） */}
+            <label htmlFor={keyInputId} className="text-b2 text-ink-secondary">
+              API Key
+            </label>
+            <SecretField
+              id={keyInputId}
+              testId={`provider-${provider.id}-key`}
+              toggleTestId={`provider-${provider.id}-key-toggle`}
               value={draft.key}
-              placeholder={keyState?.hasKey ? '已保存；要换就填新的' : '粘贴 API Key'}
-              onChange={(event) => onDraftChange({ key: event.target.value })}
+              onValueChange={(key) => onDraftChange({ key })}
+              visible={keyVisible}
+              onVisibleChange={(visible) => setReveal((current) => ({ ...current, visible }))}
+              saved={savedKey}
+              providerId={provider.id}
             />
-          </label>
+            <span
+              data-testid={`provider-${provider.id}-key-status`}
+              className="text-c1 text-ink-tertiary"
+            >
+              {keyStatusText(keyState)}
+            </span>
+          </div>
 
           {keyState?.needsReentry ? (
             <p

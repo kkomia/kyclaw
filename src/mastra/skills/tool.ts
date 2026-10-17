@@ -46,11 +46,22 @@ export const useSkillInputSchema = z.object({
 
 export type UseSkillInput = z.infer<typeof useSkillInputSchema>
 
-/** 回包里的文件清单段（空清单就不写这一段） */
-function filesSection(files: readonly string[], truncated: boolean): string {
+/**
+ * 回包里的文件清单段（空清单就不写这一段）。
+ *
+ * 011：清单必须带**怎么读**的示例 —— 只列相对路径会把模型引向 `bash`（区外 → 审批卡），
+ * 而正确入口是 `read({ skill: <目录 ID>, path: <相对路径> })`（只读、免审、不扩大写权限）。
+ */
+function filesSection(skillDir: string, files: readonly string[], truncated: boolean): string {
   if (files.length === 0) return ''
   const tail = truncated ? `（只列了前 ${files.length} 个）` : ''
-  return `\n技能目录下的文件${tail}：\n${files.map((file) => `  · ${file}`).join('\n')}\n`
+  const sample = files[0] ?? ''
+  const call = `read({ skill: ${JSON.stringify(skillDir)}, path: ${JSON.stringify(sample)} })`
+  return (
+    `\n技能目录下的文件${tail}（读其中一份：${call} —— skill 填目录 ID，path 填下面的相对路径；` +
+    '不要用 bash / glob / grep 读技能文件）：\n' +
+    `${files.map((file) => `  · ${file}`).join('\n')}\n`
+  )
 }
 
 export async function createUseSkillTool(
@@ -69,6 +80,7 @@ export async function createUseSkillTool(
     id: 'use_skill',
     description:
       'Read one skill’s full manual (parameter rules, pitfalls, pre-delivery self-check) plus the file list of its directory. ' +
+      'Read those files with the read tool: skill = the skill directory ID printed in the result (read accepts only this ID, not the skill name), path = the listed relative path; never use bash for them. ' +
       'The "Skills (work manuals)" section of the system instructions carries names and descriptions only, so load the manual here before doing that kind of work. ' +
       'The result ends with a "本部署事实" block stating what this deployment can actually do (whether it can render page images, whether the current model reads images); that block overrides any "should" in the manual. ' +
       'The name is case-insensitive and an unknown name returns the list of available skills instead of failing. Read-only: it changes nothing.',
@@ -81,13 +93,27 @@ export async function createUseSkillTool(
       const entry = findSkill(entries, input.name)
       if (entry === undefined) return missingSkillMessage(entries, input.name)
 
-      const reading = readSkill(entry, facts())
+      const loaded = (() => {
+        try {
+          return { ok: true as const, reading: readSkill(entry, facts()) }
+        } catch (error) {
+          return { ok: false as const, why: error instanceof Error ? error.message : String(error) }
+        }
+      })()
+      if (!loaded.ok) {
+        return (
+          `技能「${entry.name}」的全文读不出来：${loaded.why}。` +
+          '技能目录可能刚被删除或改动；请稍后重试，或让用户重新安装该技能。'
+        )
+      }
+      const reading = loaded.reading
       const header = [
         `技能「${reading.name}」（${skillOrigin(entry)}）的全文：`,
         entry.description === '' ? '' : `> ${entry.description}`,
         entry.license === '' ? '' : `> 许可：${entry.license}`,
+        `> 技能目录 ID：${entry.dir}（read 的 skill 参数只认这个目录 ID，不认技能名；读目录里的资源用 read({ skill: ${JSON.stringify(entry.dir)}, path: "…" })；只读，不要用 bash）`,
         `> 末尾那一段「${SKILL_RUNTIME_FACTS_HEADING.replace(/^#+\s*/, '')}」由本机在加载时拼上，优先于正文里的应然说法。`,
-        filesSection(reading.files, reading.filesTruncated)
+        filesSection(entry.dir, reading.files, reading.filesTruncated)
       ]
         .filter((line) => line !== '')
         .join('\n')

@@ -18,6 +18,7 @@ import {
   projectRemoveArgsSchema,
   providerIdArgsSchema,
   providerKeyArgsSchema,
+  providerKeyRevealResultSchema,
   providerKeyStatesSchema,
   providerModelDiscoveryArgsSchema,
   providerModelDiscoveryResultSchema,
@@ -99,12 +100,15 @@ describe('IPC 契约：settings 通道', () => {
       get: 'settings:get',
       update: 'settings:update',
       setProviderKey: 'settings:set-provider-key',
+      revealProviderKey: 'settings:reveal-provider-key',
       providerKeyStates: 'settings:provider-key-states',
       testProvider: 'settings:test-provider',
       removeProvider: 'settings:remove-provider',
       probeModels: 'settings:probe-models',
       listProviderModels: 'settings:list-provider-models',
-      discoverProviderModels: 'settings:discover-provider-models'
+      discoverProviderModels: 'settings:discover-provider-models',
+      effectiveTheme: 'settings:effective-theme',
+      themeChanged: 'settings:theme-changed'
     })
   })
 
@@ -194,6 +198,44 @@ describe('IPC 契约：settings 密钥/测试连接通道', () => {
     // 回包多带任何字段（比如明文）都不合法——preload 会拦下来
     expect(setProviderKeyResultSchema.safeParse({ hasKey: true, key: 'sk-x' }).success).toBe(false)
     expect(setProviderKeyResultSchema.safeParse({ hasKey: false }).success).toBe(false)
+  })
+
+  it('reveal-provider-key：显式回显只回 {ok:true,key} 或结构化失败，多一个字段都不收', () => {
+    expect(providerKeyRevealResultSchema.parse({ ok: true, key: 'sk-x' })).toEqual({
+      ok: true,
+      key: 'sk-x'
+    })
+    for (const reason of ['not-configured', 'needs-reentry', 'unreadable']) {
+      expect(
+        providerKeyRevealResultSchema.parse({
+          ok: false,
+          reason,
+          message: '读不到已存密钥'
+        })
+      ).toEqual({ ok: false, reason, message: '读不到已存密钥' })
+    }
+
+    // 成功回包必须有非空 key；失败必须带已知原因与一句人话
+    expect(providerKeyRevealResultSchema.safeParse({ ok: true, key: '' }).success).toBe(false)
+    expect(providerKeyRevealResultSchema.safeParse({ ok: true }).success).toBe(false)
+    expect(
+      providerKeyRevealResultSchema.safeParse({ ok: false, reason: 'nope', message: 'x' }).success
+    ).toBe(false)
+    expect(
+      providerKeyRevealResultSchema.safeParse({ ok: false, reason: 'not-configured' }).success
+    ).toBe(false)
+    // 夹带密文/额外字段的脏回包不交给上层
+    expect(
+      providerKeyRevealResultSchema.safeParse({ ok: true, key: 'sk-x', ciphertext: 'xx' }).success
+    ).toBe(false)
+    expect(
+      providerKeyRevealResultSchema.safeParse({
+        ok: false,
+        reason: 'unreadable',
+        message: 'x',
+        key: 'sk-x'
+      }).success
+    ).toBe(false)
   })
 
   it('test-provider / remove-provider 只收一个非空 id', () => {

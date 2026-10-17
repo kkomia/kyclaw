@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
-import { publishContextItem } from '@renderer/features/chat/composer-inbox'
+import { publishContextItem, publishDraft } from '@renderer/features/chat/composer-inbox'
 import {
   clearKyclawBridge,
   installKyclawBridge,
@@ -1763,6 +1763,91 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
     expect(sent.startsWith('【引用】文件：src/app.ts（第 1–1000 行）\n```\n')).toBe(true)
     expect(sent).toContain('第999行内容')
     expect(sent.endsWith('\n```')).toBe(true)
+  })
+
+  describe('0.1.3 / 013 返工 · 回复选段作为草稿附件', () => {
+    const LONG = Array.from({ length: 80 }, (_value, index) => `第${index}行内容`).join('\n')
+
+    function publishQuote(text = LONG, messageId = 'a1'): void {
+      act(() => {
+        publishDraft({ threadId: 't1', quote: { text, messageId } })
+      })
+    }
+
+    it('长选区只进附件卡：输入框零占位、摘要截断、带摘要图标与「发送含原文」', () => {
+      setup({ threadId: 't1' })
+      publishQuote()
+
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      expect(input.value).toBe('')
+      expect(input).toHaveClass('min-h-(--composer-input-min-height)')
+
+      const card = screen.getByTestId('composer-quote-card')
+      expect(card).toHaveAttribute('data-quote', 'true')
+      expect(card.querySelector('.lucide-text-quote')).not.toBeNull()
+      expect(card).toHaveAttribute('title', 'AI 回复（消息 a1）')
+
+      const summary = screen.getByTestId('composer-quote-summary')
+      expect([...summary.textContent!.replace(/…$/, '')].length).toBeLessThanOrEqual(60)
+      expect(summary.textContent!.endsWith('…')).toBe(true)
+      expect(card.textContent).not.toContain('第79行内容')
+
+      expect(screen.getByTestId('composer-quote-count')).toHaveTextContent(
+        `共 ${[...LONG].length} 字`
+      )
+      expect(screen.getByTestId('composer-quote-send-mode')).toHaveTextContent('发送含原文')
+      // 折叠态不铺原文：完整内容只在展开后的 textarea 里
+      expect(screen.queryByTestId('composer-quote-original')).toBeNull()
+    })
+
+    it('展开查看 / 编辑原文：输入框仍为空；发送带编辑后的完整原文，不自动发送', () => {
+      const { onSend } = setup({ threadId: 't1' })
+      publishQuote()
+      expect(onSend).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByTestId('composer-quote-toggle'))
+      expect(screen.getByTestId('composer-quote-toggle')).toHaveAttribute('aria-expanded', 'true')
+      const original = screen.getByTestId('composer-quote-original') as HTMLTextAreaElement
+      expect(original.value).toBe(LONG)
+
+      fireEvent.change(original, { target: { value: '编辑后的原文' } })
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe('')
+      expect(onSend).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      expect(onSend).toHaveBeenCalledTimes(1)
+      expect(sentText(onSend)).toBe('【引用】回复：回复选段\n```\n编辑后的原文\n```')
+      expect(screen.queryByTestId('composer-quote-card')).toBeNull()
+    })
+
+    it('移除：只删卡与载荷；输入框里的草稿一个字不动，也不发送', () => {
+      const { onSend } = setup({ threadId: 't1' })
+      type('我的批注')
+      publishQuote()
+
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      expect(input.value).toBe('我的批注')
+      fireEvent.click(screen.getByLabelText('移除 回复选段'))
+
+      expect(screen.queryByTestId('composer-quote-card')).toBeNull()
+      expect(input.value).toBe('我的批注')
+      expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('已有草稿 / 已有附件：连续引用按顺序追加，输入框不被覆盖', () => {
+      const { onSend } = setup({ threadId: 't1' })
+      type('我的批注')
+      publishQuote('第一段', 'a1')
+      publishQuote('第二段', 'a2')
+
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe('我的批注')
+      expect(screen.getAllByTestId('composer-quote-card')).toHaveLength(2)
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      expect(sentText(onSend)).toBe(
+        '我的批注\n\n【引用】回复：回复选段\n```\n第一段\n```\n\n【引用】回复：回复选段\n```\n第二段\n```'
+      )
+    })
   })
 
   it('摘选超上限：按字节截断并给人话；定位不到行号时**不写位置**（不瞎编）', async () => {

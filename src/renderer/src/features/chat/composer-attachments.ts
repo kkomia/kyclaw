@@ -25,6 +25,12 @@ import {
   PDF_MAX_BYTES,
   type PdfExtractResult
 } from '@shared/attachments'
+import {
+  appendSegmentOf,
+  MESSAGE_CONTEXT_VERSION,
+  type ContextEntry,
+  type MessageContext
+} from './message-context'
 
 export { ATTACHMENT_MAX_BYTES, IMAGE_MAX_BYTES, PDF_MAX_BYTES }
 
@@ -54,6 +60,15 @@ export interface PendingAttachment {
   absolute?: string
   /** 摘选（round 42 二轮）：载荷头用「【引用】文件：…」，卡片也按引用卡画；没有就是普通【附件】块 */
   quote?: boolean
+  /**
+   * 摘选的来源类别（0.1.3 / 013 返工）：缺省 = 文件摘选（沿用「【引用】文件：…」）；
+   * `'reply'` = 对话回复选段（载荷头写「【引用】回复：…」，不冒充文件）。
+   */
+  quoteFrom?: 'reply'
+  /** 摘选来源的展示标签（附件卡上那行来源；缺省 = 路径 / 文件名） */
+  origin?: string
+  /** 摘选来源的稳定标识（metadata 的 source / tooltip；缺省 = path / relative / name） */
+  originRef?: string
   /** 摘选在源文里的行号区间（1 基闭区间；定位不到就不给——不瞎编） */
   lines?: { start: number; end: number }
 }
@@ -70,6 +85,12 @@ export interface OutgoingFile {
 export interface OutgoingMessage {
   text: string
   files: OutgoingFile[]
+  /**
+   * **展示上下文**（0.1.3 / 006）：这次组装往正文里追加了哪几段附件 / 摘选、各自的边界在哪。
+   * 它**不进模型载荷** —— ChatPage 发送时把它随消息放进 `metadata`（见 message-context），
+   * 气泡据此把追加段藏起来、改成气泡下方的图标项。没有追加段（纯文本 / 只有图片）就没有这一格。
+   */
+  context?: MessageContext
 }
 
 /** PDF 抽取的实现（渲染端注入 `window.kyclaw.attachments.extractPdf`；测试注入假件） */
@@ -342,16 +363,18 @@ function fenceFor(text: string): string {
 
 /**
  * 附件块的抬头（round 42：内容进消息时**带上来源路径与位置**；round 53 起路径引用同一条口径）：
- *   - 摘选 → `【引用】文件：<相对路径>（第 X–Y 行）`（行号定位不到就不写那半截，不瞎编）；
+ *   - 文件摘选 → `【引用】文件：<相对路径>（第 X–Y 行）`（行号定位不到就不写那半截，不瞎编）；
+ *   - 回复选段（0.1.3 / 013 返工）→ `【引用】回复：<选段名>`；不把它说成文件；
  *   - 整文件 → `【附件】<路径>`：路径引用给 `path`（根内相对 / 根外绝对），文件树那条路给
  *     `relative`；两者都没有（无路径兜底的文本内联）才是文件名。
  */
 function attachmentHeaderOf(attachment: PendingAttachment): string {
   const label = attachment.path ?? attachment.relative ?? attachment.name
   if (attachment.quote === true) {
+    const kind = attachment.quoteFrom === 'reply' ? '回复' : '文件'
     return attachment.lines === undefined
-      ? `【引用】文件：${label}`
-      : `【引用】文件：${label}（第 ${attachment.lines.start}–${attachment.lines.end} 行）`
+      ? `【引用】${kind}：${label}`
+      : `【引用】${kind}：${label}（第 ${attachment.lines.start}–${attachment.lines.end} 行）`
   }
   return `【附件】${label}`
 }
@@ -360,25 +383,102 @@ function attachmentHeaderOf(attachment: PendingAttachment): string {
  * 发送时的组装（round 14：引用已改为输入框内联标记，不再单独成段）：正文 → 附件块
  * （附件内容包在围栏里，模型按原文读）。图片不进来——它不走文本，走 file part。
  * 路径引用（round 53）也没有内容可包：只发抬头那一行，模型按路径自己读（不假装给了内容）。
+ *
+ * 0.1.3 / 006：块在这里一次算出来（`composedBlocks`），正文与**展示上下文**共用同一份结果——
+ * 两边的边界不可能对不上（对不上就不是"藏错段"的问题，而是根本不会藏，见 message-context）。
  */
-export function composeOutgoingText(input: {
+interface ComposedBlock {
+  text: string
+  /** 这一段来自哪个附件；null = 用户自己打的那段正文 */
+  attachment: PendingAttachment | null
+}
+
+function composedBlocks(input: {
   text: string
   attachments: readonly PendingAttachment[]
-}): string {
+}): ComposedBlock[] {
   const { text, attachments } = input
-  const blocks: string[] = []
+  const blocks: ComposedBlock[] = []
   const trimmed = text.trim()
-  if (trimmed !== '') blocks.push(trimmed)
+  if (trimmed !== '') blocks.push({ text: trimmed, attachment: null })
   for (const attachment of attachments) {
     if (attachment.text === undefined) {
-      if (attachment.path !== undefined) blocks.push(attachmentHeaderOf(attachment))
+      if (attachment.path !== undefined) {
+        blocks.push({ text: attachmentHeaderOf(attachment), attachment })
+      }
       continue
     }
     const content = attachment.text.replace(/\n+$/, '')
     const fence = fenceFor(content)
-    blocks.push(`${attachmentHeaderOf(attachment)}\n${fence}\n${content}\n${fence}`)
+    blocks.push({
+      text: `${attachmentHeaderOf(attachment)}\n${fence}\n${content}\n${fence}`,
+      attachment
+    })
   }
-  return blocks.join('\n\n')
+  return blocks
+}
+
+export function composeOutgoingText(input: {
+  text: string
+  attachments: readonly PendingAttachment[]
+}): string {
+  return composedBlocks(input)
+    .map((block) => block.text)
+    .join('\n\n')
+}
+
+/** 一个附件 → 展示上下文里的一条（append 另算：它要正文里的边界） */
+function contextEntryOf(attachment: PendingAttachment): Omit<ContextEntry, 'append'> {
+  // 来源顺序：摘选自带的稳定标识（回复选段的来源消息 id）→ 路径 → 文件名
+  const source = attachment.originRef ?? attachment.path ?? attachment.relative ?? attachment.name
+  return {
+    kind: attachment.image !== undefined ? 'image' : attachment.quote === true ? 'quote' : 'file',
+    name: attachment.name,
+    size: attachment.size,
+    source,
+    ...(attachment.absolute === undefined ? {} : { absolute: attachment.absolute }),
+    ...(attachment.lines === undefined ? {} : { lines: attachment.lines }),
+    ...(attachment.pdf === undefined ? {} : { pdf: attachment.pdf })
+  }
+}
+
+/**
+ * 展示上下文：**逐附件**记一条（图片也记 —— 它是上下文的一部分；展示侧不重复画缩略图），
+ * 真进了正文的那些再挂上 `append`（段长 / 前后分隔符 / 头尾摘录；摘要由发送路径盖章）。
+ *
+ * 头尾摘录只是**同步一阶的门槛**（每个追加段 ≤48 字，见 @shared/message-context 的
+ * SEGMENT_EXCERPT_CHARS）—— ≤48 字的短段等于整段原样留档（它本来就这么长），大段正文不会被复制；
+ * 名字 / 来源各有长度上限，整份上下文还有总量预算（真 UTF-8 字节；超了发送路径干脆不挂，
+ * 一律按原文显示）。
+ *
+ * 条目顺序 = 附件顺序；追加段的顺序也与之相同，所以展示侧能从正文尾部一段段倒着核验。
+ * 图片不产生文本块，也就不带 `append`（它本来就不在正文里）。
+ */
+function contextEntriesOf(
+  attachments: readonly PendingAttachment[],
+  blocks: readonly ComposedBlock[]
+): ContextEntry[] {
+  // 带附件的块（含它们在整份 blocks 里的**下标** —— 分隔符按"它前面有没有别的块"算，
+  // 用户自己那段正文也算一个块）
+  const appended = blocks
+    .map((block, index) => ({ block, index }))
+    .filter((item) => item.block.attachment !== null)
+  const entries: ContextEntry[] = []
+  let appendedIndex = 0
+  for (const attachment of attachments) {
+    const item = appended[appendedIndex]
+    if (item !== undefined && item.block.attachment === attachment) {
+      entries.push({
+        ...contextEntryOf(attachment),
+        append: appendSegmentOf(item.block.text, item.index === 0 ? 0 : 2)
+      })
+      appendedIndex += 1
+    } else {
+      // 没产生文本块的附件（图片）：条目照记，但没有 append
+      entries.push(contextEntryOf(attachment))
+    }
+  }
+  return entries
 }
 
 /** 图片附件 → 要随消息真发的 file part（顺序与附件条一致） */
@@ -397,10 +497,19 @@ export function outgoingFilesOf(attachments: readonly PendingAttachment[]): Outg
   )
 }
 
-/** 发送时的完整载荷：文本（含内联附件块）+ 要真发的图片 */
+/** 发送时的完整载荷：文本（含内联附件块）+ 要真发的图片（+ 展示上下文，见 OutgoingMessage.context） */
 export function composeOutgoing(input: {
   text: string
   attachments: readonly PendingAttachment[]
 }): OutgoingMessage {
-  return { text: composeOutgoingText(input), files: outgoingFilesOf(input.attachments) }
+  const blocks = composedBlocks(input)
+  const entries = contextEntriesOf(input.attachments, blocks)
+  return {
+    text: blocks.map((block) => block.text).join('\n\n'),
+    files: outgoingFilesOf(input.attachments),
+    // 一条追加段都没有（纯文本 / 只有图片）就不挂上下文：metadata 不多占一格
+    ...(entries.some((entry) => entry.append !== undefined)
+      ? { context: { v: MESSAGE_CONTEXT_VERSION, entries } }
+      : {})
+  }
 }

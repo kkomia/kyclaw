@@ -26,6 +26,8 @@ export interface TasksGroupProps {
   notices?: Record<string, true>
   /** round 20：置顶会话的行内图钉标识（透传给 SessionList） */
   pinnedIds?: ReadonlySet<string>
+  /** 010：在跑的会话 id（透传给 SessionList → 行尾灰圈） */
+  runningIds?: ReadonlySet<string>
   onSelect: (threadId: string) => void
   /** 行内动作失败的一句话（重命名/归档/置顶…） */
   onActionError?: (message: string) => void
@@ -36,6 +38,7 @@ export function TasksGroup({
   activeId,
   notices,
   pinnedIds,
+  runningIds,
   onSelect,
   onActionError
 }: TasksGroupProps): React.JSX.Element | null {
@@ -80,6 +83,7 @@ export function TasksGroup({
             listClassName="min-h-0 overflow-visible px-0 pt-0"
             onSelect={onSelect}
             pinnedIds={pinnedIds}
+            runningIds={runningIds}
             onActionError={onActionError}
           />
         </div>

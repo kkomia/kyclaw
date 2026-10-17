@@ -21,6 +21,13 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
       await expect(page.getByTestId(id)).toBeEnabled()
     }
 
+    // ready-to-show 可能晚于 DOM 可交互：等窗口真正可见后再读主进程侧几何
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible() ?? false)
+      )
+      .toBe(true)
+
     // 主进程侧：默认几何 1280×800（R15）、窗口可见、标题是应用名
     const window = await app.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0]
@@ -77,8 +84,49 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
   }
 })
 
-test('关窗即退出（R14）：点标题栏关闭钮，应用整个退出', async () => {
-  const launched = await launchApp()
+test('关窗到托盘（R14 换口径）：偏好「最小化到托盘」时点关闭钮 → 窗口隐藏不销毁、应用继续活着', async () => {
+  // 偏好直接预置成 tray：ask 档要弹原生模态框（Playwright 点不到），它的三种选择与
+  // 「记住我的选择」落盘由 src/main/__tests__/window-close.spec.ts 钉住、
+  // 真注入路径的端到端验证见 e2e/_r013-tray-close-probe.spec.ts 头注
+  const launched = await launchApp({ settings: { closeToTrayMode: 'tray' } })
+  const { app, page } = launched
+
+  try {
+    await waitForChat(page)
+    const pid = app.process().pid
+    const stillAlive = (): boolean => {
+      try {
+        process.kill(pid as number, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    await page.getByTestId('window-close').click()
+
+    // 窗口还在，只是藏进托盘；进程照旧活着（后台任务继续跑）
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) => {
+          const wins = BrowserWindow.getAllWindows()
+          return {
+            count: wins.length,
+            visible: wins[0]?.isVisible() ?? false,
+            destroyed: wins[0]?.isDestroyed() ?? true
+          }
+        })
+      )
+      .toEqual({ count: 1, visible: false, destroyed: false })
+    expect(stillAlive()).toBe(true)
+  } finally {
+    await closeApp(launched)
+  }
+})
+
+test('关窗即退出（偏好「直接退出」）：点关闭钮 → 应用整个退出', async () => {
+  // 用户明确选了"直接退出"：点关闭就是正常关闭（window-all-closed → 退出），不进托盘
+  const launched = await launchApp({ settings: { closeToTrayMode: 'quit' } })
   const { app, page } = launched
 
   try {
@@ -96,7 +144,36 @@ test('关窗即退出（R14）：点标题栏关闭钮，应用整个退出', as
     const closed = app.waitForEvent('close')
     await page.getByTestId('window-close').click()
     await closed
-    // 关窗 = 退出（Windows 口径）：进程真的没了，不是"窗口藏起来、托盘继续活着"
+    await expect.poll(stillAlive).toBe(false)
+  } finally {
+    await closeApp(launched)
+  }
+})
+
+test('关窗即退出（R14，托盘不可用）：偏好「最小化到托盘」但托盘建不起来时点关闭钮，应用整个退出', async () => {
+  // 托盘是"关闭到托盘"唯一的找回入口：建不起来就整条关掉（tray 档也不能把窗口藏到没有入口的后台）
+  const launched = await launchApp({
+    settings: { closeToTrayMode: 'tray' },
+    env: { KYCLAW_DISABLE_TRAY: '1' }
+  })
+  const { app, page } = launched
+
+  try {
+    await waitForChat(page)
+    const pid = app.process().pid
+    const stillAlive = (): boolean => {
+      try {
+        process.kill(pid as number, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const closed = app.waitForEvent('close')
+    await page.getByTestId('window-close').click()
+    await closed
+    // 进程真的没了（不是"窗口藏起来、托盘继续活着"）
     await expect.poll(stillAlive).toBe(false)
   } finally {
     await closeApp(launched)

@@ -38,6 +38,9 @@ describe('kyclawInstructions：技能清单注入', () => {
     }
     expect(text).toContain('use_skill')
     expect(text).toContain('【引用】技能：')
+    // 011：没有工作区时也明确"技能资源仍用 read 的 skill 参数读"，不要走 bash
+    expect(text).toContain("read's `skill` parameter")
+    expect(text).toContain('never use bash for skill files')
   })
 
   // round 68：目录里那几行**只是摘要**——不写清这一点，模型会拿一行描述当作"我读过它了"

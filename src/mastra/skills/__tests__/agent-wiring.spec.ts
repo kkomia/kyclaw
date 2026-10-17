@@ -13,9 +13,11 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthoringRuntime } from '../../../shared/authoring'
+import type { InstalledPlugin } from '../../../shared/settings'
 import type { SkillSource } from '../../../shared/skills'
+import { skillSourcesFor } from '../../../main/plugins/skills'
 import type { KyclawModel } from '../../model'
 import { createKyclawAgent } from '../../agents/kyclaw'
 
@@ -65,6 +67,169 @@ describe('装配检查：技能在 agent 上真的可用', () => {
     const out = String(await tool.execute({ name: 'pptx' }, { agent: { threadId: 'session-1' } }))
     expect(out).toContain('技能「pptx」（内置技能）的全文')
     expect(out).toContain('一页一个意思。')
+  })
+
+  it('011：use_skill 回包的目录 ID 直接用于 read 读资源（现读注册表；写权限不跟着开）', async () => {
+    // 生产来源就是 skillSourcesFor（扫描 `<userData>/skills`）；测试原样用它，证明接线不是另一套
+    const skillsDir = join(tmp, 'skills')
+    const dir = join(skillsDir, 'pptx')
+    mkdirSync(join(dir, 'reference'), { recursive: true })
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      '---\nname: pptx\ndescription: 做演示文稿时用它\n---\n# 手册正文\n一页一个意思。',
+      'utf8'
+    )
+    writeFileSync(join(dir, 'reference', 'fields.md'), '# 字段\n内容正文', 'utf8')
+    const sources = (): readonly SkillSource[] =>
+      skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    const agent = await createKyclawAgent(resolveModel, undefined, { skillSources: sources })
+
+    const tools = await agent.listTools()
+    const context = { agent: { threadId: 'session-1' } }
+    const call = async (name: string, input: unknown): Promise<string> => {
+      const tool = tools[name] as unknown as {
+        execute(input: unknown, context: unknown): Promise<unknown>
+      }
+      return String(await tool.execute(input, context))
+    }
+
+    // ① 文件清单给出可执行的读法（目录 ID，不是绝对路径）
+    const manual = await call('use_skill', { name: 'pptx' })
+    expect(manual).toContain('read({ skill: "pptx", path: "SKILL.md" })')
+    expect(manual).toContain('reference/fields.md')
+
+    // ② 同一只 agent 的 read 能读技能资源（没有配置任何工作区也成立）
+    const read = tools.read as unknown as {
+      execute(input: unknown, context: unknown): Promise<unknown>
+    }
+    expect(
+      String(await read.execute({ skill: 'pptx', path: 'reference/fields.md' }, context))
+    ).toContain('内容正文')
+
+    // ③ 只读：write 仍只认授权工作区
+    const write = tools.write as unknown as {
+      execute(input: unknown, context: unknown): Promise<unknown>
+    }
+    await expect(
+      write.execute({ path: join(dir, 'reference', 'fields.md'), content: 'x' }, context)
+    ).rejects.toThrow(/授权工作区/)
+
+    // ④ 注册表现读：技能卸载（目录被删）后 read 立刻拒绝（不信任上下文里旧的 use_skill 输出）
+    rmSync(dir, { recursive: true, force: true })
+    await expect(
+      read.execute({ skill: 'pptx', path: 'reference/fields.md' }, context)
+    ).rejects.toThrow(/没有已注册的技能/)
+  })
+
+  it('011：坏 frontmatter 只在来源清单里，use_skill 看不到，read 也拒绝（信任根与有效清单同源）', async () => {
+    const skillsDir = join(tmp, 'skills')
+    const bad = join(skillsDir, 'bad')
+    mkdirSync(bad, { recursive: true })
+    writeFileSync(join(bad, 'SKILL.md'), 'not frontmatter', 'utf8')
+    writeFileSync(join(bad, 'reference.md'), 'FAKE_MARKER_NOT_A_REAL_SECRET', 'utf8')
+    const sources = (): readonly SkillSource[] =>
+      skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const agent = await createKyclawAgent(resolveModel, undefined, { skillSources: sources })
+      const tools = await agent.listTools()
+      const context = { agent: { threadId: 'session-1' } }
+      const call = async (name: string, input: unknown): Promise<string> => {
+        const tool = tools[name] as unknown as {
+          execute(input: unknown, context: unknown): Promise<unknown>
+        }
+        return String(await tool.execute(input, context))
+      }
+
+      expect(await call('use_skill', { name: 'bad' })).toContain('没找到技能')
+      expect(String(await agent.getInstructions())).not.toContain('· bad')
+
+      // read 的信任根每次现算：坏的 frontmatter 不在表里，也不再重复打印发现警告
+      warn.mockClear()
+      await expect(call('read', { skill: 'bad', path: 'reference.md' })).rejects.toThrow(
+        /没有已注册的技能/
+      )
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('011：插件目录名 ≠ 技能名：use_skill 打印目录 ID，read 只认 ID（不盲加名字别名）', async () => {
+    const skillsDir = join(tmp, 'skills')
+    const dir = join(skillsDir, 'market-p1-demo')
+    mkdirSync(join(dir, 'reference'), { recursive: true })
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      '---\nname: demo\ndescription: 插件演示\n---\n# 手册正文',
+      'utf8'
+    )
+    writeFileSync(join(dir, 'reference', 'fields.md'), '# 字段\n内容正文', 'utf8')
+    const installed: InstalledPlugin[] = [
+      {
+        id: 'market-p1',
+        marketplaceId: 'market',
+        name: '演示插件',
+        installedAt: '2026-10-13T00:00:00.000Z',
+        mcpServerIds: [],
+        skillDirs: ['market-p1-demo'],
+        installDir: null
+      }
+    ]
+    const agent = await createKyclawAgent(resolveModel, undefined, {
+      skillSources: () => skillSourcesFor({ skillsDir, installed, builtinDir: null })
+    })
+    const tools = await agent.listTools()
+    const context = { agent: { threadId: 'session-1' } }
+    const call = async (name: string, input: unknown): Promise<string> => {
+      const tool = tools[name] as unknown as {
+        execute(input: unknown, context: unknown): Promise<unknown>
+      }
+      return String(await tool.execute(input, context))
+    }
+
+    const manual = await call('use_skill', { name: 'demo' })
+    expect(manual).toContain('技能目录 ID：market-p1-demo')
+    expect(manual).toContain('read 的 skill 参数只认这个目录 ID')
+
+    // 目录 ID 可读（大小写不敏感）；技能名不是 read 的索引，没有别名
+    expect(await call('read', { skill: 'market-p1-demo', path: 'reference/fields.md' })).toContain(
+      '内容正文'
+    )
+    expect(await call('read', { skill: 'MARKET-P1-DEMO', path: 'reference/fields.md' })).toContain(
+      '内容正文'
+    )
+    await expect(call('read', { skill: 'demo', path: 'reference/fields.md' })).rejects.toThrow(
+      /没有已注册的技能「demo」/
+    )
+    // 不带 skill 也不会把技能资源当工作区文件读
+    await expect(call('read', { path: 'reference/fields.md' })).rejects.toThrow(/授权工作区/)
+  })
+
+  it('011：技能在装配后变成坏 frontmatter：read 的信任根现读，立刻拒绝', async () => {
+    const skillsDir = join(tmp, 'skills')
+    const dir = join(skillsDir, 'demo')
+    mkdirSync(join(dir, 'reference'), { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: demo\n---\n# 手册正文', 'utf8')
+    writeFileSync(join(dir, 'reference', 'fields.md'), '# 字段\n内容正文', 'utf8')
+    const agent = await createKyclawAgent(resolveModel, undefined, {
+      skillSources: () => skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    })
+    const tools = await agent.listTools()
+    const context = { agent: { threadId: 'session-1' } }
+    const call = async (name: string, input: unknown): Promise<string> => {
+      const tool = tools[name] as unknown as {
+        execute(input: unknown, context: unknown): Promise<unknown>
+      }
+      return String(await tool.execute(input, context))
+    }
+
+    expect(await call('read', { skill: 'demo', path: 'reference/fields.md' })).toContain('内容正文')
+    writeFileSync(join(dir, 'SKILL.md'), 'not frontmatter', 'utf8')
+    await expect(call('read', { skill: 'demo', path: 'reference/fields.md' })).rejects.toThrow(
+      /没有已注册的技能/
+    )
+    expect(await call('use_skill', { name: 'demo' })).toContain('没找到技能')
   })
 
   it('没有技能：指令里不出现技能清单，use_skill 照样注册（回"暂无可用技能"）', async () => {
@@ -149,10 +314,18 @@ describe('装配检查（round 65）：模型自己写的技能，下一轮就�
     expect(readBack).toContain('# 发票助手')
     expect(readBack).toContain('reference/fields.md')
 
-    // ③ 删掉之后两边同时消失
+    // ③ create_skill 写的配套资源，同一只 agent 的 read 立刻能按目录 ID 读到
+    expect(await call('read', { skill: 'invoice-helper', path: 'reference/fields.md' })).toContain(
+      '# 字段'
+    )
+
+    // ④ 删掉之后两边同时消失（read 的目录索引也立刻失效）
     expect(await call('delete_skill', { name: 'invoice-helper' })).toContain('已删除用户技能')
     expect(String(await agent.getInstructions())).not.toContain('invoice-helper')
     expect(await call('use_skill', { name: 'invoice-helper' })).toContain('没找到技能')
+    await expect(
+      call('read', { skill: 'invoice-helper', path: 'reference/fields.md' })
+    ).rejects.toThrow(/没有已注册的技能/)
   })
 
   it('add_mcp_server 走的是装配传下去的运行时（写盘 + 通知对齐各一次）', async () => {

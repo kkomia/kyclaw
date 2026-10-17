@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { AtSign, Trash2 } from 'lucide-react'
 import { Tooltip } from '@renderer/components/ui/tooltip'
 import type { PendingAttachment } from './composer-attachments'
+import { ImageLightbox } from './ImageLightbox'
 
 /**
  * 图片附件的磁贴（round 50，用户口径 + Kimi 实拍）：粘贴/上传进来的图片不再走文字 chip，
@@ -12,8 +12,8 @@ import type { PendingAttachment } from './composer-attachments'
  *   - hover / 键盘聚焦时浮出半透明遮罩 + 两个图标钮：**删除**（Trash2）与 **@ 提及**（AtSign，
  *     提示「提及图片 N」）；按钮常驻 DOM、靠 opacity 过渡（`--motion-fast`，不硬切），
  *     所以键盘也能走到（group-focus-within）；
- *   - **点磁贴空白处 = 放大预览**：全屏遮罩 lightbox（≤90vw/85vh contain），点遮罩空白 / Esc 关闭，
- *     进出场走既有浮层动效（animate-fade-in / animate-dialog-in，不硬切）；
+ *   - **点磁贴空白处 = 放大预览**：共用 `ImageLightbox` 的全屏遮罩（≤90vw/85vh contain），
+ *     关闭钮 / 点遮罩空白 / Esc 都能关，进出场走既有浮层动效（animate-fade-in / animate-dialog-in，不硬切）；
  *   - 右键一律不吃原生菜单（雷点 4，与预览区同口径）；
  *   - **提及只是文字指路**：把 `【引用】图片：图N` 插进输入框（走既有引用 chip 覆盖层），
  *     图片本体仍作为附件随消息真发（见 composer-attachments 的 outgoingFilesOf），不重复携带载荷。
@@ -110,51 +110,8 @@ export function PendingImageTile({
         onOpenChange={setPreviewOpen}
         src={image.url}
         name={attachment.name}
+        testId="composer-image-lightbox"
       />
     </>
-  )
-}
-
-/**
- * 放大预览（lightbox）：全屏遮罩（bg-mask）+ 图片居中 contain（≤90vw/85vh）。
- * 用 Radix Dialog 的原语（Portal / 焦点管理 / Esc / 进出场 Presence 全复用 ui/dialog 那套），
- * 但外框自己画：内容铺满视口做居中容器——"点空白"就是点它自己（event.target === currentTarget）。
- */
-function ImageLightbox({
-  open,
-  onOpenChange,
-  src,
-  name
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  src: string
-  name: string
-}): React.JSX.Element {
-  return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-mask data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out" />
-        <DialogPrimitive.Content
-          data-testid="composer-image-lightbox"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) onOpenChange(false)
-          }}
-          // 雷点 4：原生右键菜单不进客户端（预览区同口径）
-          onContextMenu={(event) => event.preventDefault()}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-transparent outline-none data-[state=open]:animate-dialog-in data-[state=closed]:animate-dialog-out"
-        >
-          <DialogPrimitive.Title className="sr-only">图片预览</DialogPrimitive.Title>
-          <img
-            data-testid="composer-image-lightbox-img"
-            src={src}
-            alt={name}
-            draggable={false}
-            onContextMenu={(event) => event.preventDefault()}
-            className="max-h-[85vh] max-w-[90vw] object-contain"
-          />
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
   )
 }

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 import { resetProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
@@ -969,5 +970,39 @@ describe('SessionsController·round 61：「任务」组（没有项目的会话
 
     expect(rowOrder()).toEqual(['session-row-t-b', 'session-row-t-a'])
     expect(screen.getByTestId('session-pin-mark-t-b')).toBeInTheDocument()
+  })
+
+  it('010：后台会话在跑 → 行上画灰圈（切走也看得见）；跑完撤下', async () => {
+    await mountTasks()
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+
+    act(() => useThreadRunStore.getState().setRunning('t-b', true))
+
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
+      screen.getByTestId('session-running-t-b')
+    )
+    // 当前会话（首屏选中 t-a）不受影响
+    expect(screen.queryByTestId('session-running-t-a')).not.toBeInTheDocument()
+
+    act(() => useThreadRunStore.getState().setRunning('t-b', false))
+    expect(screen.queryByTestId('session-running-t-b')).not.toBeInTheDocument()
+  })
+
+  it('010：项目名下的会话在跑 → 项目分组里同样画灰圈（只画一处，不重复）', async () => {
+    await mountTasks([{ threadId: 't-b', projectId: 'p1' }])
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+
+    act(() => useThreadRunStore.getState().setRunning('t-b', true))
+
+    expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+      screen.getByTestId('session-running-t-b')
+    )
+    expect(screen.getAllByTestId(/^session-running-/)).toHaveLength(1)
   })
 })

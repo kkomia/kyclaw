@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AtSign,
+  ChevronDown,
   Compass,
   ListChecks,
   Paperclip,
@@ -9,6 +10,7 @@ import {
   Shield,
   ShieldAlert,
   Sparkles,
+  TextQuote,
   X,
   type LucideIcon
 } from 'lucide-react'
@@ -1028,6 +1030,8 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
 export interface PendingChipsProps {
   attachments: readonly PendingAttachment[]
   onRemoveAttachment: (id: string) => void
+  /** 0.1.3 / 013 返工：编辑摘选原文（摘要卡展开后的 textarea；发送带的是编辑后的全文） */
+  onEditAttachment: (id: string, text: string) => void
   /** round 50：磁贴上的 @ 提及——把 `图片：图N` 引用插进输入框（图片本体仍在附件里，不重复携带载荷） */
   onMentionAttachment: (attachment: PendingAttachment, index: number) => void
 }
@@ -1044,50 +1048,108 @@ function quoteSummaryOf(text: string): string {
 }
 
 /**
- * 摘选的「引用」卡（round 42 二轮，用户给了截图："引用"标识 + 文件路径与行号 + 内容摘要可删除）。
- * 含标识 / 路径 / 行号 / 摘要（截断展示）/ 总字数；完整内容不铺在界面上——传出去的仍是全文
- * （上限 16KB，超了截断并另行给一句人话），大段选择不会把输入卡撑开。
+ * 摘选的「引用」卡（round 42 二轮；0.1.3 / 013 返工加入「查看 / 编辑原文」）。
+ *
+ * 用户口径：长选区不能把输入框撑开 —— 卡上只铺**截断摘要**（60 码点 + 省略号）+ 字数 +
+ * 来源；摘要图标是 `TextQuote`。点摘要行展开后，**完整原文**才出现，并可在 textarea 里直接编辑。
+ *
+ * 语义（用户要求说清楚）：卡上那行只是展示摘要，**发送时带的是完整原文**（`发送含原文`），
+ * 不是摘要。完整原文不铺在折叠态里（卡不撑高），但它一直存在附件状态里，发送路径
+ * （composer-attachments 的围栏）与 006 的 metadata 追加段都按当前全文走。
  */
 function QuoteCard({
   attachment,
-  onRemove
+  onRemove,
+  onEdit
 }: {
   attachment: PendingAttachment
   onRemove: () => void
+  onEdit: (text: string) => void
 }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
   const text = attachment.text ?? ''
+  const label = attachment.origin ?? attachment.relative ?? attachment.name
+  const sourceTitle =
+    attachment.originRef ??
+    attachment.absolute ??
+    attachment.path ??
+    attachment.relative ??
+    attachment.name
   return (
     <div
       data-testid={`composer-attachment-${attachment.name}`}
       data-quote="true"
+      title={sourceTitle}
       className="flex min-w-0 max-w-96 flex-col gap-0.5 rounded-button-lg border-(length:--hairline-width) border-surface-border bg-secondary px-2.5 py-1.5 text-c1"
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0 rounded-badge bg-(--fill-active) px-1 py-0.5 text-ink-secondary">
-          引用
-        </span>
-        <span className="min-w-0 truncate text-ink">{attachment.relative ?? attachment.name}</span>
-        {attachment.lines === undefined ? null : (
-          <span data-testid="composer-quote-lines" className="shrink-0 text-ink-tertiary">
-            第 {attachment.lines.start}–{attachment.lines.end} 行
+      <div
+        data-testid="composer-quote-card"
+        data-quote="true"
+        title={sourceTitle}
+        className="flex min-w-0 flex-col gap-0.5"
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <TextQuote aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+          <span className="shrink-0 rounded-badge bg-(--fill-active) px-1 py-0.5 text-ink-secondary">
+            引用
           </span>
-        )}
-        <button
-          type="button"
-          aria-label={`移除 ${attachment.name}`}
-          onClick={onRemove}
-          className="ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
-        >
-          <X aria-hidden="true" className="size-3" />
-        </button>
-      </div>
-      <div className="flex min-w-0 items-center gap-1 text-ink-tertiary">
-        <span data-testid="composer-quote-summary" className="min-w-0 truncate">
-          {quoteSummaryOf(text)}
-        </span>
-        <span data-testid="composer-quote-count" className="shrink-0">
-          共 {[...text].length} 字
-        </span>
+          <span className="min-w-0 truncate text-ink">{label}</span>
+          {attachment.lines === undefined ? null : (
+            <span data-testid="composer-quote-lines" className="shrink-0 text-ink-tertiary">
+              第 {attachment.lines.start}–{attachment.lines.end} 行
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label={`移除 ${attachment.name}`}
+            onClick={onRemove}
+            className="ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+          >
+            <X aria-hidden="true" className="size-3" />
+          </button>
+        </div>
+        <div className="flex min-w-0 items-center gap-1 text-ink-tertiary">
+          <button
+            type="button"
+            data-testid="composer-quote-toggle"
+            aria-expanded={open}
+            aria-label={open ? '收起引用原文' : '查看引用原文'}
+            onClick={() => setOpen((value) => !value)}
+            className="flex min-w-0 flex-1 items-center gap-1 rounded-button-sm text-left text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
+          >
+            <span data-testid="composer-quote-summary" className="min-w-0 truncate">
+              {quoteSummaryOf(text)}
+            </span>
+            <ChevronDown
+              aria-hidden="true"
+              className={cn(
+                'size-3.5 shrink-0 transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                open && 'rotate-180'
+              )}
+            />
+          </button>
+          <span data-testid="composer-quote-count" className="shrink-0">
+            共 {[...text].length} 字
+          </span>
+          <span
+            data-testid="composer-quote-send-mode"
+            title="发送时带上完整原文，不是摘要"
+            className="shrink-0 text-ink-secondary"
+          >
+            发送含原文
+          </span>
+        </div>
+        {open ? (
+          <textarea
+            data-testid="composer-quote-original"
+            aria-label="引用原文（可编辑）"
+            value={text}
+            rows={4}
+            spellCheck={false}
+            onChange={(event) => onEdit(event.target.value)}
+            className="mt-1 max-h-40 w-full resize-y rounded-button-sm border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-2 py-1 text-b2 text-ink outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-text"
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -1098,6 +1160,7 @@ function QuoteCard({
  * round 14：引用不再走这里（改为输入框内联标记 + 镜像 pill，见 reference-markers.ts）。
  * 模块 2：图片把回形针换成**缩略图**（发送前就能确认是哪张）；PDF 额外印一截页数（数据，不是说明小字）。
  * round 42 二轮：摘选画成**引用卡**（路径 + 行号 + 摘要 + 字数），整文件仍是原来的 chip。
+ * 0.1.3 / 013 返工：引用卡可展开查看 / 编辑原文（折叠态只占两行；发送仍带全文）。
  * round 50：**图片改走磁贴**（PendingImageTile：64px 缩略图 + hover 删除/@ 提及 + 点开放大预览）；
  * 非图片与摘选保持原样（口径不动；round 53 起路径引用的整文件 chip 照旧印名字 + 大小，
  * 完整路径进 `title`——chip 上不铺长路径）。
@@ -1105,6 +1168,7 @@ function QuoteCard({
 export function PendingChips({
   attachments,
   onRemoveAttachment,
+  onEditAttachment,
   onMentionAttachment
 }: PendingChipsProps): React.JSX.Element | null {
   if (attachments.length === 0) return null
@@ -1124,6 +1188,7 @@ export function PendingChips({
               key={attachment.id}
               attachment={attachment}
               onRemove={() => onRemoveAttachment(attachment.id)}
+              onEdit={(text) => onEditAttachment(attachment.id, text)}
             />
           )
         }

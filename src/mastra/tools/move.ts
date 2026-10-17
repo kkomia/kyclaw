@@ -17,6 +17,7 @@ import { z } from '../../shared/zod'
 import {
   approvalSessionOf,
   needsApproval,
+  samePath,
   sessionKey,
   statOrNull,
   toolTarget,
@@ -58,10 +59,10 @@ export async function createMoveTool(ctx: ToolContext): Promise<Tool<MoveInput, 
       const source = toolTarget(ctx, input.path, session)
       const destination = toolTarget(ctx, input.to, session)
 
-      if (relative(source.abs, destination.abs) === '') {
+      if (samePath(source.abs, destination.abs)) {
         throw new Error(`move 失败：源与目标是同一个路径（${input.path}）`)
       }
-      if (relative(source.workspace.path, source.abs) === '') {
+      if (samePath(source.root, source.abs)) {
         throw new Error('move 失败：不能移动工作区根目录本身；如确需改根路径，请用 bash 工具')
       }
       if (inside(source.abs, destination.abs)) {

@@ -173,7 +173,7 @@ afterEach(() => {
 })
 
 describe('插件页 · 三个分区（round 10）', () => {
-  it('默认「插件」：标签 + 计数 + 副标题；插件区空态、MCP 区才有 mcp-add、技能区没有新增', async () => {
+  it('默认「插件」：标签 + 计数 + 副标题；插件区空态、MCP 区才有 mcp-add、技能区有导入入口', async () => {
     installMockApi([])
     installPluginsBridge(EMPTY_OVERVIEW)
     render(<PluginsPage />)
@@ -203,10 +203,13 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('mcp-add')).toHaveTextContent('新增')
     expect(await screen.findByTestId('mcp-empty')).toHaveTextContent('还没有 MCP 服务')
 
-    // 技能区：插件技能一组 + 空态（这份 fixture 没有技能，内置一组不出标题）；计数 = 清单条数
+    // 技能区：三组（这份 fixture 没有技能 → 内置不出标题，「我的」与「插件」各给空态）；
+    // round 94 起有自己的新增入口（从网址 / 本地文件 / 本地文件夹导入），计数 = 清单条数
     fireEvent.click(screen.getByTestId('plugins-tab-skills'))
     expect(screen.getByTestId('plugins-title')).toHaveTextContent('技能')
-    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看内置与插件技能')
+    expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('查看内置、我的与插件技能')
+    expect(screen.getByTestId('skills-user')).toHaveTextContent('我的技能')
+    expect(screen.getByTestId('skills-user-empty')).toHaveTextContent('还没有自己导入的技能')
     expect(screen.getByTestId('skills-plugins')).toHaveTextContent('插件技能')
     expect(screen.getByTestId('skills-plugins-empty')).toHaveTextContent('还没有插件带来的技能')
     // 没有内置技能就不留一个空标题
@@ -214,6 +217,7 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.queryByText('内置技能')).not.toBeInTheDocument()
     expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
     expect(screen.queryByTestId('plugins-add')).not.toBeInTheDocument()
+    expect(screen.getByTestId('skills-add')).toHaveTextContent('新增')
   })
 
   it('底部常驻添加 chips 已删除（round 5）：新增走右上角菜单（round 9 起含「从 JSON 导入」）', async () => {
@@ -908,6 +912,290 @@ describe('插件页 · 插件分区（round 10：市场 / 安装 / 卸载）', (
     expect(within(pluginGroup).queryByTestId('skill-installed-pptx')).not.toBeInTheDocument()
     expect(within(pluginGroup).queryByTestId(/^skill-installed-/)).not.toBeInTheDocument()
     expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('4')
+  })
+
+  it('技能分区：「我的技能」一组是 source: user 的那些，不与插件一组混淆（round 94）', async () => {
+    installMockApi([])
+    installPluginsBridge({
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'pptx', name: 'pptx', pluginId: null, pluginName: null, source: 'builtin' },
+        // 用户自己导入的（source: user）
+        {
+          dir: 'invoice-helper',
+          name: 'invoice-helper',
+          pluginId: null,
+          pluginName: null,
+          source: 'user'
+        },
+        // 插件带来的
+        {
+          dir: 'demo-p1-s1',
+          name: 's1',
+          pluginId: 'demo-p1',
+          pluginName: 'p1',
+          source: 'plugin'
+        }
+      ]
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+
+    const mine = await screen.findByTestId('skills-user')
+    expect(mine).toHaveTextContent('我的技能')
+    const mineRow = within(mine).getByTestId('skill-installed-invoice-helper')
+    expect(mineRow).toHaveTextContent('invoice-helper')
+    expect(mineRow).not.toHaveTextContent('来自')
+    expect(within(mine).queryByTestId('skill-installed-pptx')).not.toBeInTheDocument()
+    expect(within(mine).queryByTestId('skill-installed-demo-p1-s1')).not.toBeInTheDocument()
+
+    const plugins = screen.getByTestId('skills-plugins')
+    expect(within(plugins).getByTestId('skill-installed-demo-p1-s1')).toBeInTheDocument()
+    expect(within(plugins).queryByTestId('skill-installed-invoice-helper')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('skills-user-empty')).not.toBeInTheDocument()
+    expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('3')
+  })
+
+  it('技能分区：新增菜单里三条导入入口（网址 / 本地文件 / 本地文件夹）（round 94）', async () => {
+    installMockApi([])
+    installPluginsBridge(EMPTY_OVERVIEW)
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+
+    expect(screen.getByTestId('skill-add-url')).toHaveTextContent('从网址导入')
+    expect(screen.getByTestId('skill-add-file')).toHaveTextContent('从本地文件导入')
+    expect(screen.getByTestId('skill-add-folder')).toHaveTextContent('从本地文件夹导入')
+  })
+
+  it('从网址导入：填网址 → 导入 → 关框、回执、列表刷出「我的技能」（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    const imported: PluginsOverview = {
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        {
+          dir: 'from-url',
+          name: 'from-url',
+          pluginId: null,
+          pluginName: null,
+          source: 'user'
+        }
+      ]
+    }
+    bridge.plugins.addSkillFromUrl.mockResolvedValue({
+      overview: imported,
+      added: { name: 'from-url', dir: 'from-url' },
+      blocked: null
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-url'))
+
+    // 空网址不给点；填上才可导入
+    expect(screen.getByTestId('skill-url-save')).toBeDisabled()
+    fireEvent.change(screen.getByTestId('skill-url-input'), {
+      target: { value: 'https://example.com/demo.zip' }
+    })
+    fireEvent.click(screen.getByTestId('skill-url-save'))
+
+    await waitFor(() =>
+      expect(bridge.plugins.addSkillFromUrl).toHaveBeenCalledWith('https://example.com/demo.zip')
+    )
+    expect(await screen.findByTestId('plugins-notice')).toHaveTextContent('已导入技能「from-url」')
+    expect(screen.queryByTestId('skill-url-input')).not.toBeInTheDocument()
+    expect(screen.getByTestId('skill-installed-from-url')).toBeInTheDocument()
+  })
+
+  it('从网址导入失败：原因行内留在框里（不关框、不静默）（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    bridge.plugins.addSkillFromUrl.mockRejectedValue(
+      new Error('导入已阻断：http://127.0.0.1:9/x 是本机（环回）地址')
+    )
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-url'))
+    fireEvent.change(screen.getByTestId('skill-url-input'), {
+      target: { value: 'http://127.0.0.1:9/x' }
+    })
+    fireEvent.click(screen.getByTestId('skill-url-save'))
+
+    expect(await screen.findByTestId('skill-url-error')).toHaveTextContent('导入已阻断')
+    expect(screen.getByTestId('skill-url-input')).toBeInTheDocument()
+    expect(screen.queryByTestId('plugins-notice')).not.toBeInTheDocument()
+  })
+
+  it('从本地文件 / 文件夹导入：走桥、回执、取消什么都不说（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    const imported: PluginsOverview = {
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'local-one', name: 'local-one', pluginId: null, pluginName: null, source: 'user' }
+      ]
+    }
+    bridge.plugins.importSkillFromFile.mockResolvedValue({
+      overview: imported,
+      added: { name: 'local-one', dir: 'local-one' },
+      blocked: null
+    })
+    bridge.plugins.importSkillFromFolder.mockResolvedValue({
+      overview: imported,
+      added: null,
+      blocked: null
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-file'))
+    expect(await screen.findByTestId('plugins-notice')).toHaveTextContent('已导入技能「local-one」')
+    expect(screen.getByTestId('skill-installed-local-one')).toBeInTheDocument()
+
+    // 文件夹导入这次是"用户取消"（added null）：总览照刷，但不留回执
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-folder'))
+    await waitFor(() => expect(bridge.plugins.importSkillFromFolder).toHaveBeenCalled())
+    expect(screen.queryByTestId('plugins-notice')).not.toBeInTheDocument()
+  })
+
+  it('被出站边界拦下（本机/内网）：给"允许访问 <主机>"，点了才写白名单并自动重试（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    // 白名单里已经有一台老主机：允许新主机时**不许把它挤掉**，也不许动别的字段
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), network: { allowLocalHosts: ['nas.local:5000'] } }
+    })
+    const imported: PluginsOverview = {
+      marketplaces: [],
+      installed: [],
+      installedSkills: [
+        { dir: 'lan-skill', name: 'lan-skill', pluginId: null, pluginName: null, source: 'user' }
+      ]
+    }
+    bridge.plugins.addSkillFromUrl
+      .mockResolvedValueOnce({
+        overview: EMPTY_OVERVIEW,
+        added: null,
+        blocked: {
+          host: '127.0.0.1:24817',
+          url: 'http://127.0.0.1:24817/r94.zip',
+          message: '导入已阻断：这个地址是本机（环回）地址 127.0.0.1 —— 请求没有发出去。'
+        }
+      })
+      .mockResolvedValueOnce({
+        overview: imported,
+        added: { name: 'lan-skill', dir: 'lan-skill' },
+        blocked: null
+      })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-url'))
+    fireEvent.change(screen.getByTestId('skill-url-input'), {
+      target: { value: 'http://127.0.0.1:24817/r94.zip' }
+    })
+    fireEvent.click(screen.getByTestId('skill-url-save'))
+
+    // 被拦下：原因 + 作用域说明 + 精确到 host:port 的允许按钮都在；**还没写任何设置**
+    expect(await screen.findByTestId('skill-url-blocked')).toHaveTextContent('本机（环回）地址')
+    expect(screen.getByTestId('skill-url-blocked-scope')).toHaveTextContent(
+      '联网抓取等工具共用同一份设置'
+    )
+    expect(screen.getByTestId('skill-url-allow')).toHaveTextContent('允许访问 127.0.0.1:24817')
+    expect(bridge.update).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('skill-url-allow'))
+
+    // 点了才写：**保留既有条目**，只加用户确认的那一条；写完自动重试导入 → 回执 + 关框
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        network: { allowLocalHosts: ['nas.local:5000', '127.0.0.1:24817'] }
+      })
+    )
+    expect(await screen.findByTestId('plugins-notice')).toHaveTextContent('已导入技能「lan-skill」')
+    expect(bridge.plugins.addSkillFromUrl).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('skill-url-input')).not.toBeInTheDocument()
+  })
+
+  it('允许之后重试又失败（404）：旧的"要你允许"提示撤掉，别让用户重复授权（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    // 从默认设置起（白名单空）：别跟着同文件里别的用例漂
+    useSettingsStore.setState({ settings: defaultSettings() })
+    bridge.plugins.addSkillFromUrl
+      .mockResolvedValueOnce({
+        overview: EMPTY_OVERVIEW,
+        added: null,
+        blocked: {
+          host: '127.0.0.1:24817',
+          url: 'http://127.0.0.1:24817/r94.zip',
+          message: '导入已阻断：这个地址是本机（环回）地址 127.0.0.1'
+        }
+      })
+      .mockRejectedValueOnce(new Error('Error invoking remote method: Error: 下载失败：HTTP 404'))
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-url'))
+    fireEvent.change(screen.getByTestId('skill-url-input'), {
+      target: { value: 'http://127.0.0.1:24817/r94.zip' }
+    })
+    fireEvent.click(screen.getByTestId('skill-url-save'))
+    await screen.findByTestId('skill-url-allow')
+
+    fireEvent.click(screen.getByTestId('skill-url-allow'))
+
+    // 白名单写了（幂等一条），重试的真原因行内显示；"允许访问"按钮不再挂着
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenCalledWith({
+        network: { allowLocalHosts: ['127.0.0.1:24817'] }
+      })
+    )
+    expect(await screen.findByTestId('skill-url-error')).toHaveTextContent('HTTP 404')
+    expect(screen.queryByTestId('skill-url-allow')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('skill-url-blocked')).not.toBeInTheDocument()
+    expect(bridge.plugins.addSkillFromUrl).toHaveBeenCalledTimes(2)
+  })
+
+  it('框里取消：白名单一个字都不改（round 94）', async () => {
+    installMockApi([])
+    const bridge = installPluginsBridge(EMPTY_OVERVIEW)
+    bridge.plugins.addSkillFromUrl.mockResolvedValue({
+      overview: EMPTY_OVERVIEW,
+      added: null,
+      blocked: {
+        host: '127.0.0.1:24817',
+        url: 'http://127.0.0.1:24817/r94.zip',
+        message: '导入已阻断：这个地址是本机（环回）地址 127.0.0.1'
+      }
+    })
+    render(<PluginsPage />)
+
+    fireEvent.click(screen.getByTestId('plugins-tab-skills'))
+    fireEvent.keyDown(screen.getByTestId('skills-add'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('skill-add-url'))
+    fireEvent.change(screen.getByTestId('skill-url-input'), {
+      target: { value: 'http://127.0.0.1:24817/r94.zip' }
+    })
+    fireEvent.click(screen.getByTestId('skill-url-save'))
+    await screen.findByTestId('skill-url-allow')
+
+    fireEvent.click(screen.getByTestId('skill-url-cancel'))
+    expect(bridge.update).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('skill-url-allow')).not.toBeInTheDocument()
   })
 })
 

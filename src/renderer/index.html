@@ -1,7 +1,8 @@
 <!doctype html>
-<html>
+<html lang="zh-CN" data-startup-completed-stages="shell-visible">
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
     <title>kyclaw</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <!-- connect-src 放行 127.0.0.1 的任意端口：主进程内嵌的 agent 服务每次启动端口随机（T6） -->
@@ -9,10 +10,232 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*"
     />
+    <!--
+      012（启动白屏，用户返工：要确定的百分比进度）：启动画面写死在 HTML 壳里，样式也内联 ——
+      模块脚本是 defer 的，这段标记与样式会先画出来（窗口 ready-to-show 一露就是它），
+      不用等 React bundle 解析/执行。
+
+      百分比是**阶段百分比**（不是耗时、不是预计剩余时间）：五个真实里程碑等权
+      （每完成一个 +20%）；这里只写初始阶段（壳已显示，20%）；bundle 执行、设置读盘完成、
+      React 首屏提交、壳退场由 lib/startup-splash.ts 推进。没有按时间补数的定时器
+      （宽度过渡只跟随已完成的阶段值，不会自己往前走）；卡在某一阶段就停在最近完成值。
+      晚到的阶段不会让百分比倒退：壳还在时用下方 .app-splash__detail 写明已完成什么。
+
+      80 → 100 不在 React 的同一个 layout effect 里写：100% 与退场由
+      dismissStartupSplash 排到下一次绘制之后，再等宽度过渡走完才淡出。
+
+      主题口径：窗口底色（main/window.ts 的 backgroundColor）本来就按系统主题取
+      #fbfaf9 / #181817；这里用 prefers-color-scheme 跟同一个来源，避免在应用主题读盘前
+      先闪一层相反色。标记里的 20 必须与 STARTUP_STAGES['shell-visible'] 一致（单测核对）。
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --splash-bg: #fbfaf9;
+        --splash-ink: #000000e6;
+        --splash-muted: #0000008c;
+        --splash-track: #00000014;
+        --splash-accent: #1783ff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --splash-bg: #181817;
+          --splash-ink: #ffffffd6;
+          --splash-muted: #ffffff6b;
+          --splash-track: #ffffff24;
+          --splash-accent: #1a88ff;
+        }
+      }
+
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+
+      html {
+        background: var(--splash-bg);
+      }
+
+      body {
+        margin: 0;
+        background: var(--splash-bg);
+        color: var(--splash-ink);
+        font-family:
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          'PingFang SC',
+          'Hiragino Sans GB',
+          'Microsoft YaHei',
+          'Noto Sans CJK SC',
+          sans-serif;
+      }
+
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--splash-bg);
+        color: var(--splash-ink);
+        user-select: none;
+        transition: opacity 180ms ease;
+      }
+
+      #app-splash.is-leaving {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      /* 首屏在提交前失败：停在明确错误文案上，不再显示进度 */
+      #app-splash.is-failed .app-splash__track,
+      #app-splash.is-failed .app-splash__percent,
+      #app-splash.is-failed .app-splash__detail {
+        visibility: hidden;
+      }
+
+      #app-splash.is-failed .app-splash__status {
+        color: var(--splash-ink);
+        font-weight: 500;
+      }
+
+      .app-splash__inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        padding-bottom: 4vh;
+      }
+
+      .app-splash__mark {
+        display: block;
+        width: 56px;
+        height: 56px;
+      }
+
+      .app-splash__wordmark {
+        font-size: 21px;
+        font-weight: 600;
+        line-height: 1.2;
+        letter-spacing: -0.015em;
+      }
+
+      /* 确定进度条：宽度只由阶段完成事件推动（见 lib/startup-splash.ts），没有无限动画 */
+      .app-splash__track {
+        position: relative;
+        width: 180px;
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--splash-track);
+      }
+
+      .app-splash__fill {
+        height: 100%;
+        border-radius: inherit;
+        background: var(--splash-accent);
+        transition: width 180ms ease;
+      }
+
+      .app-splash__meta {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        width: 180px;
+      }
+
+      .app-splash__status {
+        margin: 0;
+        color: var(--splash-muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .app-splash__percent {
+        color: var(--splash-muted);
+        font-size: 12px;
+        line-height: 1.5;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .app-splash__percent-label {
+        margin-right: 2px;
+        opacity: 0.72;
+      }
+
+      /* 晚到阶段（例如设置读盘晚于 React 提交）的完成状态；百分比不倒退 */
+      .app-splash__detail {
+        margin: 0;
+        color: var(--splash-muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #app-splash {
+          transition: none;
+        }
+
+        .app-splash__fill {
+          transition: none;
+        }
+      }
+    </style>
   </head>
 
   <body>
+    <div
+      id="app-splash"
+      role="status"
+      aria-live="polite"
+      aria-label="kyclaw 正在启动"
+      data-startup-stage="shell-visible"
+      data-startup-percent="20"
+    >
+      <div class="app-splash__inner">
+        <svg class="app-splash__mark" viewBox="0 0 64 64" aria-hidden="true">
+          <rect width="64" height="64" rx="15" fill="#2588f7" />
+          <path
+            d="M23 18.5v27M23.4 32.2l15.4-12.8M23.4 32.8l16 12.6"
+            fill="none"
+            stroke="#fff"
+            stroke-width="7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <div class="app-splash__wordmark" aria-hidden="true">kyclaw</div>
+        <div
+          class="app-splash__track"
+          role="progressbar"
+          aria-label="启动阶段进度"
+          data-progress-kind="stages"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="20"
+          aria-valuetext="启动阶段 20%，正在启动…"
+        >
+          <div class="app-splash__fill" style="width: 20%"></div>
+        </div>
+        <div class="app-splash__meta">
+          <p class="app-splash__status">正在启动…</p>
+          <span class="app-splash__percent" aria-hidden="true"
+            ><span class="app-splash__percent-label">阶段</span>
+            <span class="app-splash__percent-value">20%</span></span
+          >
+        </div>
+        <p class="app-splash__detail" hidden></p>
+      </div>
+    </div>
+
     <div id="root"></div>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

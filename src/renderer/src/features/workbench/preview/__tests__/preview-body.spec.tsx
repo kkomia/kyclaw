@@ -96,7 +96,7 @@ describe('PreviewBody：办公档走新版页式阅读器', () => {
     expect(screen.queryByTestId('file-preview-markdown')).toBeNull()
   })
 
-  it('转换中：先说"正在转"，不空着（拿到的仍是一个有高度的宿主）', () => {
+  it('转换中：先说"正在加载预览…"，不空着（拿到的仍是一个有高度的宿主）', () => {
     // 永不落地的转换：停在加载态
     const load = vi.fn(() => new Promise<Uint8Array>(() => undefined))
 

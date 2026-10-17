@@ -62,8 +62,12 @@ describe('DshOfficeViewer：转换 → 复用 PDF 阅读器', () => {
 
     render(<DshOfficeViewer load={load} />)
 
-    // 转换中：先给一句"正在转"，不空着
-    expect(screen.getByTestId('dsh-office-loading')).toHaveTextContent('正在把这份文档转成')
+    // 转换中：先给一句"正在加载预览…"（不把"转 PDF"这条内部链路讲给用户，反馈 003），
+    // 不定 Spinner 与 role=status 都在
+    const loading = screen.getByTestId('dsh-office-loading')
+    expect(loading).toHaveTextContent('正在加载预览…')
+    expect(loading).toHaveAttribute('role', 'status')
+    expect(loading.querySelector('[aria-hidden="true"]')).not.toBeNull()
 
     await waitFor(() =>
       expect(screen.getByTestId('dsh-office-viewer')).toHaveAttribute('data-state', 'ready')

@@ -338,6 +338,9 @@ describe('FilesTool：按格式路由', () => {
     const image = (await screen.findByTestId('file-preview-image')).querySelector('img')
     expect(image?.getAttribute('src')).toBe('data:image/png;base64,iVBORw==')
     expect(bed.bridge.workbench.readFile).not.toHaveBeenCalled()
+    // 图片这一档也要确定高度（"适应窗口"要吃视口高）：BottomSheet 走 sized 口径（55vh），
+    // 不能是"内容撑高 + 70% 上限"（那样子层 h-full 退化成 auto，量到的视口高就是内容自己的高）
+    expect(screen.getByTestId('file-preview')).toHaveClass('h-[55vh]')
   })
 
   it('PDF 走字节通道（渲染交给 PdfPreview）', async () => {

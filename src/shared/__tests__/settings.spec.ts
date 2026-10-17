@@ -25,6 +25,8 @@ describe('AppSettings schema', () => {
       workspaces: [],
       defaultWorkspace: null,
       defaultWorkspaceInitialized: false,
+      // 0.1.3 托盘驻留：关闭偏好默认「每次询问」（弹窗里可勾「记住我的选择」落成 tray/quit）
+      closeToTrayMode: 'ask',
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -230,6 +232,31 @@ describe('默认工作区与项目 schema（T18）', () => {
       }).success
     ).toBe(false)
     // 别的字段照旧可以打补丁
+    expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
+  })
+
+  it('closeToTrayMode：落盘三档之一；补丁可以改（设置→外观能改也能撤销），旧键已废除', () => {
+    for (const mode of ['ask', 'tray', 'quit'] as const) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, closeToTrayMode: mode }).success,
+        mode
+      ).toBe(true)
+      expect(appSettingsPatchSchema.parse({ closeToTrayMode: mode })).toEqual({
+        closeToTrayMode: mode
+      })
+    }
+    // 非法取值：两份 schema 都拦
+    for (const bad of ['always', 'never', 'Tray', true, '', 1]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, closeToTrayMode: bad }).success,
+        String(bad)
+      ).toBe(false)
+      expect(appSettingsPatchSchema.safeParse({ closeToTrayMode: bad }).success, String(bad)).toBe(
+        false
+      )
+    }
+    // 旧的"首次提示"布尔键已废除：补丁里出现它会整份拒掉（strictObject），老文件由读盘迁移剥掉
+    expect(appSettingsPatchSchema.safeParse({ closeToTrayHintShown: true }).success).toBe(false)
     expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
   })
 })

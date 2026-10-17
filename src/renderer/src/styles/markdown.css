@@ -1,5 +1,5 @@
 /**
- * 对话内容层：助手的 markdown 正文、代码块（Shiki）与流式光标。
+ * 对话内容层：助手的 markdown 正文、代码块（Shiki）、表格与流式光标。
  * 由 styles/tailwind.css 引入（样式唯一入口）。
  *
  * 配色全部来自 token（语义层/原样层），明暗随 html[data-theme] 自动切：
@@ -8,6 +8,9 @@
  *   - 正文只消费字阶（markdown-* 八档）与间距/圆角/动效工程阶梯。
  * 边框纪律：正文里不用 border-left/right 画装饰（代码块/表格用整圈 hairline），
  * 流式光标是"背景色画的细竖线"，不是边框 —— 渲染完不残留任何边线。
+ * 表格的边框归属是一条**边界语义**，不是样式技巧：整圈表框由外壳（.markdown-table-shell）的
+ * 一条 hairline 负责，表格自己只留内部网格线 —— 要去掉的恰好是"表格在行内方向的两条外缘"，
+ * 所以写成 border-inline-start/end（跟随书写方向），与 border-left/right 那种装饰性单边线不是一回事。
  */
 
 :root {
@@ -103,6 +106,64 @@
   text-underline-offset: 2px;
 }
 
+/* ===== 网页引用角标（0.1.3） =====
+   外链本体撑到 24×24（命中区口径），可见的小胶囊放在内层 `.citation-chip-face`：
+   视觉仍是上标数字、不撑行高（负 margin），鼠标/触摸/键盘的命中区不再小于 24px。
+   卡片由 CitationChip portal 画；hover / focus 只换 face 的填充档，不画新边线。 */
+.markdown-body a.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -0.4em 0.02em -0.4em 0;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  color: var(--accent-text);
+  text-decoration: none;
+  vertical-align: middle;
+  touch-action: manipulation;
+}
+
+.markdown-body .citation-chip-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15em;
+  height: 1.15em;
+  padding: 0 0.18em;
+  border-radius: var(--radius-pill);
+  background-color: var(--fill-selected);
+  font-size: 0.68em;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  transform: translateY(-0.32em);
+  transition:
+    background-color var(--motion-fast) var(--motion-ease-inout),
+    color var(--motion-fast) var(--motion-ease-inout);
+}
+
+.markdown-body a.citation-chip:hover .citation-chip-face {
+  background-color: var(--fill-hover);
+}
+
+.markdown-body a.citation-chip:focus-visible {
+  text-decoration: none;
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.markdown-body a.citation-chip:focus-visible .citation-chip-face {
+  background-color: var(--fill-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .citation-chip-face {
+    transition: none;
+  }
+}
+
 .markdown-body blockquote {
   margin: var(--space-3) 0;
   padding: var(--space-2) var(--space-4);
@@ -186,6 +247,110 @@
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
+}
+
+/* ===== 表格（MarkdownTable.tsx） =====
+   结构：shell（圆角 + 整圈 hairline + 裁切；间距挂这里）＞ head（操作行）＋ scroll（横滚口）＞ table。
+   最外一圈线由 shell 画、表格只留内部网格（不然外壳与表格的边线并成双线）；
+   横向滚动靠"单元格不折行"：内容宽过容器就出滚动条，窄窗里不会把表挤成一柱一柱换行的字。 */
+.markdown-table-shell {
+  margin: var(--space-3) 0;
+  border: var(--border-width-hairline) solid var(--border-hairline);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+/* 操作行：状态文字 + 两个图标钮（无可见文字），靠右贴表格上沿 */
+.markdown-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+
+/* 流式没结束：整行收起（判据挂在祖先的 data-streaming 上，DOM 一个字节都不变 ——
+   分块渲染与整篇渲染必须逐字节一致，见 TextPart.tsx 的 round 73 口径）。
+   流一停这个属性就没了，按钮自然出现，不需要任何重渲染。 */
+.markdown-body[data-streaming='true'] .markdown-table-head {
+  display: none;
+}
+
+.markdown-table-status {
+  font-size: var(--markdown-B3_Content-font-size);
+  line-height: var(--markdown-B3_Content-line-height);
+  color: var(--text-tertiary);
+}
+
+.markdown-table-status[data-tone='error'] {
+  color: var(--danger);
+}
+
+.markdown-table-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; /* 命中区下限（图标 14）；hover 只铺填充档，不画新边线 */
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-button-sm);
+  background-color: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--motion-ease-inout),
+    color var(--motion-fast) var(--motion-ease-inout);
+}
+
+.markdown-table-tool:hover {
+  background-color: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+.markdown-table-tool:active {
+  background-color: var(--fill-active);
+}
+
+.markdown-table-tool:disabled {
+  background-color: transparent;
+  color: var(--text-quaternary);
+  cursor: not-allowed;
+}
+
+.markdown-table-scroll {
+  overflow-x: auto;
+}
+
+/* 间距与外框都在 shell 上（这条要压过正文的 .markdown-body table）；
+   宽度占满外壳：内容短的表也把外壳填满，内容长则由单元格的 min-content 撑出滚动。 */
+.markdown-body .markdown-table-scroll > table {
+  width: 100%;
+  margin: 0;
+}
+
+.markdown-table-scroll th,
+.markdown-table-scroll td {
+  white-space: nowrap;
+}
+
+/* 整圈边框的归属：外框 = shell 那一圈 hairline，表格只留内部网格。
+   去掉的是**表格在行内方向的两条外缘**（inline-start/end，跟随书写方向），
+   加上首行顶边、末行底边共四处 —— 四处一起去掉，才是"边框归外壳"的完整语义。 */
+.markdown-table-scroll tr > :first-child {
+  border-inline-start: none;
+}
+
+.markdown-table-scroll tr > :last-child {
+  border-inline-end: none;
+}
+
+.markdown-table-scroll thead > tr:first-child > * {
+  border-top: none;
+}
+
+.markdown-table-scroll tbody > tr:last-child > * {
+  border-bottom: none;
 }
 
 /* ===== 流式光标（细竖线 + 呼吸；尊重 reduced-motion） ===== */

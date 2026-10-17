@@ -24,12 +24,13 @@
  *      一次调用只交付一件，多件就分多次调用。给了多个路径时**不抛错**，回一句人话回执说清
  *      "这次一件都没交付、该拆成几次"——抛错会被模型当成工具坏了，回执才是可执行的下一步。
  */
-import { basename, relative, sep } from 'node:path'
+import { basename } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import {
   approvalSessionOf,
   needsApproval,
+  relativeInside,
   sessionKey,
   statOrNull,
   toolTarget,
@@ -157,7 +158,7 @@ export async function createDeliverFileTool(
 
       // 上界内就是一件：用归一化后的那一条（模型常在路径尾带个换行），空格只在两端被去掉
       const target = listed[0] ?? input.path
-      const { abs, workspace } = toolTarget(ctx, target, sessionKey(context))
+      const { abs, root } = toolTarget(ctx, target, sessionKey(context))
       const fileStat = await statOrNull(ctx, abs)
       if (fileStat === null) {
         throw new Error(`deliver_file 失败：${target} 不存在（可以先用 glob 找一下它现在在哪）`)
@@ -169,7 +170,7 @@ export async function createDeliverFileTool(
       }
 
       const name = basename(abs)
-      const relPath = relative(workspace.path, abs).split(sep).join('/')
+      const relPath = relativeInside(root, abs)
       const note = input.note?.trim() ?? ''
       const mimeType = mimeTypeOf(name)
 

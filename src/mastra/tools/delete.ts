@@ -7,12 +7,12 @@
  * 明确不做的事：不删工作区根目录本身（`path: "."` 一类的手滑直接拒掉，要删根请用 bash 自担）。
  * 目录非空且没传 recursive 时报错并给出下一步（而不是让 Node 的英文错误上卡）。
  */
-import { relative } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import {
   approvalSessionOf,
   needsApproval,
+  samePath,
   sessionKey,
   statOrNull,
   toolTarget,
@@ -45,8 +45,8 @@ export async function createDeleteTool(ctx: ToolContext): Promise<Tool<DeleteInp
     requireApproval: (input, approval) =>
       needsApproval(ctx, 'delete', input, approvalSessionOf(approval)),
     execute: async (input, context) => {
-      const { abs, workspace } = toolTarget(ctx, input.path, sessionKey(context))
-      if (relative(workspace.path, abs) === '') {
+      const { abs, root } = toolTarget(ctx, input.path, sessionKey(context))
+      if (samePath(root, abs)) {
         throw new Error(
           'delete 失败：不能删除工作区根目录本身；如确需清空，请用 bash 工具（会请求审批）'
         )

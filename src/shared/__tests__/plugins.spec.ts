@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  installedSkillViewSchema,
   marketplaceManifestSchema,
   mergeServerMaps,
   normalizePluginSource,
   pluginMcpServersToConfigs,
+  pluginSkillImportSchema,
   resolveWithin,
   serversFromMcpJson,
   slugify,
@@ -332,5 +334,74 @@ describe('resolveWithin · realpath 硬化（符号链接/junction 穿透）', (
     } finally {
       rmSync(base, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * round 94 的两处契约（用户反馈 004 = 单独注册技能）：
+ *   ① 技能行的 `source` 三档（内置 / 我的 / 插件）—— 界面按它分三组，写错一档就分错组；
+ *   ② 导入回包 `{ overview, added }`：`added` 为 null 表示"用户取消了原生选择器"，
+ *      半截回包（缺 overview / overview 不是总览）必须判为不合法（渲染端拿它没法显示）。
+ */
+describe('installedSkillViewSchema：source 三档', () => {
+  const base = { dir: 'demo', name: 'demo', pluginId: null, pluginName: null }
+
+  it('三档都收；老回包（没有 source）也收（按插件技能兜底）', () => {
+    for (const source of ['builtin', 'user', 'plugin'] as const) {
+      expect(installedSkillViewSchema.safeParse({ ...base, source }).success, source).toBe(true)
+    }
+    expect(installedSkillViewSchema.safeParse(base).success).toBe(true)
+  })
+
+  it('认不出的 source 与缺字段：判不合法', () => {
+    expect(installedSkillViewSchema.safeParse({ ...base, source: 'mine' }).success).toBe(false)
+    expect(installedSkillViewSchema.safeParse({ ...base, dir: '' }).success).toBe(false)
+    expect(installedSkillViewSchema.safeParse({ ...base, name: 1 }).success).toBe(false)
+  })
+})
+
+describe('pluginSkillImportSchema：导入回包', () => {
+  const overview = { marketplaces: [], installed: [], installedSkills: [] }
+  const block = {
+    host: '127.0.0.1:8080',
+    url: 'http://127.0.0.1:8080/x.zip',
+    message: '导入已阻断：…'
+  }
+
+  it('导入成功 / 取消（added null）/ 被拦下待确认（blocked）三种形状都收', () => {
+    expect(
+      pluginSkillImportSchema.safeParse({
+        overview,
+        added: { name: 'demo', dir: 'demo' },
+        blocked: null
+      }).success
+    ).toBe(true)
+    expect(
+      pluginSkillImportSchema.safeParse({ overview, added: null, blocked: null }).success
+    ).toBe(true)
+    expect(
+      pluginSkillImportSchema.safeParse({ overview, added: null, blocked: block }).success
+    ).toBe(true)
+  })
+
+  it('半截回包（缺 overview / added 少字段 / blocked 少字段 / 多字段）：判不合法', () => {
+    expect(pluginSkillImportSchema.safeParse({ added: null, blocked: null }).success).toBe(false)
+    expect(
+      pluginSkillImportSchema.safeParse({ overview, added: { name: 'demo' }, blocked: null })
+        .success
+    ).toBe(false)
+    expect(
+      pluginSkillImportSchema.safeParse({
+        overview,
+        added: null,
+        blocked: { host: '127.0.0.1:8080' }
+      }).success
+    ).toBe(false)
+    expect(
+      pluginSkillImportSchema.safeParse({ overview, added: null, blocked: null, extra: 1 }).success
+    ).toBe(false)
+    expect(
+      pluginSkillImportSchema.safeParse({ overview: {}, added: null, blocked: null }).success
+    ).toBe(false)
   })
 })

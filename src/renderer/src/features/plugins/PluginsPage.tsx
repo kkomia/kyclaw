@@ -10,14 +10,18 @@ import { Menu } from '@renderer/components/ui/menu'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import {
   addPluginMarketplace,
+  addSkillFromUrl,
+  allowSkillHost,
   fetchPluginsOverview,
+  importSkillFromFile,
+  importSkillFromFolder,
   installPlugin,
   refreshPluginMarketplace,
   removePluginMarketplace,
   uninstallPlugin
 } from '@renderer/lib/plugins-api'
 import { fetchMcpServers, saveMcpServers } from '@renderer/lib/mcp-api'
-import type { PluginsOverview } from '@shared/plugins'
+import type { PluginSkillEgressBlock, PluginsOverview } from '@shared/plugins'
 import { BUILTIN_PLUGINS } from './builtin-plugins'
 import {
   mcpServerProblems,
@@ -38,7 +42,8 @@ import { PluginsSkillsPanel } from './PluginsSkillsPanel'
  *
  * 「插件」分区的数据来自主进程的 `plugins:overview`（市场清单 + 插件 + 安装记录 + 已装技能）；
  * 「＋新增」菜单按分区给不同入口：插件区 = 添加插件市场（照 Codex 的三字段）；MCP 区 = round 9 的三项
- * （stdio / HTTP / 从 JSON 导入）；技能区没有新增——**技能随应用内置或随插件安装，不能单独装**（用户口径）。
+ * （stdio / HTTP / 从 JSON 导入）；**技能区（round 94）= 从网址 / 本地文件 / 本地文件夹导入单个技能**
+ * ——技能不必再随插件或整包安装才进得来（用户反馈 004），导入后落进"我的技能"一组。
  * 文案照用户口径：不解释后端（雷点 2.1/2.2）。
  */
 type PluginsTab = 'plugins' | 'mcp' | 'skills'
@@ -53,12 +58,16 @@ const TABS: Array<{ id: PluginsTab; label: string; testId: string }> = [
 const HEADINGS: Record<PluginsTab, { title: string; subtitle: string }> = {
   plugins: { title: '插件', subtitle: '从插件市场安装与管理插件' },
   mcp: { title: 'MCP', subtitle: '连接外部工具服务' },
-  skills: { title: '技能', subtitle: '查看内置与插件技能' }
+  skills: { title: '技能', subtitle: '查看内置、我的与插件技能' }
 }
 
 /** 导入框里的示例（placeholder 就是口径说明，不写解释性小字） */
 const IMPORT_PLACEHOLDER =
   '{"mcpServers": {"perfsight": {"type": "http", "url": "https://api.perfsight.qq.com/mcp", "headers": {"Authorization": "Bearer YOUR_API_KEY"}}}}'
+
+/** 技能网址导入的口径提示（上限与"内网要先放行"都是用户会撞到的边界，写在框下面一行） */
+const SKILL_URL_HINT =
+  '直链 SKILL.md 或单个技能的 zip，最大 8MB；本机与内网地址默认不允许，被拦下时可以在下面点「允许这台主机」。'
 
 function messageOf(error: unknown): string {
   // round 25：展示前统一剥 IPC 包装（`Error invoking remote method …` 不再露给用户）
@@ -74,6 +83,8 @@ export function PluginsPage(): React.JSX.Element {
   const [overview, setOverview] = useState<PluginsOverview | null>(null)
   /** 插件区动作失败的原因（行内给，人话） */
   const [actionError, setActionError] = useState<string | undefined>(undefined)
+  /** 动作成功的一句回执（round 94：导入技能后总览会变，但"新装进来的是哪一份"得说一句） */
+  const [actionNotice, setActionNotice] = useState<string | undefined>(undefined)
   /** 动作进行中的 key（按钮 loading + 禁其余动作） */
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -91,6 +102,14 @@ export function PluginsPage(): React.JSX.Element {
   const [importText, setImportText] = useState('')
   const [dialogError, setDialogError] = useState<string | undefined>(undefined)
   const [saving, setSaving] = useState(false)
+
+  /** 技能导入（round 94）：网址对话框 + 两条原生选择器入口 */
+  const [skillUrlOpen, setSkillUrlOpen] = useState(false)
+  const [skillUrl, setSkillUrl] = useState('')
+  const [skillUrlError, setSkillUrlError] = useState<string | undefined>(undefined)
+  const [importingSkill, setImportingSkill] = useState(false)
+  /** 被出站边界拦下的"可以放行"的那一档（本机/内网）：非 null 时框里给"允许访问 <主机>" */
+  const [skillBlocked, setSkillBlocked] = useState<PluginSkillEgressBlock | null>(null)
 
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
 
@@ -113,6 +132,7 @@ export function PluginsPage(): React.JSX.Element {
     async (key: string, action: () => Promise<PluginsOverview>): Promise<void> => {
       setBusy(key)
       setActionError(undefined)
+      setActionNotice(undefined)
       try {
         setOverview(await action())
         // 装/卸会连带增删 mcpServers：刷新渲染端的设置副本，MCP 标签计数才不是旧的
@@ -125,6 +145,25 @@ export function PluginsPage(): React.JSX.Element {
     },
     []
   )
+
+  /**
+   * 技能导入的两条本地入口（round 94）：路径由主进程的原生选择器给，渲染端只递"挑文件还是挑文件夹"。
+   * 取消 = `added: null`（什么都不说）；成功就刷总览并回一句"已导入 xx"。
+   */
+  const importLocalSkill = useCallback(async (kind: 'file' | 'folder'): Promise<void> => {
+    setBusy(`skill-${kind}`)
+    setActionError(undefined)
+    setActionNotice(undefined)
+    try {
+      const result = kind === 'file' ? await importSkillFromFile() : await importSkillFromFolder()
+      setOverview(result.overview)
+      if (result.added !== null) setActionNotice(`已导入技能「${result.added.name}」`)
+    } catch (error) {
+      setActionError(messageOf(error))
+    } finally {
+      setBusy(null)
+    }
+  }, [])
 
   const submitMarketplace = useCallback(async (): Promise<void> => {
     setAdding(true)
@@ -162,6 +201,58 @@ export function PluginsPage(): React.JSX.Element {
     setImportText('')
     setImportOpen(true)
   }, [])
+
+  /**
+   * 从网址导入一个技能（round 94）。三条结果：
+   *   - 成功 → 关框 + 回执；
+   *   - **被出站边界拦下且可以放行**（本机/内网这一档）→ 框里给原因 + 作用域说明 + "允许访问 <主机>"；
+   *   - 其它失败 → 行内人话。
+   */
+  const runSkillUrlImport = useCallback(async (): Promise<void> => {
+    const result = await addSkillFromUrl(skillUrl.trim())
+    setOverview(result.overview)
+    setSkillBlocked(result.blocked)
+    if (result.blocked === null) {
+      setSkillUrlOpen(false)
+      setSkillUrl('')
+      if (result.added !== null) setActionNotice(`已导入技能「${result.added.name}」`)
+    }
+  }, [skillUrl])
+
+  const submitSkillUrl = useCallback(async (): Promise<void> => {
+    setImportingSkill(true)
+    setSkillUrlError(undefined)
+    setSkillBlocked(null)
+    try {
+      await runSkillUrlImport()
+    } catch (error) {
+      setSkillUrlError(messageOf(error))
+    } finally {
+      setImportingSkill(false)
+    }
+  }, [runSkillUrlImport])
+
+  /**
+   * "允许访问 <主机>"：**用户点这一下才写白名单**（没有静默放行、没有默认开）。写完用同一个网址
+   * 重试一次导入 —— 用户点按钮的意图就是"导入这个"，不该让他再点一次。
+   *
+   * 重试若因**别的**原因失败（404 / 超时 / 包坏了），旧的"要你允许"提示必须撤掉：那一台主机已经
+   * 写进白名单了，再挂着那条提示会让人以为还得点一次（重复授权），而白名单里是幂等的一条。
+   */
+  const allowSkillHostAndRetry = useCallback(async (): Promise<void> => {
+    if (skillBlocked === null) return
+    setImportingSkill(true)
+    setSkillUrlError(undefined)
+    try {
+      await allowSkillHost(skillBlocked.host)
+      await runSkillUrlImport()
+    } catch (error) {
+      setSkillBlocked(null)
+      setSkillUrlError(messageOf(error))
+    } finally {
+      setImportingSkill(false)
+    }
+  }, [runSkillUrlImport, skillBlocked])
 
   const addProblems =
     addForm === null
@@ -321,7 +412,47 @@ export function PluginsPage(): React.JSX.Element {
                 </Button>
               }
             />
-          ) : null}
+          ) : (
+            // round 94：技能可以单独注册了（用户反馈 004）——网址 / 本地文件 / 本地文件夹三条入口
+            <Menu
+              align="end"
+              items={[
+                {
+                  id: 'url',
+                  label: '从网址导入',
+                  testId: 'skill-add-url',
+                  onSelect: () => {
+                    setSkillUrlError(undefined)
+                    setSkillBlocked(null)
+                    setSkillUrl('')
+                    setSkillUrlOpen(true)
+                  }
+                },
+                {
+                  id: 'file',
+                  label: '从本地文件导入',
+                  testId: 'skill-add-file',
+                  onSelect: () => void importLocalSkill('file')
+                },
+                {
+                  id: 'folder',
+                  label: '从本地文件夹导入',
+                  testId: 'skill-add-folder',
+                  onSelect: () => void importLocalSkill('folder')
+                }
+              ]}
+              trigger={
+                <Button
+                  size="sm"
+                  icon={<Plus />}
+                  loading={busy === 'skill-file' || busy === 'skill-folder'}
+                  data-testid="skills-add"
+                >
+                  新增
+                </Button>
+              }
+            />
+          )}
         </div>
 
         {/* round 23：动作失败的行内错误**贴着面板顶部**（原来在页面底，被 94 行插件列表淹没，
@@ -329,6 +460,11 @@ export function PluginsPage(): React.JSX.Element {
         {actionError === undefined ? null : (
           <p data-testid="plugins-error" className="text-c1 text-danger">
             {actionError}
+          </p>
+        )}
+        {actionNotice === undefined ? null : (
+          <p data-testid="plugins-notice" className="text-c1 text-ink-secondary">
+            {actionNotice}
           </p>
         )}
 
@@ -414,6 +550,81 @@ export function PluginsPage(): React.JSX.Element {
             {marketplaceError === undefined ? null : (
               <p data-testid="marketplace-error" className="text-c1 text-danger">
                 {marketplaceError}
+              </p>
+            )}
+          </div>
+        </Dialog>
+
+        {/* 技能：从网址导入（round 94）。上限与"内网要先放行"写在输入框下面一行 ——
+          用户会撞到这两个边界，所以先讲清，失败提示里再给一次出口 */}
+        <Dialog
+          open={skillUrlOpen}
+          onOpenChange={(open) => {
+            if (!open) setSkillUrlOpen(false)
+          }}
+          title="从网址导入技能"
+          size="md"
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                data-testid="skill-url-cancel"
+                onClick={() => setSkillUrlOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                data-testid="skill-url-save"
+                loading={importingSkill}
+                disabled={skillUrl.trim() === ''}
+                onClick={() => void submitSkillUrl()}
+              >
+                导入
+              </Button>
+            </>
+          }
+        >
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-b2 text-ink-secondary">网址</span>
+              <Input
+                data-testid="skill-url-input"
+                value={skillUrl}
+                placeholder="https://example.com/skills/demo.zip"
+                onChange={(event) => {
+                  setSkillUrl(event.target.value)
+                  // 换了网址，上一次那条"要放行"就作废了（白名单还没写，重新判）
+                  setSkillBlocked(null)
+                }}
+              />
+            </label>
+            <p className="text-c1 text-ink-tertiary">{SKILL_URL_HINT}</p>
+            {skillBlocked === null ? null : (
+              <div className="flex flex-col gap-2 rounded-panel bg-secondary p-3">
+                <p data-testid="skill-url-blocked" className="text-c1 text-danger">
+                  {skillBlocked.message}
+                </p>
+                {/* 作用域如实说清：这一下写的是共用白名单，不是"只对这次导入生效"；取消不改任何东西 */}
+                <p data-testid="skill-url-blocked-scope" className="text-c1 text-ink-tertiary">
+                  允许访问 {skillBlocked.host} 会把这一台主机写进「本机 /
+                  内网白名单」，联网抓取等工具共用同一份设置；取消不做任何改动。
+                </p>
+                <div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    data-testid="skill-url-allow"
+                    loading={importingSkill}
+                    onClick={() => void allowSkillHostAndRetry()}
+                  >
+                    允许访问 {skillBlocked.host}
+                  </Button>
+                </div>
+              </div>
+            )}
+            {skillUrlError === undefined ? null : (
+              <p data-testid="skill-url-error" className="text-c1 text-danger">
+                {skillUrlError}
               </p>
             )}
           </div>

@@ -37,6 +37,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       outsideWorkspaceMode: 'full' as const,
       defaultWorkspace: null,
       defaultWorkspaceInitialized: false,
+      closeToTrayMode: 'quit' as const,
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -149,6 +150,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
       outsideWorkspaceMode: 'ask',
       defaultWorkspace: null,
       defaultWorkspaceInitialized: false,
+      // 0.1.3 托盘驻留：关闭偏好是后加的字段 → 老文件（没有旧 hint 标记）补默认档 ask
+      closeToTrayMode: 'ask',
       projects: [],
       permissions: { rules: [] },
       mcpServers: [],
@@ -298,6 +301,79 @@ describe('设置存储（userData 下的 settings.json）', () => {
       endpoint: 'https://cloud.langfuse.com',
       proxyUrl: ''
     })
+  })
+
+  /**
+   * 0.1.3 托盘驻留：关闭偏好从"首次提示标记"（旧 boolean）迁到三档 mode——老文件必须能被读出来
+   * （strict schema 缺键 = 整份设置当坏文件，主题/provider 全丢）。口径：
+   *   - 合法的新值优先（用户在新设置页改过就是它）；
+   *   - 旧键 `closeToTrayHintShown: true` = 旧行为下"点关闭直接收进托盘"→ 迁成 `tray`（保持旧行为，
+   *     不是还原过去按钮选择——旧标记里没有按钮信息）；缺失 / false → `ask`（照旧会问）；
+   *   - 非法新值不连累其余设置（退到上面那条旧键规则）；
+   *   - 旧键一律剥掉：strict schema 里没有它，留着会让整份设置当坏文件。
+   */
+  it('0.1.3：关闭偏好迁移——合法新值优先；旧 hint true → tray（保旧行为）；缺/非法 → ask；旧键剥掉', () => {
+    const file = settingsPath(dir)
+    const legacy = (): Record<string, unknown> => {
+      const raw = { ...DEFAULT_SETTINGS } as Record<string, unknown>
+      delete raw.closeToTrayMode
+      return raw
+    }
+
+    // 1) 老文件什么都没有（既没有新键也没有旧键）→ ask
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      'utf8'
+    )
+    const fresh = readSettings(file)
+    expect(fresh.closeToTrayMode).toBe('ask')
+    expect(fresh.theme).toBe('dark')
+
+    // 2) 旧键 true（旧行为：提示给过之后点关闭直接收进托盘）→ tray；旧键不留在读出的对象里
+    writeFileSync(file, JSON.stringify({ ...legacy(), closeToTrayHintShown: true }), 'utf8')
+    const migrated = readSettings(file)
+    expect(migrated.closeToTrayMode).toBe('tray')
+    expect(migrated.theme).toBe('system')
+    expect(Object.keys(migrated)).not.toContain('closeToTrayHintShown')
+    expect(JSON.stringify(migrated)).not.toContain('closeToTrayHintShown')
+
+    // 3) 旧键 false / 被手改坏（非布尔）→ ask（不连累其余设置）
+    for (const old of [false, 'yes', 1]) {
+      writeFileSync(file, JSON.stringify({ ...legacy(), closeToTrayHintShown: old }), 'utf8')
+      const recovered = readSettings(file)
+      expect(recovered.closeToTrayMode, String(old)).toBe('ask')
+      expect(recovered.theme, String(old)).toBe('system')
+    }
+
+    // 4) 合法新值优先（哪怕旧键是 true）：'quit' 说了算，旧键照样剥掉（不然 strict 会整份丢）
+    writeFileSync(
+      file,
+      JSON.stringify({ ...DEFAULT_SETTINGS, closeToTrayMode: 'quit', closeToTrayHintShown: true }),
+      'utf8'
+    )
+    expect(readSettings(file).closeToTrayMode).toBe('quit')
+    expect(readSettings(file).theme).toBe('system')
+
+    // 5) 非法新值 + 旧键 true → 退到旧行为 tray；非法新值 + 没有旧键 → ask
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...DEFAULT_SETTINGS,
+        closeToTrayMode: 'always',
+        closeToTrayHintShown: true
+      }),
+      'utf8'
+    )
+    expect(readSettings(file).closeToTrayMode).toBe('tray')
+    writeFileSync(file, JSON.stringify({ ...DEFAULT_SETTINGS, closeToTrayMode: 'always' }), 'utf8')
+    expect(readSettings(file).closeToTrayMode).toBe('ask')
+
+    // 6) 两个写口都往返：用户在设置页改（补丁路径）与弹窗勾"记住"（主进程内部写）落盘后读回原样
+    updateSettings(file, { closeToTrayMode: 'tray' })
+    expect(readSettings(file).closeToTrayMode).toBe('tray')
+    updateSettings(file, { closeToTrayMode: 'quit' })
+    expect(readSettings(file).closeToTrayMode).toBe('quit')
   })
 
   it('round 48：带旧 modelCapabilities 键（已删除的手动"支持看图"开关）的文件照样读：迁移时剥掉，其余不丢', () => {

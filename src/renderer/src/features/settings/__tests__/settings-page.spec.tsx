@@ -552,6 +552,69 @@ describe('外观 · 与落盘设置一致', () => {
   })
 })
 
+/**
+ * 外观 · 关闭窗口行为（0.1.3 托盘驻留）：三档偏好（每次询问 / 最小化到托盘 / 直接退出）走
+ * settings:update 的补丁（可以在设置页改、也能改回来）；说明文案要交代适用范围
+ * （Windows / Linux 才有效、macOS 沿 Dock、托盘不可用不硬藏）。
+ */
+describe('外观 · 关闭窗口行为（三档偏好）', () => {
+  it('三档都在，默认「每次询问」，并写明 Win/Linux 适用与 macOS/托盘不可用的边界', () => {
+    renderPage()
+
+    expect(screen.getByTestId('close-mode-ask')).toHaveTextContent('每次询问')
+    expect(screen.getByTestId('close-mode-tray')).toHaveTextContent('最小化到托盘')
+    expect(screen.getByTestId('close-mode-quit')).toHaveTextContent('直接退出')
+
+    expect(screen.getByTestId('close-mode-ask')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('close-mode-tray')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('close-mode-quit')).toHaveAttribute('aria-pressed', 'false')
+
+    const hint = screen.getByTestId('close-mode-hint')
+    expect(hint).toHaveTextContent('Windows')
+    expect(hint).toHaveTextContent('macOS')
+    expect(hint).toHaveTextContent('托盘')
+  })
+
+  it('点「直接退出」→ 选中态跟着走、落盘 {closeToTrayMode:"quit"}；再点回「每次询问」能撤销', async () => {
+    const bridge = installKyclawBridge()
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('close-mode-quit'))
+
+    expect(screen.getByTestId('close-mode-quit')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('close-mode-ask')).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByTestId('close-mode-quit')).toHaveClass('bg-selected')
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ closeToTrayMode: 'quit' }))
+
+    // 能撤销（不是单向设置）：切回「每次询问」同样落盘
+    fireEvent.click(screen.getByTestId('close-mode-ask'))
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ closeToTrayMode: 'ask' }))
+    expect(screen.getByTestId('close-mode-ask')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('close-mode-quit')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('落盘里是 tray 时选中态一致（读完设置再渲）', async () => {
+    installKyclawBridge({ ...DEFAULT_SETTINGS, closeToTrayMode: 'tray' })
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, closeToTrayMode: 'tray' } })
+
+    renderPage()
+
+    expect(screen.getByTestId('close-mode-tray')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('close-mode-ask')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('落盘失败不改 UI（本次改动仍在，只留日志）', async () => {
+    const bridge = installKyclawBridge()
+    bridge.update.mockRejectedValueOnce(new Error('磁盘满了'))
+    renderPage()
+
+    fireEvent.click(screen.getByTestId('close-mode-tray'))
+
+    expect(screen.getByTestId('close-mode-tray')).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(console.error).toHaveBeenCalled())
+  })
+})
+
 describe('「追踪」/「关于」栏（T17）', () => {
   it('「追踪」栏：Langfuse 组在这一栏里（默认关的口径）', async () => {
     installKyclawBridge()

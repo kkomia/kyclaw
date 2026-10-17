@@ -36,6 +36,18 @@ export const themeModeSchema = z.enum(['system', 'light', 'dark'])
 export const fontTierSchema = z.enum(['small', 'default', 'large'])
 
 /**
+ * 关闭窗口的偏好（0.1.3 托盘驻留，三档；Windows / Linux 适用）：
+ *   - `ask`（默认）：每次点关闭都弹三选一（弹窗里可勾「记住我的选择」落成 tray / quit）；
+ *   - `tray`：点关闭直接收进托盘（窗口留着、后台任务继续，从托盘 / 再起一次应用找回）；
+ *   - `quit`：点关闭直接退出应用。
+ * macOS 不看这一位（关窗沿 Dock 现状）；托盘不可用时 `tray` 也退化成正常关闭
+ * （不能把窗口藏到没有找回入口的后台）。
+ */
+export const CLOSE_TO_TRAY_MODES = ['ask', 'tray', 'quit'] as const
+
+export const closeToTrayModeSchema = z.enum(CLOSE_TO_TRAY_MODES)
+
+/**
  * 访问档位（spec §5.2；round 75 起是**两个独立档位**共用的一个枚举）：
  * ask = 每次询问（默认）；full = 完全访问（**真免审**）。
  *
@@ -401,6 +413,13 @@ export const appSettingsSchema = z.strictObject({
   defaultWorkspace: z.string().min(1).nullable(),
   /** 默认工作区首次初始化是否已完成；内部持久字段，不由渲染端设置。 */
   defaultWorkspaceInitialized: z.boolean(),
+  /**
+   * 关闭窗口偏好（0.1.3 托盘驻留的三档，见 CLOSE_TO_TRAY_MODES）。
+   * **用户可以改**：设置 → 外观 走 settings:update 补丁；关闭弹窗里勾「记住我的选择」也写这里。
+   * 旧字段 `closeToTrayHintShown`（首次提示标记 boolean）已废除——读盘迁移（main/settings.ts）
+   * 会把它换成这一档：旧标记 true（旧行为 = 点关闭直接收进托盘）→ `tray`，其余 → `ask`。
+   */
+  closeToTrayMode: closeToTrayModeSchema,
   /** T18 的项目列表（增删走 projects:* 通道：路径要先过 checkWorkspacePath） */
   projects: z.array(projectSchema),
   /** T13 的审批记忆规则（审批卡的"永久允许"写这里）；旧落盘文件由 main/settings.ts 补空表 */
@@ -466,6 +485,7 @@ export const appSettingsSchema = z.strictObject({
  * "启用必须配置完整"的校验），不另开一条不过校验的口子。
  * **不含 pluginMarketplaces / installedPlugins**：两者都带路径（`path` / `installDir`），
  * 写入只有 `plugins:*` 一条路 —— 直接从渲染端改等于给「移除市场 / 卸载插件」的递归删除递任意目录。
+ * （`closeToTrayMode` 反过来是**可以**打补丁的：设置 → 外观 就是靠它改的，三档取值没有路径风险。）
  */
 export const appSettingsPatchSchema = appSettingsSchema.partial().omit({
   workspaces: true,
@@ -479,6 +499,7 @@ export const appSettingsPatchSchema = appSettingsSchema.partial().omit({
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
 export type FontTier = z.infer<typeof fontTierSchema>
+export type CloseToTrayMode = z.infer<typeof closeToTrayModeSchema>
 export type WorkspaceMode = z.infer<typeof workspaceModeSchema>
 export type Workspace = z.infer<typeof workspaceSchema>
 export type PermissionRule = z.infer<typeof permissionRuleSchema>
@@ -576,6 +597,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   outsideWorkspaceMode: 'ask',
   defaultWorkspace: null,
   defaultWorkspaceInitialized: false,
+  /** 0.1.3 托盘驻留：关闭偏好默认「每次询问」（弹窗里可勾「记住我的选择」落成 tray / quit） */
+  closeToTrayMode: 'ask',
   projects: [],
   permissions: { rules: [] },
   mcpServers: [],

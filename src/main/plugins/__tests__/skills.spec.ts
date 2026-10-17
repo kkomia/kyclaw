@@ -8,14 +8,15 @@
  *   ② 插件技能的归属靠 `installedPlugins[].skillDirs` 认领（认不出就 pluginId/pluginName 为 null，
  *      且不带前缀——名字退回原目录名）；
  *   ③ 名字走 SKILL.md 的 frontmatter，没有就用"目录名去插件前缀"（与 round 10 的显示口径一致）；
- *   ④ 内置技能带 `source: 'builtin'` 标记；插件技能保持老形状（不带这个字段）。
+ *   ④ 来源标记（round 94 起三档）：内置 `builtin` / 没有插件认领的 `user`（我的技能）/ 插件 `plugin`。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SKILL_FILE } from '../../../shared/skills'
 import type { InstalledPlugin } from '../../../shared/settings'
+import { discoverSkills } from '../../../mastra/skills/loader'
 import { installedSkillViews, skillSourcesFor } from '../skills'
 
 let tmp: string
@@ -85,6 +86,42 @@ describe('skillSourcesFor：两类来源', () => {
   })
 })
 
+describe('011：链接不作为技能来源（只读信任根不能指向任意目录）', () => {
+  it('技能目录本身是 junction / 符号链接 → 扫描不列它', (context) => {
+    const real = makeSkill(join(tmp, 'elsewhere'), 'outside-skill', '---\nname: evil\n---\n')
+    mkdirSync(skillsDir, { recursive: true })
+    try {
+      symlinkSync(
+        real,
+        join(skillsDir, 'linked-skill'),
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+    } catch {
+      context.skip()
+      return
+    }
+
+    const sources = skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    expect(sources).toEqual([])
+    expect(installedSkillViews(sources)).toEqual([])
+  })
+
+  it('SKILL.md 本身是链接 → 不算技能（入口文件不能指向目录外）', (context) => {
+    const outside = join(tmp, 'outside-entry.md')
+    writeFileSync(outside, '---\nname: leak\ndescription: 外部\n---\nSECRET', 'utf8')
+    const dir = join(skillsDir, 'linked-entry')
+    mkdirSync(dir, { recursive: true })
+    try {
+      symlinkSync(outside, join(dir, SKILL_FILE), 'file')
+    } catch {
+      context.skip()
+      return
+    }
+
+    expect(skillSourcesFor({ skillsDir, installed: [], builtinDir: null })).toEqual([])
+  })
+})
+
 describe('installedSkillViews：总览回包里的技能行', () => {
   it('内置技能带 source 标记；名字走 frontmatter', () => {
     makeSkill(builtinDir, 'pptx', '---\nname: pptx\ndescription: 演示\n---\n')
@@ -96,7 +133,7 @@ describe('installedSkillViews：总览回包里的技能行', () => {
     ])
   })
 
-  it('插件技能保持老形状（dir/name/pluginId/pluginName，不带 source）', () => {
+  it('插件技能带 source: plugin（归属、前缀与名字都不变）', () => {
     makeSkill(skillsDir, 'market-p1-demo', '---\nname: demo\n---\n')
 
     const views = installedSkillViews(
@@ -104,13 +141,58 @@ describe('installedSkillViews：总览回包里的技能行', () => {
     )
 
     expect(views).toEqual([
-      { dir: 'market-p1-demo', name: 'demo', pluginId: 'market-p1', pluginName: '演示插件' }
+      {
+        dir: 'market-p1-demo',
+        name: 'demo',
+        pluginId: 'market-p1',
+        pluginName: '演示插件',
+        source: 'plugin'
+      }
     ])
-    expect('source' in (views[0] ?? {})).toBe(false)
+  })
+
+  it('round 94：没有插件记录认领的是「我的技能」（source: user）', () => {
+    makeSkill(skillsDir, 'invoice-helper', '---\nname: invoice-helper\n---\n')
+
+    const views = installedSkillViews(
+      skillSourcesFor({ skillsDir, installed: [PLUGIN], builtinDir })
+    )
+
+    expect(views).toEqual([
+      {
+        dir: 'invoice-helper',
+        name: 'invoice-helper',
+        pluginId: null,
+        pluginName: null,
+        source: 'user'
+      }
+    ])
   })
 
   it('SKILL.md 读不出来（同名目录但没有入口文件）→ 不进清单', () => {
     mkdirSync(join(skillsDir, 'empty'), { recursive: true })
     expect(installedSkillViews(skillSourcesFor({ skillsDir, installed: [] }))).toEqual([])
+  })
+
+  it('round 94：点开头的一级目录不进扫描（内部命名空间；崩溃残留不会顶着一个名字进清单）', () => {
+    makeSkill(skillsDir, 'demo', '---\nname: demo\n---\n')
+    makeSkill(skillsDir, '.skill-import-999-1000', '---\nname: demo\n---\n')
+    makeSkill(builtinDir, '.hidden-builtin', '---\nname: x\n---\n')
+
+    const sources = skillSourcesFor({ skillsDir, installed: [], builtinDir })
+    expect(sources.map((source) => source.dir)).toEqual(['demo'])
+    expect(installedSkillViews(sources).map((view) => view.name)).toEqual(['demo'])
+  })
+})
+
+describe('011：来源清单与有效技能清单的差异', () => {
+  it('有 SKILL.md 但 frontmatter 坏 → 来源清单/界面仍列出，discoverSkills（use_skill 与 read 信任根）排除', () => {
+    makeSkill(skillsDir, 'bad', '正文没有 frontmatter')
+
+    const sources = skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    // 界面仍能看到这个目录（现状），但它不是可用技能
+    expect(sources.map((source) => source.dir)).toEqual(['bad'])
+    expect(installedSkillViews(sources).map((view) => view.name)).toEqual(['bad'])
+    expect(discoverSkills(sources, { warn: false })).toEqual([])
   })
 })

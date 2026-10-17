@@ -4,8 +4,10 @@ import {
   VISION_ATTACHMENT_FORMATS,
   linesOfSelection,
   publishContextItem,
+  publishDraft,
   resolveContextItem,
   subscribeContextItems,
+  subscribeDrafts,
   truncateToBytes,
   utf8ByteLength
 } from '@renderer/features/chat/composer-inbox'
@@ -131,6 +133,21 @@ describe('context inbox · 发布 / 订阅', () => {
     order.length = 0
     publishContextItem(FILE_ITEM)
     expect(order).toEqual(['outer'])
+  })
+})
+
+describe('0.1.3 / 013 返工 · 引用草稿通道（AI 回复选文 → 附件条）', () => {
+  it('quote 事件原样派发（原文与来源消息 id 都在）；退订后不再收到', () => {
+    const listener = vi.fn()
+    const off = subscribeDrafts(listener)
+    const quote = { text: '选中的原文', messageId: 'a1' }
+
+    publishDraft({ threadId: 't1', quote })
+    expect(listener).toHaveBeenCalledWith({ threadId: 't1', quote })
+
+    off()
+    publishDraft({ threadId: 't1', quote })
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -249,6 +249,36 @@ describe('DshPdfViewer：缩放', () => {
     expect(screen.getByTestId('dsh-zoom-value')).toHaveTextContent('100%')
   })
 
+  it('不接管鼠标拖拽：没有图片那侧的 pan 开关（PDF 选文手势不受影响）', async () => {
+    mocks.getDocument.mockReturnValue(taskOf(fakeDocument(1)))
+    render(<DshPdfViewer bytes={BYTES} />)
+    await screen.findByTestId('dsh-zoom-in')
+
+    const scrollport = screen
+      .getByTestId('dsh-zoom-frame')
+      .querySelector('[data-dsh-zoom-scrollport]') as HTMLElement
+    // 拖动平移是图片宿主显式打开的能力；PDF 的滚动口不该带这个标记
+    expect(scrollport).not.toHaveAttribute('data-dsh-pan-enabled')
+
+    scrollport.scrollLeft = 12
+    scrollport.scrollTop = 34
+    const page = screen.getByTestId('dsh-pdf-page')
+    fireEvent.pointerDown(page, {
+      button: 0,
+      buttons: 1,
+      pointerType: 'mouse',
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100
+    })
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 40, clientY: 40 })
+    fireEvent.pointerUp(window, { pointerId: 1 })
+
+    expect(scrollport).not.toHaveAttribute('data-dsh-panning')
+    expect(scrollport.scrollLeft).toBe(12)
+    expect(scrollport.scrollTop).toBe(34)
+  })
+
   it('改缩放报给宿主（onZoomChange 拿的是偏好，不是换算后的数字）', async () => {
     mocks.getDocument.mockReturnValue(taskOf(fakeDocument(1)))
     const onZoomChange = vi.fn()
@@ -257,6 +287,31 @@ describe('DshPdfViewer：缩放', () => {
     fireEvent.click(await screen.findByTestId('dsh-zoom-in'))
 
     expect(onZoomChange).toHaveBeenCalledWith({ kind: 'fixed', scale: 1.25 })
+  })
+
+  it('适应宽度不看高度：视口再矮也不参与（contain 是图片那边的事，PDF 口径不变）', async () => {
+    mocks.getDocument.mockReturnValue(taskOf(fakeDocument(1)))
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get: () => 424
+    })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 200
+    })
+    try {
+      render(<DshPdfViewer bytes={BYTES} />)
+      await screen.findByTestId('dsh-zoom-in')
+
+      const frame = screen.getByTestId('dsh-zoom-frame')
+      expect(frame).toHaveAttribute('data-dsh-zoom-fit', 'width')
+      // 页宽按 96/72 折算：800 × 96/72 = 1066.67 → (424−24)/1066.67 = 0.375 → 38%。
+      // 只按宽算：真把高度也折进来（contain）会缩到 13% 左右
+      expect(screen.getByTestId('dsh-zoom-value')).toHaveTextContent('38%')
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
+      Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
+    }
   })
 })
 

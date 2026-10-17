@@ -9,7 +9,7 @@
  *   ③ 没有 frontmatter（或没有闭合 `---`）时整份当正文——宁可当手册，也不吃掉半份内容。
  */
 import { describe, expect, it } from 'vitest'
-import { parseSkillFrontmatter, skillNameOf } from '../../../shared/skills'
+import { isWindowsReservedName, parseSkillFrontmatter, skillNameOf } from '../../../shared/skills'
 
 describe('parseSkillFrontmatter：基本形状', () => {
   it('name + description（引号包裹、值里有冒号）', () => {
@@ -112,5 +112,38 @@ describe('skillNameOf：名字派生', () => {
     expect(skillNameOf({ dir: 'pptx', namePrefix: '' }, '')).toBe('pptx')
     // 前缀不是目录名前缀时原样用目录名（不硬切）
     expect(skillNameOf({ dir: 'demo', namePrefix: 'other-' }, '')).toBe('demo')
+  })
+})
+
+/**
+ * round 94：Windows 保留设备名（`con` / `nul` / `com1`…）——技能名与 zip 条目段共用的那一份口径。
+ * 它挡的是"落盘的名字与校验过的名字分叉"：`nul.txt` 在 Windows 上写不进真文件（或被静默改写），
+ * 于是导入声称成功、文件却不在（或换了个名字）。
+ */
+describe('isWindowsReservedName：保留设备名', () => {
+  it('设备名本身与带扩展名的写法都算（大小写不敏感）', () => {
+    for (const name of [
+      'con',
+      'CON',
+      'nul',
+      'nul.txt',
+      'con.md',
+      'com1',
+      'COM9',
+      'lpt1',
+      'aux',
+      'conin$',
+      'CONOUT$',
+      'clock$',
+      'conin$.txt'
+    ]) {
+      expect(isWindowsReservedName(name), name).toBe(true)
+    }
+  })
+
+  it('只在整段就是设备名时命中（`console` / `com10` / `mynul` 都不算）', () => {
+    for (const name of ['console', 'com10', 'mynul', 'aux-skill', 'nul-', 'pptx']) {
+      expect(isWindowsReservedName(name), name).toBe(false)
+    }
   })
 })

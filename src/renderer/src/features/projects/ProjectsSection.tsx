@@ -4,6 +4,7 @@ import type { Project } from '@shared/projects'
 import { Button } from '@renderer/components/ui/button'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useThreadRunStore } from '../chat/thread-run-store'
 import { useSessionsStore } from '../sessions/sessions-store'
 import { composeSidebarSessions } from '../sessions/sidebar-sessions'
 import { CreateProjectDialog, type CreateProjectMode } from './CreateProjectDialog'
@@ -47,6 +48,12 @@ export function ProjectsSection(): React.JSX.Element {
 
   const [dialog, setDialog] = useState<{ mode: CreateProjectMode; key: number } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  /**
+   * 010：在跑的会话（thread-run-store —— 常驻 Chat 的 submitted/streaming 订阅），
+   * 转成 Set 透传给项目分组；项目名下的会话在跑时，项目行下的那一行同样画灰圈。
+   */
+  const running = useThreadRunStore((state) => state.running)
+  const runningIds = useMemo(() => new Set(Object.keys(running)), [running])
 
   useEffect(() => {
     void ensureLoaded()
@@ -185,6 +192,7 @@ export function ProjectsSection(): React.JSX.Element {
         onCreateFolder={() => setDialog({ mode: 'folder', key: Date.now() })}
         onManageWorkspaces={() => navigate('/settings/workspaces')}
         pinnedIds={pinnedIds}
+        runningIds={runningIds}
         onActionError={(message) => setActionError(message)}
       />
 

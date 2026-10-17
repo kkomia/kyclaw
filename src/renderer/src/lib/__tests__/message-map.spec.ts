@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { UIMessage } from 'ai'
 import type { StoredMessage } from '@shared/threads'
 import { mapStoredMessages } from '../message-map'
+import { MESSAGE_CONTEXT_KEY, SENT_AT_KEY } from '@shared/message-context'
 
 /**
  * 历史回灌映射（T9 Step 1）：Mastra 存储消息 → AI SDK UI 消息。
@@ -438,5 +439,122 @@ describe('mapStoredMessages：与渲染契约对齐', () => {
     ]) as readonly StoredMessage[]
 
     expect(mapStoredMessages(source)).toHaveLength(1)
+  })
+})
+
+describe('0.1.3 / 006 + 008：展示上下文与发送时刻的回读', () => {
+  /** 与写侧同一份形状（真链路落库回读的形状由 message-context-wire.spec.ts 钉住） */
+  const context = {
+    v: 1,
+    entries: [
+      {
+        kind: 'file',
+        name: 'note.md',
+        size: 12,
+        source: 'note.md',
+        append: {
+          length: 27,
+          join: 2,
+          head: '【附件】note.md\n```\n第一行\n第二行\n```',
+          tail: '【附件】note.md\n```\n第一行\n第二行\n```',
+          sha256: 'a'.repeat(64)
+        }
+      }
+    ]
+  }
+
+  function storedUser(metadata: unknown, createdAt?: unknown): StoredMessage {
+    return {
+      id: 'u1',
+      role: 'user',
+      ...(createdAt === undefined ? {} : { createdAt }),
+      content: { format: 2, parts: [{ type: 'text', text: '看这个' }], metadata }
+    } as StoredMessage
+  }
+
+  it('content.metadata.kyclawContext 原样回挂（严格校验过的那一份）', () => {
+    const [mapped] = mapStoredMessages([storedUser({ [MESSAGE_CONTEXT_KEY]: context })])
+    expect((mapped.metadata as Record<string, unknown>)[MESSAGE_CONTEXT_KEY]).toEqual(context)
+  })
+
+  it('不合规的展示上下文不挂（坏数据 → 气泡按原文显示）', () => {
+    const [mapped] = mapStoredMessages([
+      storedUser({ [MESSAGE_CONTEXT_KEY]: { ...context, v: 99 } })
+    ])
+    expect(mapped.metadata).toBeUndefined()
+  })
+
+  it('顶层 createdAt（存储自己落的记录时间）当兜底：没有别人的时候用它', () => {
+    // 顶层 = 存储落库时刻（ISO 串）；part 与 metadata 上都没有时间 → 用它（exact 由读侧判）
+    const [onlyTop] = mapStoredMessages([storedUser(undefined, '2026-10-16T06:05:30.000Z')])
+    expect(onlyTop.metadata).toEqual({ createdAt: Date.parse('2026-10-16T06:05:30.000Z') })
+
+    // part 上更晚 → 取 part 最大值（round 59 口径）
+    const both = {
+      id: 'u2',
+      role: 'user',
+      createdAt: new Date('2026-10-16T06:00:00.000Z'),
+      content: {
+        format: 2,
+        parts: [{ type: 'text', text: '正文', createdAt: Date.parse('2026-10-16T06:05:30.000Z') }]
+      }
+    } as unknown as StoredMessage
+    const [mapped] = mapStoredMessages([both])
+    expect((mapped.metadata as { createdAt?: unknown }).createdAt).toBe(
+      Date.parse('2026-10-16T06:05:30.000Z')
+    )
+
+    // 顶层是脏数据（不是时间）→ 不看它，回落到 part 时间
+    const [dirty] = mapStoredMessages([storedUser(undefined, '不是时间')])
+    expect(dirty.metadata).toBeUndefined()
+  })
+
+  it('自有时间键（kyclawSentAt）优先：数字锚点 + 原值透传（精确发送时刻）', () => {
+    const iso = '2026-10-16T06:05:30.123Z'
+    const [mapped] = mapStoredMessages([
+      storedUser({ [SENT_AT_KEY]: iso, createdAt: '2026-10-16T06:05:29.000Z' }, iso)
+    ])
+    const metadata = mapped.metadata as Record<string, unknown>
+    // 数字锚点用我们写的那一份（不是服务端落库时刻）
+    expect(metadata.createdAt).toBe(Date.parse(iso))
+    // 精确时刻原值透传（读侧 readSentAt 据此标 exact）
+    expect(metadata[SENT_AT_KEY]).toBe(iso)
+  })
+
+  it('自有时间键是脏数据：不挂它，锚点回落到别的来源', () => {
+    const [mapped] = mapStoredMessages([
+      storedUser({ [SENT_AT_KEY]: '不是时间' }, '2026-10-16T06:05:30.000Z')
+    ])
+    const metadata = mapped.metadata as Record<string, unknown>
+    expect(metadata[SENT_AT_KEY]).toBeUndefined()
+    expect(metadata.createdAt).toBe(Date.parse('2026-10-16T06:05:30.000Z'))
+  })
+
+  it('时间与上下文同时存在：都挂（互不挤占）', () => {
+    const [mapped] = mapStoredMessages([
+      storedUser({ [MESSAGE_CONTEXT_KEY]: context }, '2026-10-16T06:05:30.000Z')
+    ])
+    expect(mapped.metadata).toEqual({
+      createdAt: Date.parse('2026-10-16T06:05:30.000Z'),
+      [MESSAGE_CONTEXT_KEY]: context
+    })
+  })
+
+  it('超体量预算的展示上下文不挂（时间照旧挂上）', () => {
+    const oversized = {
+      v: 1,
+      entries: Array.from({ length: 20 }, (_, index) => ({
+        kind: 'file' as const,
+        name: `f${index}.txt`,
+        size: 1,
+        source: 'x'.repeat(1024)
+      }))
+    }
+    const [mapped] = mapStoredMessages([
+      storedUser({ [MESSAGE_CONTEXT_KEY]: oversized }, '2026-10-16T06:05:30.000Z')
+    ])
+    const metadata = mapped.metadata as Record<string, unknown>
+    expect(metadata[MESSAGE_CONTEXT_KEY]).toBeUndefined()
+    expect(metadata.createdAt).toBe(Date.parse('2026-10-16T06:05:30.000Z'))
   })
 })

@@ -450,9 +450,10 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
             testId="file-preview"
             title={baseNameOf(preview.relative)}
             onClose={() => setPreview(null)}
-            // 页式 / 表格预览内部自带滚动口：这一层必须是**确定高度**（55vh），否则高度链断在
-            // "内容撑高 + 70% 上限"上——框架会长到一千多像素，浮动缩放控件的露头区落到可视区外
-            // （R90 探针在 1280×800 的窗口上实测撞到过）
+            // 需确定高度的预览（页式 / 表格 / 图片，内部自带滚动口）：这一层必须是**确定高度**（55vh），
+            // 否则高度链断在"内容撑高 + 70% 上限"上——框架会长到一千多像素，浮动缩放控件的露头区
+            // 落到可视区外（R90 探针在 1280×800 的窗口上实测撞到过）；图片还多一条"contain 量到的
+            // 视口高必须是真视口高"的理由（见 preview/host-size.ts）
             sized={previewNeedsFixedHeight(preview.mode)}
           >
             <div

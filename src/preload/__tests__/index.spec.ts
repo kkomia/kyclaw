@@ -130,16 +130,19 @@ describe('preload：window.kyclaw 白名单', () => {
 })
 
 describe('preload：window.kyclaw.settings', () => {
-  it('暴露 settings 一族（读 / 改 / 密钥 / 密钥状态 / 测试连接 / 删除 / 元数据探测 / 列端点模型 / 发现模型）', async () => {
+  it('暴露 settings 一族（读 / 改 / 密钥 / 显式回显 / 密钥状态 / 测试连接 / 删除 / 元数据探测 / 列端点模型 / 发现模型）', async () => {
     const { kyclawApi } = await loadPreload()
 
     expect(Object.keys(kyclawApi.settings).sort()).toEqual([
       'discoverProviderModels',
+      'effectiveTheme',
       'get',
       'listProviderModels',
+      'onThemeChanged',
       'probeModels',
       'providerKeyStates',
       'removeProvider',
+      'revealProviderKey',
       'setProviderKey',
       'testProvider',
       'update'
@@ -246,6 +249,42 @@ describe('preload：window.kyclaw.settings', () => {
     mocks.invoke.mockResolvedValueOnce({ hasKey: true, key: 'sk-test-key' })
 
     await expect(kyclawApi.settings.setProviderKey('deepseek', 'sk-test-key')).rejects.toThrow()
+  })
+
+  it('revealProviderKey 只把 id 发给 settings:reveal-provider-key，回包严格过 schema', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValueOnce({ ok: true, key: 'sk-saved-secret' })
+
+    await expect(kyclawApi.settings.revealProviderKey('deepseek')).resolves.toEqual({
+      ok: true,
+      key: 'sk-saved-secret'
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('settings:reveal-provider-key', 'deepseek')
+
+    // 失败分支（未配置 / 需重录 / 读不到）是一等结果，照原样交给上层
+    mocks.invoke.mockResolvedValueOnce({
+      ok: false,
+      reason: 'needs-reentry',
+      message: '已存的密钥在这台机器上读不到，请重新录入'
+    })
+    await expect(kyclawApi.settings.revealProviderKey('deepseek')).resolves.toEqual({
+      ok: false,
+      reason: 'needs-reentry',
+      message: '已存的密钥在这台机器上读不到，请重新录入'
+    })
+
+    // 脏回包：成功夹带密文 / 空 key / 失败缺原因——一律抛，不交给上层
+    for (const bad of [
+      { ok: true, key: 'sk-x', ciphertext: 'xx' },
+      { ok: true, key: '' },
+      { ok: false, message: 'x' },
+      { ok: false, reason: 'nope', message: 'x' }
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(bad)
+      await expect(kyclawApi.settings.revealProviderKey('deepseek')).rejects.toThrow(
+        /密钥回显响应结构不合法/
+      )
+    }
   })
 
   it('providerKeyStates 按 schema 解析出 { hasKey, needsReentry }；结构不对就抛', async () => {

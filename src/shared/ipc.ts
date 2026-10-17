@@ -15,7 +15,7 @@ import {
   type ProviderKeyState,
   type ProviderType
 } from './providers'
-import type { PluginIconResponse, PluginsOverview } from './plugins'
+import type { PluginIconResponse, PluginSkillImport, PluginsOverview } from './plugins'
 import { TRANSLATE_MAX_CHARS, type TranslateResult } from './translate'
 import { SEARCH_KEY_TARGETS, type SearchKeyTarget } from './search'
 import type { PdfExtractResult } from './attachments'
@@ -44,6 +44,9 @@ import {
   type WorkspaceMode
 } from './settings'
 
+export const resolvedThemeSchema = z.enum(['light', 'dark'])
+export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>
+
 export const IPC_CHANNELS = {
   window: {
     /** 最小化窗口 */
@@ -62,8 +65,18 @@ export const IPC_CHANNELS = {
     get: 'settings:get',
     /** 打补丁改设置（入参 AppSettingsPatch，返回合并后的 AppSettings） */
     update: 'settings:update',
-    /** 写一条 provider 的密钥（入参 [id, key]，返回 {hasKey:true}——永远不回明文） */
+    /** 写一条 provider 的密钥（入参 [id, key]，返回 {hasKey:true}——写方向永远不回明文） */
     setProviderKey: 'settings:set-provider-key',
+    /**
+     * 用户**显式点击眼睛**时回显一条已存密钥（入参 [id]，返回
+     * `{ok:true,key}` 或带原因的 `{ok:false,reason,message}`）。
+     *
+     * 安全边界：这是**唯一**一条把已存 provider 密钥送回渲染端的通道——
+     * 仅在用户点眼睛时调用；不自动推送、不缓存、不落盘、不写日志；
+     * 渲染端拿到后只在当次展开期间临时显示，收起/切换/保存/关闭弹窗/卸载即清除。
+     * 失败文案只给原因（未配置 / 需重录 / 读不到），不回显任何密文或明文。
+     */
+    revealProviderKey: 'settings:reveal-provider-key',
     /** 各 provider 的密钥状态（无入参，返回 { [id]: {hasKey, needsReentry} }） */
     providerKeyStates: 'settings:provider-key-states',
     /** 测试连接（入参 [id]，主进程分项验证连通/流式/流式工具，返回 ConnectionTestResult） */
@@ -92,7 +105,11 @@ export const IPC_CHANNELS = {
      * 与那条的另一个差别：**失败要带一句人话回来**（`ok:false`），弹窗得把"读不到"和
      * "端点就是空的"分开说——那条静默回空表在这里会变成误导。
      */
-    discoverProviderModels: 'settings:discover-provider-models'
+    discoverProviderModels: 'settings:discover-provider-models',
+    /** 主进程当前解析后的明暗（system 模式按 OS 解析）；返回 'light' | 'dark' */
+    effectiveTheme: 'settings:effective-theme',
+    /** 主进程 → 渲染端：解析后的明暗变化推送（system 模式下不依赖渲染端 media query） */
+    themeChanged: 'settings:theme-changed'
   },
   workspace: {
     /** 打开原生选择器添加一个授权目录（无入参，取消=不改动；返回合并后的 AppSettings） */
@@ -334,7 +351,19 @@ export const IPC_CHANNELS = {
      * round 23：读一个插件的本地图标（入参 [marketplaceId, pluginName]，返回 { dataUrl | null }）——
      * 插件目录在主进程解析（渲染端传不了任意路径）；没有可用图标 = null，渲染端画字母头像。
      */
-    icon: 'plugins:icon'
+    icon: 'plugins:icon',
+    /**
+     * round 94：从 URL 导入一个技能（入参 [{ url }]；返回 { overview, added }）——
+     * 出站边界（逐跳校验 + 8MiB 上限）与 `network.allowLocalHosts` 白名单都在主进程，
+     * 渲染端递的只是用户填的网址原文。
+     */
+    addSkillUrl: 'plugins:add-skill-url',
+    /**
+     * round 94：从本地文件 / 文件夹导入一个技能（入参 ['file' | 'folder']；返回 { overview, added }）。
+     * 路径**只由主进程的原生选择器**给（渲染端传不了任意路径，与 workspace/projects 同一纪律）；
+     * 用户取消 = `added: null`，什么都不落盘。
+     */
+    importSkillLocal: 'plugins:import-skill-local'
   }
 } as const
 
@@ -366,7 +395,7 @@ export const pdfExtractArgsSchema = z.tuple([z.instanceof(Uint8Array)])
 /** settings:set-provider-key 的入参：[id, key]（都非空；key 只在主进程内存里短暂存在） */
 export const providerKeyArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
 
-/** settings:test-provider / settings:remove-provider 的入参：[id] */
+/** 设置族里只收一个 provider id 的通道（test-provider / remove-provider / reveal-provider-key 等）的入参：[id] */
 export const providerIdArgsSchema = z.tuple([z.string().min(1)])
 
 /**
@@ -526,6 +555,38 @@ export const projectFolderSchema = z.strictObject({ path: z.string().min(1).null
 
 /** 写密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
 export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(true) })
+
+/**
+ * settings:reveal-provider-key 的失败原因：
+ *   - `not-configured` 没配过密钥（或这条 provider 根本不在设置里）；
+ *   - `needs-reentry`  存过但本机解不开（换机 / 迁移 / 系统账户变了）；
+ *   - `unreadable`     读到了密文但这次解不出明文（防御性兜底；与 needs-reentry 分开报）。
+ * 三种都只给原因与一句人话，**不回显密文**。
+ */
+export const providerKeyRevealFailureReasonSchema = z.enum([
+  'not-configured',
+  'needs-reentry',
+  'unreadable'
+])
+
+export type ProviderKeyRevealFailureReason = z.infer<typeof providerKeyRevealFailureReasonSchema>
+
+/**
+ * settings:reveal-provider-key 的回包（用户显式点眼睛才走）：
+ *   - 成功带**真实密钥明文** —— 这是全应用唯一一条这样的回包；调用方用完即清；
+ *   - 失败带原因 + 人话，不抛（"没配置 / 需重录"是常态，不是异常）。
+ * strict：多一个字段都不交给渲染端（防"顺手夹带"）。
+ */
+export const providerKeyRevealResultSchema = z.discriminatedUnion('ok', [
+  z.strictObject({ ok: z.literal(true), key: z.string().min(1) }),
+  z.strictObject({
+    ok: z.literal(false),
+    reason: providerKeyRevealFailureReasonSchema,
+    message: z.string().min(1)
+  })
+])
+
+export type ProviderKeyRevealResult = z.infer<typeof providerKeyRevealResultSchema>
 
 /** settings:provider-key-states 的回包：键是 provider id */
 export const providerKeyStatesSchema = z.record(z.string(), providerKeyStateSchema)
@@ -785,6 +846,15 @@ export const pluginIdArgsSchema = z.tuple([z.string().min(1)])
 /** plugins:icon 的入参：[marketplaceId, pluginName]（插件目录在主进程解析，同 containment 口径） */
 export const pluginIconArgsSchema = z.tuple([z.string().min(1), z.string().min(1)])
 
+/** round 94：plugins:add-skill-url 的入参：[{ url }]（网址原文；出站边界在主进程判） */
+export const pluginSkillUrlArgsSchema = z.tuple([z.strictObject({ url: z.string().min(1) })])
+
+/**
+ * round 94：plugins:import-skill-local 的入参：['file' | 'folder'] —— 只说"让用户挑什么"，
+ * 不代表任何路径能进来（路径由主进程的原生选择器给）。
+ */
+export const pluginSkillLocalArgsSchema = z.tuple([z.enum(['file', 'folder'])])
+
 /** 跨边界入参不合法（主进程侧抛这个，不静默忽略） */
 export class IpcInputError extends Error {
   constructor(channel: string, detail: string) {
@@ -828,8 +898,14 @@ export interface KyclawSettingsApi {
   get(): Promise<AppSettings>
   /** 只给要改的字段，返回合并后的完整设置 */
   update(patch: AppSettingsPatch): Promise<AppSettings>
-  /** 写一条 provider 的密钥：成功只回 {hasKey:true}（明文永不回渲染端） */
+  /** 写一条 provider 的密钥：成功只回 {hasKey:true}（写方向不回明文） */
   setProviderKey(id: string, key: string): Promise<{ hasKey: true }>
+  /**
+   * **用户显式点击眼睛**时回显一条已存密钥的真实明文（唯一一条这样的读通道）。
+   * 只在点击时调用；拿到后只在当次展开期间显示，收起/切换/保存/关闭弹窗/卸载即清除。
+   * 失败（未配置 / 需重录 / 读不到）回结构化原因与人话，不回显密文。
+   */
+  revealProviderKey(id: string): Promise<ProviderKeyRevealResult>
   /** 各 provider 的密钥状态（键是 provider id；解不开的密钥体现在 needsReentry） */
   providerKeyStates(): Promise<Record<string, ProviderKeyState>>
   /** 主进程发一条最小请求验证连通性（返回延迟或错误文案） */
@@ -855,6 +931,10 @@ export interface KyclawSettingsApi {
     baseUrl?: string
     apiKey: string
   }): Promise<ProviderModelDiscoveryResult>
+  /** 当前解析后的明暗（system 模式取主进程 nativeTheme，不依赖渲染端 media query） */
+  effectiveTheme(): Promise<ResolvedTheme>
+  /** 订阅解析后的明暗变化（主进程推送），返回退订函数 */
+  onThemeChanged(listener: (theme: ResolvedTheme) => void): () => void
 }
 
 /** preload 暴露给渲染端的 agent 服务面（服务未起时 endpoint() 会 reject） */
@@ -1185,4 +1265,13 @@ export interface KyclawPluginsApi {
   uninstall(id: string): Promise<PluginsOverview>
   /** round 23：读插件本地图标（data URL；没有 = null，渲染端画字母头像） */
   icon(marketplaceId: string, name: string): Promise<PluginIconResponse>
+  /**
+   * round 94：从 URL 导入一个技能（直链 SKILL.md 或单技能 zip）。
+   * 成功回新的总览 + 导入的技能；失败抛人话（出站被拦的提示也在里面）。
+   */
+  addSkillFromUrl(url: string): Promise<PluginSkillImport>
+  /** round 94：从本地文件导入（`.md` / zip；走原生选择器，取消 = added null） */
+  importSkillFromFile(): Promise<PluginSkillImport>
+  /** round 94：从本地文件夹导入（根目录含 SKILL.md；走原生选择器，取消 = added null） */
+  importSkillFromFolder(): Promise<PluginSkillImport>
 }

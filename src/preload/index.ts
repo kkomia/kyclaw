@@ -16,9 +16,11 @@ import {
   projectBaseSchema,
   projectFolderSchema,
   projectOpenInExplorerResultSchema,
+  providerKeyRevealResultSchema,
   providerKeyStatesSchema,
   providerModelDiscoveryResultSchema,
   providerModelListResultSchema,
+  resolvedThemeSchema,
   searchKeyStatesSchema,
   setLangfuseKeysResultSchema,
   setProviderKeyResultSchema,
@@ -62,6 +64,8 @@ import { providerKeyStateSchema } from '../shared/providers'
 import {
   pluginsOverviewSchema,
   pluginIconResponseSchema,
+  pluginSkillImportSchema,
+  type PluginSkillImport,
   type PluginsOverview
 } from '../shared/plugins'
 import {
@@ -149,6 +153,15 @@ const settingsApi: KyclawSettingsApi = {
     if (!parsed.success) throw new Error('[kyclaw] 密钥保存响应结构不合法')
     return parsed.data
   },
+  // 唯一一条把已存密钥读回渲染端的通道（用户显式点眼睛才调用）：回包必须严格是
+  // {ok:true,key} 或 {ok:false,reason,message}，多一个字段都不交给上层。
+  revealProviderKey: async (id) => {
+    const parsed = providerKeyRevealResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.revealProviderKey, id)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] 密钥回显响应结构不合法')
+    return parsed.data
+  },
   providerKeyStates: async () => {
     const parsed = providerKeyStatesSchema.safeParse(
       await ipcRenderer.invoke(IPC_CHANNELS.settings.providerKeyStates)
@@ -184,6 +197,22 @@ const settingsApi: KyclawSettingsApi = {
     )
     if (!parsed.success) throw new Error('[kyclaw] 模型发现响应结构不合法')
     return parsed.data
+  },
+  effectiveTheme: async () => {
+    const parsed = resolvedThemeSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.settings.effectiveTheme)
+    )
+    return parsed.success ? parsed.data : 'light'
+  },
+  onThemeChanged: (listener) => {
+    const handler = (_event: unknown, payload: unknown): void => {
+      const parsed = resolvedThemeSchema.safeParse(payload)
+      if (parsed.success) listener(parsed.data)
+    }
+    ipcRenderer.on(IPC_CHANNELS.settings.themeChanged, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.settings.themeChanged, handler)
+    }
   }
 }
 
@@ -521,7 +550,21 @@ const pluginsApi: KyclawPluginsApi = {
     )
     if (!parsed.success) return { dataUrl: null }
     return parsed.data
-  }
+  },
+  // round 94：单个技能的导入（URL / 本地文件 / 本地文件夹）。
+  // 回包是 { overview, added }：结构不对就抛（半截总览没法显示）；失败原因由主进程抛人话。
+  addSkillFromUrl: async (url) =>
+    parseSkillImport(await ipcRenderer.invoke(IPC_CHANNELS.plugins.addSkillUrl, { url })),
+  importSkillFromFile: async () =>
+    parseSkillImport(await ipcRenderer.invoke(IPC_CHANNELS.plugins.importSkillLocal, 'file')),
+  importSkillFromFolder: async () =>
+    parseSkillImport(await ipcRenderer.invoke(IPC_CHANNELS.plugins.importSkillLocal, 'folder'))
+}
+
+function parseSkillImport(payload: unknown): PluginSkillImport {
+  const parsed = pluginSkillImportSchema.safeParse(payload)
+  if (!parsed.success) throw new Error('[kyclaw] 技能导入响应结构不合法')
+  return parsed.data
 }
 
 function parseOverview(payload: unknown): PluginsOverview {

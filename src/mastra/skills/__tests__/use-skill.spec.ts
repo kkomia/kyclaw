@@ -11,7 +11,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { classifyToolCall } from '../../../main/permission/classify'
 import { SKILL_FILE, type SkillSource } from '../../../shared/skills'
 import { callTool, createBed, type TestBed } from '../../tools/__tests__/helpers'
@@ -80,6 +80,43 @@ describe('use_skill：命中', () => {
     expect(out).toContain('reference/layouts.md')
     expect(out).toContain('# pptx：用 create_ppt 做演示文稿')
     expect(out).toContain('一页一个意思。')
+  })
+
+  it('011：回包给出技能目录 ID，并明确用 read({skill,path}) 读资源（不要走 bash）', async () => {
+    const source = sourceOf({
+      kind: 'plugin',
+      dir: 'market-p1-demo',
+      pluginId: 'market-p1',
+      content: '---\nname: demo\n---\n示例手册'
+    })
+    mkdirSync(join(source.path, 'reference'))
+    writeFileSync(join(source.path, 'reference', 'fields.md'), '# 字段', 'utf8')
+    const tool = await createUseSkillTool(bed.ctx, () => [source])
+
+    const out = String(await callTool(tool, { name: 'demo' }))
+
+    // 目录名与技能名不同（插件带前缀）：清单里的示例必须用**目录 ID**，且说明 read 只认 ID
+    expect(out).toContain('技能目录 ID：market-p1-demo')
+    expect(out).toContain('read 的 skill 参数只认这个目录 ID，不认技能名')
+    expect(out).toContain('read({ skill: "market-p1-demo", path: "SKILL.md" })')
+    expect(out).toContain('reference/fields.md')
+    expect(out).toContain('不要用 bash')
+  })
+
+  it('坏 frontmatter 不进入可用清单（use_skill 找不到，不会读出空正文）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const good = sourceOf({ kind: 'builtin', dir: 'pptx', content: PPTX_MD })
+      const bad = sourceOf({ kind: 'builtin', dir: 'bad', content: '正文没有 frontmatter' })
+      const tool = await createUseSkillTool(bed.ctx, () => [good, bad])
+
+      const out = String(await callTool(tool, { name: 'bad' }))
+      expect(out).toContain('没找到技能「bad」')
+      expect(out).toContain('pptx')
+      expect(out).not.toContain('正文没有 frontmatter')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('插件技能：说明来自哪个插件；名字用去掉前缀的目录名也能命中', async () => {

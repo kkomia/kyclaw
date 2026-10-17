@@ -12,7 +12,13 @@ import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from '
 import type { ComposerModeMenu, ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
 import type { OutgoingMessage, PdfExtractor, PendingAttachment } from './composer-attachments'
-import { resolveContextItem, subscribeContextItems, subscribeDrafts } from './composer-inbox'
+import {
+  resolveContextItem,
+  subscribeContextItems,
+  subscribeDrafts,
+  utf8ByteLength
+} from './composer-inbox'
+import type { ComposerQuoteDraft } from './composer-inbox'
 import {
   discardComposerCarryover,
   keepComposerCarryover,
@@ -69,6 +75,8 @@ import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-w
  * 另一条入口（round 42）：工作台文件树的「添加到上下文」与预览区选中的「添加到上下文（摘选）」
  * 走 composer-inbox 的事件通道进来，落进**同一个附件条**、同一套上限（解析在订阅方做）。
  * round 61：同一个通道里多了「原文放回输入框」（消息动作行的「撤回」→ 草稿），草稿只有这一条外部写入口。
+ * 0.1.3 / 013 返工：选中 AI 回复的「引用」也走这条通道，但落点是**附件条**（可展开 / 编辑的原文卡），
+ * 不写输入框；发送时仍带完整原文（不是卡上那行摘要）。
  *
  * 引用（round 14 起=光标处内联标记；round 21 换图3 观感：不透明覆盖层画 chip）：`＋ → 引用…`
  * 与 round 15 的建议浮窗同一条路 ——
@@ -156,6 +164,27 @@ function uid(): string {
   return `c${uidCounter}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+/** 回复选段在附件条上的名字（多条选段各是一张卡；来源消息 id 走 tooltip / metadata） */
+const REPLY_QUOTE_NAME = '回复选段'
+
+/**
+ * 0.1.3 / 013 返工：把「选中 AI 回复」的原文做成一条**草稿附件**。
+ * 原文只做换行归一（不 trim 掉用户选中的内容），摘要卡只负责展示；发送时仍是全文。
+ * 来源消息 id 放进 `originRef`（气泡下方图标项的 tooltip / metadata source），可追溯。
+ */
+function replyQuoteAttachment(quote: ComposerQuoteDraft, text: string): PendingAttachment {
+  return {
+    id: uid(),
+    name: REPLY_QUOTE_NAME,
+    size: utf8ByteLength(text),
+    text,
+    quote: true,
+    quoteFrom: 'reply',
+    origin: 'AI 回复',
+    ...(quote.messageId === undefined ? {} : { originRef: `AI 回复（消息 ${quote.messageId}）` })
+  }
+}
+
 /**
  * 剪贴板里的文件（round 50 粘贴入口）。
  *
@@ -206,15 +235,6 @@ export function Composer({
   const blocked = pending !== null
   const [draft, setDraft] = useState('')
   /**
-   * 草稿的实时值。两个用它的地方都是"外部想动草稿"：① 草稿通道要**追加到末尾**时得知道
-   * 输入框里现在有什么（round 76），闭包里的 `draft` 是订阅那一刻的旧值；② 会话实例就绪
-   * 那一下输入卡会重挂一次，草稿要过桥带走（见 composer-carryover）。
-   */
-  const draftRef = useRef(draft)
-  useEffect(() => {
-    draftRef.current = draft
-  }, [draft])
-  /**
    * R92：草稿的**最后写入记录**与**最后一次 commit 的草稿**。
    *
    * 为什么需要（v4 取证，2026-10-16）：冷启动"落位换 key 重挂"若与输入落在**同一批提交**，
@@ -235,7 +255,7 @@ export function Composer({
     setDraft(value)
   }
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  /** 附件的实时值（与 draftRef 同一个用途：重挂前过桥带走，见 composer-carryover） */
+  /** 附件的实时值（与草稿 ref 同一类用途：重挂前过桥带走，见 composer-carryover） */
   const attachmentsRef = useRef(attachments)
   useEffect(() => {
     attachmentsRef.current = attachments
@@ -621,13 +641,30 @@ export function Composer({
    * round 76：同一条通道上还有「能力入口」胶囊，它要 `mode: 'append'` —— 空框照旧直接填入，
    * 已经有草稿就**追加到末尾**（用户已经写下的那半句一个字不丢；只有空白也算空框）。
    * 缺省（撤回那一路）仍是整段替换：那条路是"把这条消息收回来重发"，语义上就该覆盖。
+   *
+   * 追加读 `draftTruthRef`（同步真值），不读 passive effect 才更新的 state 镜像：
+   * 同一 tick 连续两次 append 时，第二次必须看见第一次的结果，不能把第一次覆盖掉。
+   *
+   * 0.1.3 / 013 返工：`draft.quote` 走**附件条**（不写输入框）：原文收成一张可展开 / 可编辑的
+   * 摘要卡，已有草稿与已有附件都保留（追加，不覆盖）；只落本地状态，不触发发送。
    */
   useEffect(() => {
     if (threadId === null) return
     return subscribeDrafts((draft) => {
       if (draft.threadId !== threadId) return
-      if (draft.mode === 'append' && draftRef.current.trim() !== '') {
-        const current = draftRef.current
+      if (draft.quote !== undefined) {
+        const quote = draft.quote
+        // 换行符归一，但**不 trim 正文**：用户选中的原文一个字节都不丢
+        const text = quote.text.replace(/\r\n?/g, '\n')
+        if (text.trim() === '') return
+        setAttachments((previous) => [...previous, replyQuoteAttachment(quote, text)])
+        // 焦点交回输入框末尾，用户可以直接写批注；输入框内容与光标位置之外的东西都不动
+        setCaretToken(draftTruthRef.current.length)
+        return
+      }
+      if (draft.text === undefined) return
+      const current = draftTruthRef.current
+      if (draft.mode === 'append' && current.trim() !== '') {
         const next = `${current}${current.endsWith('\n') ? '' : '\n'}${draft.text}`
         trackDraft(next)
         setCaretToken(next.length)
@@ -678,7 +715,7 @@ export function Composer({
     () => () => {
       if (pendingRef.current === null) return
       keepComposerCarryover({
-        // 抄**输入框此刻真实写着什么**，不抄 `draftRef` 这个 state 镜像：两者会在"state 还没跟上
+        // 抄**输入框此刻真实写着什么**，不抄 `draftPropRef` 这个 state 镜像：两者会在"state 还没跟上
         // 用户这一下改动"时分叉（DOM 上有字、state 仍是空），而用户看得见的就是 DOM 那一份 ——
         // 以它为准，卸载时就不会把半句吞掉（这条口径由 composer-first.spec 的
         // 「DOM 有字、state 空」那条用例钉住）。`textareaRef` 此刻已被 React 置空，所以读
@@ -748,6 +785,13 @@ export function Composer({
         attachments={attachments}
         onRemoveAttachment={(id) =>
           setAttachments((previous) => previous.filter((item) => item.id !== id))
+        }
+        onEditAttachment={(id, text) =>
+          setAttachments((previous) =>
+            previous.map((item) =>
+              item.id === id ? { ...item, text, size: utf8ByteLength(text) } : item
+            )
+          )
         }
         onMentionAttachment={(_attachment, index) =>
           // 提及只是文字指路：插一段可 chip 化的引用（图片本体仍在附件里随消息真发）

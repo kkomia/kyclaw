@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../../components/ui/button'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useThreadRunStore } from '../chat/thread-run-store'
 import { PluginsNavItem } from '../plugins/PluginsNavItem'
 import { ProjectsSection } from '../projects/ProjectsSection'
 import { useProjectsStore } from '../projects/projects-store'
@@ -44,6 +45,12 @@ export function SessionsController(): React.JSX.Element {
   const projects = useSettingsStore((state) => state.settings.projects)
   const archivedThreads = useSettingsStore((state) => state.settings.archivedThreads)
   const pinnedThreads = useSettingsStore((state) => state.settings.pinnedThreads)
+  /**
+   * 010：在跑的会话（thread-run-store —— 常驻 Chat 的 submitted/streaming 订阅）。
+   * 只在状态跳变时更新（不跟逐 token 正文），转成 Set 透传给「任务」组。
+   */
+  const running = useThreadRunStore((state) => state.running)
+  const runningIds = useMemo(() => new Set(Object.keys(running)), [running])
 
   /** round 20：行动作失败的一行提示（与 project-error 同口径：显示原因，不静默） */
   const [actionError, setActionError] = useState<string | null>(null)
@@ -116,6 +123,7 @@ export function SessionsController(): React.JSX.Element {
           activeId={activeId}
           notices={notices}
           pinnedIds={pinnedIds}
+          runningIds={runningIds}
           onSelect={select}
           onActionError={(message) => setActionError(message)}
         />

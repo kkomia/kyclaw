@@ -8,6 +8,7 @@ import {
   type KyclawSettingsApi,
   type KyclawWindowApi,
   type LangfuseState,
+  type ProviderKeyRevealResult,
   type ProviderModelDiscoveryResult,
   type ProviderModelOption,
   type SearchKeyStates,
@@ -19,7 +20,7 @@ import {
   type AppSettingsPatch,
   type WorkspaceMode
 } from '@shared/settings'
-import type { PluginsOverview } from '@shared/plugins'
+import type { PluginSkillImport, PluginsOverview } from '@shared/plugins'
 import { emptyOverview, type LocalModelsOverview } from '@shared/local-models'
 import type { TranslateResult } from '@shared/translate'
 import type { SearchKeyTarget } from '@shared/search'
@@ -53,6 +54,8 @@ export interface SettingsApiStub {
   get: Mock<() => Promise<AppSettings>>
   update: Mock<(patch: AppSettingsPatch) => Promise<AppSettings>>
   setProviderKey: Mock<(id: string, key: string) => Promise<{ hasKey: true }>>
+  /** 用户显式点眼睛：默认按本桥记住的 key 回真实值；用例可覆盖成功/失败 */
+  revealProviderKey: Mock<(id: string) => Promise<ProviderKeyRevealResult>>
   providerKeyStates: Mock<() => Promise<Record<string, ProviderKeyState>>>
   testProvider: Mock<(id: string) => Promise<ConnectionTestResult>>
   /** round 22：模型元数据探测（默认回当前设置；用例喂 probedModels） */
@@ -61,6 +64,9 @@ export interface SettingsApiStub {
   listProviderModels: Mock<(id: string) => Promise<ProviderModelOption[]>>
   /** 用户反馈 007：拿刚填的地址与密钥发现模型（默认"读不到"，用例喂清单/失败原因） */
   discoverProviderModels: Mock<KyclawSettingsApi['discoverProviderModels']>
+  /** 主进程解析后的明暗（默认按设置里的显式档；system 回 light） */
+  effectiveTheme: Mock<() => Promise<'light' | 'dark'>>
+  onThemeChanged: Mock<(listener: (theme: 'light' | 'dark') => void) => () => void>
   removeProvider: Mock<(id: string) => Promise<AppSettings>>
 }
 
@@ -159,7 +165,8 @@ export const PICKED_FOLDER = 'D:\\picked\\现有文件夹'
 export const PROJECT_BASE = 'D:\\picked\\Workspaces'
 
 function settingsApi(state: BridgeState): SettingsApiStub {
-  const keyed = new Set<string>()
+  /** 测试桥的"密钥账本"：只记内存里的明文，用来模拟主进程的显式回显 */
+  const keyed = new Map<string, string>()
 
   return {
     get: vi.fn(async () => state.current),
@@ -167,9 +174,16 @@ function settingsApi(state: BridgeState): SettingsApiStub {
       state.current = { ...state.current, ...patch }
       return state.current
     }),
-    setProviderKey: vi.fn(async (id: string) => {
-      keyed.add(id)
+    setProviderKey: vi.fn(async (id: string, key: string) => {
+      keyed.set(id, key)
       return { hasKey: true as const }
+    }),
+    revealProviderKey: vi.fn(async (id: string): Promise<ProviderKeyRevealResult> => {
+      const key = keyed.get(id)
+      if (key === undefined) {
+        return { ok: false, reason: 'not-configured', message: '还没有保存 API Key' }
+      }
+      return { ok: true, key }
     }),
     providerKeyStates: vi.fn(async () => {
       const states: Record<string, ProviderKeyState> = {}
@@ -188,6 +202,8 @@ function settingsApi(state: BridgeState): SettingsApiStub {
       ok: false,
       message: '读不到这条端点的模型清单'
     })),
+    effectiveTheme: vi.fn(async () => (state.current.theme === 'dark' ? 'dark' : 'light')),
+    onThemeChanged: vi.fn(() => () => {}),
     removeProvider: vi.fn(async (id: string) => {
       state.current = {
         ...state.current,
@@ -569,11 +585,21 @@ export interface PluginsApiStub {
   uninstall: Mock<(id: string) => Promise<PluginsOverview>>
   /** round 23：插件图标（data URL；默认 null = 字母头像） */
   icon: Mock<(marketplaceId: string, name: string) => Promise<{ dataUrl: string | null }>>
+  /** round 94：技能的三个导入入口（默认"导入成功且什么都没新增"——用例按需喂 returned） */
+  addSkillFromUrl: Mock<(url: string) => Promise<PluginSkillImport>>
+  importSkillFromFile: Mock<() => Promise<PluginSkillImport>>
+  importSkillFromFolder: Mock<() => Promise<PluginSkillImport>>
 }
 
 export function pluginsApiStub(
-  initial: PluginsOverview = { marketplaces: [], installed: [], installedSkills: [] }
+  initial: PluginsOverview = { marketplaces: [], installed: [], installedSkills: [] },
+  /** round 94：导入成功时回的总览与技能（用例喂"导入了 xx"的那一份） */
+  imported?: { overview: PluginsOverview; added: { name: string; dir: string } | null }
 ): PluginsApiStub {
+  const outcome: PluginSkillImport = {
+    blocked: null,
+    ...(imported ?? { overview: initial, added: null })
+  }
   return {
     overview: vi.fn(async () => initial),
     addMarketplace: vi.fn(async () => initial),
@@ -581,7 +607,10 @@ export function pluginsApiStub(
     removeMarketplace: vi.fn(async () => initial),
     install: vi.fn(async () => initial),
     uninstall: vi.fn(async () => initial),
-    icon: vi.fn(async () => ({ dataUrl: null }))
+    icon: vi.fn(async () => ({ dataUrl: null })),
+    addSkillFromUrl: vi.fn(async () => outcome),
+    importSkillFromFile: vi.fn(async () => outcome),
+    importSkillFromFolder: vi.fn(async () => outcome)
   }
 }
 

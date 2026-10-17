@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampZoom,
+  containZoom,
   DEFAULT_ZOOM_BOUNDS,
   FIT_WIDTH,
   fitWidthZoom,
@@ -73,6 +74,53 @@ describe('resolveZoom：偏好 → 倍率', () => {
     expect(resolveZoom({ kind: 'fixed', scale: 2 }, 424, 800, 24)).toBe(2)
     expect(resolveZoom(FIT_WIDTH, 1224, 800, 24, false)).toBe(1)
   })
+
+  it('contain 那侧把现算的 fit 倍率传进来：fit 模式取它，固定倍率不动，不传时行为与原来逐值一致', () => {
+    expect(resolveZoom(FIT_WIDTH, 424, 800, 24, false, 0.2)).toBe(0.2)
+    expect(resolveZoom({ kind: 'fixed', scale: 2 }, 424, 800, 24, false, 0.2)).toBe(2)
+    // 不传第 6 位 = 历史路径（按适应宽度现算）
+    expect(resolveZoom(FIT_WIDTH, 424, 800, 24, false, undefined)).toBe(
+      resolveZoom(FIT_WIDTH, 424, 800, 24, false)
+    )
+  })
+})
+
+/* ── containZoom：适应窗口（宽高都装得下，只缩不放；图片那侧的 fit 口径） ── */
+
+describe('containZoom：适应窗口', () => {
+  it('宽图：宽受限就按宽缩（扣掉左右留白）', () => {
+    // 视口 424×800、四边各留 16（合计 32）；图 1000×400：
+    // 宽 (424−32)/1000 = 0.392，高 (800−32)/400 = 1.92 → 取小的那个
+    expect(containZoom(424, 800, 1000, 400, 32, 32)).toBeCloseTo(0.392, 6)
+  })
+
+  it('竖图：高受限就按高缩（不会因为"宽还装得下"就不缩）', () => {
+    // 视口 424×300；图 400×1000：宽 0.98、高 (300−32)/1000 = 0.268 → 0.268
+    expect(containZoom(424, 300, 400, 1000, 32, 32)).toBeCloseTo(0.268, 6)
+  })
+
+  it('小图不放大（默认只缩不放；要铺开得显式 allowUpscale=true）', () => {
+    expect(containZoom(424, 300, 100, 50, 32, 32)).toBe(1)
+    expect(containZoom(424, 300, 100, 50, 32, 32, true)).toBeCloseTo(
+      Math.min((424 - 32) / 100, (300 - 32) / 50),
+      6
+    )
+  })
+
+  it('尺寸没凑齐 / 高度还没量到：退回适应宽度，不硬套 contain', () => {
+    // 视口还没量到宽高 → 1（还没该缩放）
+    expect(containZoom(0, 0, 1000, 400, 32, 32)).toBe(1)
+    // 高度没量到 → 按适应宽度（(424−32)/1000），不是 1、也不是 contain
+    expect(containZoom(424, 0, 1000, 400, 32, 32)).toBeCloseTo((424 - 32) / 1000, 6)
+    // 原始尺寸缺一个 → 退回适应宽度：缺宽时适应宽度也算不出来，按原始大小（1）
+    expect(containZoom(424, 300, undefined, 400, 32, 32)).toBe(1)
+    expect(containZoom(424, 300, 1000, undefined, 32, 32)).toBeCloseTo((424 - 32) / 1000, 6)
+  })
+
+  it('装得下的下限不被视口倒挂（可用区为负时不给出 0 / 负数）', () => {
+    // 视口比留白还小：可用区按 1px 兜底（与 fitWidthZoom 同一口径）
+    expect(containZoom(20, 20, 1000, 1000, 32, 32)).toBeCloseTo(1 / 1000, 6)
+  })
 })
 
 /* ── ZoomBounds：宿主可配边界（图片那套 10%–800% / ×1.25；不传就是上面那套文档口径） ── */
@@ -99,7 +147,7 @@ describe('ZoomBounds：边界可配，默认不动', () => {
     expect(stepZoom(0.1, -1, IMAGE_ZOOM_BOUNDS)).toBe(0.1)
   })
 
-  it('图片边界：10%–800%，且"下限跟随适应宽度"由调用方用 floor 覆盖', () => {
+  it('图片边界：10%–800%，且"下限跟随当前适配倍率"由调用方用 floor 覆盖', () => {
     expect(clampZoom(9, IMAGE_ZOOM_BOUNDS)).toBe(8)
     expect(clampZoom(0.01, IMAGE_ZOOM_BOUNDS)).toBe(0.1)
     // fitFloor 的实际用法：视口量出来的 fit 比 min 还小 → 以 fit 为下限（点缩小不会反而放大）

@@ -6,6 +6,7 @@ import {
   passingConnectionTest
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import type { ProviderKeyRevealResult } from '@shared/ipc'
 import { defaultSettings, type AppSettings } from '@shared/settings'
 import type { ProviderConfig } from '@shared/providers'
 import { ModelSettings } from '../ModelSettings'
@@ -15,11 +16,16 @@ import { ModelSettings } from '../ModelSettings'
  *   - 新增走右上角「新增」弹窗：渠道下拉（内置 / 自定义）→ 字段 → 添加即落盘；已添加的内置渠道置灰；
  *   - 新建成功 = 弹窗关闭 + 新行**自动展开**；失败留弹窗里报原因（不关窗）；
  *   - 已配置：默认折叠只显示名字 / 模型名 / 上下文 / 能力图标 / 默认徽章；点行展开编辑；
- *   - key 只写不回显：保存后输入框清空、状态"已配置"、整页文本不含明文；
+ *   - key 写入后不回显：保存后输入框清空、状态"已配置"、整页文本不含明文；
  *   - 半截配置在展开区行内报"配置不完整：缺 X"；解不开的密钥引导重录（Review Focus #5）；
  *   - 测试连接：先存后测，分项显示三步结论 + 验证范围（005）；
  *   - 保存反馈（012）：存完给"已保存"，但只要再动一下草稿就立刻收掉；保存期间又改草稿时
  *     新改动一个字都不丢、反馈也不谎报（见文件末尾那一组）。
+ *   - API Key 显隐：默认掩码；本次有新输入时眼睛只临时揭示这次输入；本次无输入但已存密钥时，
+ *     点眼睛才调 reveal 通道回显真实 key（用户复验口径）。收起折叠 / 切到另一条 provider /
+ *     保存成功 / 取消关闭 / 新增弹窗关闭都立即复位并清掉本地明文（真 input.type / value 断言）。
+ *     已存密钥（本次未输入）在掩码态显示固定圆点占位；眼睛按钮不抢输入框焦点
+ *     （点完眼睛可直接键入，字符不会落在按钮上）。
  */
 const DEEPSEEK: ProviderConfig = {
   id: 'deepseek',
@@ -125,6 +131,7 @@ describe('模型组 · 折叠行（默认全折叠）', () => {
     expect(row('openai')).toHaveAttribute('aria-expanded', 'true')
     expect(input('provider-openai-model').value).toBe('gpt-4o-mini')
     expect(input('provider-openai-base-url').value).toBe('https://api.openai.com/v1')
+    expect(input('provider-openai-key')).toHaveAttribute('type', 'password')
     expect(input('provider-openai-key').value).toBe('')
     expect(screen.getByTestId('provider-openai-save')).toBeInTheDocument()
     expect(screen.getByTestId('provider-openai-test')).toBeInTheDocument()
@@ -264,6 +271,32 @@ describe('模型组 · 新增弹窗', () => {
     )
   })
 
+  it('009：输入框里的说明/示例占位去掉；字段靠标签仍可识别，渠道未选态保留', async () => {
+    await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    // 渠道选择器的"未选"状态是必要的，保留
+    expect(screen.getByTestId('model-add-channel')).toHaveTextContent('选一个渠道')
+
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+
+    // 四个文本框（模型 ID / 地址 / 渠道名称 / key）都不再带 placeholder 说明或示例
+    for (const testId of [
+      'model-add-model',
+      'model-add-base-url',
+      'model-add-name',
+      'model-add-key'
+    ]) {
+      expect(input(testId), testId).not.toHaveAttribute('placeholder')
+    }
+    // 字段仍可识别：注册与行内编辑同一套命名（模型 ID / Base URL / 渠道名称 / API Key）
+    expect(input('model-add-model').closest('label')).toHaveTextContent('模型 ID')
+    expect(input('model-add-base-url').closest('label')).toHaveTextContent('Base URL')
+    expect(input('model-add-name').closest('label')).toHaveTextContent('渠道名称')
+    expect(input('model-add-key')).toHaveAccessibleName('API Key')
+  })
+
   it('缺模型名 / 缺 Base URL：弹窗里报（人话），不落盘、不关窗', async () => {
     const bridge = await mount(defaultSettings())
 
@@ -298,6 +331,8 @@ describe('模型组 · 新增弹窗', () => {
     expect(await screen.findByTestId('model-add-append-hint')).toHaveTextContent('DeepSeek')
     expect(screen.queryByTestId('model-add-key')).not.toBeInTheDocument()
     expect(screen.queryByTestId('model-add-base-url')).not.toBeInTheDocument()
+    // 009：这一档的模型输入框同样不带占位说明（清单那行"没读到…手填"的说明是动态面，保留）
+    expect(input('model-add-model')).not.toHaveAttribute('placeholder')
 
     // 007：端点上读到的模型列出来供选（带实测上下文长度），选中即填进"模型"
     await waitFor(() => expect(bridge.listProviderModels).toHaveBeenCalledWith('deepseek'))
@@ -397,7 +432,9 @@ describe('模型组 · 新增弹窗', () => {
     // 密钥只在这一次调用里过桥：既没落盘、也没写进密钥存储
     expect(bridge.update).not.toHaveBeenCalled()
     expect(bridge.setProviderKey).not.toHaveBeenCalled()
-    expect(document.body.textContent ?? '').not.toContain(KEY)
+    // 真 input：走的是刚键入的草稿值，显示仍是默认掩码
+    expect(input('model-add-key')).toHaveAttribute('type', 'password')
+    expect(input('model-add-key').value).toBe(KEY)
 
     fireEvent.keyDown(screen.getByTestId('model-add-discovered'), { key: 'ArrowDown' })
     expect(screen.getByTestId('model-add-discovered-qwen3-max')).toHaveTextContent('262K')
@@ -523,8 +560,54 @@ describe('模型组 · 新增弹窗', () => {
       bridge.setProviderKey.mock.invocationCallOrder[0]
     )
     await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
-    // 明文不落在页面上（弹窗已关，输入框也不留）
-    expect(document.body.textContent ?? '').not.toContain(KEY)
+    // 弹窗已关：密钥输入框不在 DOM 里；自动展开的新行是空值 + 默认掩码
+    await waitFor(() => expect(screen.queryByTestId('model-add-key')).not.toBeInTheDocument())
+    await waitFor(() => expect(input('provider-deepseek-key')).toBeInTheDocument())
+    expect(input('provider-deepseek-key')).toHaveAttribute('type', 'password')
+    expect(input('provider-deepseek-key').value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('API Key 默认掩码：眼睛按钮只临时揭示新输入，切回后提交照旧写密钥', async () => {
+    const bridge = await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+
+    const keyInput = input('model-add-key')
+    expect(keyInput).toHaveAttribute('type', 'password')
+    const toggle = screen.getByTestId('model-add-key-toggle')
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    // 填了值也不改默认掩码
+    expect(keyInput).toHaveAttribute('type', 'password')
+
+    // 眼睛只改这一次的显示，不改输入值
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(KEY)
+    expect(toggle).toHaveAccessibleName('隐藏 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+
+    // 保存结果与全程掩码时一致：配置先落盘、密钥照旧交给主进程；关窗后原输入框移除，
+    // 自动展开的新行是空值密码框（既不复读已存 key，也不留明文）
+    fireEvent.click(screen.getByTestId('model-add-submit'))
+    await waitFor(() => expect(bridge.setProviderKey).toHaveBeenCalledWith('deepseek', KEY))
+    expect(bridge.update.mock.calls.at(-1)?.[0]).toMatchObject({
+      providers: [{ id: 'deepseek' }]
+    })
+    await waitFor(() => expect(screen.queryByTestId('model-add-key')).not.toBeInTheDocument())
+    await waitFor(() => expect(input('provider-deepseek-key')).toBeInTheDocument())
+    expect(input('provider-deepseek-key')).toHaveAttribute('type', 'password')
+    expect(input('provider-deepseek-key').value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
   })
 
   it('落盘失败：留在弹窗里报原因，不关窗', async () => {
@@ -548,8 +631,56 @@ describe('模型组 · 新增弹窗', () => {
   })
 })
 
-describe('模型组 · 密钥只写不回显', () => {
-  it('填 key 保存：只把 [id, key] 交给主进程；状态转"已配置"，输入框清空，整页不含明文', async () => {
+describe('模型组 · 用户反馈 009 返工（行内编辑去说明小字 + 精简布局）', () => {
+  it('已有模型行内编辑：输入框不再带说明/示例占位，动态状态照留', async () => {
+    await mount(withProviders(DEEPSEEK))
+    expand('deepseek')
+
+    for (const testId of [
+      'provider-deepseek-name',
+      'provider-deepseek-model',
+      'provider-deepseek-display-name',
+      'provider-deepseek-context-window',
+      'provider-deepseek-base-url',
+      'provider-deepseek-key'
+    ]) {
+      expect(input(testId), testId).not.toHaveAttribute('placeholder')
+    }
+
+    // 动态面不是"输入说明小字"：密钥状态、上下文来源与实测/回退值都还在
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('未配置')
+    )
+    expect(screen.getByTestId('provider-deepseek-context-window-source')).toHaveTextContent('回退')
+    expect(input('provider-deepseek-context-window').closest('label')).toHaveTextContent('128K')
+  })
+
+  it('命名统一：渠道名称 / 模型名称 / 模型 ID；模型名称与模型 ID 同一行', async () => {
+    await mount(withProviders(DEEPSEEK))
+    expand('deepseek')
+
+    expect(input('provider-deepseek-name').closest('label')).toHaveTextContent('渠道名称')
+    expect(input('provider-deepseek-display-name').closest('label')).toHaveTextContent('模型名称')
+    expect(input('provider-deepseek-model').closest('label')).toHaveTextContent('模型 ID')
+    expect(input('provider-deepseek-context-window').closest('label')).toHaveTextContent(
+      '上下文长度（tokens）'
+    )
+    expect(input('provider-deepseek-base-url').closest('label')).toHaveTextContent('Base URL')
+    expect(input('provider-deepseek-key')).toHaveAccessibleName('API Key')
+
+    // "同一行"：模型名称与模型 ID 是同一身份栅格（#identity）下的兄弟节点
+    const identity = screen.getByTestId('provider-deepseek-identity')
+    const displayNameLabel = input('provider-deepseek-display-name').closest('label')
+    const modelLabel = input('provider-deepseek-model').closest('label')
+    expect(identity).toContainElement(input('provider-deepseek-name'))
+    expect(identity).toContainElement(displayNameLabel)
+    expect(identity).toContainElement(modelLabel)
+    expect(displayNameLabel?.parentElement).toBe(modelLabel?.parentElement)
+  })
+})
+
+describe('模型组 · 密钥写方向与显式回显', () => {
+  it('填 key 保存：只把 [id, key] 交给主进程；状态转"已配置"，输入框清空回掩码、已存 key 默认不回显', async () => {
     const bridge = await mount(withProviders(DEEPSEEK))
     expand('deepseek')
     // 先等密钥状态读完（读到"未配置"才谈得上"转已配置"）
@@ -564,12 +695,309 @@ describe('模型组 · 密钥只写不回显', () => {
     await waitFor(() =>
       expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
     )
+    expect(input('provider-deepseek-key')).toHaveAttribute('type', 'password')
     expect(input('provider-deepseek-key').value).toBe('')
-    expect(document.body.textContent ?? '').not.toContain(KEY)
+    // 保存后 = "已有密钥但本次未输入"：用固定圆点串占位，页面上仍然没有明文
+    expect(input('provider-deepseek-key')).toHaveAttribute('placeholder', '••••••••••••')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
     // 012：保存按钮点完要有结果反馈
     await waitFor(() =>
       expect(screen.getByTestId('provider-deepseek-notice')).toHaveTextContent('已保存')
     )
+  })
+
+  it('已存密钥：点眼睛显式回显真实值，再点一次回掩码并清空本地明文', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+
+    // 已存密钥：状态读到"已配置"，但输入框仍是空的掩码框，页面上没有明文
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+    const keyInput = input('provider-deepseek-key')
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    // 已存密钥不读进任何 input（textContent 抓不到 input.value，用真实 display value 断言）
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+    // 已有密钥但本次未输入：掩码态用固定圆点串占位（纯视觉，不是真实密钥）
+    expect(keyInput).toHaveAttribute('placeholder', '••••••••••••')
+
+    const toggle = screen.getByTestId('provider-deepseek-key-toggle')
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    // 没点之前绝不回显
+    expect(bridge.revealProviderKey).not.toHaveBeenCalled()
+
+    // 用户显式点眼睛：只调一次 reveal，显示真实密钥（不是圆点/提示）
+    fireEvent.click(toggle)
+    await waitFor(() => expect(keyInput.value).toBe(KEY))
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput).not.toHaveAttribute('placeholder')
+    expect(bridge.revealProviderKey).toHaveBeenCalledTimes(1)
+    expect(bridge.revealProviderKey).toHaveBeenCalledWith('deepseek')
+    expect(toggle).toHaveAccessibleName('隐藏 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+    // 再点一次：回掩码并清掉本地明文（state/DOM 都不留）
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(keyInput).toHaveAttribute('placeholder', '••••••••••••')
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+    // 收起显示不会再打一次通道
+    expect(bridge.revealProviderKey).toHaveBeenCalledTimes(1)
+
+    // 保存语义不变：本次没有新输入时，不会把回显出来的 key 当成"新 key"再写一遍
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-notice')).toHaveTextContent('已保存')
+    )
+    expect(bridge.setProviderKey).not.toHaveBeenCalled()
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('显式回显：加载中给轻量状态，失败给人话且不显示任何密钥', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    let finish!: (value: ProviderKeyRevealResult) => void
+    bridge.revealProviderKey.mockImplementationOnce(
+      () =>
+        new Promise<ProviderKeyRevealResult>((resolve) => {
+          finish = resolve
+        })
+    )
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+
+    // 在途：明文态 + 一句轻量状态（此时还没有任何密钥被画出来）
+    expect(await screen.findByTestId('provider-deepseek-key-reveal-status')).toHaveTextContent(
+      '正在读取已存密钥'
+    )
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+
+    finish({
+      ok: false,
+      reason: 'needs-reentry',
+      message: '已存的密钥在这台机器上读不到，请重新录入'
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-reveal-status')).toHaveTextContent(
+        '重新录入'
+      )
+    )
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('显式回显被 IPC 拒绝：错误人话化，不显示密钥', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'settings:reveal-provider-key': Error: 读取失败")
+    )
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-reveal-status')).toHaveTextContent(
+        '读取失败'
+      )
+    )
+    expect(screen.getByTestId('provider-deepseek-key-reveal-status')).not.toHaveTextContent(
+      'Error invoking remote method'
+    )
+    expect(input('provider-deepseek-key').value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('未配置 / needsReentry：点眼睛不调用 reveal，保持掩码与现有状态文案', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: false, needsReentry: true }
+    })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('需要重新录入')
+    )
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+
+    expect(bridge.revealProviderKey).not.toHaveBeenCalled()
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(screen.queryByTestId('provider-deepseek-key-reveal-status')).not.toBeInTheDocument()
+    expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('需要重新录入')
+  })
+
+  it('收起折叠：已回显的明文立即清除并回掩码；再展开不会自动重新拉取', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const keyInput = input('provider-deepseek-key')
+    const toggle = screen.getByTestId('provider-deepseek-key-toggle')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(keyInput.value).toBe(KEY))
+
+    expand('deepseek') // 收起
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(keyInput).toHaveAttribute('placeholder', '••••••••••••')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+
+    expand('deepseek') // 再展开：仍是掩码；回显只在用户再次点击时发生
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(bridge.revealProviderKey).toHaveBeenCalledTimes(1)
+  })
+
+  it('切到另一条 provider：前一行已回显的明文立即清除', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK, OPENAI))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false },
+      openai: { hasKey: false, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    await waitFor(() => expect(keyInput.value).toBe(KEY))
+
+    expand('openai') // 切到另一条 provider（deepseek 仍展开）
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(screen.getByTestId('provider-deepseek-key-toggle')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+    expect(input('provider-openai-key')).toHaveAttribute('type', 'password')
+  })
+
+  it('保存成功：已回显的明文立即清除并回掩码', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    await waitFor(() => expect(keyInput.value).toBe(KEY))
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+    // 点保存就立即回掩码（不等落盘回来）
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-notice')).toHaveTextContent('已保存')
+    )
+
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('删除 provider（卸载行）：已回显的明文不再留在页面上', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    await waitFor(() => expect(input('provider-deepseek-key').value).toBe(KEY))
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-remove'))
+    await waitFor(() => expect(screen.queryByTestId('provider-deepseek')).not.toBeInTheDocument())
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('本次已有输入优先：眼睛只切显示，不调用 reveal', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const keyInput = input('provider-deepseek-key')
+    const typed = 'sk-new-draft-123'
+    fireEvent.change(keyInput, { target: { value: typed } })
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(typed)
+    expect(bridge.revealProviderKey).not.toHaveBeenCalled()
+
+    // 再点回掩码：草稿还在（本次输入不属于"已存密钥"的临时回显）
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe(typed)
   })
 
   it('配置与 key 一起保存：先落配置再写 key（顺序不能反）', async () => {
@@ -599,6 +1027,8 @@ describe('模型组 · 密钥只写不回显', () => {
     expand('deepseek')
 
     expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('读取中')
+    // 状态没读到时不猜"已配置"：不给圆点占位
+    expect(input('provider-deepseek-key')).not.toHaveAttribute('placeholder')
     expect(screen.queryByTestId('provider-deepseek-problems')).not.toBeInTheDocument()
     await waitFor(() => expect(bridge.providerKeyStates).toHaveBeenCalled())
   })
@@ -614,6 +1044,8 @@ describe('模型组 · 密钥只写不回显', () => {
 
     expect(await screen.findByTestId('provider-deepseek-reentry')).toHaveTextContent('重新录入')
     expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('需要重新录入')
+    // 读不到密钥 ≠ 已配置：不给圆点占位（不假装有一把可用的密钥）
+    expect(input('provider-deepseek-key')).not.toHaveAttribute('placeholder')
     // 官方云主机（deepseek 预置）没有密钥仍是缺项（原口径）；别的地址不会报这一条
     expect(screen.getByTestId('provider-deepseek-problems')).toHaveTextContent(
       '配置不完整：缺 API 密钥'
@@ -632,6 +1064,244 @@ describe('模型组 · 密钥只写不回显', () => {
       '系统安全存储不可用'
     )
     expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('未配置')
+  })
+})
+
+/**
+ * API Key 显隐的复位口径：本次有输入时眼睛只揭示**当前 draft**；本次无输入但已存密钥时，
+ * 点眼睛才临时回显真实 key（用完即清）。收起折叠 / 切到另一条 provider / 保存成功 /
+ * 取消关闭 / 新增弹窗关闭都要立即回到默认掩码，且不留明文。
+ * 这里全部拿真实 `input.type` / `input.value` 断言（`textContent` 抓不到 input.value）。
+ */
+describe('模型组 · API Key 显隐复位（收起 / 切换 / 保存 / 关闭弹窗）', () => {
+  it('眼睛按钮不抢焦点：点眼睛后直接键入仍落在输入框（真实键盘路径）', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+    expand('deepseek')
+
+    const keyInput = input('provider-deepseek-key')
+    const toggle = screen.getByTestId('provider-deepseek-key-toggle')
+    // 模拟真实浏览器：点击按钮会先把焦点放到按钮上（jsdom 不会自动做，手工聚焦）
+    toggle.focus()
+    expect(toggle).toHaveFocus()
+
+    // 真实点击顺序是 mousedown → mouseup → click；组件在 mousedown 里 preventDefault + 把焦点送回输入框
+    fireEvent.mouseDown(toggle)
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveFocus()
+    // 未配置且本次没输入：没有可回显的内容，保持掩码（不进入空明文态），也不调用 reveal
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(bridge.revealProviderKey).not.toHaveBeenCalled()
+
+    // 接着直接键入（不重新点输入框）：字符必须落进 draft/value，而不是落在按钮上
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    expect(keyInput.value).toBe(KEY)
+    expect(keyInput).toHaveAttribute('type', 'password')
+
+    // 本次有输入后，眼睛才切换明文（显示的就是刚敲的值）
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(KEY)
+  })
+
+  it('收起编辑折叠：立即回到密码框；草稿保留，再展开仍是掩码', async () => {
+    await mount(withProviders(DEEPSEEK))
+    expand('deepseek')
+
+    const keyInput = input('provider-deepseek-key')
+    const toggle = screen.getByTestId('provider-deepseek-key-toggle')
+    expect(keyInput).toHaveAttribute('type', 'password')
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(KEY)
+    // 无论鼠标（mousedown 已 preventDefault）还是键盘激活，焦点都留在输入框
+    expect(keyInput).toHaveFocus()
+
+    expand('deepseek') // 收起
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe(KEY)
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+
+    expand('deepseek') // 再展开：仍是密码框（收起时已复位，不会把上次的明文展示带回来）
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe(KEY)
+  })
+
+  it('切到另一条 provider：前一行已揭示的 key 立即收回（两行都展开也一样）', async () => {
+    await mount(withProviders(DEEPSEEK, OPENAI))
+    expand('deepseek')
+
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    expect(keyInput).toHaveAttribute('type', 'text')
+
+    expand('openai') // 切到另一条 provider（deepseek 仍展开）
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe(KEY)
+    expect(screen.getByTestId('provider-deepseek-key-toggle')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+    expect(input('provider-openai-key')).toHaveAttribute('type', 'password')
+  })
+
+  it('保存成功：立即回到密码框并清空已提交的新 key（眼睛按钮也复位）', async () => {
+    const bridge = await mount(withProviders(DEEPSEEK))
+    expand('deepseek')
+
+    const keyInput = input('provider-deepseek-key')
+    const toggle = screen.getByTestId('provider-deepseek-key-toggle')
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'text')
+    // 眼睛只改显示：不落盘、不写密钥
+    expect(bridge.update).not.toHaveBeenCalled()
+    expect(bridge.setProviderKey).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+    await waitFor(() => expect(bridge.setProviderKey).toHaveBeenCalledWith('deepseek', KEY))
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(toggle).toHaveAccessibleName('显示 API Key')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('保存成功（没写新 key）同样收回显隐，其他草稿一个字不丢', async () => {
+    const bridge = installKyclawBridge(withProviders(DEEPSEEK))
+    bridge.providerKeyStates.mockResolvedValue({
+      deepseek: { hasKey: true, needsReentry: false }
+    })
+    bridge.revealProviderKey.mockResolvedValue({ ok: true, key: KEY })
+    await useSettingsStore.getState().load()
+    render(<ModelSettings />)
+    expand('deepseek')
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-key-status')).toHaveTextContent('已配置')
+    )
+
+    const modelInput = input('provider-deepseek-model')
+    const keyInput = input('provider-deepseek-key')
+    fireEvent.change(modelInput, { target: { value: 'deepseek-v4-pro' } })
+    fireEvent.click(screen.getByTestId('provider-deepseek-key-toggle'))
+    await waitFor(() => expect(keyInput.value).toBe(KEY))
+
+    fireEvent.click(screen.getByTestId('provider-deepseek-save'))
+    await waitFor(() =>
+      expect(bridge.update).toHaveBeenLastCalledWith({
+        providers: [{ ...DEEPSEEK, model: 'deepseek-v4-pro' }]
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-deepseek-notice')).toHaveTextContent('已保存')
+    )
+
+    expect(keyInput).toHaveAttribute('type', 'password')
+    expect(keyInput.value).toBe('')
+    expect(modelInput.value).toBe('deepseek-v4-pro')
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
+  })
+
+  it('新增弹窗：眼睛不抢焦点，点完眼睛直接键入仍进输入框', async () => {
+    await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+
+    const keyInput = input('model-add-key')
+    const toggle = screen.getByTestId('model-add-key-toggle')
+    toggle.focus()
+    expect(toggle).toHaveFocus()
+
+    fireEvent.mouseDown(toggle)
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveFocus()
+    // 弹窗里没有已存密钥、本次也没输入：保持掩码
+    expect(keyInput).toHaveAttribute('type', 'password')
+
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    expect(keyInput.value).toBe(KEY)
+    expect(keyInput).toHaveAttribute('type', 'password')
+
+    // 本次有输入后，眼睛才切换明文
+    fireEvent.click(toggle)
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(KEY)
+  })
+
+  it('弹窗里换渠道：已揭示的 key 立即回到密码框，新渠道从空值开始', async () => {
+    await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+    fireEvent.change(input('model-add-key'), { target: { value: KEY } })
+    fireEvent.click(screen.getByTestId('model-add-key-toggle'))
+    expect(input('model-add-key')).toHaveAttribute('type', 'text')
+
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-custom-openai-compatible'))
+
+    const switched = input('model-add-key')
+    expect(switched).toHaveAttribute('type', 'password')
+    expect(switched.value).toBe('')
+    expect(screen.getByTestId('model-add-key-toggle')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('取消关闭新增弹窗：再打开是密码框、空值、眼睛未按下', async () => {
+    await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+    const keyInput = input('model-add-key')
+    fireEvent.change(keyInput, { target: { value: KEY } })
+    fireEvent.click(screen.getByTestId('model-add-key-toggle'))
+    expect(keyInput).toHaveAttribute('type', 'text')
+    expect(keyInput.value).toBe(KEY)
+
+    fireEvent.click(screen.getByTestId('model-add-cancel'))
+    await waitFor(() => expect(screen.queryByTestId('model-add-key')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+
+    const reopened = input('model-add-key')
+    expect(reopened).toHaveAttribute('type', 'password')
+    expect(reopened.value).toBe('')
+    expect(screen.getByTestId('model-add-key-toggle')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('新增成功关闭弹窗：原弹窗输入移除，新行展开是空值密码框', async () => {
+    const bridge = await mount(defaultSettings())
+
+    fireEvent.click(screen.getByTestId('model-add'))
+    fireEvent.keyDown(screen.getByTestId('model-add-channel'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByTestId('model-add-channel-preset-deepseek'))
+    fireEvent.change(input('model-add-key'), { target: { value: KEY } })
+    fireEvent.click(screen.getByTestId('model-add-key-toggle'))
+    expect(input('model-add-key')).toHaveAttribute('type', 'text')
+
+    fireEvent.click(screen.getByTestId('model-add-submit'))
+
+    await waitFor(() => expect(bridge.setProviderKey).toHaveBeenCalledWith('deepseek', KEY))
+    await waitFor(() => expect(screen.queryByTestId('model-add-key')).not.toBeInTheDocument())
+    await waitFor(() => expect(input('provider-deepseek-key')).toBeInTheDocument())
+    expect(input('provider-deepseek-key')).toHaveAttribute('type', 'password')
+    expect(input('provider-deepseek-key').value).toBe('')
+    expect(screen.getByTestId('provider-deepseek-key-toggle')).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+    expect(screen.queryByDisplayValue(KEY)).not.toBeInTheDocument()
   })
 })
 
@@ -1009,11 +1679,21 @@ describe('模型组 · 用户反馈 002/003/004/006（渠道名 / 手动上下�
     expect(line).toHaveTextContent('主力模型')
 
     expand('deepseek')
-    // 004：展示名归展示名，**模型名（API 标识）原样**——发送/探测认的仍是后者
+    // 004：模型名称归展示，**模型 ID（API 标识）原样**——发送/探测认的仍是后者
     expect(input('provider-deepseek-display-name').value).toBe('主力模型')
     expect(input('provider-deepseek-model').value).toBe('deepseek-flash')
-    expect(screen.getByTestId('provider-deepseek-display-name').parentElement).toHaveTextContent(
-      '不进任何请求、密钥或探测'
+    // 009 返工：输入说明小字已删，字段只靠标签识别；模型名称与模型 ID 同一组身份字段
+    expect(screen.getByTestId('provider-deepseek-display-name').closest('label')).toHaveTextContent(
+      '模型名称'
+    )
+    expect(
+      screen.getByTestId('provider-deepseek-display-name').parentElement
+    ).not.toHaveTextContent('不进任何请求')
+    expect(screen.getByTestId('provider-deepseek-identity')).toContainElement(
+      screen.getByTestId('provider-deepseek-display-name')
+    )
+    expect(screen.getByTestId('provider-deepseek-identity')).toContainElement(
+      screen.getByTestId('provider-deepseek-model')
     )
   })
 

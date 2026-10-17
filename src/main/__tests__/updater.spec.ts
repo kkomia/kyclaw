@@ -453,6 +453,47 @@ describe('createUpdater：状态机', () => {
     updater.install()
     expect(backend.installs).toBe(1)
   })
+
+  /**
+   * 0.1.3 托盘驻留（独立审核 135 收口）：安装路径**不许**预先立"正在退出"标记。
+   *
+   * 依据（本机核对的 electron-updater 6.8.9 源码，见 node_modules/electron-updater/out/BaseUpdater.js
+   * 的 quitAndInstall）：只有 `install()` 真成功才 `emit('before-quit-for-update')` 并 `app.quit()`；
+   * 失败 / 静默 false / 重复点（quitAndInstallCalled）什么都不发、也不退出。若我们在调
+   * `backend.install()` 之前先把退出标记立起来，那几种情况下应用还活着，但之后点 X 会被"真退出"
+   * 直接放行——托盘驻留当场失效。所以这里钉两件事：
+   *   ① 安装调用对状态机零副作用（状态、广播、后端调用次数都可核对）；
+   *   ② 后端安装抛错（真件：安装器起不来）如实抛给调用方，状态不变、也不产生任何标记类副作用
+   *      （标记的接线口径由 window-close-wiring.spec.ts 的源码级钉子守）。
+   */
+  it('安装调用对状态机零副作用：重复点安装 / 后端抛错都不改变状态与广播', async () => {
+    const { updater, backend, changes } = built({})
+    await flush()
+    await detect(updater, backend, { version: '1.0.1' })
+    backend.emit('update-downloaded', { version: '1.0.1' })
+
+    const before = changes.length
+    updater.install()
+    updater.install()
+    // 去重是 electron-updater 内部的事（BaseUpdater 的 quitAndInstallCalled）；我们这一层如实转交
+    expect(backend.installs).toBe(2)
+    // 状态与广播一个字节都不动：已经"已下载"就还是"已下载"
+    expect(changes.length).toBe(before)
+    expect(updater.state().status).toMatchObject({ phase: 'downloaded' })
+
+    // 后端安装失败（安装器起不来）：如实抛给调用方（IPC 那一侧看得到），状态不变、下次点还会再试
+    const failure = new Error('installer spawn failed')
+    const broken = new FakeBackend()
+    vi.spyOn(broken, 'install').mockImplementation(() => {
+      throw failure
+    })
+    const other = built({ backend: broken })
+    await flush()
+    await detect(other.updater, broken, { version: '1.0.1' })
+    broken.emit('update-downloaded', { version: '1.0.1' })
+    expect(() => other.updater.install()).toThrow(failure)
+    expect(other.updater.state().status).toMatchObject({ phase: 'downloaded' })
+  })
 })
 
 describe('createUpdater：渠道兜底重试', () => {

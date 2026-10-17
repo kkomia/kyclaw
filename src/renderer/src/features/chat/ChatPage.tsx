@@ -20,6 +20,8 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import type { OutgoingMessage } from './composer-attachments'
+import { buildUserMessageMetadata, carryOverMessageContext } from './message-context'
+import type { MessageContext } from './message-context'
 import {
   allowForSession,
   canResumeAfterApproval,
@@ -971,10 +973,26 @@ function ActiveChat({
       } catch {
         /* 用量取不到：不压缩，照常发送 */
       }
+      /**
+       * 0.1.3 / 006+008：随消息挂一份**展示 metadata**（发送时刻 + 附件追加段的展示上下文）。
+       * 它**不改正文、不改 file part** —— 模型读到的文本与这条消息永远与 composeOutgoing 的产物逐字相同；
+       * 服务端会把它存进存储消息的 content.metadata（回读见 lib/message-map），气泡据此藏追加段、画图标项。
+       * 挂在哪一刻：这里（真正 sendMessage 之前），所以它记的是**发送时刻**而不是进队/点击时刻。
+       *
+       * 时间**不走**消息顶层的 `createdAt`（AI SDK 的简写形态也没有这一格）：实测那一路落库的是
+       * 服务端落库时刻（差 8–180ms，见 message-context-wire.spec.ts），而 `metadata.createdAt`
+       * 会原样留在存储的 content.metadata 里 —— 于是回读拿到的是**逐毫秒**的发送时刻。
+       */
+      const metadata = await buildUserMessageMetadata({
+        at: Date.now(),
+        text: message.text,
+        context: message.context ?? null
+      })
       // 图片走 file part（module 2）：没有图片时连字段都不带，保持"纯文本消息"的老形状
       void sendMessage(
         {
           text: message.text,
+          metadata,
           ...(message.files.length === 0 ? {} : { files: message.files })
         },
         threadRequestOptions(threadId)
@@ -1169,25 +1187,55 @@ function ActiveChat({
     [dispatch, isLocked, ready, threadId]
   )
 
+  /**
+   * 0.1.3 / 013 返工：选中助手正文 →「引用」→ **草稿附件**（不自动发送）。
+   *
+   * 与旧实现（把 Markdown 引用块 append 进输入框）的区别：长选区不再占输入框，Composer
+   * 的附件条上出现一张可展开 / 可编辑的摘要卡；**原文完整保留**，发送时模型拿到的仍是全文
+   * （不是卡上的摘要）。草稿通道只写 Composer 的本地状态（`publishDraft` 的 quote 分支），
+   * 发送仍只由用户按发送钮 / Enter 触发。来源消息 id 一并带上，气泡下方图标项可追溯。
+   * 空白选区不发布。
+   */
+  const quoteSelection = useCallback(
+    (text: string, source: { messageId: string }): void => {
+      if (text.trim() === '') return
+      publishDraft({ threadId, quote: { text, messageId: source.messageId } })
+    },
+    [threadId]
+  )
+
   /** 编辑重发（R2）：服务端截断 → 客户端截断重发；截断失败不重发（否则历史两边不一致）。
    *  T13 N1：与编辑入口同一道闸门——流式中/等审批期间不动作（截断会把挂起消息删掉，而服务端
    *  run 快照还在，决策会对着空气回灌；流式中则是对当前这条流并发。闸门只在旧重试卡这条
    *  窄路径上会被擦边：编辑入口本身在挂起期间是关的）。
-   *  round 62：闸门 = `isLocked()`（多一道"发送预检在途"——那段窗口 busy 还是 false）。 */
+   *  round 62：闸门 = `isLocked()`（多一道"发送预检在途"——那段窗口 busy 还是 false）。
+   *  0.1.3 / 006：重发时**沿用原来的展示上下文**（用户只改了自己的字、附件段原样没动 → 按摘要
+   *  认领得上，图标项与隐藏照旧）；认领不上（改到了附件段 / 原本就没有上下文）就只带发送时刻 ——
+   *  展示回退成原文，绝不把用户改过的内容当附件藏掉。 */
   const editResend = useCallback(
     (messageId: string, text: string) => {
       if (isLocked()) return
       setPendingSync(null)
+      const original = messages.find((message) => message.id === messageId)
       truncateThread(threadId, messageId).then(
         () => {
-          void sendMessage({ text, messageId }, threadRequestOptions(threadId))
+          void (async (): Promise<void> => {
+            let context: MessageContext | null = null
+            try {
+              context = await carryOverMessageContext(original?.metadata, text)
+            } catch (cause) {
+              console.warn('[kyclaw] 编辑重发的展示上下文没能沿用（按原文展示）', cause)
+            }
+            const metadata = await buildUserMessageMetadata({ at: Date.now(), text, context })
+            void sendMessage({ text, messageId, metadata }, threadRequestOptions(threadId))
+          })()
         },
         () => {
           setPendingSync({ kind: 'edit', messageId, text })
         }
       )
     },
-    [isLocked, sendMessage, threadId]
+    [isLocked, messages, sendMessage, threadId]
   )
 
   /** 重试 = 整轮重生成：先删掉上一条助手回复，再 regenerate（防止新旧回复在存储里合并）。
@@ -1374,6 +1422,8 @@ function ActiveChat({
             // round 61：撤回 / 重新生成与编辑同一道闸（都能在服务端动历史，与流式/挂起轮/压缩互斥）
             onUndo={actionsLocked ? undefined : undoMessage}
             onRegenerate={actionsLocked ? undefined : regenerateReply}
+            /* 0.1.3 / 013：选中回复 → 引用草稿（写草稿，不发送；流式中也能用） */
+            onQuoteSelection={quoteSelection}
             compaction={hero ? null : compaction}
             compacting={compacting}
             compactionIndex={compactionIndex}

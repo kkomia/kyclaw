@@ -4,7 +4,7 @@
  * 写 settings 的两族字段（pluginMarketplaces / installedPlugins）只有这一条路，
  * 安装/卸载连带增删的 mcpServers 条目也在这里落盘（新增一律停用，与 MCP 面板口径一致）。
  */
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC_CHANNELS,
   noArgsSchema,
@@ -13,9 +13,17 @@ import {
   pluginIconArgsSchema,
   pluginIdArgsSchema,
   pluginInstallArgsSchema,
-  pluginMarketplaceIdArgsSchema
+  pluginMarketplaceIdArgsSchema,
+  pluginSkillLocalArgsSchema,
+  pluginSkillUrlArgsSchema
 } from '../../shared/ipc'
 import type { PluginsOverview } from '../../shared/plugins'
+import {
+  importSkillFromLocal,
+  importSkillFromUrl,
+  SkillEgressBlockedError,
+  type SkillImportDeps
+} from '../plugins/skill-add'
 import { installPlugin, uninstallPluginFiles } from '../plugins/installer'
 import {
   addMarketplace,
@@ -34,6 +42,13 @@ import { pluginsDirs, pluginSettingsStore } from '../plugins/store'
  */
 export interface PluginIpcOptions {
   builtinSkillsDir?: string | null
+  /**
+   * round 94：原生选择器（技能导入的 file/folder 两条入口）。缺省走 electron 的 `dialog`
+   * （有父窗口就模态）；单测注入假件（真 Electron 的 e2e 直接覆写主进程的 dialog，见
+   * `e2e/_r94-skill-import.spec.ts`）—— 渲染端**永远递不了路径**这条不因注入而放松：
+   * 注入的是"用户会选哪个"，不是"路径从哪来"。
+   */
+  pickSkillPath?: (kind: 'file' | 'folder') => Promise<string | undefined>
 }
 
 export function registerPluginIpc(userDataDir: string, options: PluginIpcOptions = {}): void {
@@ -177,4 +192,83 @@ export function registerPluginIpc(userDataDir: string, options: PluginIpcOptions
     if (marketplace === undefined) return { dataUrl: null }
     return { dataUrl: readPluginIconDataUrl(marketplace, name) }
   })
+
+  /**
+   * round 94：导入一个技能的两条通道。动作全在主进程：出站边界/解包/命名/冲突/原子发布都在
+   * `plugins/skill-add.ts` 里（这里只做入参闸门、原生选择器与"回吐新总览"这三件事）。
+   *
+   * 白名单**现读**（与 fetch 的出站边界同一份设置）：界面上的"允许这台主机"按钮写的就是它
+   * （settings:update 的 network 字段），写完再点一次导入就通，不必重启。技能落盘进
+   * `<userData>/skills`，插件页与 `+ → 引用技能`、agent 的技能清单读的都是同一份（下一轮对话即可用）。
+   */
+  const skillDeps = (): SkillImportDeps => ({
+    skillsDir: dirs.skills,
+    builtinDir: options.builtinSkillsDir ?? null,
+    installed: store.read().installedPlugins,
+    allowHosts: () => store.read().network?.allowLocalHosts ?? []
+  })
+
+  ipcMain.handle(IPC_CHANNELS.plugins.addSkillUrl, async (_event, ...args) => {
+    const [input] = parseIpcArgs(pluginSkillUrlArgsSchema, args, IPC_CHANNELS.plugins.addSkillUrl)
+    try {
+      const added = await importSkillFromUrl(skillDeps(), input.url)
+      return { overview: overview(), added, blocked: null }
+    } catch (error) {
+      // 本机/内网这一档**不抛**：回一个结构化的"需要你确认"（界面据此给"允许这台主机"按钮，
+      // 点下去写的就是同一份出站白名单）。其余失败（解析不出 / 超时 / 404 / 包坏了…）照旧抛人话。
+      if (error instanceof SkillEgressBlockedError && error.local) {
+        return {
+          overview: overview(),
+          added: null,
+          blocked: { host: error.host, url: error.url, message: error.message }
+        }
+      }
+      throw error
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.plugins.importSkillLocal, async (event, ...args) => {
+    const [kind] = parseIpcArgs(
+      pluginSkillLocalArgsSchema,
+      args,
+      IPC_CHANNELS.plugins.importSkillLocal
+    )
+    const picked =
+      options.pickSkillPath !== undefined
+        ? await options.pickSkillPath(kind)
+        : await pickSkillPath(event, kind)
+    // 取消 = 什么都不做（照旧回当前总览；added 为 null 让界面知道"没导入")
+    if (picked === undefined) return { overview: overview(), added: null, blocked: null }
+    const added = await importSkillFromLocal(skillDeps(), picked)
+    return { overview: overview(), added, blocked: null }
+  })
+}
+
+/** 原生选择器（有父窗口走模态；取消回 undefined） */
+async function pickSkillPath(
+  event: IpcMainInvokeEvent,
+  kind: 'file' | 'folder'
+): Promise<string | undefined> {
+  const parent = BrowserWindow.fromWebContents(event.sender)
+  const options =
+    kind === 'folder'
+      ? {
+          title: '选择技能文件夹',
+          properties: ['openDirectory' as const],
+          buttonLabel: '导入'
+        }
+      : {
+          title: '选择技能文件',
+          properties: ['openFile' as const],
+          filters: [
+            { name: '技能（SKILL.md 或技能 zip）', extensions: ['md', 'markdown', 'zip'] },
+            { name: '全部文件', extensions: ['*'] }
+          ],
+          buttonLabel: '导入'
+        }
+  const result = parent
+    ? await dialog.showOpenDialog(parent, options)
+    : await dialog.showOpenDialog(options)
+  const picked = result.canceled ? undefined : result.filePaths[0]
+  return picked === '' ? undefined : picked
 }

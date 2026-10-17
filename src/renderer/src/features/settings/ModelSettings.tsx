@@ -26,8 +26,10 @@ import { SettingsGroup } from './SettingsGroup'
  *
  * 分工（这几条都是既有口径，本轮不动）：
  *   - provider 配置（id/type/baseUrl/model/isDefault）落 settings.json，经 `saveProviders` 走 settings:update；
- *   - 密钥只在**写**的方向上经过渲染端（用户输入 → settings:set-provider-key），主进程加密后落
- *     safeStorage 密文；读回来的只有"已配置 / 需要重新录入"两个状态，界面永远不回显明文；
+ *   - 密钥的**写**方向经过渲染端（用户输入 → settings:set-provider-key），主进程加密后落
+ *     safeStorage 密文；读回来的常规只有"已配置 / 需要重新录入"两个状态。唯一例外是用户
+ *     **显式点眼睛**（settings:reveal-provider-key）：拿到真实 key 只用于当次临时展示，
+ *     收起/切换/保存/关闭弹窗/卸载即清除，不落盘、不写日志；
  *   - "测试连接"由主进程分项验证（连通 / 流式 / 流式工具，见 main/connection-test.ts；用户反馈 005），
  *     这里把四档结论（通过 / 失败 / 未验证 / 未执行）逐步显示，并如实带上"验证范围"
  *     ——"未验证"不算通过，也不封注册；
@@ -47,16 +49,17 @@ import { SettingsGroup } from './SettingsGroup'
  *   - 上下文长度手填（键 `<providerId>:<model>`）；与探测表分开存是刻意的：探测每趟都整条重写
  *     自己的记录，手动值住在那里会被下一次探测压掉。输入框里**只放手动值**——留空 = 走实测/回退，
  *     下面那行如实写出自动值是多少、来源是"实测"还是"回退"（006 的来源标注）；
- *   - 模型显示名（004）：**只影响展示**（这一行与 composer 的模型菜单），不进任何 key / 请求 / 探测。
+ *   - 模型名称（004；原「显示名」）：**只影响展示**（这一行与 composer 的模型菜单），
+ *     不进任何 key / 请求 / 探测。
  *
  * 用户反馈 001 的闭环（本页补齐"选择 / 移除"这两半）：
  *   - **加**：新增弹窗里"给这条端点加模型"（见 ModelAddDialog）；
- *   - **选 / 摘**：展开行「模型」那一栏下面的注册清单 + 「管理」菜单——点一个就切过去，
+ *   - **选 / 摘**：展开行「模型 ID」那一栏下面的注册清单 + 「管理」菜单——点一个就切过去，
  *     也能把多余的（含改错的名字）摘掉。摘完保存才落盘；草稿没动过时**原样保留**落盘的
  *     `models`（老配置没有这个键就继续没有，不会被每次保存塞一个空字段）。
  *
  * 用户反馈 012（保存反馈 + 草稿竞态）：保存成功行内给"已保存"，但**任何一次草稿修改都立刻
- * 把它收掉**（改了内容还挂着"已保存"就是在撒谎——不管改的是名称/模型/显示名/上下文/Base URL/
+ * 把它收掉**（改了内容还挂着"已保存"就是在撒谎——不管改的是渠道名称/模型 ID/模型名称/上下文/Base URL/
  * 密钥，还是 001 的「从清单移除」）。保存是异步的，所以每行还带一个"编辑序号"：只有保存期间
  * 用户没再动过，才用落盘值重置草稿并报"已保存"；动过就一个字都不覆盖，改说
  * "刚才那一份已保存；你又改了内容，改动还没保存"。同理，"先存后测"遇到保存期间又改动时
@@ -90,7 +93,7 @@ function contextInputInvalid(text: string): boolean {
   return text.trim() !== '' && parseContextTokens(text) === undefined
 }
 
-/** 按落盘值取一份编辑草稿（key 永远从空开始：已存的密钥不回显；上下文那一栏只放**手动值**） */
+/** 按落盘值取一份编辑草稿（key 永远从空开始：已存密钥只在显式点眼睛时临时回显；上下文那一栏只放**手动值**） */
 function draftOf(provider: ProviderConfig, override: ModelOverride | undefined): ProviderDraft {
   return {
     name: provider.name ?? '',
@@ -170,6 +173,13 @@ export function ModelSettings(): React.JSX.Element {
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   /** 每一行上一次保存的结果（012：保存按钮点完要有反馈；行内展示，与 error 同一套存法） */
   const [notices, setNotices] = useState<Record<string, string | undefined>>({})
+  /**
+   * 密钥显隐的复位序号（API Key 显隐）：展开/收起任一行、任一行开始保存 / 保存成功都 +1。
+   * 行内只把明文展示（本次输入或显式回显的已存 key）保留到"这一次展开 / 这一次保存"为止——
+   * 收起、切到别的 provider、保存都立即回到掩码并清掉本地明文；草稿与密钥存储语义不变
+   * （只复位显示态，见 ProviderRow / SecretField）。
+   */
+  const [revealEpoch, setRevealEpoch] = useState(0)
   const [pageError, setPageError] = useState<string | undefined>(undefined)
   /**
    * 每一行草稿的"编辑序号"（012）：每次用户改动 +1。
@@ -272,6 +282,8 @@ export function ModelSettings(): React.JSX.Element {
    */
   const save = useCallback(
     async (provider: ProviderConfig): Promise<boolean> => {
+      // 点保存就收回行内已揭示/已回显的明文（不必等落盘回来；失败时草稿仍在，只是回到掩码）
+      setRevealEpoch((epoch) => epoch + 1)
       const draft = drafts[provider.id] ?? draftFor(provider)
       if (contextInputInvalid(draft.contextWindow)) {
         setNotices((previous) => ({ ...previous, [provider.id]: undefined }))
@@ -344,10 +356,12 @@ export function ModelSettings(): React.JSX.Element {
             ...previous,
             [provider.id]: '刚才那一份已保存；你又改了内容，改动还没保存'
           }))
+          // 这一趟已成功写盘：把行内可能还开着的密钥明文展示收回（用户新敲的内容留在草稿里）
+          setRevealEpoch((epoch) => epoch + 1)
           await refreshKeyStates()
           return true
         }
-        // 保存期间没人动：以落盘值重置草稿（key 清空，不回显），字段回到保存后的真相
+        // 保存期间没人动：以落盘值重置草稿（key 清空；要看到已存 key 得再显式点眼睛），字段回到保存后的真相
         const persisted = useSettingsStore
           .getState()
           .settings.providers.find((candidate) => candidate.id === provider.id)
@@ -361,6 +375,8 @@ export function ModelSettings(): React.JSX.Element {
           )
         }))
         setNotices((previous) => ({ ...previous, [provider.id]: '已保存' }))
+        // 保存成功：密钥输入框已清空，显隐也立即回到默认掩码
+        setRevealEpoch((epoch) => epoch + 1)
         await refreshKeyStates()
         return true
       } catch (error) {
@@ -412,7 +428,7 @@ export function ModelSettings(): React.JSX.Element {
     [draftDirty, save]
   )
 
-  /** 001：在已注册的模型之间切换（只改草稿的「模型」那一栏，显示名/手动上下文跟着换） */
+  /** 001：在已注册的模型之间切换（只改草稿的「模型 ID」那一栏，模型名称/手动上下文跟着换） */
   const pickRegisteredModel = useCallback(
     (provider: ProviderConfig, model: string): void => {
       patchDraft(provider, { model })
@@ -486,6 +502,8 @@ export function ModelSettings(): React.JSX.Element {
         }))
       }
       setExpanded((previous) => ({ ...previous, [id]: true }))
+      // 新增弹窗关闭（成功）：别把任何一行之前揭示的密钥明文留到这次操作之后
+      setRevealEpoch((epoch) => epoch + 1)
       await refreshKeyStates()
     },
     [refreshKeyStates]
@@ -493,6 +511,8 @@ export function ModelSettings(): React.JSX.Element {
 
   const toggle = useCallback((id: string): void => {
     setExpanded((previous) => ({ ...previous, [id]: !previous[id] }))
+    // 展开 / 收起 / 切到另一条 provider：行内已揭示的密钥一律立即收回（只复位显示态）
+    setRevealEpoch((epoch) => epoch + 1)
   }, [])
 
   return (
@@ -535,6 +555,7 @@ export function ModelSettings(): React.JSX.Element {
                 onResetContext={() => patchDraft(provider, { contextWindow: '' })}
                 onUseRegisteredModel={(model) => pickRegisteredModel(provider, model)}
                 onDropRegisteredModel={(model) => dropRegisteredModel(provider, model)}
+                revealEpoch={revealEpoch}
               />
             ))}
           </div>

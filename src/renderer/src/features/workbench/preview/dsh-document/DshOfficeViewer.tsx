@@ -28,7 +28,8 @@ export interface DshOfficeLabels {
 }
 
 const DEFAULT_LABELS: DshOfficeLabels = {
-  converting: '正在把这份文档转成可翻页的 PDF…',
+  // 加载态只说"在加载"（不把"转 PDF"这条内部链路讲给用户，反馈 003）
+  converting: '正在加载预览…',
   retry: '重试'
 }
 

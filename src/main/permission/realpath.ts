@@ -25,6 +25,17 @@ const realPath = realpathSync.native
 
 export type WorkspaceResolution = { ok: true; abs: string } | { ok: false; reason: string }
 
+/**
+ * 与 `WorkspaceResolution` 同一结果，但成功时**带出归一后的工作区根**。
+ *
+ * 为什么需要它：Windows 上同一个目录有长名与 8.3 短名（如 `C:\LMSTUD~1`）两种写法，
+ * junction / symlink 根也一样。调用方拿设置里存的原始根（`workspace.path`）去对
+ * realpath 后的 `abs` 算 `relative`，会得到 `..\..\...` 这类伪相对路径。这里让根与
+ * `abs` 出自**同一次 realpath 判定**，算相对路径 / 判根一律用返回的 `root`。
+ */
+export type WorkspaceResolutionWithRoot =
+  { ok: true; abs: string; root: string } | { ok: false; reason: string }
+
 /** UNC / 设备路径的两种前缀：`\\server`、`//server` 与 `\\?\`、`\\.\`（后者也以双斜杠开头） */
 const UNC_PREFIX = /^[\\/]{2}/
 
@@ -33,11 +44,24 @@ export function isUncPath(value: string): boolean {
 }
 
 /** 拒绝的原因是一句能直接给人/模型看的话（T11 会把它放进工具错误里） */
-function deny(reason: string): WorkspaceResolution {
+function deny(reason: string): { ok: false; reason: string } {
   return { ok: false, reason }
 }
 
 export function resolveInsideWorkspace(root: string, target: string): WorkspaceResolution {
+  const resolved = resolveInsideWorkspaceWithRoot(root, target)
+  if (!resolved.ok) return resolved
+  return { ok: true, abs: resolved.abs }
+}
+
+/**
+ * `resolveInsideWorkspace` 的完整版：成功时把 `root`（realpath 归一后的工作区根）一并返回。
+ * 两者共用同一段判定；只关心 `abs` 的旧调用方继续用上面那个薄包装。
+ */
+export function resolveInsideWorkspaceWithRoot(
+  root: string,
+  target: string
+): WorkspaceResolutionWithRoot {
   if (root.length === 0) return deny('工作区路径为空')
   if (isUncPath(root)) return deny('不支持 UNC 工作区')
   if (root.includes('\0')) return deny('工作区路径含非法字符')
@@ -63,11 +87,11 @@ export function resolveInsideWorkspace(root: string, target: string): WorkspaceR
     existing.missing.length === 0 ? existing.real : join(existing.real, ...existing.missing)
   // 防御性复查：abs 由"已验真的前缀 + 纯名字段"拼出，词法上不可能翻出去
   if (!isInside(rootReal, abs)) return deny('目标路径在工作区之外')
-  return { ok: true, abs }
+  return { ok: true, abs, root: rootReal }
 }
 
 /** 工作区根：必须存在且是目录，返回它的真实路径 */
-function realRoot(root: string): string | WorkspaceResolution {
+function realRoot(root: string): string | { ok: false; reason: string } {
   let real: string
   try {
     real = realPath(root)

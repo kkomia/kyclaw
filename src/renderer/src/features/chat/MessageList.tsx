@@ -1,8 +1,17 @@
-import { Fragment, useEffect, useRef } from 'react'
+import { Fragment, useEffect, useMemo, useRef } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
+import {
+  EMPTY_CITATIONS,
+  extractCitationsFromTexts,
+  knownSourcesOfParts,
+  mergeKnownSources,
+  type Citation,
+  type CitationHint
+} from './citations'
 import { CompactionMarker } from './CompactionMarker'
 import { compactionRowIndex } from './compaction-line'
+import { deliverablesByTurnTail } from './deliverable'
 import { Message } from './Message'
 import { MessageRail } from './MessageRail'
 
@@ -37,6 +46,11 @@ export interface MessageListProps {
    * 闸门（流式 / 等审批 / 压缩中）由上层算好——关着就整个不给。
    */
   onRegenerate?: (messageId: string) => void
+  /**
+   * 选中助手正文 → 引用（0.1.3 / 013 返工）：由 ChatPage 接到草稿通道，落成 Composer 的
+   * 原文摘要卡（不写输入框、不自动发送）；不给 = 不挂选文菜单（其余只读宿主保持原样）。
+   */
+  onQuoteSelection?: (text: string, source: { messageId: string }) => void
   /** round 19：压缩记录（null = 不渲染分界线） */
   compaction?: ThreadCompaction | null
   /** 压缩进行中（同一位置显示「正在压缩上下文…」） */
@@ -68,18 +82,99 @@ function tailSignature(messages: UIMessage[]): string {
   return `${messages.length}:${last.parts.length}:${size}`
 }
 
+interface CitationTurn {
+  /** 本轮已完成工具结果建立的 allowlist（键存在即授权） */
+  knownSources: ReadonlyMap<string, CitationHint>
+  /** 本轮末尾汇总的来源；非轮末消息显式空数组（压掉各自的面板） */
+  sources: readonly Citation[]
+}
+
+/**
+ * 网页引用的**按轮**接线（0.1.3 · P0 provenance）。
+ *
+ * 审批 / ask-user / 计划续跑会追加 assistant 消息：工具结果可能在 A、引用在 B。用户消息是
+ * 轮次边界，同一轮连续的 assistant 消息共享一份 allowlist；**不跨用户轮**，否则上一轮搜到的
+ * URL 会给下一轮正文授权。来源面板只在轮末那条汇总一次（与交付卡的 `deliverablesByTurnTail`
+ * 同一形状），避免 A/B 各出一份。
+ *
+ * 正文按 text part 分别提取；每个 part 在渲染时也是独立 Markdown 实例。
+ */
+function citationTurnsOf(
+  messages: UIMessage[],
+  streamingMessageId: string | undefined
+): Array<CitationTurn | undefined> {
+  const slots: Array<CitationTurn | undefined> = new Array(messages.length)
+  let assistantIndices: number[] = []
+
+  const flush = (): void => {
+    if (assistantIndices.length === 0) return
+    const knownSources = new Map<string, CitationHint>()
+    const texts: string[] = []
+    for (const index of assistantIndices) {
+      const message = messages[index]
+      if (message === undefined) continue
+      mergeKnownSources(knownSources, knownSourcesOfParts(message.parts))
+      for (const part of message.parts) {
+        if (part.type === 'text') texts.push(part.text)
+      }
+    }
+    // 正在流的那一轮：面板不出现，只建 allowlist 供角标门控，不扫长正文（round 73 的流式预算）。
+    // 历史轮不受影响（它们没在流，面板该在还在）。
+    const streaming = assistantIndices.some((index) => messages[index]?.id === streamingMessageId)
+    const sources =
+      streamingMessageId !== undefined && streaming
+        ? EMPTY_CITATIONS
+        : extractCitationsFromTexts(texts, knownSources)
+    const tail = assistantIndices[assistantIndices.length - 1]
+    for (const index of assistantIndices) {
+      slots[index] = {
+        knownSources,
+        sources: index === tail ? sources : EMPTY_CITATIONS
+      }
+    }
+    assistantIndices = []
+  }
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (message === undefined) continue
+    if (message.role === 'user') {
+      flush()
+      continue
+    }
+    if (message.role === 'assistant') assistantIndices.push(index)
+  }
+  flush()
+  return slots
+}
+
 export function MessageList({
   messages,
   status,
   onEdit,
   onUndo,
   onRegenerate,
+  onQuoteSelection,
   compaction = null,
   compacting = false,
   compactionIndex
 }: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
+  /**
+   * 交付卡的整轮汇总（0.1.3 / 014）：连续助手消息算一轮，只有轮末那条拿得到聚合结果
+   * （审批 / ask-user / 计划续跑会追加助手消息，不能把卡截在半轮）。用户消息是轮次边界；
+   * 历史回灌与实时流走同一份消息数组，所以回读后的位置一致。
+   */
+  const turnDeliverables = useMemo(() => deliverablesByTurnTail(messages), [messages])
+  /**
+   * 网页引用也按轮接线（0.1.3 · P0 provenance）：同一轮连续的 assistant 消息共享工具结果
+   * allowlist，来源面板只在轮末汇总；用户消息是边界，不跨轮污染。
+   */
+  const citationTurns = useMemo(
+    () => citationTurnsOf(messages, status === 'streaming' ? lastAssistantId : undefined),
+    [messages, status, lastAssistantId]
+  )
 
   const viewRef = useRef<HTMLDivElement>(null)
   const stickyRef = useRef(true)
@@ -135,6 +230,16 @@ export function MessageList({
                     ? undefined
                     : () => onRegenerate(message.id)
                 }
+                /* 交付卡只给轮末那条助手消息；其余助手消息显式给空数组（压掉自己的卡） */
+                deliverables={turnDeliverables[index]}
+                onQuoteSelection={
+                  onQuoteSelection === undefined
+                    ? undefined
+                    : (text) => onQuoteSelection(text, { messageId: message.id })
+                }
+                /* 引用 allowlist 本轮共享；来源面板只给轮末那条，非轮末显式空数组 */
+                knownSources={citationTurns[index]?.knownSources}
+                citationSources={citationTurns[index]?.sources}
               />
             </Fragment>
           ))}

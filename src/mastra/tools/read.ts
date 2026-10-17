@@ -1,5 +1,6 @@
 /**
- * read 工具（round 71 起**按类型分派**，0.1.2 扩到**办公八格式**）：读授权工作区内的文件。
+ * read 工具（round 71 起**按类型分派**，0.1.2 扩到**办公八格式**）：读授权工作区内的文件；
+ * 011 起 `skill` 参数还能读**已注册技能目录内**的配套资源（只读信任根，见 `skill-read.ts`）。
  *
  * 为什么要有分派：用户实测反馈——丢来 PDF / Word / 图片时，模型吃不到原始输入，只能去 bash 里
  * 想办法或先转格式。现在一条 read 调用就能拿到内容，路径也**最省 token**（不必先转成中间格式）：
@@ -66,7 +67,7 @@
  * 会把错误对象当成图片档去读盘、附字节。
  */
 import { StringDecoder } from 'node:string_decoder'
-import { basename, extname, relative, sep } from 'node:path'
+import { basename, extname } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
 import {
@@ -92,11 +93,13 @@ import { convertLegacyOffice, type LegacyOfficeKind } from './office-legacy'
 import {
   approvalSessionOf,
   needsApproval,
+  relativeInside,
   sessionKey,
   statOrNull,
   toolTarget,
   type ToolContext
 } from './guard'
+import { resolveTrustedRead } from './skill-read'
 
 /** read 的文本输出上限：超过就截断（spec §5.1"输出截断限额"） */
 export const READ_MAX_BYTES = 256 * 1024
@@ -158,7 +161,19 @@ export const READ_IMAGE_MAX_PIXELS = 16_000_000
 export const IMAGE_PIXELS_PER_TOKEN = 1600
 
 export const readInputSchema = z.object({
-  path: z.string().min(1).describe('File path; relative paths resolve against the workspace root'),
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      'File path; relative paths resolve against the workspace root, or against the skill directory when skill is set'
+    ),
+  skill: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Read-only: the skill directory ID printed by use_skill (not the skill name). When set, path is a relative path inside that skill directory (hidden paths and node_modules are not readable). Never grants write access; omit it for ordinary workspace files.'
+    ),
   offset: z.number().int().min(1).optional().describe('First line to return, 1-based'),
   limit: z.number().int().min(1).optional().describe('Maximum number of lines to return')
 })
@@ -168,19 +183,25 @@ export type ReadInput = z.infer<typeof readInputSchema>
 /**
  * 图片档的输出（与文本档构成两态联合）：**图片字节不进这个对象**（界面上的工具卡会把 output
  * 序列化后截 600 字，塞 base64 进去会把卡片撑爆，与 render_ppt 同一个理由）——这里只放回执与
- * 图片的元信息，`toModelOutput` 拿着 `abs` 再读一次盘，把字节按已验证的形状附给模型。
+ * 图片的元信息，`toModelOutput` 再读一次盘，把字节按已验证的形状附给模型。普通工作区文件用
+ * `abs`；技能资源（带 `skill`）用 `skill + path` **重新过只读信任根**再读（见 skill-read.ts）。
  */
 export const readImageResultSchema = z.object({
   /** 一句话回执（模型看到的正文；界面上的工具卡也显示它） */
   message: z.string(),
-  /** 工作区相对路径（正斜杠；给模型与用户看） */
+  /** 相对路径（普通文件 = 工作区相对；技能资源 = 技能目录相对；正斜杠） */
   path: z.string(),
-  /** 绝对路径（toModelOutput 读盘用） */
+  /** 绝对路径（普通文件的 toModelOutput 读盘用；技能图片不信任它，见 `skill`） */
   abs: z.string(),
   /** 交给模型时声明的 MIME */
   mediaType: z.string(),
   /** 文件字节数 */
   bytes: z.number(),
+  /**
+   * 技能资源图片的目录 ID（011）：`toModelOutput` **不信任 `abs`**，拿 `skill + path` 重新过
+   * `resolveTrustedRead` 才读第二次盘（见那里的注释）。普通工作区文件没有这个字段。
+   */
+  skill: z.string().optional(),
   /** 像素宽高；**读不出就不给**（认不出的文件头不猜，也不拦） */
   width: z.number().optional(),
   height: z.number().optional()
@@ -195,6 +216,15 @@ export type ReadImageResult = z.infer<typeof readImageResultSchema>
 export const readResultSchema = z.union([readImageResultSchema, z.string()])
 
 export type ReadResult = z.infer<typeof readResultSchema>
+
+/** 图片档交给模型的内容形状（与 render_ppt 的页图一致：文字回执 + 原始字节） */
+interface ImageModelOutput {
+  type: 'content'
+  value: Array<
+    | { type: 'text'; text: string }
+    | { type: 'file'; mediaType: string; data: { type: 'data'; data: string } }
+  >
+}
 
 /** 认路的图片扩展名 → MIME（与 composer / 附件的 `IMAGE_MEDIA_TYPES` 同一套） */
 const IMAGE_MEDIA_TYPE: Readonly<Record<string, string>> = {
@@ -382,9 +412,10 @@ function kindOf(target: string): ReadKind {
  * round 75：**读图片不再单独弹卡**（用户口径："读图这种就不该审"）。在这之前图片这一支按"外发档"
  * 单独判过一次审批（把字节发给模型端点 = 把文件带出本机，所以当时要问一次）—— 用户裁定不审：
  * 读一张图与读一个文本在"用户想不想让模型看"这件事上没有区别，而且弹卡的位置（工具执行前）
- * 也说不出"这次会发多少、发给谁"。**边界照旧**：目标仍必须落在授权工作区内（执行层的
- * `toolTarget` → 引擎，区外一律 fail closed）；不能证明落点在工作区里的调用走的是 guard 的
- * 「工作区之外」那一档（见 guard.needsApproval），与其它工具同一把尺。
+ * 也说不出"这次会发多少、发给谁"。**边界照旧**：普通文件必须落在授权工作区内（执行层的
+ * `toolTarget` → 引擎，区外一律 fail closed）；技能配套资源走 011 的只读信任根
+ * （`skill-read.ts`：已注册技能目录 + realpath containment），同样 fail closed，且**不扩大**任何
+ * 写权限 —— write/edit/delete/move 仍只认工作区。
  *
  * 图片字节发给模型端点这件事本身**不做审批**，但做**能力门**：当前模型读不了图就不发（见
  * `readImage` 的 vision 判断）。
@@ -1055,7 +1086,7 @@ async function readByKind(
   ctx: ToolContext,
   kind: ReadKind,
   abs: string,
-  workspacePath: string,
+  root: string,
   input: ReadInput,
   size: number,
   signal: AbortSignal | undefined,
@@ -1063,13 +1094,7 @@ async function readByKind(
 ): Promise<ReadResult> {
   switch (kind.kind) {
     case 'image':
-      return await readImage(
-        ctx,
-        abs,
-        relative(workspacePath, abs).split(sep).join('/'),
-        input.path,
-        size
-      )
+      return await readImage(ctx, abs, relativeInside(root, abs), input.path, size)
     case 'pdf':
       return await readPdf(ctx, abs, input.path, size, input)
     case 'csv':
@@ -1106,7 +1131,9 @@ export async function createReadTool(
   return createTool({
     id: 'read',
     description:
-      'Read a workspace file. Plain text comes back as-is (offset/limit take a line window); .pdf comes back as ' +
+      'Read a workspace file, or a file inside a registered skill directory when `skill` is set (read-only; ' +
+      '`skill` is the directory ID use_skill printed — not the skill name — and `path` is a relative path inside it; ' +
+      'hidden paths and node_modules are refused). Plain text comes back as-is (offset/limit take a line window); .pdf comes back as ' +
       'its text layer and .docx as markdown; .xlsx and .csv come back as tables whose rows carry row numbers and ' +
       'cell addresses (a formula reads as `=formula → cached result`, and a cached 0 is told apart from no cached ' +
       "result); .pptx comes back as per-page text in the deck's real order, with pictures and charts reported as " +
@@ -1125,7 +1152,20 @@ export async function createReadTool(
       readNeedsApproval(ctx, input, approvalSessionOf(approval)),
     execute: async (input, context): Promise<ReadResult> => {
       const session = sessionKey(context)
-      const { abs, workspace } = toolTarget(ctx, input.path, session)
+      // 011：带 skill 走「已注册技能目录」只读通道（skill 只是索引，路径永远由注册表 + 受校验的
+      // 相对路径拼出）；不带 skill 时逐字保持原行为（普通工作区文件）。
+      const target =
+        input.skill === undefined
+          ? (() => {
+              const resolved = toolTarget(ctx, input.path, session)
+              return { abs: resolved.abs, base: resolved.root, skill: undefined }
+            })()
+          : (() => {
+              const resolved = resolveTrustedRead(ctx, input.skill, input.path)
+              return { abs: resolved.abs, base: resolved.root, skill: resolved.entry.id }
+            })()
+      const { abs, base, skill } = target
+
       const fileStat = await statOrNull(ctx, abs)
       if (fileStat === null || !fileStat.isFile()) {
         throw new Error(`read 失败：${input.path} 不存在或不是文件（目录请用 glob 列出）`)
@@ -1135,7 +1175,7 @@ export async function createReadTool(
         ctx,
         kindOf(abs),
         abs,
-        workspace.path,
+        base,
         input,
         fileStat.size,
         context.abortSignal,
@@ -1144,9 +1184,11 @@ export async function createReadTool(
 
       // 读过的路径记进当前会话（edit 的"未读先改"靠它）：抽取档与图片档也记 —— 模型确实"看过"
       // 这份文件的内容（只是经过了抽取 / 视觉）。真去 edit 一个二进制会因 oldText 匹配不上而失败，
-      // 不会静默改坏文件。
+      // 不会静默改坏文件。技能资源只记 abs，**不**因此获得写权限（edit 仍只认 toolTarget / 授权工作区）。
       ctx.state.markRead(session, abs)
-      return result
+
+      // 图片档把技能目录 ID 带进输出：toModelOutput 二次读盘时重新校验，不信任这里给的 abs
+      return skill === undefined || typeof result === 'string' ? result : { ...result, skill }
     },
     /**
      * 图片档把**原生字节**交给模型看；文本 / 抽取档返回 null（= 不做映射，原样是文本，
@@ -1162,34 +1204,93 @@ export async function createReadTool(
      * "不是字符串就当图片档"，于是一个**错误对象**也会被当成图片档 —— 拿它没有的 `abs` 去读盘、
      * 或者把错误对象里的字段当成路径。校验不过一律返回 null（= 不做映射，按文本原样走）。
      *
+     * **技能资源图片的二次读盘重新校验**（011）：输出里带 `skill` 时，不直接用 `abs` —— 拿
+     * `skill + path` 再过一遍 `resolveTrustedRead`（有效技能现读 + realpath containment），读的是
+     * 重新解析出来的目标；**字节上限 / 类型 / 像素 / vision 能力**也按当前文件重新检查（execute 之后
+     * 文件可能被替换）。先 `stat` 再用有界 `readFile(abs, READ_IMAGE_MAX_BYTES)`，不会先整份读进内存。
+     * 技能被卸载 / 文件变成链接外逃 / 读盘后换成大文件或非图片时只退化成人话，绝不按未校验的
+     * `abs` 或旧 MIME 把新字节发出去。
+     *
+     * **普通工作区图片保持既有行为**：仍按 `abs` 读一次盘、不在这里重做工作区/技能边界（execute
+     * 时已过引擎与三道上限）；这一支不做无关重构。
+     *
      * 读不到就退化成人话（不把整次调用判失败）：文件可能在 execute 之后被删/改名了。
      */
     toModelOutput: async (result: ReadResult) => {
       const image = readImageResultSchema.safeParse(result)
       if (!image.success) return null
+
+      const textOnly = (why: string): ImageModelOutput => ({
+        type: 'content',
+        value: [
+          {
+            type: 'text',
+            text: `${image.data.message}\n（${why}，这次我没看到图）`
+          }
+        ]
+      })
+      const fileContent = (mediaType: string, bytes: Buffer): ImageModelOutput => ({
+        type: 'content',
+        value: [
+          { type: 'text', text: image.data.message },
+          {
+            type: 'file',
+            mediaType,
+            data: { type: 'data', data: Buffer.from(bytes).toString('base64') }
+          }
+        ]
+      })
+
+      const skill = image.data.skill
+      if (skill === undefined) {
+        // 普通工作区图片：既有行为逐字保留（只在读不到时退化成人话）
+        try {
+          return fileContent(image.data.mediaType, await ctx.fs.readFile(image.data.abs))
+        } catch {
+          return textOnly('这张图在读取之后取不到了：文件可能刚被删除或改名')
+        }
+      }
+
       try {
-        const bytes = await ctx.fs.readFile(image.data.abs)
-        return {
-          type: 'content',
-          value: [
-            { type: 'text', text: image.data.message },
-            {
-              type: 'file',
-              mediaType: image.data.mediaType,
-              data: { type: 'data', data: Buffer.from(bytes).toString('base64') }
-            }
-          ]
+        const target = resolveTrustedRead(ctx, skill, image.data.path)
+        if (currentSkillRuntimeFacts()?.vision === false) {
+          return textOnly('当前模型看不了图，所以没有把技能图片的字节发出去')
         }
+
+        const stat = await statOrNull(ctx, target.abs)
+        if (stat === null || !stat.isFile()) {
+          return textOnly('这张图在读取之后取不到了：文件可能刚被删除或改名')
+        }
+        if (stat.size > READ_IMAGE_MAX_BYTES) {
+          return textOnly(
+            `这张图在读取之后变成了 ${formatSize(stat.size)}，超过单张图片 ` +
+              `${formatSize(READ_IMAGE_MAX_BYTES)} 的上限`
+          )
+        }
+
+        const bytes = await ctx.fs.readFile(target.abs, READ_IMAGE_MAX_BYTES)
+        if (bytes.length !== stat.size) {
+          return textOnly('这张图在读取时发生了变化（大小与刚查到的不一致）')
+        }
+        const sniffed = sniffFormat(bytes)
+        if (sniffed === null) {
+          return textOnly('这张图在读取之后格式变了，和当时识别的图片类型对不上')
+        }
+        const expected = IMAGE_MEDIA_TYPE[extname(target.abs).toLowerCase()] ?? 'image/png'
+        const mediaType = SNIFF_MEDIA_TYPE[sniffed] ?? null
+        if (mediaType === null || mediaType !== expected || mediaType !== image.data.mediaType) {
+          return textOnly('这张图在读取之后格式变了，和当时识别的图片类型对不上')
+        }
+        const imageSize = imageSizeOf(bytes, sniffed)
+        if (imageSize !== null && imageSize.width * imageSize.height > READ_IMAGE_MAX_PIXELS) {
+          return textOnly(
+            `这张图在读取之后尺寸变了（${imageSize.width}×${imageSize.height}），超过单张图片 ` +
+              `${formatPixels(READ_IMAGE_MAX_PIXELS)} 像素的上限`
+          )
+        }
+        return fileContent(mediaType, bytes)
       } catch {
-        return {
-          type: 'content',
-          value: [
-            {
-              type: 'text',
-              text: `${image.data.message}\n（这张图在读取之后取不到了：文件可能刚被删除或改名，这次我没看到图）`
-            }
-          ]
-        }
+        return textOnly('这张图在读取之后取不到了：文件可能刚被删除或改名')
       }
     }
   })

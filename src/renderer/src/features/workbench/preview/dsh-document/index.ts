@@ -81,6 +81,7 @@ export { pdfTextRenderer } from './text-layer'
 export { isAbortError, pdfFailureText } from './errors'
 export {
   clampZoom,
+  containZoom,
   DEFAULT_ZOOM_LABELS,
   FIT_WIDTH,
   fitWidthZoom,
@@ -90,6 +91,7 @@ export {
   stepZoom,
   ZOOM_OPTIONS,
   ZOOM_STEP,
+  type ZoomFit,
   type ZoomLabels,
   type ZoomPreference
 } from './zoom'

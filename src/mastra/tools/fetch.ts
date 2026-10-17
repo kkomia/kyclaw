@@ -439,8 +439,8 @@ function blockedError(target: URL, reason: string, hop: number): Error {
       '为什么：fetch 默认只访问公网地址 —— 本机（localhost / 127.0.0.1）、内网与链路本地地址一律挡下，' +
         '否则一个网页或一份文档就能诱导它回头去读你机器上的服务或内网设备。',
       `下一步：要读本机服务请改用 bash 跑 curl（例如 curl "${target.href}"，会先请你审批）；` +
-        `确实要让 fetch 直连这个主机，把它加进白名单（设置 → 网络 → 允许访问的本机/内网主机），` +
-        `或设环境变量 ${FETCH_ALLOW_HOSTS_ENV}=${normalizeHost(target.hostname)}。`
+        `确实要让 fetch 直连这个主机，设环境变量 ${FETCH_ALLOW_HOSTS_ENV}=${normalizeHost(target.hostname)}` +
+        `（它等价于把这台主机写进本机/内网白名单）。`
     ].join('\n')
   )
 }

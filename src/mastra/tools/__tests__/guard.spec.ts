@@ -39,6 +39,7 @@ describe('resolveTarget：目标必须落在授权工作区内', () => {
     expect(resolveTarget(bed.ctx, 'a.txt')).toEqual({
       ok: true,
       abs: file,
+      root: bed.root,
       workspace: bed.roots[0]
     })
     expect(resolveTarget(bed.ctx, file)).toMatchObject({ ok: true, abs: file })

@@ -47,8 +47,15 @@ export function formatCompactTokens(value: number): string {
 }
 
 /**
- * 一条消息的时间（epoch ms）：回灌时挂在 `metadata.createdAt` 上（message-map 取该消息各 part
- * 的 `createdAt` 最大值）。本轮新发的消息不会有这个字段（客户端消息不落它）→ 未知 = null。
+ * 一条消息的时间（epoch ms）：**只认数字** —— 回灌时 message-map 把时间锚点挂成数字
+ * （`metadata.createdAt`；来源与准头排序见 message-map 的 messageTime，0.1.3 / 008 起优先我们
+ * 自己写的 `kyclawSentAt`）。
+ *
+ * 两种"读不到"都是未知（回 null，不编造）：
+ *   - 本轮新发、还没回灌过的消息：`metadata.createdAt` 是 ISO 串（发送时刻），
+ *     `metadata.kyclawSentAt` 也是 ISO 串 —— 这里刻意不解析它们（消费者要的是"时间锚点"，
+ *     且会话内那一段由 ChatPage 的冻结锚点管，见 compactionRowIndex 的第 2 条）；
+ *   - 存储里一点时间都没有的老数据。
  */
 export function messageCreatedAtOf(message: UIMessage): number | null {
   const metadata = message.metadata
@@ -66,9 +73,9 @@ export function messageCreatedAtOf(message: UIMessage): number | null {
  *   - 某条消息**时间未知** → 同样插它之前：按"**不早于压缩**"处理。
  *
  * 为什么未知一律当"不早于压缩"（round 59 修正，之前写成"继承前一条已知时间"，方向是反的）：
- *   1. 会话重开后，**本轮新发的**消息天然没有时间戳，而回灌来的历史大多**早于**压缩时刻
- *      （压缩保留了它们）——继承前一条已知时间会把新消息判成"压缩前"，分界线一路漂到列表
- *      末尾、新消息永远排在分界线上面；
+ *   1. 会话里**本轮新发的**消息在这一刻还没有时间锚点（回灌之后才有数字时间；见 messageCreatedAtOf），
+ *      而回灌来的历史大多**早于**压缩时刻（压缩保留了它们）——继承前一条已知时间会把新消息判成
+ *      "压缩前"，分界线一路漂到列表末尾、新消息永远排在分界线上面；
  *   2. 手动压缩时列表里已经有本轮新发的消息，它们确实存在于压缩之前（会被算进保留窗口）——
  *      这一段由渲染端在压缩完成那一刻**冻结锚点**处理（见 ChatPage 的 compactionAnchor），
  *      与这里的规则各管一段：锚点在手时按锚点定位，不在手时（重开会话）才走时间戳规则。

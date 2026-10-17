@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router'
 import { Ellipsis, Pin } from 'lucide-react'
 import { IconButton } from '../../components/ui/icon-button'
+import { Spinner } from '../../components/ui/spinner'
 import { cn } from '../../components/ui/cn'
 import { navItemClass } from '../../components/shell/nav-item'
 import { SessionActionsMenu } from './SessionActionsMenu'
@@ -22,7 +23,9 @@ import { SessionActionsMenu } from './SessionActionsMenu'
  *     ⋯ 仍是固定宽度占位（w-7 shrink-0，round 16 口径）——出现/消失不挪动文本；
  *   - 置顶的会话行带一个**图钉小标识**（不是文字）；
  *   - 草稿行（还没落成线程）**也给行尾 ⋯**（round 26：置顶/归档/移至项目先物化，重命名/删除
- *     就地做——不再"灰着不让用"）。
+ *     就地做——不再"灰着不让用"）；
+ *   - 010：行尾"完成点"那一格同时是**运行态灰圈**的位置（runningIds 里有这条会话就画灰圈，
+ *     在跑优先完成点；灰圈的来源见 features/chat/thread-run-store，由分组组件透传）。
  */
 export interface SessionListEntry {
   id: string
@@ -44,6 +47,12 @@ export interface SessionListProps {
   onSelect: (threadId: string) => void
   /** round 20：置顶的会话 id（行内图钉标识；"排最前"由 composeSidebarSessions 给） */
   pinnedIds?: ReadonlySet<string>
+  /**
+   * 010：正在跑（提交中 / 流式中）的会话 id —— 行尾那一格画**灰色圆环**（与完成点同一个槽位：
+   * 在跑优先完成点；跑完完成点按未读语义原样回来）。数据源 = thread-run-store，由两个分组
+   * （TasksGroup / ProjectList）透传，后台会话同样可见。
+   */
+  runningIds?: ReadonlySet<string>
   /** 行内动作失败的一句话（重命名/归档/置顶…；露在侧栏的就地错误行） */
   onActionError?: (message: string) => void
 }
@@ -59,10 +68,12 @@ export function SessionList({
   listClassName,
   onSelect,
   pinnedIds,
+  runningIds,
   onActionError
 }: SessionListProps): React.JSX.Element {
   const navigate = useNavigate()
   const pinned = pinnedIds ?? new Set<string>()
+  const running = runningIds ?? new Set<string>()
 
   return (
     <ul
@@ -107,7 +118,17 @@ export function SessionList({
                 />
               ) : null}
               <span className="min-w-0 flex-1 truncate text-left">{title}</span>
-              {notices[session.id] ? (
+              {/* 010：行尾这一格 = 运行态 / 完成点（同一个槽位）。在跑画灰色圆环（三级灰、
+                  reduced-motion 下停转仍是一枚可读的 status）；没在跑但有未读完成点就画圆点。
+                  两者都在时**运行优先**——完成未读语义不受影响（notices 原样留着，跑完自己回来）。 */}
+              {running.has(session.id) ? (
+                <Spinner
+                  size="sm"
+                  label="正在生成回复"
+                  data-testid={`session-running-${session.id}`}
+                  className="text-ink-tertiary motion-reduce:animate-none"
+                />
+              ) : notices[session.id] ? (
                 <span
                   data-testid={`session-done-${session.id}`}
                   title="新回复已完成"

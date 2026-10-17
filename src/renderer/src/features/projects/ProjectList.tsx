@@ -72,6 +72,8 @@ export interface ProjectListProps {
   onManageWorkspaces?: () => void
   /** round 20：置顶会话的行内图钉标识（透传给 SessionList） */
   pinnedIds?: ReadonlySet<string>
+  /** 010：在跑的会话 id（透传给 SessionList → 项目分组里的行尾灰圈） */
+  runningIds?: ReadonlySet<string>
   /** round 24：会话行动作失败的一句话（会话动作已抽到 SessionActionsMenu，见 SessionList） */
   onActionError?: (message: string) => void
 }
@@ -93,6 +95,7 @@ export function ProjectList({
   onCreateFolder,
   onManageWorkspaces,
   pinnedIds,
+  runningIds,
   onActionError
 }: ProjectListProps): React.JSX.Element {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
@@ -348,6 +351,7 @@ export function ProjectList({
                             listClassName="min-h-0 overflow-visible pt-0"
                             onSelect={onSelectSession}
                             pinnedIds={pinnedIds}
+                            runningIds={runningIds}
                             onActionError={onActionError}
                           />
                         </div>

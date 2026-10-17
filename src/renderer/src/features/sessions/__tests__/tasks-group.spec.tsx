@@ -133,4 +133,13 @@ describe('TasksGroup', () => {
     fireEvent.click(screen.getByTestId('session-item-t-a'))
     expect(props.onSelect).toHaveBeenCalledWith('t-a')
   })
+
+  it('010：runningIds 透传——在跑的会话在「任务」组内同样画灰圈（后台会话可见）', () => {
+    renderGroup({ runningIds: new Set(['t-b']) })
+
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
+      screen.getByTestId('session-running-t-b')
+    )
+    expect(screen.queryByTestId('session-running-t-a')).not.toBeInTheDocument()
+  })
 })

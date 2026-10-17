@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { classifyToolCall } from '../../../main/permission/classify'
 import type { PermissionRule, Workspace, WorkspaceMode } from '../../../shared/settings'
-import { createToolContext, type ToolContext, type ToolFs } from '../guard'
+import { createToolContext, type ToolContext, type ToolFs, type TrustedReadRoots } from '../guard'
 
 export interface TestBed {
   /** 本用例独占的临时目录（工作区与"工作区外"都在它下面） */
@@ -32,6 +32,8 @@ export function createBed(
     rules?: PermissionRule[]
     /** 「工作区之外」那一档（round 75；缺省 = 缺省档 ask，与落盘缺省一致） */
     outsideMode?: WorkspaceMode
+    /** 011：已注册技能的只读信任根（缺省 = 没有技能） */
+    trustedReadRoots?: TrustedReadRoots
   } = {}
 ): TestBed {
   const tmp = mkdtempSync(join(tmpdir(), 'kyclaw-tools-'))
@@ -51,7 +53,8 @@ export function createBed(
     fs: options.fs,
     permissionRules: () => rules,
     // 显式注入：不依赖 main/permission 的模块级注册表（用例之间互不影响）
-    outsideMode: () => outsideMode
+    outsideMode: () => outsideMode,
+    trustedReadRoots: options.trustedReadRoots
   })
 
   return {

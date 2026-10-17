@@ -26,6 +26,17 @@
   overscroll-behavior: contain;
 }
 
+/* 图片拖拽平移（仅 `panOnDrag` 的宿主会标 data-dsh-pan-enabled；PDF 永远不标）：
+   固定倍率（多半已放大）给抓手光标，拖拽中换成抓紧；拖拽期间不选字。 */
+.dsh-zoom-frame[data-dsh-zoom-mode='fixed'] .dsh-zoom-scrollport[data-dsh-pan-enabled] {
+  cursor: grab;
+}
+
+.dsh-zoom-scrollport[data-dsh-panning] {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .dsh-zoom-surface {
   max-width: none;
 }

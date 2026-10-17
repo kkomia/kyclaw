@@ -265,12 +265,13 @@ export const installedSkillViewSchema = z.strictObject({
   pluginId: z.string().nullable(),
   pluginName: z.string().nullable(),
   /**
-   * round 64：技能来源标记。**内置**技能会给 `'builtin'`（随包分发的 office 四件套），
-   * 插件技能不带这个字段 —— 老回包形状原样保留（渲染端不认识的字段忽略即可）。
-   * 内置技能也进 installedSkills：插件页的「技能」面板与 composer 的 `+ → 引用技能`
+   * round 64：技能来源标记。**内置**技能给 `'builtin'`（随包分发的 office 四件套）；
+   * round 94：**我的**技能给 `'user'`（用户从 URL / 本地导入、或模型用 create_skill 建的 ——
+   * 判据是"`<userData>/skills` 下没有插件记录认领它"）。插件技能带 `'plugin'`。
+   * 内置与我自己建的都进 installedSkills：插件页的「技能」面板与 composer 的 `+ → 引用技能`
    * 都读这一份，用户在那里就能看到并引用它们。
    */
-  source: z.enum(['builtin', 'plugin']).optional()
+  source: z.enum(['builtin', 'user', 'plugin']).optional()
 })
 
 export const pluginsOverviewSchema = z.strictObject({
@@ -284,8 +285,36 @@ export const pluginIconResponseSchema = z.strictObject({
   dataUrl: z.string().nullable()
 })
 
+/**
+ * round 94：导入一个技能的回包（两个通道共用）。
+ * `added` = 导入进来的技能（名字 + 目录名，见 skill-add.ts 的命名口径）；
+ * 用户在原生选择器里点了取消 = `null`（什么都没发生）。**失败是抛错**（人话原因由界面行内显示），
+ * 不在这里塞一个"失败"形状 —— 总览与技能两个字段要么都真、要么整次调用不成立。
+ *
+ * `blocked`（**唯一一个不抛的"没做成"**）：出站边界挡下了，而且挡的是**本机/内网**这一档 ——
+ * 界面据此给一个"允许这台主机"的按钮（用户点了才会写 `network.allowLocalHosts`，见插件页）。
+ * 其余被挡的形状（解析不出 IP、域名指向私网、协议不对）照旧走抛错，**不给按钮**：
+ * 那几档要么判不出、要么要替用户再解析一次才判得出，按钮会变成"点一下绕过 fail-closed"。
+ */
+export const pluginSkillEgressBlockSchema = z.strictObject({
+  /** 要允许的**确切** `主机:端口`（与白名单写法同形；没有通配） */
+  host: z.string().min(1),
+  /** 被拦下的地址（回显用） */
+  url: z.string().min(1),
+  /** 主进程给的那句人话（与其它失败路径上用户看到的是同一句，界面直接显示） */
+  message: z.string().min(1)
+})
+
+export const pluginSkillImportSchema = z.strictObject({
+  overview: pluginsOverviewSchema,
+  added: z.strictObject({ name: z.string().min(1), dir: z.string().min(1) }).nullable(),
+  blocked: pluginSkillEgressBlockSchema.nullable()
+})
+
 export type MarketplacePluginView = z.infer<typeof marketplacePluginViewSchema>
 export type MarketplaceView = z.infer<typeof marketplaceViewSchema>
 export type InstalledSkillView = z.infer<typeof installedSkillViewSchema>
 export type PluginsOverview = z.infer<typeof pluginsOverviewSchema>
 export type PluginIconResponse = z.infer<typeof pluginIconResponseSchema>
+export type PluginSkillEgressBlock = z.infer<typeof pluginSkillEgressBlockSchema>
+export type PluginSkillImport = z.infer<typeof pluginSkillImportSchema>

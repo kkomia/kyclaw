@@ -13,7 +13,7 @@
  * fs 可注入（测试用延迟/故障模拟），默认实现就是 node:fs——真实行为由各工具自己的用例钉。
  */
 import { globSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import {
   mkdir,
   open,
@@ -30,7 +30,10 @@ import type { PermissionRule, Workspace, WorkspaceMode } from '../../shared/sett
 import { isAllowedByRules } from '../../shared/permissions'
 import { scanCommand } from '../../shared/command-risk'
 import type { ToolClass } from '../../main/permission/classify'
-import { resolveInsideWorkspace } from '../../main/permission/realpath'
+import {
+  resolveInsideWorkspace,
+  resolveInsideWorkspaceWithRoot
+} from '../../main/permission/realpath'
 import { outsideMode as outsideModeRegistry } from '../../main/permission/outside-mode'
 
 /** 工具分级函数（T10 的 classifyToolCall；测试可注入别的实现） */
@@ -166,6 +169,22 @@ export type PermissionRuleSource = () => readonly PermissionRule[]
  */
 export type OutsideModeSource = () => WorkspaceMode
 
+/**
+ * 已注册技能目录的**只读**信任根（011）：`id` 是 `use_skill` 回包里给模型的目录索引，
+ * `path` 是应用侧现读出来的目录绝对路径。生产装配**只放当前有效的技能**（与 use_skill /
+ * 系统指令清单共用 `discoverSkills` 判据；坏 frontmatter / 失效技能不进表，read 侧再复查一次）。
+ * 模型给的 `skill` 只做索引匹配，永远不拼成路径；解析见 `skill-read.ts` 的 `resolveTrustedRead`。
+ */
+export interface TrustedReadRoot {
+  /** 技能目录名（`SkillSource.dir`，唯一、稳定） */
+  id: string
+  /** 技能目录绝对路径（使用时再 realpath 归一） */
+  path: string
+}
+
+/** 现读：用户刚装/卸的技能下一轮就生效（与 use_skill、技能清单同源） */
+export type TrustedReadRoots = () => readonly TrustedReadRoot[]
+
 export interface ToolContext {
   roots: WorkspaceRoots
   classify: ToolClassifier
@@ -173,6 +192,8 @@ export interface ToolContext {
   state: ToolState
   permissionRules: PermissionRuleSource
   outsideMode: OutsideModeSource
+  /** 当前有效技能的只读信任根；缺省 = 没有（普通工作区行为不变） */
+  trustedReadRoots: TrustedReadRoots
 }
 
 export function createToolContext(options: {
@@ -183,6 +204,8 @@ export function createToolContext(options: {
   permissionRules?: PermissionRuleSource
   /** 缺省 = 运行期镜像（生产装配不传；单测可注入一个固定档位） */
   outsideMode?: OutsideModeSource
+  /** 缺省 = 没有技能目录（现有工具单测与普通工作区行为不受影响） */
+  trustedReadRoots?: TrustedReadRoots
 }): ToolContext {
   return {
     roots: options.roots,
@@ -190,7 +213,8 @@ export function createToolContext(options: {
     fs: options.fs ?? nodeToolFs,
     state: new ToolState(),
     permissionRules: options.permissionRules ?? (() => []),
-    outsideMode: options.outsideMode ?? outsideModeRegistry
+    outsideMode: options.outsideMode ?? outsideModeRegistry,
+    trustedReadRoots: options.trustedReadRoots ?? (() => [])
   }
 }
 
@@ -240,6 +264,12 @@ export const NO_WORKSPACE_REASON = '还没有授权工作区：请先在「设�
 
 export interface ResolvedTarget {
   abs: string
+  /**
+   * 工作区根的**真实路径**（与 `abs` 出自同一次 realpath 判定：Windows 8.3 短名 / 大小写 /
+   * junction / symlink 都已归一）。算工作区相对路径、判"是不是根本身"一律用它 ——
+   * `workspace.path` 是设置里存的原始写法，和 `abs` 未必同一口径。
+   */
+  root: string
   workspace: Workspace
 }
 
@@ -260,8 +290,10 @@ export function resolveTarget(
 
   let firstReason = ''
   for (const workspace of roots) {
-    const resolved = resolveInsideWorkspace(workspace.path, target)
-    if (resolved.ok) return { ok: true, abs: resolved.abs, workspace }
+    const resolved = resolveInsideWorkspaceWithRoot(workspace.path, target)
+    if (resolved.ok) {
+      return { ok: true, abs: resolved.abs, root: resolved.root, workspace }
+    }
     if (firstReason === '') firstReason = resolved.reason
   }
   return { ok: false, reason: `不在任何授权工作区内（${firstReason}）` }
@@ -278,7 +310,7 @@ export function toolTarget(ctx: ToolContext, target: string, session?: string): 
     const hint = resolved.reason.includes('工作区之外') ? OUT_OF_WORKSPACE_HINT : ''
     throw new Error(`无法使用路径「${target}」：${resolved.reason}${hint}`)
   }
-  return { abs: resolved.abs, workspace: resolved.workspace }
+  return { abs: resolved.abs, root: resolved.root, workspace: resolved.workspace }
 }
 
 /**
@@ -297,9 +329,28 @@ export function scanRoot(ctx: ToolContext, target?: string, session?: string): R
   }
 
   const workspace = roots[0]
-  const resolved = resolveInsideWorkspace(workspace.path, '.')
+  const resolved = resolveInsideWorkspaceWithRoot(workspace.path, '.')
   if (!resolved.ok) throw new Error(`工作区不可用：${resolved.reason}`)
-  return { abs: resolved.abs, workspace }
+  return { abs: resolved.abs, root: resolved.root, workspace }
+}
+
+/**
+ * 已归一绝对路径 → **工作区相对路径**（正斜杠）。`root` 必须与 `abs` 同一 realpath 口径：
+ * 用 `ResolvedTarget.root`（`toolTarget` / `scanRoot` 的返回值）或 `resolveTrustedRead().root`，
+ * **不要**用 `workspace.path`（设置里存的可能是 8.3 短名 / junction 写法，与 `abs` 对不上）。
+ * 根自身返回 `''`。
+ */
+export function relativeInside(root: string, abs: string): string {
+  return relative(root, abs).split(sep).join('/')
+}
+
+/**
+ * 两个已归一绝对路径是否同一路径（工作区根判断 / move 的源目标判断）。
+ * 比较交给 `path.relative`：Windows 上大小写不敏感；两侧都来自引擎 realpath，
+ * 短名与 junction 已归一。**不做**任何额外的包含判断或权限放宽。
+ */
+export function samePath(a: string, b: string): boolean {
+  return relative(a, b) === ''
 }
 
 /**

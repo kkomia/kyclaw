@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  *
  * 密钥部分（settings:set-provider-key 等）连带 mock safeStorage：假密码本 = 反转字符串，
  * 于是"回包不含明文、磁盘是密文"这类断言在 node 环境里也能真验证。
+ * 例外是 `settings:reveal-provider-key`（用户显式点眼睛）：它**应当**回一次真实明文，
+ * 但失败文案与落盘文件仍不能含明文/密文（见对应 describe）。
  */
 const mocks = vi.hoisted(() => {
   type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -124,14 +126,16 @@ afterEach(() => {
 })
 
 describe('settings 通道 handler', () => {
-  it('九条 invoke 通道都注册了', () => {
+  it('十一条 invoke 通道都注册了', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual([
       'settings:discover-provider-models',
+      'settings:effective-theme',
       'settings:get',
       'settings:list-provider-models',
       'settings:probe-models',
       'settings:provider-key-states',
       'settings:remove-provider',
+      'settings:reveal-provider-key',
       'settings:set-provider-key',
       'settings:test-provider',
       'settings:update'
@@ -158,12 +162,60 @@ describe('settings 通道 handler', () => {
     expect(() => handler(EVENT, 1)).toThrow(IpcInputError)
   })
 
+  it('settings:effective-theme 走注入的解析器；没有 hook 时回 light', () => {
+    expect(handlerOf(IPC_CHANNELS.settings.effectiveTheme)(EVENT)).toBe('light')
+
+    mocks.handlers.clear()
+    const effectiveTheme = vi.fn(() => 'dark' as const)
+    registerSettingsIpc(dir, { effectiveTheme })
+
+    expect(handlerOf(IPC_CHANNELS.settings.effectiveTheme)(EVENT)).toBe('dark')
+    expect(effectiveTheme).toHaveBeenCalledTimes(1)
+  })
+
   it('settings:update 合并补丁、落盘，并回吐合并后的完整设置', () => {
     const next = handlerOf(IPC_CHANNELS.settings.update)(EVENT, { theme: 'light' })
 
     expect(next).toEqual({ ...DEFAULT_SETTINGS, theme: 'light' })
     expect(readSettings(settingsPath(dir))).toEqual(next)
     expect(handlerOf(IPC_CHANNELS.settings.get)(EVENT)).toEqual(next)
+  })
+
+  it('012：theme 落盘后通知 onThemeSaved（运行时切 system 的接线点）', () => {
+    mocks.handlers.clear()
+    const onThemeSaved = vi.fn()
+    registerSettingsIpc(dir, { onThemeSaved })
+
+    const next = handlerOf(IPC_CHANNELS.settings.update)(EVENT, { theme: 'system' }) as {
+      theme: string
+    }
+
+    expect(next.theme).toBe('system')
+    expect(onThemeSaved).toHaveBeenCalledWith('system')
+    expect(readSettings(settingsPath(dir)).theme).toBe('system')
+  })
+
+  it('012：只改字号不触发主题通知', () => {
+    mocks.handlers.clear()
+    const onThemeSaved = vi.fn()
+    registerSettingsIpc(dir, { onThemeSaved })
+
+    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { fontTier: 'large' })
+
+    expect(onThemeSaved).not.toHaveBeenCalled()
+  })
+
+  it('主题 hook 抛错会向调用方传播（此时设置已落盘）', () => {
+    mocks.handlers.clear()
+    const onThemeSaved = vi.fn(() => {
+      throw new Error('主题同步失败')
+    })
+    registerSettingsIpc(dir, { onThemeSaved })
+
+    expect(() => handlerOf(IPC_CHANNELS.settings.update)(EVENT, { theme: 'dark' })).toThrow(
+      '主题同步失败'
+    )
+    expect(readSettings(settingsPath(dir)).theme).toBe('dark')
   })
 
   it('settings:update 的非法补丁被入参闸门拦住：抛 IpcInputError，文件不动', () => {
@@ -200,14 +252,16 @@ describe('settings 通道 handler', () => {
     expect(outsideMode()).toBe('ask')
   })
 
-  it('落盘失败时把错误抛给调用方（不静默吞掉用户的改动）', () => {
+  it('落盘失败时把错误抛给调用方（不静默吞掉用户的改动），也不触发主题通知', () => {
     // 父路径是文件 → mkdir 必失败
     const blocked = join(dir, 'blocked')
     writeFileSync(blocked, 'x', 'utf8')
+    const onThemeSaved = vi.fn()
     mocks.handlers.clear()
-    registerSettingsIpc(blocked)
+    registerSettingsIpc(blocked, { onThemeSaved })
 
     expect(() => handlerOf(IPC_CHANNELS.settings.update)(EVENT, { theme: 'dark' })).toThrow()
+    expect(onThemeSaved).not.toHaveBeenCalled()
   })
 })
 
@@ -241,6 +295,54 @@ describe('settings:set-provider-key（密钥只进不出）', () => {
       expect(() => handler(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
     }
     expect(existsSync(secretsPath(dir))).toBe(false)
+  })
+})
+
+describe('settings:reveal-provider-key（仅用户显式点击时回显真实密钥）', () => {
+  it('已配置且密钥可解：回 {ok:true,key}；只读——设置与密钥文件一个字节都不动', () => {
+    configure(DEEPSEEK)
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'deepseek', KEY)
+    const settingsBefore = readFileSync(settingsPath(dir), 'utf8')
+    const secretsBefore = readFileSync(secretsPath(dir), 'utf8')
+
+    const revealed = handlerOf(IPC_CHANNELS.settings.revealProviderKey)(EVENT, 'deepseek')
+
+    expect(revealed).toEqual({ ok: true, key: KEY })
+    expect(readFileSync(settingsPath(dir), 'utf8')).toBe(settingsBefore)
+    expect(readFileSync(secretsPath(dir), 'utf8')).toBe(secretsBefore)
+  })
+
+  it('没配过 / provider 不在设置里 / 解不开：结构化失败，不回显任何密文或明文', () => {
+    configure(DEEPSEEK)
+
+    // 没配过密钥
+    expect(handlerOf(IPC_CHANNELS.settings.revealProviderKey)(EVENT, 'deepseek')).toEqual({
+      ok: false,
+      reason: 'not-configured',
+      message: '还没有保存 API Key'
+    })
+    // 有孤儿密文（配置里没有这条 provider）也不回显
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'ghost', KEY)
+    const ghost = handlerOf(IPC_CHANNELS.settings.revealProviderKey)(EVENT, 'ghost')
+    expect(ghost).toMatchObject({ ok: false, reason: 'not-configured' })
+    expect(JSON.stringify(ghost)).not.toContain(KEY)
+
+    // 存过但本机解不开（换机/迁移）：报"需重录"，不回显密文
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'deepseek', KEY)
+    mocks.decryptFails = true
+    const unreadable = handlerOf(IPC_CHANNELS.settings.revealProviderKey)(EVENT, 'deepseek')
+    expect(unreadable).toMatchObject({ ok: false, reason: 'needs-reentry' })
+    expect(JSON.stringify(unreadable)).not.toContain(KEY)
+    // 反向密文（测试 mock 的加密结果）也不能出现在失败文案里
+    expect(JSON.stringify(unreadable)).not.toContain([...KEY].reverse().join(''))
+  })
+
+  it('入参不合法（缺 id / 空串 / 多参）被闸门拦住', () => {
+    const handler = handlerOf(IPC_CHANNELS.settings.revealProviderKey)
+
+    for (const args of [[], [''], ['deepseek', 'extra'], [1]]) {
+      expect(() => handler(EVENT, ...args), JSON.stringify(args)).toThrow(IpcInputError)
+    }
   })
 })
 

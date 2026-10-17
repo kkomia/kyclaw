@@ -5,18 +5,25 @@
  * `packages/client/ui-sidebar-documentpreview/src/client/image/ImageBody.tsx`，并接了本仓既有的
  * 图片阅读能力。四类改动（口径差异都写在这里，不在别处重述）：
  *
- * 1) **缩放走统一视口**：上游图片与 PDF 共用同一个 `ZoomViewport`（适应宽度 + 百分比档位菜单 +
+ * 1) **缩放走统一视口**：上游图片与 PDF 共用同一个 `ZoomViewport`（fit 模式 + 百分比档位菜单 +
  *    加减一档 + Ctrl/捏合手势），这里直接复用本仓已移植的 `dsh-document/ZoomViewport`（同一份，
- *    不复制）—— 这就是"统一缩放"的落点。**但能力不缩水**：图片这一侧传自己的
- *    `IMAGE_ZOOM_BOUNDS`（**10%–800%**、一档 **×1.25**、下限跟随适应宽度），
- *    与 round 52 的既有口径逐值相同；文档阅读器不传边界，仍是 25%–400% / 0.25 栅格，不受影响。
- *    旋转按钮保留（见 3），双击适应宽度 ↔ 100% 也保留。
+ *    不复制）—— 这就是"统一缩放"的落点。**但口径各是各的**：
+ *    · 图片这侧 fit = **适应窗口**（`fit='contain'`：宽高都装得下、只缩不放 —— 小图不撑大，
+ *      大图完整看得见；放大靠滚动，永不拉伸），菜单里也就写「适应窗口」；
+ *      默认 preference 仍是 fit 那一档（`FIT_WIDTH` 常量名沿用，语义是"fit 模式"）；
+ *    · 图片传自己的 `IMAGE_ZOOM_BOUNDS`（**10%–800%**、一档 **×1.25**、下限跟随 fit 倍率），
+ *      与 round 52 的既有口径逐值相同；文档阅读器不传边界也不传 fit，仍是 25%–400% / 0.25 栅格 /
+ *      适应宽度，不受影响。
+ *    · 图片这侧把底部缩放控件**常驻**（`alwaysShowControls`：可见的放大 / 缩小按钮），
+ *      并启用**鼠标拖拽平移**（`panOnDrag`：只认左键、内容超出视口才接管；触屏仍走原生滚动）。
+ *      这两个开关都只在图片宿主打开，PDF / 办公档不装拖拽监听，选文不受影响。
+ *    旋转按钮保留（见 3），双击 fit ↔ 100% 也保留。
  * 2) **data URL 而非 Blob URL**：本仓 CSP 是 `img-src 'self' data:`（不放行 blob:），
  *    SVG 字节同样只经 `<img>` 的静态图上下文进入渲染，不进 DOM、不进 iframe；
  *    代价是 base64 膨胀约 33%（预览上限 30MB，见 `PREVIEW_IMAGE_MAX_BYTES`）。
  * 3) **保留 round 52 的旋转**：DSH 没有旋转，本仓有（用户可见功能，不砍）。旋转不改倍率语义：
- *    外框按**旋转后的外接框**给（90°/270° 宽高对调），所以"适应宽度"与滚动范围都按眼睛看到的
- *    那个方向算。双击 = 适应宽度 ↔ 100%（看图软件惯例，同样是本仓既有口径）。
+ *    外框按**旋转后的外接框**给（90°/270° 宽高对调），所以"适应窗口"与滚动范围都按眼睛看到的
+ *    那个方向算。双击 = 适应窗口 ↔ 100%（看图软件惯例，同样是本仓既有口径）。
  * 4) **没有内在尺寸的 SVG 不判坏图**：SVG 只给 viewBox、不给 width/height 时浏览器报 0×0，
  *    上游不处理（它的 `<img>` 走 fit-width 也可能量不到宽）；这里降级成"原始尺寸铺开、
  *    不给缩放控件"，不把能看的图说成坏的。
@@ -34,13 +41,17 @@ import {
   DEFAULT_ZOOM_LABELS,
   FIT_WIDTH,
   IMAGE_ZOOM_BOUNDS,
+  type ZoomLabels,
   type ZoomPreference
 } from '../dsh-document/zoom'
 import { IMAGE_MEDIA_TYPES, toDataUrl, type DshImageFormat } from './formats'
 import './dsh-media.css'
 
-/** 适应宽度时四周留的呼吸位（与 dsh-document 的页列同档：左右各 12px）。 */
-const VIEW_GUTTER = 24
+/** 适应窗口时四周留的呼吸位（与 `.dsh-media-frame` 的 padding: 16px 同源：左右 / 上下各 16px，合计 32）。 */
+const VIEW_GUTTER = 32
+
+/** 图片这一侧的 fit 文案：口径是"适应窗口"（contain 宽高都装得下），不是文档那边的"适应宽度"。 */
+const IMAGE_ZOOM_LABELS: ZoomLabels = { ...DEFAULT_ZOOM_LABELS, fitWidth: '适应窗口' }
 
 interface Size {
   readonly w: number
@@ -67,7 +78,7 @@ export function DshImageBody({
   /** 原始像素尺寸（未解码出来是 null：此时不画内容、也不给缩放控件） */
   const [natural, setNatural] = useState<Size | null>(null)
   const [rotation, setRotation] = useState(0)
-  /** 缩放偏好（受控：状态住在阅读器里，换文件随组件重挂归位） */
+  /** 缩放偏好（受控：状态住在阅读器里，换文件随组件重挂归位）；fit 那一档对图片就是"适应窗口"。 */
   const [preference, setPreference] = useState<ZoomPreference>(FIT_WIDTH)
 
   // 30MB 图的 base64 只编一次（bytes 身份变化才重编）
@@ -95,6 +106,7 @@ export function DshImageBody({
     setRotation((prev) => (prev + delta + 360) % 360)
   }, [])
 
+  /** 双击换挡：适应窗口（fit）↔ 100%（看图软件惯例；100% 一定回到原始像素，不再按面板算）。 */
   const toggleFit = useCallback((): void => {
     setPreference((prev) => (prev.kind === 'fit-width' ? { kind: 'fixed', scale: 1 } : FIT_WIDTH))
   }, [])
@@ -157,12 +169,19 @@ export function DshImageBody({
         <ZoomViewport
           preference={preference}
           intrinsicWidth={footprint?.w}
+          intrinsicHeight={footprint?.h}
           horizontalInset={VIEW_GUTTER}
-          // 上游图片口径：适应宽度**只缩不放**（比面板小的图保持 100%，别把图标糊成一片）
+          verticalInset={VIEW_GUTTER}
+          // 图片这侧 fit = 适应窗口（contain，宽高都装得下、只缩不放 —— 小图不撑大，放大靠滚动）
+          fit="contain"
+          // 上游图片口径：fit（含 contain）**只缩不放**（比面板小的图保持 100%，别把图标糊成一片）
           fitWidthUpscale={false}
-          // 图片的既有能力：10%–800%、一档 ×1.25、下限跟随适应宽度（文档阅读器不传，口径互不影响）
+          // 图片的既有能力：10%–800%、一档 ×1.25、下限跟随 fit 倍率（文档阅读器不传，口径互不影响）
           bounds={IMAGE_ZOOM_BOUNDS}
-          labels={DEFAULT_ZOOM_LABELS}
+          labels={IMAGE_ZOOM_LABELS}
+          // 001 返工：底部 ± 控件常驻（可见的放大 / 缩小按钮），放大后按住左键拖拽平移
+          alwaysShowControls
+          panOnDrag
           onPreference={setPreference}
         >
           <div className="dsh-media-frame">

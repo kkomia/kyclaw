@@ -158,6 +158,14 @@ describe('ProjectList', () => {
     expect(props.onSelectSession).toHaveBeenCalledWith('t-a')
   })
 
+  it('010：runningIds 透传——项目名下的会话在项目分组里也画灰圈', () => {
+    renderList({ runningIds: new Set(['t-a']) })
+
+    expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+      screen.getByTestId('session-running-t-a')
+    )
+  })
+
   it('＋ 菜单两条路：新建空白项目 / 使用现有文件夹各自回调', () => {
     const { props } = renderList()
 

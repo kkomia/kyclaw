@@ -48,6 +48,57 @@ describe('composeOutgoingText · 段落组装', () => {
   })
 })
 
+describe('0.1.3 / 013 返工 · composeOutgoing：回复选段仍带完整原文', () => {
+  const original = '第一段原文\n第二段原文'
+  const quote: PendingAttachment = {
+    id: 'q1',
+    name: '回复选段',
+    size: original.length,
+    text: original,
+    quote: true,
+    quoteFrom: 'reply',
+    origin: 'AI 回复',
+    originRef: 'AI 回复（消息 a1）'
+  }
+
+  it('抬头写「【引用】回复：…」，围栏里是完整原文（不是卡上的摘要）', () => {
+    const text = composeOutgoingText({ text: '', attachments: [quote] })
+    expect(text).toBe(`【引用】回复：回复选段\n${fence(3)}\n${original}\n${fence(3)}`)
+  })
+
+  it('展示上下文仍按 006 的形状生成：kind=quote、source 可追溯到消息、append 摘录不复制大段正文', () => {
+    const outgoing = composeOutgoing({ text: '', attachments: [quote] })
+    const entry = outgoing.context?.entries[0]
+    expect(entry).toMatchObject({
+      kind: 'quote',
+      name: '回复选段',
+      source: 'AI 回复（消息 a1）'
+    })
+    expect(entry?.append).toBeDefined()
+    expect(entry?.append?.length).toBe(
+      `【引用】回复：回复选段\n${fence(3)}\n${original}\n${fence(3)}`.length
+    )
+    // 头尾摘录有上限（≤48 字），大段原文不会整段复制进 metadata
+    expect(entry?.append?.head.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(48)
+    expect(entry?.append?.tail.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(48)
+  })
+
+  it('文件摘选的既有抬头不变（【引用】文件：…）', () => {
+    const fileQuote: PendingAttachment = {
+      id: 'q2',
+      name: 'app.ts 摘选',
+      size: 3,
+      text: 'abc',
+      relative: 'src/app.ts',
+      quote: true,
+      lines: { start: 3, end: 8 }
+    }
+    expect(composeOutgoingText({ text: '', attachments: [fileQuote] })).toBe(
+      `【引用】文件：src/app.ts（第 3–8 行）\n${fence(3)}\nabc\n${fence(3)}`
+    )
+  })
+})
+
 describe('composeOutgoingText · 围栏加固（内容自带反引号）', () => {
   it('内容里出现 ``` → 围栏加长到 4，围栏之间原样保留内容', () => {
     const body = '写法：\n```ts\nconst a = 1\n```\n就这样'

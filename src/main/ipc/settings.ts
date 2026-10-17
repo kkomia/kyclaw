@@ -4,9 +4,12 @@
  * 区别是设置不作用在"发来消息的那个窗口"上，而是读写这个应用自己的 userData 目录
  * （目录在注册时传进来，测试用临时目录即可，不必 mock electron 的 app）。
  *
- * 密钥纪律（T8）：
+ * 密钥纪律（T8；用户复验 2026-10-17 调整了"回显"边界）：
  *   - `settings:set-provider-key` 只在**写**的方向上见到明文，回包只有 `{hasKey:true}`；
- *   - 读密钥只发生在主进程内部（模型解析 / 测试连接），密钥不出主进程；
+ *   - 常规读密钥只发生在主进程内部（模型解析 / 测试连接）；
+ *   - **唯一的回渲染端例外**：`settings:reveal-provider-key` —— 用户**显式点击眼睛**时，
+ *     用下面同一个 `readKey` 读出已存密钥并回一次；不自动推送、不缓存、不落盘、不写日志，
+ *     失败只给结构化原因 + 人话（未配置 / 需重录 / 读不到），绝不回显密文；
  *   - 测试连接的失败文案与每一步结论都先抹掉密钥再回给渲染端（供应商可能回显）；
  *   - `settings:discover-provider-models`（用户反馈 007）是唯一一条"渲染端把明文密钥递进来"的
  *     通道，因为它探的是**还没保存**的端点；明文只在这一趟请求头里活着，不落盘、不进日志、不回包。
@@ -19,7 +22,9 @@ import {
   providerIdArgsSchema,
   providerKeyArgsSchema,
   providerModelDiscoveryArgsSchema,
-  settingsUpdateArgsSchema
+  settingsUpdateArgsSchema,
+  type ProviderKeyRevealResult,
+  type ResolvedTheme
 } from '../../shared/ipc'
 import { providerConfigProblems, type ProviderKeyState } from '../../shared/providers'
 import { connectionTestNotRun, testConnection } from '../connection-test'
@@ -36,6 +41,7 @@ import {
   setProviderKey
 } from '../secrets'
 import { readSettings, settingsPath, updateSettings } from '../settings'
+import type { ThemeMode } from '../../shared/settings'
 
 export interface SettingsIpcHooks {
   /**
@@ -44,17 +50,29 @@ export interface SettingsIpcHooks {
    * 值没真变也照调——要不要动由监听方自己比（见 main/updater.ts 的 reconfigure）。
    */
   onUpdateUrlSaved?: () => void
+  /** 这次落盘写了 `theme` 之后的通知；落盘成功才调。 */
+  onThemeSaved?: (theme: ThemeMode) => void
+  /** 当前解析后的明暗（主进程 nativeTheme 为准） */
+  effectiveTheme?: () => ResolvedTheme
 }
 
 export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks = {}): void {
   const file = settingsPath(userDataDir)
   const secrets = secretsPath(userDataDir)
-  /** 密钥读取器（主进程内唯一的口子：safeStorage 解出来只进内存，不回渲染端、不进日志） */
+  /**
+   * 密钥读取器（主进程内唯一的口子）：safeStorage 解出来只进内存、不进日志；
+   * 唯一的回渲染端例外是用户显式点眼睛的 `settings:reveal-provider-key`（见下）。
+   */
   const readKey = (providerId: string): string | null => getProviderKey(secrets, providerId)
 
   ipcMain.handle(IPC_CHANNELS.settings.get, (_event, ...args) => {
     parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.settings.get)
     return readSettings(file)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.settings.effectiveTheme, (_event, ...args) => {
+    parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.settings.effectiveTheme)
+    return hooks.effectiveTheme?.() ?? 'light'
   })
 
   ipcMain.handle(IPC_CHANNELS.settings.update, (_event, ...args) => {
@@ -63,6 +81,8 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
     const next = updateSettings(file, patch)
     // round 63：更新源改完当场生效（不用重启）——落盘成功才通知
     if (patch.updateUrl !== undefined) hooks.onUpdateUrlSaved?.()
+    // 主题落盘后通知监听方同步 nativeTheme（切回 system 时解除媒体查询锁定）
+    if (patch.theme !== undefined) hooks.onThemeSaved?.(next.theme)
     // round 22：provider 保存后**后台**探一轮（元数据 + round 48 的视觉能力；不 await、不挡保存；失败静默）
     if (patch.providers !== undefined) {
       for (const provider of next.providers) {
@@ -83,7 +103,51 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
     return { hasKey: true }
   })
 
-  // 各 provider 的密钥状态（渲染端拿它显示"已配置 / 需要重新录入"，永远拿不到明文）
+  // 用户**显式点击眼睛**时才回显已存密钥（用户复验口径：眼睛要看到真实 key，不是圆点/提示）。
+  // 这是唯一一条把已存 provider 密钥送回渲染端的通道：只认已配置的 provider，
+  // 明文只活在这个局部变量与这一次 IPC 回包里——不自动推送、不缓存、不落盘、不写日志；
+  // 失败只回结构化原因与人话，错误信息绝不带密文。
+  ipcMain.handle(
+    IPC_CHANNELS.settings.revealProviderKey,
+    (_event, ...args): ProviderKeyRevealResult => {
+      const [id] = parseIpcArgs(providerIdArgsSchema, args, IPC_CHANNELS.settings.revealProviderKey)
+      const configured = readSettings(file).providers.some((provider) => provider.id === id)
+      if (!configured) {
+        return {
+          ok: false,
+          reason: 'not-configured',
+          message: '这条 provider 没有配置，读不到密钥'
+        }
+      }
+
+      // 正常路径只解密一次；读不到时再用状态区分"没配过 / 需重录 / 防御性读失败"
+      const key = readKey(id)
+      if (key !== null) return { ok: true, key }
+
+      const state = providerKeyState(secrets, id)
+      if (state.needsReentry) {
+        return {
+          ok: false,
+          reason: 'needs-reentry',
+          message: '已存的密钥在这台机器上读不到，请重新录入'
+        }
+      }
+      if (state.hasKey) {
+        return {
+          ok: false,
+          reason: 'unreadable',
+          message: '读取已存密钥失败，请重新录入'
+        }
+      }
+      return {
+        ok: false,
+        reason: 'not-configured',
+        message: '还没有保存 API Key'
+      }
+    }
+  )
+
+  // 各 provider 的密钥状态（渲染端拿它显示"已配置 / 需要重新录入"）
   ipcMain.handle(IPC_CHANNELS.settings.providerKeyStates, (_event, ...args) => {
     parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.settings.providerKeyStates)
     const states: Record<string, ProviderKeyState> = {}

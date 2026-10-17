@@ -4,16 +4,28 @@ import {
   memo,
   startTransition,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
   type ClassAttributes,
+  type ComponentProps,
   type HTMLAttributes,
   type ReactNode
 } from 'react'
-import Markdown, { type Components } from 'react-markdown'
+import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { CitationHintsContext, EMPTY_CITATION_HINTS } from '../citation-hints'
+import {
+  citationKey,
+  citationLabel,
+  decodeHtmlEntities,
+  safeHttpUrl,
+  type CitationHint
+} from '../citations'
+import { CitationChip } from './CitationChip'
 import { CodeBlock } from './CodeBlock'
+import { MarkdownSourceProvider, MarkdownTable } from './MarkdownTable'
 import { splitBlocks } from './markdown-blocks'
 
 /**
@@ -21,6 +33,12 @@ import { splitBlocks } from './markdown-blocks'
  *
  * 代码块在这里从 `<pre>` 那一层接管（react-markdown 把围栏代码给成 pre > code）：
  * 换成自绘的 CodeBlock（语言标注 + 复制 + Shiki），行内 code 单独出样式。
+ * 表格同理从 `table` 那一层接管：整张表套进圆角外壳 + 横向滚动口，复制 / 下载见 MarkdownTable.tsx
+ * ——每个 Markdown 实例都把**自己吃进去的源文本**交给它（`MarkdownSourceProvider`），
+ * 导出的是这段 Markdown 原文而不是页面上的字。**流式期间那两个按钮由 CSS 收起**
+ * （祖先的 `data-streaming`），所以整篇渲染与分块渲染的 DOM 仍然逐字节一致。
+ * 这一层接管**只在回复流里开**（`TextPartProps.tables`）：计划卡 / 记忆页 / 轨迹详情的表格
+ * 走基础组件表，渲染结果与改动前一个字节都不差。
  * 流式光标的样式钩在 `data-streaming` 上（CSS 伪元素，细竖线；见 styles/markdown.css）。
  *
  * ## round 73：流式正文的两级优化（流畅度 P0）
@@ -58,6 +76,23 @@ import { splitBlocks } from './markdown-blocks'
 export interface TextPartProps {
   text: string
   streaming?: boolean
+  /**
+   * 表格外壳与复制 / 下载（0.1.3 · 007）：**只在回复流里开**。
+   *
+   * 默认按调用点判：回复流那条（Message.tsx）一直显式传 `streaming`，另外三处宿主
+   * （计划卡 / 记忆页 / 轨迹详情）只传 `text` —— 那三处保持原样（表格仍是 react-markdown 的
+   * 默认元素，不套外壳、不出按钮），这个扩展不去改别处的外观。
+   * 要显式收口就传 `tables`（显式优先）；之后若想让回复流也写明白，加一位即可，不必动默认逻辑。
+   */
+  tables?: boolean
+  /**
+   * 本轮已完成 web_search / fetch 工具结果建立的已知来源 allowlist（0.1.3 网页引用）。
+   *
+   * **键存在即授权**：只有 citationKey 命中这里的数字链接才渲染角标；未命中的保持普通
+   * 安全外链。只有 `Message.tsx` 会传；其它宿主（计划卡 / 记忆页 / 轨迹详情）没有工具
+   * 上下文，数字链接一律按普通链接显示（不能凭正文 URL 自称来源）。
+   */
+  knownSources?: ReadonlyMap<string, CitationHint>
 }
 
 function PreBlock({
@@ -75,6 +110,63 @@ function PreBlock({
   return <pre>{children}</pre>
 }
 
+/** 链接文本的纯文字（模型可能把数字套进 `**` / `*`；角标只认数字本身） */
+function plainText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(plainText).join('')
+  if (isValidElement<{ children?: ReactNode }>(node)) return plainText(node.props.children)
+  return ''
+}
+
+const UNSAFE_LINK_SCHEME = /^(?:javascript|data|vbscript):/i
+
+/** 普通链接兜底也不放行带凭据的 http(s)（host 会遮住凭据，用户看不出点去哪） */
+const CREDENTIALED_HTTP = /^https?:\/\/[^/?#]*@/i
+
+/**
+ * Markdown 的 `a` 覆盖：数字文本 + 安全 http(s) **且**命中本轮已知来源 → 引用角标；
+ * 其余保持普通外链。
+ *
+ * P0 provenance：正文 URL 本身不授权来源。未命中 allowlist 的数字链接走下面的普通
+ * `<a>`（仍然是安全外链），既不出角标，也不进来源面板。
+ *
+ * 危险协议不落成可点击链接（react-markdown 默认也会清洗，这里再兜一层）；带凭据的 http(s)
+ * 同样不落成链接（host 遮住凭据，用户看不出点去哪）。相对路径 / mailto 等普通链接行为不变。
+ * 数字文本到非 http(s) 目标时也按普通链接处理，不冒充网页来源。
+ */
+function MarkdownLink({
+  href,
+  title,
+  children
+}: ComponentProps<'a'> & ExtraProps): React.JSX.Element {
+  const knownSources = useContext(CitationHintsContext)
+  const label = citationLabel(plainText(children))
+  const url = label === undefined ? undefined : safeHttpUrl(href)
+  const key = url === undefined ? undefined : citationKey(url)
+  if (label !== undefined && url !== undefined && key !== undefined && knownSources.has(key)) {
+    return (
+      <CitationChip
+        label={label}
+        url={url}
+        title={title ?? undefined}
+        hint={knownSources.get(key)}
+      />
+    )
+  }
+
+  const raw = href?.trim() ?? ''
+  // 实体编码的协议（`javascript&colon;…`）解码后再判，别让普通链接兜底绕过清洗
+  const decoded = decodeHtmlEntities(raw)
+  if (decoded === '' || UNSAFE_LINK_SCHEME.test(decoded) || CREDENTIALED_HTTP.test(decoded)) {
+    return <span>{children}</span>
+  }
+  return (
+    <a href={decoded} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  )
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   pre: PreBlock,
   code: ({ children }) => (
@@ -82,23 +174,42 @@ const MARKDOWN_COMPONENTS: Components = {
       {children}
     </code>
   ),
-  a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  )
+  a: MarkdownLink
+}
+
+/**
+ * 回复流那一份组件表：只多了 `table`（其余逐字相同）。
+ *
+ * 两个表都是模块级常量 —— `components` 的身份在两条渲染路上都稳定，react-markdown 不会因为
+ * "传了个新对象"而重建；别处宿主用上面那份（表格保持默认元素），见 TextPartProps.tables。
+ */
+const MARKDOWN_COMPONENTS_WITH_TABLES: Components = {
+  ...MARKDOWN_COMPONENTS,
+  table: MarkdownTable
 }
 
 /**
  * markdown 正文（按 text 值 memo）。
  *
  * 这是全链路上最贵的一层（解析 + 子树协调 + CodeBlock/Shiki 的调度）：`text` 没变就整棵跳过。
+ * 表格的源文本就是这一份 `text` —— 整篇渲染时 `node.position` 的偏移与它同源。
  */
-const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }): React.JSX.Element {
+const MarkdownBody = memo(function MarkdownBody({
+  text,
+  tables
+}: {
+  text: string
+  tables: boolean
+}): React.JSX.Element {
   return (
-    <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
-      {text}
-    </Markdown>
+    <MarkdownSourceProvider source={text}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={tables ? MARKDOWN_COMPONENTS_WITH_TABLES : MARKDOWN_COMPONENTS}
+      >
+        {text}
+      </Markdown>
+    </MarkdownSourceProvider>
   )
 })
 
@@ -107,12 +218,26 @@ const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }): Rea
  *
  * 与 `MarkdownBody` 是同一个东西，分开只为**稳定组件类型**：`blocks.map` 里现写匿名组件会让
  * memo 每次都换类型、整棵重挂，等于白切。
+ *
+ * 表格源文本是**这一块**的文本（偏移与块同源，切出来的字节与全文里那一段相同）；
+ * 块 text 不变 → 这个组件根本不重渲染 → 表里已画好的部分也不会每帧重挂。
  */
-const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): React.JSX.Element {
+const MarkdownBlock = memo(function MarkdownBlock({
+  text,
+  tables
+}: {
+  text: string
+  tables: boolean
+}): React.JSX.Element {
   return (
-    <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
-      {text}
-    </Markdown>
+    <MarkdownSourceProvider source={text}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={tables ? MARKDOWN_COMPONENTS_WITH_TABLES : MARKDOWN_COMPONENTS}
+      >
+        {text}
+      </Markdown>
+    </MarkdownSourceProvider>
   )
 })
 
@@ -122,12 +247,14 @@ const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }): R
  * 分不开（null）就整篇一块 —— 退化成一级优化的行为，不会出错。
  */
 const StreamingMarkdown = memo(function StreamingMarkdown({
-  text
+  text,
+  tables
 }: {
   text: string
+  tables: boolean
 }): React.JSX.Element {
   const blocks = splitBlocks(text)
-  if (blocks === null) return <MarkdownBody text={text} />
+  if (blocks === null) return <MarkdownBody text={text} tables={tables} />
   return (
     <>
       {blocks.map((block, index) => (
@@ -136,7 +263,7 @@ const StreamingMarkdown = memo(function StreamingMarkdown({
         // 不补的话流式期间与最终排版差一个换行（见 text-part-blocks.spec.tsx 的逐字节比对）。
         <Fragment key={index}>
           {index === 0 ? null : '\n'}
-          <MarkdownBlock text={block} />
+          <MarkdownBlock text={block} tables={tables} />
         </Fragment>
       ))}
     </>
@@ -199,19 +326,34 @@ function useCadencedText(text: string, streaming: boolean): string {
   return streaming && usable ? shown : text
 }
 
-export function TextPart({ text, streaming = false }: TextPartProps): React.JSX.Element {
-  const shown = useCadencedText(text, streaming)
+export function TextPart({
+  text,
+  streaming,
+  tables,
+  knownSources
+}: TextPartProps): React.JSX.Element {
+  const live = streaming ?? false
+  // 回复流判据：调用点显式传了 `streaming`（Message.tsx 那条）＝ 聊天正文；显式 `tables` 优先
+  const withTables = tables ?? streaming !== undefined
+  const shown = useCadencedText(text, live)
+  const sources = knownSources ?? EMPTY_CITATION_HINTS
   return (
-    <div
-      data-testid="message-text"
-      data-streaming={streaming ? 'true' : undefined}
-      className="markdown-body"
-    >
-      {streaming ? <StreamingMarkdown text={shown} /> : <MarkdownBody text={shown} />}
-      {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
-      {streaming && text === '' ? (
-        <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />
-      ) : null}
-    </div>
+    <CitationHintsContext.Provider value={sources}>
+      <div
+        data-testid="message-text"
+        data-streaming={live ? 'true' : undefined}
+        className="markdown-body"
+      >
+        {live ? (
+          <StreamingMarkdown text={shown} tables={withTables} />
+        ) : (
+          <MarkdownBody text={shown} tables={withTables} />
+        )}
+        {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
+        {live && text === '' ? (
+          <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />
+        ) : null}
+      </div>
+    </CitationHintsContext.Provider>
   )
 }

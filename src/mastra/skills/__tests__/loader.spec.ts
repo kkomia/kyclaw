@@ -10,11 +10,24 @@
  *   ④ 全文读取：超过 256KB 截断、文件清单列出配套资料（最多 100 条，隐藏目录不进）；
  *   ⑤ round 68 容错：没有（闭合的）frontmatter 的文件**记警告后整份忽略**，别的技能照常可用。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SKILL_FILE, type SkillSource } from '../../../shared/skills'
+import {
+  readSkillHeader,
+  readSkillSource,
+  SKILL_FILE,
+  type SkillSource
+} from '../../../shared/skills'
 import {
   discoverSkills,
   findSkill,
@@ -124,6 +137,17 @@ describe('discoverSkills：来源 → 清单', () => {
     }
   })
 
+  it('warn:false：坏技能仍被排除，但不打印警告（read 的信任根每次现算）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      makeSkill(join(tmp, 'skills'), 'market-p1-bad', '正文没有 frontmatter')
+      expect(discoverSkills([pluginSource('market-p1-bad')], { warn: false })).toEqual([])
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('frontmatter 在、description 缺：仍然算技能（名字退回目录名去前缀，描述是空串）', () => {
     makeSkill(join(tmp, 'skills'), 'market-p1-nodesc', '---\nname: nodesc\n---\n手册')
     makeSkill(join(tmp, 'skills'), 'market-p1-noname', '---\ndescription: 有描述没名字\n---\n手册')
@@ -190,6 +214,9 @@ describe('skillsGuidance：渐进式披露第一层', () => {
     expect(text.startsWith('\n- Skills (work manuals)')).toBe(true)
     expect(text).toContain('· pptx：做演示文稿')
     expect(text).toContain('use_skill')
+    // 011：技能资源明确走 read 的 skill 参数，不再把模型引向 bash
+    expect(text).toContain('`skill`')
+    expect(text).toContain('never use bash, glob or grep for skill files')
     expect(text).not.toContain('秘密正文')
   })
 
@@ -248,6 +275,146 @@ describe('readSkill：全文 + 配套文件清单', () => {
     expect(listing.truncated).toBe(true)
     // 目录不存在：空清单，不抛
     expect(listSkillFiles(join(tmp, 'nope'))).toEqual({ files: [], truncated: false })
+  })
+
+  it('011：SKILL.md 是链接指向目录外 → discover / header 不认，全文明确失败（不读外部正文）', (context) => {
+    const path = makeSkill(join(tmp, 'skills'), 'market-p1-linked')
+    const outside = join(tmp, 'outside.md')
+    writeFileSync(outside, '---\nname: leak\ndescription: 外部\n---\nSECRET 正文', 'utf8')
+    try {
+      symlinkSync(outside, join(path, SKILL_FILE), 'file')
+    } catch {
+      context.skip()
+      return
+    }
+
+    const source = pluginSource('market-p1-linked')
+    expect(readSkillHeader(source)).toBeNull()
+    expect(readSkillSource(source).ok).toBe(false)
+    expect(discoverSkills([source])).toEqual([])
+
+    // 手工构造的旧 entry 也不能把链接目标读成技能正文：明确报错，不是成功形状的空正文
+    const entry: SkillEntry = {
+      name: 'leak',
+      description: '',
+      dir: source.dir,
+      kind: source.kind,
+      file: join(path, SKILL_FILE),
+      bytes: 100,
+      license: '',
+      source
+    }
+    expect(() => readSkill(entry)).toThrow(/不可读/)
+  })
+
+  it('011：SKILL.md 链接指向技能目录内部 → 允许（真实根内），但清单不跟随链接', (context) => {
+    const path = makeSkill(join(tmp, 'skills'), 'market-p1-inner')
+    writeFileSync(
+      join(path, 'manual.md'),
+      '---\nname: inner\ndescription: 内部链接\n---\n内部手册正文',
+      'utf8'
+    )
+    try {
+      symlinkSync(join(path, 'manual.md'), join(path, SKILL_FILE), 'file')
+    } catch {
+      context.skip()
+      return
+    }
+
+    const source = pluginSource('market-p1-inner')
+    expect(readSkillHeader(source)?.name).toBe('inner')
+    const [entry] = discoverSkills([source])
+    expect(entry).toBeDefined()
+    const reading = readSkill(entry as NonNullable<typeof entry>)
+    expect(reading.text).toContain('内部手册正文')
+    // 清单只列真实文件：内部链接的 SKILL.md 不进清单，真实目标 manual.md 在
+    expect(reading.files).toEqual(['manual.md'])
+  })
+
+  it('readSkill：入口被删 / 根被换成 junction → 明确失败，且不列外部文件名', (context) => {
+    const path = makeSkill(join(tmp, 'skills'), 'market-p1-gone', '---\nname: gone\n---\n入口')
+    const [entry] = discoverSkills([pluginSource('market-p1-gone')])
+    expect(entry).toBeDefined()
+    writeFileSync(join(path, SKILL_FILE), 'not frontmatter', 'utf8')
+    expect(() => readSkill(entry as NonNullable<typeof entry>)).toThrow(/不可读/)
+    rmSync(join(path, SKILL_FILE))
+    expect(() => readSkill(entry as NonNullable<typeof entry>)).toThrow(/不可读/)
+
+    // 根被换成指向外部目录的 junction：readSkill 不列外部文件名，listSkillFiles 根也不跟随
+    const outsideDir = join(tmp, 'outside-root')
+    mkdirSync(outsideDir, { recursive: true })
+    writeFileSync(join(outsideDir, 'SKILL.md'), '---\nname: leak\n---\n外部', 'utf8')
+    writeFileSync(join(outsideDir, 'secret.md'), 'FAKE_MARKER_NOT_A_REAL_SECRET', 'utf8')
+    const linked = join(tmp, 'skills', 'market-p1-replaced')
+    try {
+      symlinkSync(outsideDir, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch {
+      context.skip()
+      return
+    }
+    const replaced: SkillEntry = {
+      name: 'replaced',
+      description: '',
+      dir: 'market-p1-replaced',
+      kind: 'plugin',
+      file: join(linked, SKILL_FILE),
+      bytes: 100,
+      license: '',
+      source: pluginSource('market-p1-replaced')
+    }
+    expect(() => readSkill(replaced)).toThrow(/不可读/)
+    expect(listSkillFiles(linked)).toEqual({ files: [], truncated: false })
+  })
+
+  it('011：SKILL.md 在 discovery 后变大 → 按当前长度有界截断（旧 bytes 快照不作数）', () => {
+    const path = makeSkill(join(tmp, 'builtin'), 'grow', '---\nname: grow\n---\n小文件')
+    const [entry] = discoverSkills([builtinSource('grow')])
+    expect(entry).toBeDefined()
+    writeFileSync(
+      join(path, SKILL_FILE),
+      `---\nname: grow\ndescription: 变大\n---\n${'a'.repeat(SKILL_TEXT_MAX_BYTES * 2)}`,
+      'utf8'
+    )
+
+    const reading = readSkill(entry as NonNullable<typeof entry>)
+    expect(reading.truncated).toBe(true)
+    expect(Buffer.byteLength(reading.text, 'utf8')).toBeLessThanOrEqual(SKILL_TEXT_MAX_BYTES)
+  })
+
+  it('011：listSkillFiles 不跟随目录 junction（不把外部目录的文件名列给模型）', (context) => {
+    const path = makeSkill(join(tmp, 'builtin'), 'docx', '---\nname: docx\n---\n')
+    const outsideDir = join(tmp, 'outside-dir')
+    mkdirSync(outsideDir, { recursive: true })
+    writeFileSync(join(outsideDir, 'secret.md'), 'secret', 'utf8')
+    writeFileSync(join(path, 'real.md'), 'x', 'utf8')
+    try {
+      symlinkSync(
+        outsideDir,
+        join(path, 'link-out'),
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+    } catch {
+      context.skip()
+      return
+    }
+
+    expect(listSkillFiles(path).files).toEqual(['SKILL.md', 'real.md'])
+  })
+
+  it('011：listSkillFiles 不跟随文件符号链接（无权限建文件链接则 skip）', (context) => {
+    const path = makeSkill(join(tmp, 'builtin'), 'docx', '---\nname: docx\n---\n')
+    const outsideDir = join(tmp, 'outside-dir')
+    mkdirSync(outsideDir, { recursive: true })
+    writeFileSync(join(outsideDir, 'secret.md'), 'secret', 'utf8')
+    writeFileSync(join(path, 'real.md'), 'x', 'utf8')
+    try {
+      symlinkSync(join(outsideDir, 'secret.md'), join(path, 'linked.md'), 'file')
+    } catch {
+      context.skip()
+      return
+    }
+
+    expect(listSkillFiles(path).files).toEqual(['SKILL.md', 'real.md'])
   })
 })
 

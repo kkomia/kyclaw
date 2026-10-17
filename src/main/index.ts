@@ -5,7 +5,7 @@
  * T17 起多了两族接线：更新通道（updater.ts，源没配就是"什么都不做"的实例）与追踪通道
  * （telemetry，Langfuse 默认关）——两者都不挡窗口、失败只记日志。
  */
-import { app } from 'electron'
+import { app, autoUpdater } from 'electron'
 import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
@@ -41,7 +41,8 @@ import {
   UPDATE_URL_ENV
 } from './updater'
 import { createTray } from './tray'
-import { showMainWindow } from './window'
+import { applyThemeMode, currentResolvedTheme, showMainWindow } from './window'
+import { markQuitting } from './window-close'
 import { installWebviewGuard } from './webview'
 import { resolveModel } from '../mastra/model'
 import { killAllRunning } from '../mastra/tools/exec'
@@ -156,7 +157,12 @@ if (!app.requestSingleInstanceLock()) {
     registerWindowIpc()
     // round 63：更新源写进设置后要当场生效，所以设置通道带一个回调（更新器本身是异步装配的，
     // 这里晚绑定取"当前那个"——回调只在渲染端保存设置时触发，那时下面的 updater 早就装配好了）
-    registerSettingsIpc(userDataDir, { onUpdateUrlSaved: () => updater.reconfigure() })
+    registerSettingsIpc(userDataDir, {
+      onUpdateUrlSaved: () => updater.reconfigure(),
+      // 主题改完同步 nativeTheme 与窗口底色
+      onThemeSaved: applyThemeMode,
+      effectiveTheme: currentResolvedTheme
+    })
     // round 22：启动时后台探一轮模型元数据（真实上下文长度/思考挡位；串行、静默、不挡窗口）
     void probeConfiguredProvidersQuietly({
       file: settingsPath(userDataDir),
@@ -247,7 +253,10 @@ if (!app.requestSingleInstanceLock()) {
       mainMark('渲染端文档加载完')
       reportMainStartup()
     })
-    createTray()
+    // 托盘：win/linux「关闭到托盘」的入口（建失败会走"不可用"分支——关窗照常退出，见 tray.ts）
+    // KYCLAW_DISABLE_TRAY=1（隔离探针 / 排查用）= 本次运行不建托盘：与"托盘建失败"走同一条
+    // 回退路径（关闭窗口即退出），用于在真 Electron 里验证"藏不住"的那半边
+    if (process.env.KYCLAW_DISABLE_TRAY !== '1') createTray()
 
     // 更新通道（T17 / round 63）：通道面立刻可用（渲染端一挂载就拉状态），装配是异步的
     // （electron-updater 是动态 import）——装好后顶上并广播一次。源现算（环境变量 > 设置里的更新源 >
@@ -351,7 +360,31 @@ if (!app.requestSingleInstanceLock()) {
     })
   })
 
-  // 关完窗口即退出（Windows/Linux 口径）；macOS 停留在 Dock，等 activate 再起窗
+  // 退出已经开始（托盘「退出 kyclaw」、系统退出…）→ 立标记：close 事件见到一律放行，
+  // 不再把这次关闭收进托盘（口径见 window-close.ts 的"只有真退出事件才立标记"）。
+  // 标记是单向的，所以这里只接真事件、不接任何"可能要退出"的前置信号。
+  app.on('before-quit', markQuitting)
+
+  /**
+   * 更新安装（quitAndInstall）那一路单独接一个真事件。
+   *
+   * 依据（本机已核对，不是推测）：
+   *   - Electron 文档（electron.d.ts）：原生 `autoUpdater.quitAndInstall()` "会先关掉所有窗口，
+   *     再自动 `app.quit()`"，所以那条路上 `before-quit` 晚于窗口 close——只听 before-quit 会把
+   *     安装触发的那次关窗收进托盘、把安装卡住；文档同时指明这种时候要听 `before-quit-for-update`。
+   *   - electron-updater 6.8.9（node_modules/electron-updater/out/BaseUpdater.js 的 quitAndInstall）：
+   *     只有 **安装真的启动成功**（`install()` 返回 true）才走
+   *     `setImmediate(() => { require('electron').autoUpdater.emit('before-quit-for-update'); app.quit() })`；
+   *     失败 / 已经在装（`quitAndInstallCalled`）/ 没有更新包时**什么都不发、也不退出**。
+   * 所以在**发事件的那个对象**（Electron 原生 autoUpdater）上接：它只在"更新即将退出"这一刻发，
+   * 安装失败或重复安装不会发，标记不会被提前立起来。
+   * 平台兜底：这个对象在个别平台可能缺席，缺了就跳过（那一路本来也没有更新可用）——不拿启动去赌。
+   */
+  autoUpdater?.on('before-quit-for-update', markQuitting)
+
+  // 关完窗口即退出（Windows/Linux 口径）；macOS 停留在 Dock，等 activate 再起窗。
+  // 托盘驻留不冲突：win/linux 上窗口"关闭"会被收成隐藏（window-close.ts），根本走不到这里；
+  // 真的走到这里只有两种情形——正在退出，或托盘不可用（那本来就该关窗退出）
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       app.quit()

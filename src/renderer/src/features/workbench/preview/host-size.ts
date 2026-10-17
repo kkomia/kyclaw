@@ -9,7 +9,11 @@
  *   · 页式预览按内容长到一千多像素（1053px），浮动缩放控件的"露头区"落到可视区外（够不着）；
  *   · 旧 PDF 入口的滚动口退化成内容高（没有可滚动量）→ "当前页"永远算成最后一页、
  *     点目录跳页不滚动（R90 探针：点第 2 条目录，高亮当场跳去第 3 条）。
- * 文本 / markdown / 图片 / HTML 那几档由内容撑高，维持原样。
+ *
+ * 图片（2026-10-16 收进这一档，反馈 001）：图片阅读器也有自己的滚动口，而且默认"适应窗口"
+ * （contain）要拿**视口高**算适配倍率 —— 宿主若是"内容撑高"，量到的高就是内容自己的高（恒等），
+ * 竖图永远"装得下"、适配失效（看着就是不适配）。所以给确定高度这条，
+ * 文本 / markdown / 代码 / HTML 那几档（没有自己的滚动口、按内容撑高）维持原样。
  */
 import type { PreviewMode } from './modes'
 
@@ -18,5 +22,5 @@ import type { PreviewMode } from './modes'
  * @param mode 按后缀定下来的预览档。
  */
 export function previewNeedsFixedHeight(mode: PreviewMode): boolean {
-  return mode === 'office' || mode === 'table' || mode === 'pdf'
+  return mode === 'office' || mode === 'table' || mode === 'pdf' || mode === 'image'
 }
