@@ -1,25 +1,38 @@
 import { useLayoutEffect } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { AppShell } from './components/shell/AppShell'
+import { ModuleHost } from './components/shell/ModuleHost'
 import { advanceStartupSplash, dismissStartupSplash } from './lib/startup-splash'
 import { startupMark } from './lib/startup-timing'
-import { ChatPage } from './features/chat/ChatPage'
+import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { MemoryPage } from './features/memory/MemoryPage'
+import { NotesPage } from './features/notes/NotesPage'
+import { OfficePage } from './features/office/OfficePage'
 import { PluginsPage } from './features/plugins/PluginsPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { UsagePage } from './features/usage/UsagePage'
 
 /**
  * 路由表：壳是布局路由（element 不带 path），主列的 <Outlet/> 渲染子路由内容。
- * 页面路由：聊天 / 设置（按栏目）/ 插件（round 5 新入口）/ 记忆 / 用量（standalone 直达保留，
- * 不进任何菜单——设置里已有同样的真实内容）+ 根路径/未知路径统一落到 /chat（主列永远有内容）。
+ * 页面路由：一级模块（主对话 / 笔记 / 知识库 / Office）/ 设置（按栏目）/ 插件（round 5 新入口）/
+ * 记忆 / 用量（standalone 直达保留，不进任何菜单——设置里已有同样的真实内容）+
+ * 根路径/未知路径统一落到 /chat（主列永远有内容）。
+ *
+ * 一级模块共用 ModuleHost：宿主自己挂常驻的 ChatPage，`/chat` 路由只是匹配用的空元素
+ * （不能在这里再挂一个 ChatPage，否则会出现第二个聊天实例）。笔记 / 知识库 / Office 的
+ * 页面元素由宿主里的 <Outlet/> 渲染。
  */
 export function AppRoutes(): React.JSX.Element {
   return (
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/chat" replace />} />
-        <Route path="/chat" element={<ChatPage />} />
+        <Route element={<ModuleHost />}>
+          <Route path="/chat" element={null} />
+          <Route path="/notes" element={<NotesPage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
+          <Route path="/office" element={<OfficePage />} />
+        </Route>
         <Route path="/settings/:section?" element={<SettingsPage />} />
         <Route path="/plugins" element={<PluginsPage />} />
         <Route path="/memory" element={<MemoryPage />} />

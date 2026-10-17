@@ -34,10 +34,10 @@ function releasePointerCapture(element: HTMLElement | null, pointerId: number): 
  *     松手恢复；双击把手回默认 400；hover 显灰线、拖动显强调线（都是 150ms 过渡，不硬切）；
  *     内容区变窄时（窗口缩小）把过宽的宽度收回 70% 以内。
  *   - **全屏**：`fullscreen` 时占满内容区（中列的隐藏由 AppShell 做），宽度与把手都让位。
- *     round 59 用户实拍：内容区从 x=0 起（左缘垫在侧栏浮层下面），全屏时面板铺满整幅 → 左半边
- *     被会话列表盖住。故全屏态补**可见左缘偏移** `ml-(--content-safe-left)`（侧栏收起时该变量为 0，
- *     自动无偏移），并把 `margin-left` 一起纳入过渡属性表（与侧栏开合同拍，不硬切）。
- *     非全屏 docked 模式不动：它在右缘，跟左缘那条变量无关。
+ *     2026-10-17 会话侧栏挪进内容卡、成了本面板的 flex 兄弟之后，全屏只要 `flex-1` 就自然占满
+ *     "侧栏右侧那块" —— round 59 那个覆盖层时代的可见左缘偏移（`ml-(--content-safe-left)`）随之退休，
+ *     margin-left 也不再进过渡属性表（只过渡宽度）。
+ *     非全屏 docked 模式一直在右缘，不涉及左缘变量。
  * 宽度走内联的 `--work-panel-width` 覆盖：token 仍是唯一出口，内层/外层因此永远同值。
  *
  * round 77：`fullscreen` 这一层只管"摆法"，来源有两处 —— 用户偏好（⤢）与**空间不足**的临时形态
@@ -191,9 +191,9 @@ export function WorkPanel({
         width === undefined ? undefined : ({ '--work-panel-width': `${width}px` } as CSSProperties)
       }
       className={cn(
-        'relative flex shrink-0 overflow-hidden border-hairline transition-[width,margin-left] duration-(--motion-main) ease-main',
+        'relative flex shrink-0 overflow-hidden border-hairline transition-[width] duration-(--motion-main) ease-main',
         open ? 'is-open border-l' : 'w-0',
-        open && (fullscreen ? 'ml-(--content-safe-left) flex-1' : 'w-(--work-panel-width)'),
+        open && (fullscreen ? 'flex-1' : 'w-(--work-panel-width)'),
         dragging && 'transition-none'
       )}
     >

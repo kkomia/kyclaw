@@ -9,43 +9,35 @@ function readSource(relativePath: string): string {
 const TAILWIND_CSS = readSource('../tailwind.css')
 
 /**
- * 样式契约（UI 返工 R1 复核修复的两条 + R2 修复轮 round 2 的焦点环颜色 / round 3 的缺口角梯度）——
- * jsdom 不做布局，这里钉的是**样式表里的机制**，真实观感由窗口级连拍序列证明（smoke-ui-r1/14-*、
- * smoke-ui-r2/F*、G*）。
+ * 样式契约（UI 返工 R1 复核修复的两条 + R2 修复轮 round 2 的焦点环颜色；
+ * 2026-10-17 壳布局改版：会话侧栏进卡、覆盖层时代的"安全左边 / 缺口角"机制整档删除）。
+ * jsdom 不做布局，这里钉的是**样式表里的机制**，真实观感由窗口级连拍序列证明。
  */
 
-describe('内容列 · 动效契约（复核 Important #1）', () => {
-  it('@property 把 --content-safe-left 注册成可插值的长度，并允许继承', () => {
-    expect(TAILWIND_CSS).toMatch(
-      /@property --content-safe-left \{[\s\S]*?syntax: '<length>';[\s\S]*?inherits: true;[\s\S]*?initial-value: 0px;/
-    )
-  })
-
-  it('过渡挂在"值真正变化的元素"（壳根的 [data-sidebar]）上', () => {
-    expect(TAILWIND_CSS).toMatch(
-      /\[data-sidebar\] \{\s*transition: --content-safe-left var\(--motion-main\) var\(--motion-ease-inout\);\s*\}/
-    )
-  })
-
-  it('content-column 只从变量推导几何，自身不再单过渡 margin-left（否则宽度会先跳一帧）', () => {
+describe('内容列 · 布局契约（2026-10-17：覆盖层 safe-left 机制退休）', () => {
+  it('content-column 只做限宽 + 在自己的可用宽里居中（不再从 --content-safe-left 推导几何）', () => {
     const utility = /@utility content-column \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
+    const normalized = utility.replace(/\s+/g, ' ').trim()
 
-    expect(utility).toContain(
-      'width: min(calc(100% - var(--content-safe-left)), var(--content-max-width));'
-    )
-    expect(utility).toContain('var(--content-safe-left)')
+    expect(normalized).toContain('width: min(100%, var(--content-max-width));')
+    expect(normalized).toContain('margin-inline: auto;')
+    // 侧栏已是卡内 flex 兄弟：主列宽度天然不含侧栏，再扣一条安全边就是双偏移（旧 bug）
+    expect(utility).not.toContain('--content-safe-left')
+    // 内容列自己没有过渡（几何跟着 flex 重排走，不需要逐帧插值一条偏移量）
     expect(utility).not.toContain('transition')
   })
 
-  it('居中基准是可见区 [safe-left, 100%]：先扣安全边取居中，再加回安全边（R2 D1）', () => {
-    const utility = /@utility content-column \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
-    const normalized = utility.replace(/\s+/g, ' ')
+  it('@property --content-safe-left 与壳根 [data-sidebar] 的过渡规则都已删除（防静默回退）', () => {
+    expect(TAILWIND_CSS).not.toContain('@property --content-safe-left')
+    expect(TAILWIND_CSS).not.toMatch(/\[data-sidebar='expanded'\]/)
+    expect(TAILWIND_CSS).not.toMatch(/\[data-sidebar\]\s*\{/)
+  })
+})
 
-    // 旧口径（按整个主列居中，max(居中, safeLeft)）在侧栏开时贴边 + 右侧留一大截空档
-    expect(normalized).toContain(
-      'margin-left: calc( var(--content-safe-left) + max(calc((100% - var(--content-safe-left) - var(--content-max-width)) / 2), 0px) );'
-    )
-    expect(normalized).not.toContain('max( calc((100% - min(')
+describe('壳 · 缺口角机制已退休（2026-10-17 侧栏进卡）', () => {
+  it('shell-notch / shell-notch-bottom 两段样式都删了（不再有覆盖层要补的圆角缺口）', () => {
+    expect(TAILWIND_CSS).not.toContain('@utility shell-notch')
+    expect(TAILWIND_CSS).not.toContain('shell-notch-bottom')
   })
 })
 
@@ -71,24 +63,6 @@ describe('焦点环 · 跟随圆角（复核 + 用户实拍）', () => {
     // 逐帧实证见 .superpowers/sdd/2026-10-10-kyclaw-mvp/_r48-flash-before/（暗色 0.84 白 → 0.12 白）。
     const base = utility.split('&:has(:focus-visible)')[0]
     expect(base).toContain('outline-color: var(--border-hairline);')
-  })
-})
-
-describe('壳 · 缺口角梯度（round 3：防静默回退）', () => {
-  it('shell-notch（上沿）：圆盘补集 —— 圆心在右下、圆盘外才是画布', () => {
-    const utility = /@utility shell-notch \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
-
-    expect(utility).toContain('circle at 100% 100%')
-    expect(utility).toContain('transparent 0 calc(var(--radius-overlay) - 1px)')
-    expect(utility).toContain('var(--bg-canvas) var(--radius-overlay)')
-  })
-
-  it('shell-notch-bottom（下沿镜像）：圆心在右上（100% 0%）', () => {
-    const utility = /@utility shell-notch-bottom \{([\s\S]*?)\n\}/.exec(TAILWIND_CSS)?.[1] ?? ''
-
-    expect(utility).toContain('circle at 100% 0%')
-    expect(utility).toContain('transparent 0 calc(var(--radius-overlay) - 1px)')
-    expect(utility).toContain('var(--bg-canvas) var(--radius-overlay)')
   })
 })
 

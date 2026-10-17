@@ -76,10 +76,19 @@ function renderShell(path = '/chat'): void {
 }
 
 describe('AppShell 三栏骨架', () => {
-  it('三栏都在，宽度走壳 token：侧栏 240 / 主列 flex-1 / 工作台 400（默认收起）', () => {
+  it('三栏都在，宽度走壳 token：一级导航 56 图标栏 / 侧栏 240 / 主列 flex-1 / 工作台 400（默认收起）', () => {
     renderShell()
 
     expect(screen.getByTestId('app-root')).toBeInTheDocument()
+    // 一级导航是 flow，且与 shell-row 平级：row 的实测宽已经不含它，窄窗判据无需二次折算
+    expect(screen.getByTestId('primary-nav')).toHaveClass('w-(--primary-nav-rail-width)')
+    expect(screen.getByTestId('primary-nav')).not.toHaveClass('w-(--primary-nav-width)')
+    expect(screen.getByTestId('primary-nav').parentElement).toBe(
+      screen.getByTestId('shell-row').parentElement
+    )
+    // 二级栏在内容卡内部（卡内左列），与主列/工作台是 flex 兄弟
+    const region = screen.getByTestId('content-region')
+    expect(region).toContainElement(screen.getByTestId('sidebar'))
     expect(screen.getByTestId('sidebar')).toHaveClass('w-(--sidebar-width)')
     expect(screen.getByTestId('main-column')).toHaveClass('flex-1')
 
@@ -88,24 +97,29 @@ describe('AppShell 三栏骨架', () => {
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
   })
 
-  it('折叠侧栏：拿 is-collapsed 并用 translate(-100%) 滑出，主列类名一字不变（主列不位移）', () => {
+  it('折叠侧栏：卡内宽度收 0 + inert；主列是它的 flex 兄弟，胶囊卡结构不变', () => {
     renderShell()
-    const mainClasses = screen.getByTestId('main-column').className
+    const region = screen.getByTestId('content-region')
 
     fireEvent.click(screen.getByTestId('sidebar-toggle'))
 
     const sidebar = screen.getByTestId('sidebar')
-    expect(sidebar).toHaveClass('is-collapsed', '-translate-x-full')
-    // 滑出屏幕后不该还能 Tab 进去/被读屏念到
+    expect(sidebar).toHaveClass('is-collapsed', 'w-0')
+    expect(sidebar).not.toHaveClass('w-(--sidebar-width)')
+    // 收没之后不该还画竖线 —— 会话栏与主对话之间那条 hairline 只在展开时存在
+    expect(sidebar).not.toHaveClass('border-r')
+    // 折叠不影响卡的结构：侧栏仍在卡里、主列是它后面的 flex 兄弟
+    expect(region).toContainElement(sidebar)
+    expect(sidebar.nextElementSibling).toBe(screen.getByTestId('main-column'))
+    // 收没后不该还能 Tab 进去/被读屏念到
     expect(sidebar).toHaveAttribute('inert')
-    expect(screen.getByTestId('main-column').className).toBe(mainClasses)
 
     fireEvent.click(screen.getByTestId('sidebar-toggle'))
 
     expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
-    expect(screen.getByTestId('sidebar')).not.toHaveClass('-translate-x-full')
+    expect(screen.getByTestId('sidebar')).toHaveClass('w-(--sidebar-width)', 'border-r')
     expect(screen.getByTestId('sidebar')).not.toHaveAttribute('inert')
-    expect(screen.getByTestId('main-column').className).toBe(mainClasses)
+    expect(region).toContainElement(screen.getByTestId('sidebar'))
   })
 
   it('工作台面板：开关切换 is-open 与 400 宽（收起时不占宽）', () => {
@@ -159,6 +173,16 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.queryByTestId('work-panel-toggle')).not.toBeInTheDocument()
     // 面板本体仍在（只是没有开关入口；窄窗自动收的逻辑不受影响）
     expect(screen.getByTestId('work-panel')).toBeInTheDocument()
+  })
+
+  it('顶栏侧栏开合钮恒显（v2 用户口径）：没有二级栏的 Office 路由也保留左端位置', () => {
+    renderShell('/office')
+
+    // 二级栏本身没有（Office 是独立模块），但顶栏左端的开合钮一致保留 —— 旧 showSidebarToggle 门已删
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument()
+    const toggle = screen.getByTestId('sidebar-toggle')
+    fireEvent.click(toggle)
+    expect(useShellStore.getState().sidebarCollapsed).toBe(true)
   })
 
   it('离开对话路由自动收起工作台（round 48 用户口径）：设置/插件等页不残留打开的面板', () => {
@@ -235,7 +259,7 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
   })
 
-  it('内容区（R2 D2/D4；round 3 四角圆角卡）：一块面 + 右/底留缝 + 一对缺口角', () => {
+  it('内容区（R2 D2/D4；round 3 四角圆角卡；2026-10-17 侧栏进卡）：一整块面 + 右/底留缝 + 内部分界细线', () => {
     renderShell()
 
     const region = screen.getByTestId('content-region')
@@ -248,26 +272,19 @@ describe('AppShell 三栏骨架', () => {
       'mb-(--shell-edge-gap)'
     )
     expect(region).not.toHaveClass('rounded-t-overlay')
-    // 右栏在内容区里面（不是独立第三根柱子）
+    // 会话侧栏、主列、右栏全在同一张卡里（不再是覆盖层 / 独立柱子）
+    expect(region).toContainElement(screen.getByTestId('sidebar'))
     expect(region).toContainElement(screen.getByTestId('main-column'))
     expect(region).toContainElement(screen.getByTestId('work-panel'))
+    // 侧栏底色跟卡一致（--bg-surface），与主对话之间只留一条 1px hairline 竖线
+    expect(screen.getByTestId('sidebar')).toHaveClass('bg-surface', 'border-r', 'border-hairline')
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('bg-canvas')
+    // 覆盖层时代的缺口角（shell-notch / shell-notch-bottom）已删除
+    expect(screen.queryByTestId('shell-notch')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('shell-notch-bottom')).not.toBeInTheDocument()
     // 右栏自己不再铺画布底（跟随内容区），只留分隔线
     expect(screen.getByTestId('work-panel')).toHaveClass('border-hairline')
     expect(screen.getByTestId('work-panel')).not.toHaveClass('bg-canvas')
-    // 侧栏与顶栏同属"壳"那层：靠底色差 + 内容区圆角相接，没有右缘描边
-    expect(screen.getByTestId('sidebar')).not.toHaveClass('border-r')
-    // 左缘的两个缺口角：上沿 + 下沿一对（都跟 --content-safe-left 走）
-    expect(screen.getByTestId('shell-notch')).toHaveClass('shell-notch', 'top-0')
-    expect(screen.getByTestId('shell-notch-bottom')).toHaveClass(
-      'shell-notch-bottom',
-      'bottom-(--shell-edge-gap)'
-    )
-    for (const id of ['shell-notch', 'shell-notch-bottom']) {
-      expect(screen.getByTestId(id)).toHaveClass(
-        'left-(--content-safe-left)',
-        'size-(--radius-overlay)'
-      )
-    }
   })
 
   it('窄窗兜底（round 77）：空间不够时工作台临时铺满内容区 —— 不关面板、不挤压聊天、不动全屏偏好', () => {
@@ -281,7 +298,9 @@ describe('AppShell 三栏骨架', () => {
     // 面板还在（不再自动收起），改成占满内容区
     const panel = screen.getByTestId('work-panel')
     expect(spaceConstrained()).toBe(true)
-    expect(panel).toHaveClass('is-open', 'flex-1', 'ml-(--content-safe-left)')
+    expect(panel).toHaveClass('is-open', 'flex-1')
+    // 2026-10-17 侧栏进卡后，全屏只需 flex-1 就落在侧栏右边；覆盖层时代的 safe-left 偏移已退休
+    expect(panel).not.toHaveClass('ml-(--content-safe-left)')
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
     expect(panel).toHaveAttribute('data-fullscreen', 'true')
     // "铺满"的来源要能分清：auto = 空间不足，不是用户按的 ⤢
@@ -411,7 +430,7 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('work-panel')).toHaveClass('w-0')
   })
 
-  it('data-sidebar 跟随折叠状态（内容列的安全边靠它算）', () => {
+  it('data-sidebar 跟随折叠状态（布局事实：卡内有没有 240 的二级栏；E2E/探针也读它）', () => {
     renderShell()
 
     expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
@@ -451,8 +470,8 @@ describe('AppShell · round 39（全屏 / 浮动钮让位）', () => {
     expect(panel).toHaveAttribute('data-fullscreen', 'true')
     expect(panel).toHaveClass('is-open', 'flex-1')
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
-    // round 59：全屏让开可见左缘（这条变量就挂在壳根，见 AppShell/[data-sidebar]）
-    expect(panel).toHaveClass('ml-(--content-safe-left)')
+    // round 59 的可见左缘偏移随覆盖层一同退休（侧栏已是卡内 flex 兄弟）
+    expect(panel).not.toHaveClass('ml-(--content-safe-left)')
     // 中列只是 hidden（聊天状态要留），不是卸载
     const main = screen.getByTestId('main-column')
     expect(main).toHaveClass('hidden')

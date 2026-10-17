@@ -58,6 +58,8 @@ describe('Tailwind 编译护栏', () => {
     ['h-(--control-height-sm)', ['height: var(--control-height-sm)']],
     ['h-(--nav-item-height)', ['height: var(--nav-item-height)']],
     ['h-(--new-session-height)', ['height: var(--new-session-height)']],
+    // 2026-10-17 一级导航只剩图标栏一档：只编译 rail 56（旧的 --primary-nav-width 已删）
+    ['w-(--primary-nav-rail-width)', ['width: var(--primary-nav-rail-width)']],
     ['min-w-(--control-min-width-md)', ['min-width: var(--control-min-width-md)']],
     ['size-(--icon-size-md)', ['width: var(--icon-size-md)', 'height: var(--icon-size-md)']],
     ['w-(--overlay-width-sm)', ['width: var(--overlay-width-sm)']],

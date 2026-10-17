@@ -1,6 +1,7 @@
 import { Copy, Minus, PanelLeftClose, PanelLeftOpen, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { IconButton } from '../ui/icon-button'
+import { AppTabBar } from './AppTabBar'
 
 /**
  * 顶栏 / 标题栏（spec §6.2：42px + 无边框窗口自绘窗控）。
@@ -12,6 +13,14 @@ import { IconButton } from '../ui/icon-button'
  *
  * 工作台（◧）开关 **round 4 已从本组件搬走**（用户裁决 R2 concern ①："右侧边栏打开的是工作区，
  * 应该属于 chat 的内容，不应该放在顶栏"）—— 现在钉在内容卡右上角，见 AppShell。
+ *
+ * 2026-10-17（0.2.0 顶侧多标签页打样）：中段从"纯留白拖拽区"换成浏览器式**标签栏**（AppTabBar，
+ * tabs + 末尾「＋」）。标签区 / 「＋」是 no-drag，标签栏内部末尾的留白仍是拖拽区 —— 所以
+ * 「左 = 二级栏开合钮，中 = 标签栏，右 = 窗控」三段之间与标签右侧空白都能拖窗。
+ * 标签栏常驻（跨路由可见），Ctrl+W / Ctrl+Tab 的键盘监听也挂在它上面。
+ *
+ * v2（用户 2026-10-17 看完布局后拍板）：二级栏开合钮**恒显**——不再按模块隐藏（笔记/知识库/Office
+ * 里没有二级栏也保留这个位置），保证顶栏左端在切模块时一致；`showSidebarToggle` 门已删。
  */
 export interface TitleBarProps {
   sidebarCollapsed: boolean
@@ -59,8 +68,7 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: TitleBarProps): 
         />
       </div>
 
-      {/* 中段留白即拖拽区 */}
-      <div className="min-w-0 flex-1" />
+      <AppTabBar />
 
       <div className="no-drag flex items-center gap-1">
         <IconButton

@@ -697,9 +697,21 @@ describe('T4 壳布局尺寸（spec §6.2 三栏骨架 / 附录 A）', () => {
     expectDecl(shellRoot, '--work-panel-width', '400px', 'semantic :root')
   })
 
+  it('一级导航（2026-10-17 起只有图标栏）：只有 56 一档，旧的 200 展开档退休；会话二级栏仍是 240', () => {
+    expectDecl(shellRoot, '--primary-nav-rail-width', '56px', 'semantic :root')
+    // 用户拍板参考 Codex 布局：一级导航永远是图标栏，不再有展开态，所以不该再留 200 的宽度 token
+    expect(shellRoot.has('--primary-nav-width'), '不该再留 --primary-nav-width').toBe(false)
+    expectDecl(shellRoot, '--sidebar-width', '240px', 'semantic :root')
+  })
+
   it('壳 token 不随主题分档（几何在明暗下一致）', () => {
     const darkShell = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
-    for (const name of ['--titlebar-height', '--sidebar-width', '--work-panel-width']) {
+    for (const name of [
+      '--titlebar-height',
+      '--primary-nav-rail-width',
+      '--sidebar-width',
+      '--work-panel-width'
+    ]) {
       expect(darkShell.has(name), `深色档不该重写几何 ${name}`).toBe(false)
     }
   })
@@ -725,7 +737,7 @@ describe('T5 导航项与新建会话尺寸（附录 A 实测值）', () => {
     expect(t5root.has('--nav-icon-size'), '不该另起 nav 专用图标尺寸').toBe(false)
   })
 
-  it('内容层限宽 800（spec §6.2 消息列）：侧栏是覆盖层，贴左缘的内容会被盖住', () => {
+  it('内容层限宽 800（spec §6.2 消息列）：侧栏进卡后主列天然不含那 240，内容列只在自己的可用宽里居中', () => {
     expectDecl(t5root, '--content-max-width', '800px', 'semantic :root')
   })
 })
@@ -762,22 +774,23 @@ describe('壳 · 中列最小可读宽（round 77 取代窄窗固定阈值）', 
   })
 })
 
-describe('壳 · 内容卡留缝（R2 修复轮 round 3）', () => {
+describe('壳 · 内容卡留缝（R2 修复轮 round 3；2026-10-17 侧栏进卡）', () => {
   const root = semantic.get(':root') ?? new Map<string, string>()
   const contentRegion = readSource('../../components/shell/ContentRegion.tsx')
   const appShell = readSource('../../components/shell/AppShell.tsx')
 
-  it('--shell-edge-gap = 6px（Kimi 桌面实测 12 设备像素 @2x）：右/底留缝与 notch 同源', () => {
+  it('--shell-edge-gap = 6px（Kimi 桌面实测 12 设备像素 @2x）：右/底留缝与圆角卡同源', () => {
     expectDecl(root, '--shell-edge-gap', 'var(--space-1-5)', 'semantic :root')
     // 工程阶梯里 6px 已有断言（'--space-1-5', 6），这里钉的是"留缝取的就是这一格"
   })
 
-  it('内容卡吃四角圆角与右/底留缝；两个缺口角在可见左缘由一对 notch 补', () => {
+  it('内容卡吃四角圆角与右/底留缝；覆盖层时代的 notch 补角随侧栏进卡一并删除', () => {
     expect(contentRegion).toContain('rounded-overlay')
     expect(contentRegion).not.toContain('rounded-t-overlay')
     expect(contentRegion).toContain('mr-(--shell-edge-gap)')
     expect(contentRegion).toContain('mb-(--shell-edge-gap)')
-    expect(appShell).toContain('shell-notch-bottom')
-    expect(appShell).toContain('bottom-(--shell-edge-gap)')
+    // 2026-10-17：会话侧栏成了卡内 flex 子列，内容卡左缘不再被覆盖层盖住，缺口角机制退休
+    expect(appShell).not.toContain('data-testid="shell-notch"')
+    expect(appShell).not.toContain('left-(--content-safe-left)')
   })
 })

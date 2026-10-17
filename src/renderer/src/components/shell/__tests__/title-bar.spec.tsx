@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   agentApiStub,
@@ -66,11 +67,20 @@ function renderTitleBar(props: Partial<TitleBarProps> = {}): {
     onToggleSidebar,
     ...props
   }
-  const { rerender, unmount } = render(<TitleBar {...full} />)
+  const { rerender, unmount } = render(
+    <MemoryRouter>
+      <TitleBar {...full} />
+    </MemoryRouter>
+  )
 
   return {
     onToggleSidebar,
-    rerender: (next) => rerender(<TitleBar {...full} {...next} />),
+    rerender: (next) =>
+      rerender(
+        <MemoryRouter>
+          <TitleBar {...full} {...next} />
+        </MemoryRouter>
+      ),
     unmount
   }
 }
@@ -96,6 +106,17 @@ describe('TitleBar', () => {
     for (const testId of ['sidebar-toggle', 'window-minimize']) {
       expect(screen.getByTestId(testId).closest('.no-drag'), testId).not.toBeNull()
     }
+  })
+
+  it('中段是顶栏标签栏（0.2.0 打样）：标签区 + 「＋」在 no-drag 里，标签右侧留白仍可拖窗', () => {
+    renderTitleBar()
+
+    expect(screen.getByTestId('titlebar')).toContainElement(screen.getByTestId('app-tabbar'))
+    // 可点区域一律 no-drag（否则 drag-region 会吞点击）
+    expect(screen.getByTestId('app-tabbar-scroll').closest('.no-drag')).not.toBeNull()
+    expect(screen.getByTestId('app-tab-add').closest('.no-drag')).not.toBeNull()
+    // 标签栏内部的留白不属于 no-drag：标题栏的 drag-region 在那里继续生效
+    expect(screen.getByTestId('app-tabbar-spacer').closest('.no-drag')).toBeNull()
   })
 
   it('窗控三键：图标 18 的 lucide 图标（R10）', () => {

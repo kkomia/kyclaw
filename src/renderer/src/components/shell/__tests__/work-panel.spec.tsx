@@ -147,17 +147,18 @@ describe('WorkPanel 拖拽调宽', () => {
     expect(screen.getByTestId('work-panel')).not.toHaveClass('is-open')
   })
 
-  it('全屏：占满内容区（flex-1）、让开可见左缘（侧栏浮层下面那段不被盖住），不再走宽度 token', () => {
+  it('全屏：占满内容区（flex-1，落在卡内侧栏右边），不再走宽度 token', () => {
     renderPanel({ fullscreen: true, width: 520 })
 
     const panel = screen.getByTestId('work-panel')
     expect(panel).toHaveAttribute('data-fullscreen', 'true')
     expect(panel).toHaveClass('is-open', 'flex-1')
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
-    // round 59 用户实拍：全屏时左半边垫在侧栏下面 → 补可见左缘偏移（侧栏收起时变量为 0）
-    expect(panel).toHaveClass('ml-(--content-safe-left)')
-    // 左侧偏移要跟着侧栏开合过渡（与 width 同一条时长/曲线）
-    expect(panel.className).toContain('transition-[width,margin-left]')
+    // 2026-10-17 会话侧栏进卡、成为 panel 的 flex 兄弟：round 59 的可见左缘偏移全档退休，
+    // 全屏只需 flex-1；过渡属性表里也不再有 margin-left（只过渡宽度）。
+    expect(panel).not.toHaveClass('ml-(--content-safe-left)')
+    expect(panel.className).toContain('transition-[width]')
+    expect(panel.className).not.toContain('margin-left')
   })
 
   it('非全屏 docked：在右缘，不拿左缘偏移', () => {
@@ -179,7 +180,7 @@ describe('WorkPanel 拖拽调宽', () => {
     const panel = screen.getByTestId('work-panel')
     expect(panel).toHaveAttribute('data-fullscreen-source', 'auto')
     // 铺满的摆法与用户全屏完全同构（探针只需看布局，不必管来源）
-    expect(panel).toHaveClass('is-open', 'flex-1', 'ml-(--content-safe-left)')
+    expect(panel).toHaveClass('is-open', 'flex-1')
     expect(panel).not.toHaveClass('w-(--work-panel-width)')
   })
 })

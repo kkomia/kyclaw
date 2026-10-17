@@ -2,7 +2,9 @@ import { create } from 'zustand'
 
 /**
  * 壳布局状态（只放"三栏骨架"自己的开关，不放业务状态）。
- * 侧栏折叠 = 覆盖层滑出（主列几何不变）；工作台面板开关 = 右栏收放。
+ * 一级导航 = 固定图标栏（2026-10-17 起没有展开/折叠两档，故这里不再有相关字段）；
+ * 侧栏折叠 = 内容卡**内部**的二级栏宽度收 0（flow，主列/工作台几何跟着重排）；
+ * 工作台面板开关 = 右栏收放。
  * `setWorkPanelOpen` 给"关面板"用（▯ / 变根收起 / 路由离开对话区，不走 toggle）。
  *
  * round 39 增补（用户口径）：
@@ -12,7 +14,7 @@ import { create } from 'zustand'
  *   - 关闭面板一律把全屏一并复位（▯ / 变根收起 / 路由离开对话区，走的都是这两个动作之一）。
  *
  * round 77 增补（窄窗兜底改成"临时铺满"）：
- *   - `workPanelFit`：AppShell 量到的**布局事实**（内容区实测宽 / 侧栏遮挡 / 面板宽 / 中列最小可读宽），
+ *   - `workPanelFit`：AppShell 量到的**布局事实**（内容卡实测宽 / 侧栏占宽 / 面板宽 / 中列最小可读宽），
  *     面板关着或量不到时是 null。空间判定、"恢复并排"、"返回对话"都从这一份读，**不再二次量 DOM**。
  *   - 它是布局结果，不是偏好：宽窗恢复、面板关掉都自动回 null/false，用户的 `workPanelFullscreen`
  *     一个字节都不动。
@@ -50,14 +52,16 @@ export function clampWorkPanelWidth(width: number, containerWidth?: number): num
 
 /**
  * 可用宽判定（round 77）的输入：三栏里"抢占"可见宽的那几件。
- * 侧栏是覆盖层（主列几何不变），所以它不算 flex 兄弟，而是**遮住**内容区左缘的 safeLeft —— 这一层
- * 折算就靠它；工作台宽度是**拖过的那条**（docked 时就是 workPanelWidth 这个实际值，不是 token 默认档），
- * 于是"拖宽过再缩窗"也会被判成空间不足。
+ * 内容卡内部是一条 flex 行（会话侧栏 | 主列 | 工作台，见 ContentRegion），所以侧栏与面板都是
+ * flex 兄弟，各占一段宽：safeLeft = 侧栏占宽（展开 --sidebar-width / 收起 0；无二级栏的模块 0），
+ * panelWidth = **拖过的那条**实际宽（不是 token 默认档）——于是"拖宽过再缩窗"也会被判成空间不足。
+ * （覆盖层时代 safeLeft 表示"遮住内容区左缘"的宽，2026-10-17 侧栏进卡后变成"卡内 flow 占宽"，
+ * 数值口径不变，故公式与用例都沿用。）
  */
 export interface WorkbenchFit {
-  /** 内容区实测宽（壳行宽扣掉右侧 --shell-edge-gap 留缝） */
+  /** 内容卡实测宽（壳行宽扣掉右缘 --shell-edge-gap 留缝） */
   contentWidth: number
-  /** 侧栏遮住的可见左边：展开 = --sidebar-width，收起（滑出屏幕）= 0 */
+  /** 卡内会话侧栏占掉的宽：展开 = --sidebar-width，收起（宽 0）= 0 */
   safeLeft: number
   /** 工作台 docked 时的宽度（store 的 workPanelWidth，可被拖宽） */
   panelWidth: number
@@ -65,14 +69,14 @@ export interface WorkbenchFit {
   minChatWidth: number
 }
 
-/** 工作台 docked 摆开后，中列还剩多少可见宽（扣侧栏遮挡，不会为负） */
+/** 工作台 docked 摆开后，中列还剩多少可见宽（扣侧栏占宽，不会为负） */
 export function dockedChatWidth(fit: WorkbenchFit): number {
   return Math.max(0, fit.contentWidth - fit.safeLeft - fit.panelWidth)
 }
 
 /**
  * 空间不足：docked 摆开会把中列挤到最小可读宽以下 → 工作台改铺满内容区（不关面板、不挤压聊天）。
- * 判据里侧栏遮挡 / 面板宽度 / 内容区宽都是实测值，所以没有"1120 那种固定阈值"——
+ * 判据里侧栏占宽 / 面板宽度 / 内容卡宽都是实测值，所以没有"1120 那种固定阈值"——
  * 收侧栏、拖窄面板、窗口变宽都会立刻改变结论。
  * fit 为 null（面板关着 / 量不到布局）= 没有占用宽的面板，一律当"不铺满"。
  */

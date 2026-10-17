@@ -253,71 +253,15 @@
   }
 }
 
-/* 壳上的"凹角"（R2 D2 / 修复轮 Important）：内容区铺满整条主列（R13：主列几何不随侧栏变），
-   它自己的左上凸圆角在 x=0 会被侧栏盖住 —— 所以在可见左缘补一块小方块，把**圆盘以外**涂成画布色
-   （圆盘留给内容卡），于是可见左缘露出的是内容卡的**凸圆角**，与 Kimi 桌面参考同向。
-   侧栏收起（safe-left = 0）时它正好压在内容卡自己的左上圆角上：涂的正是卡片圆角让出来的那块画布，
-   真正不可见。盒边长与圆半径都用 --radius-overlay（20，实测文档口径），一起变。
-   （早先版本用 `rounded-br`：那是"圆心在盒子左上的凹弧"，方向与参考相反，且收起态会啃掉
-   卡片圆角上 200+ CSS px² —— 判据与实测见 smoke-ui-r2/E0/E1 的 _notch_check。） */
-@utility shell-notch {
-  background: radial-gradient(
-    circle at 100% 100%,
-    transparent 0 calc(var(--radius-overlay) - 1px),
-    var(--bg-canvas) var(--radius-overlay)
-  );
-}
-
-/* 壳上的"凹角"·下沿镜像（R2 修复轮 round 3）：内容区是四角圆角卡（ContentRegion 的
-   rounded-overlay + 右/底 --shell-edge-gap 留缝），但它的左下圆角在 x=0 被侧栏盖住 ——
-   与上沿同一个机制，在可见左缘、卡的下边缘（bottom = --shell-edge-gap）补一块小方块：
-   圆心 = 盒子的**右上角**（100% 0%），涂圆盘以外 → 露出内容卡的凸左下圆角。
-   侧栏收起（safe-left = 0）时正好压在卡片自己的左下圆角上，真正不可见。
-   盒边长与圆半径都用 --radius-overlay，与上沿一对（判据见 smoke-ui-r2/G* 的 _corners_check）。 */
-@utility shell-notch-bottom {
-  background: radial-gradient(
-    circle at 100% 0%,
-    transparent 0 calc(var(--radius-overlay) - 1px),
-    var(--bg-canvas) var(--radius-overlay)
-  );
-}
-
-/* 内容列（页面级容器）：限宽 --content-max-width，在**实际可见区** [safe-left, 100%] 里居中。
-   侧栏是覆盖层（R13：主列几何不变、不加 pl），展开时它盖住主列左缘 240 —— 可见区就是"侧栏右缘
-   到主列右缘"这一段。所以居中基准也要用这段：先扣掉安全左边，再在剩下的宽度里取居中位置，
-   最后把安全左边加回去（可见区 < 上限时退化成"填满可见区"，不留空档）。
-   早期版本按整个主列居中 → 侧栏开着时内容贴侧栏、右侧空一大截（1280 宽下 ≈1 / ≈240 CSS）。
-
-   动效（雷点 5）：`width` 与 `margin-left` 都从 --content-safe-left 推出来，所以**过渡的是这条
-   变量本身**（@property 注册成 <length> 才能过渡，见下）：侧栏开合时两者逐帧同步变化，
-   不会出现"宽度一帧跳到位、位移还在路上"的硬切 / 瞬态溢出（而且内容沿着可见区平滑重居中）。
-   窗口 resize 不改这条变量，因此拉伸窗口时内容列不滞后。 */
+/* 内容列（页面级容器）：限宽 --content-max-width，在**自己的可用宽**里居中。
+   2026-10-17 会话侧栏进内容卡（与主列是 flex 兄弟）之后，主列的宽度天然已经不含侧栏那 240，
+   所以覆盖层时代那套"先按可见区 [safe-left, 100%] 扣安全边取居中、再加回安全边"的折算整档退休：
+   --content-safe-left 不再由壳根改写，这里也不再从它推导几何（token 本身暂留 0px，见 semantic.css）。
+   旧机制（@property 注册 + 壳根 [data-sidebar] 过渡）一并删除 —— 侧栏折叠现在是卡内 flow 的宽度动画，
+   主列/内容列跟着 flex 重排，不再需要跨元素继承一条可插值的偏移量。 */
 @utility content-column {
-  width: min(calc(100% - var(--content-safe-left)), var(--content-max-width));
-  margin-left: calc(
-    var(--content-safe-left) +
-      max(calc((100% - var(--content-safe-left) - var(--content-max-width)) / 2), 0px)
-  );
-  margin-right: auto;
-}
-
-/* 注册成可过渡的长度：语法必须写死 <length>，inherits: true 让内容列从壳根继承到插值中的值。
-   过渡声明挂在"值真正变化的那个元素"（壳根的 [data-sidebar]）上 —— 后代继承的是逐帧插值结果。 */
-@property --content-safe-left {
-  syntax: '<length>';
-  inherits: true;
-  initial-value: 0px;
-}
-
-@layer base {
-  /* 侧栏展开 = 内容列的安全左边推进到侧栏右缘；写在壳根的 data-sidebar 上，内容列继承。 */
-  [data-sidebar='expanded'] {
-    --content-safe-left: var(--sidebar-width);
-  }
-
-  [data-sidebar] {
-    transition: --content-safe-left var(--motion-main) var(--motion-ease-inout);
-  }
+  width: min(100%, var(--content-max-width));
+  margin-inline: auto;
 }
 
 @layer base {
