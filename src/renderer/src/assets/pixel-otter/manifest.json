@@ -3,9 +3,9 @@
   "version": "v1-rev3（暖棕圆脸/奶油口鼻+胸毛/有耳/无胡须）",
   "target": "src/renderer/src/assets/pixel-otter/",
   "source": "assets/manifest.json",
-  "generatedAt": "2026-10-17T16:39:02.754Z",
+  "generatedAt": "2026-10-17T16:59:09.098Z",
   "grid": 24,
-  "totalBytes": 28263,
+  "totalBytes": 28725,
   "fileCount": 42,
   "palette": {
     "light": {
@@ -120,171 +120,171 @@
   "files": [
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-idle.sheet.png",
-      "bytes": 577
+      "bytes": 574
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-idle.sheet@2x.png",
-      "bytes": 866
+      "bytes": 839
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-idle-24.png",
-      "bytes": 271
+      "bytes": 286
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-idle-32.png",
-      "bytes": 298
+      "bytes": 314
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-loading.sheet@4x.png",
-      "bytes": 1514
+      "bytes": 1518
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-loading-128.png",
-      "bytes": 614
+      "bytes": 634
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-loading-256.png",
-      "bytes": 1419
+      "bytes": 1459
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-think.sheet.png",
-      "bytes": 377
+      "bytes": 386
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-think.sheet@2x.png",
-      "bytes": 611
+      "bytes": 623
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-think-24.png",
-      "bytes": 277
+      "bytes": 290
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-think-32.png",
-      "bytes": 304
+      "bytes": 316
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-type.sheet.png",
-      "bytes": 399
+      "bytes": 409
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-type.sheet@2x.png",
-      "bytes": 565
+      "bytes": 584
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-type-24.png",
-      "bytes": 274
+      "bytes": 277
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-type-32.png",
-      "bytes": 303
+      "bytes": 312
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-float.sheet@4x.png",
-      "bytes": 1629
+      "bytes": 1638
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-float-96.png",
-      "bytes": 457
+      "bytes": 479
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-float-128.png",
-      "bytes": 595
+      "bytes": 614
     },
     {
       "path": "assets/subsets/launch-v1/sheets/light/otter-wave.sheet@4x.png",
-      "bytes": 1446
+      "bytes": 1474
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-wave-96.png",
-      "bytes": 482
+      "bytes": 488
     },
     {
       "path": "assets/subsets/launch-v1/stills/light/otter-wave-128.png",
-      "bytes": 630
+      "bytes": 633
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-idle.sheet.png",
-      "bytes": 589
+      "bytes": 583
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-idle.sheet@2x.png",
-      "bytes": 881
+      "bytes": 856
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-idle-24.png",
-      "bytes": 291
+      "bytes": 297
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-idle-32.png",
-      "bytes": 321
+      "bytes": 334
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-loading.sheet@4x.png",
-      "bytes": 1528
+      "bytes": 1532
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-loading-128.png",
-      "bytes": 645
+      "bytes": 669
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-loading-256.png",
-      "bytes": 1454
+      "bytes": 1495
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-think.sheet.png",
-      "bytes": 405
+      "bytes": 415
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-think.sheet@2x.png",
-      "bytes": 645
+      "bytes": 668
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-think-24.png",
-      "bytes": 295
+      "bytes": 300
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-think-32.png",
-      "bytes": 326
+      "bytes": 338
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-type.sheet.png",
-      "bytes": 413
+      "bytes": 423
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-type.sheet@2x.png",
-      "bytes": 585
+      "bytes": 601
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-type-24.png",
-      "bytes": 293
+      "bytes": 290
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-type-32.png",
-      "bytes": 323
+      "bytes": 328
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-float.sheet@4x.png",
-      "bytes": 1653
+      "bytes": 1659
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-float-96.png",
-      "bytes": 477
+      "bytes": 495
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-float-128.png",
-      "bytes": 629
+      "bytes": 644
     },
     {
       "path": "assets/subsets/launch-v1/sheets/dark/otter-wave.sheet@4x.png",
-      "bytes": 1456
+      "bytes": 1493
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-wave-96.png",
-      "bytes": 491
+      "bytes": 502
     },
     {
       "path": "assets/subsets/launch-v1/stills/dark/otter-wave-128.png",
-      "bytes": 655
+      "bytes": 656
     }
   ]
 }

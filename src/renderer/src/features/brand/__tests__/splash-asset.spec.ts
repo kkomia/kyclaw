@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { OTTER_STATES } from '../otter-states'
 
 /**
- * 像素海獭资产 · splash 内联与预算契约（rev3 / task-49；设计稿 §5.1/§5.5/§7.1）。
+ * 像素海獭资产 · splash 内联与预算契约（rev3.1 / task-55；设计稿 §5.1/§5.5/§7.1）。
  *
  * 这里钉的是**文件级事实**（jsdom 测不到动画）：资产子集只含四处落点用到的 6 个状态、
  * splash 用 data URI 内联（首屏零请求）、无外链、reduced-motion 静态、旧 Kimi 蓝 mark 已退场。
@@ -55,17 +55,16 @@ function collectAssets(dir: string, prefix = ''): AssetFile[] {
 const ASSETS = collectAssets(ASSET_ROOT)
 
 describe('像素海獭资产子集（rev3 launch-v1，43 文件 36,950 B）', () => {
-  it('rev3 资产身份：manifest 版本/目标目录/四处 usage 都对得上', () => {
+  it('rev3.1 资产身份：manifest 版本/目标目录/usage 对得上（设计方四处；产品 v1 用其中三处）', () => {
     expect(MANIFEST.version).toContain('rev3')
     expect(MANIFEST.target).toBe('src/renderer/src/assets/pixel-otter/')
     expect(MANIFEST.fileCount).toBe(42)
-    expect(MANIFEST.totalBytes).toBe(28263)
-    // 四处落点（v1 三处 + 初始页右上角氛围位）
+    expect(MANIFEST.totalBytes).toBe(28725)
+    // manifest 仍记录设计方四处落点（task-53 起产品只接 splash / chatHeader / welcomeLogo 三处，
+    // 初始页角落氛围位已按用户「同时出现俩海獭」的反馈删除；资产数据不删，留给未来可回退）
     for (const surface of ['splash', 'chatHeader', 'welcomeLogo', 'ambientWelcome']) {
       expect(MANIFEST.usage[surface], `manifest 缺 ${surface}`).toBeTruthy()
     }
-    expect(MANIFEST.usage.ambientWelcome.sizes).toEqual([24, 32])
-    expect(MANIFEST.usage.ambientWelcome.states).toEqual(['idle'])
     // 状态帧规格（idle 8×120ms / loading 6×80ms / think 6×120 / type 4×80 / float 6×120 / wave 6×100）
     expect(MANIFEST.states.idle).toMatchObject({ frames: 8, frameMs: 120, reducedFrame: 0 })
     expect(MANIFEST.states.loading).toMatchObject({ frames: 6, frameMs: 80, reducedFrame: 0 })
@@ -87,7 +86,7 @@ describe('像素海獭资产子集（rev3 launch-v1，43 文件 36,950 B）', ()
     expect(ASSETS.every((file) => !/frames\//.test(file.path))).toBe(true)
   })
 
-  it('体积预算：≤ 37 KB（42 资产文件 28,263 B + manifest；设计稿实测 36,950 B）', () => {
+  it('体积预算：≤ 37 KB（42 资产文件 28,725 B + manifest；设计稿实测 37,412 B）', () => {
     const assetsOnly = ASSETS.filter((file) => file.path !== 'manifest.json')
     const manifest = ASSETS.find((file) => file.path === 'manifest.json')
     const totalBytes = ASSETS.reduce((sum, file) => sum + file.bytes, 0)
@@ -95,7 +94,7 @@ describe('像素海獭资产子集（rev3 launch-v1，43 文件 36,950 B）', ()
     expect(ASSETS.length).toBe(43)
     expect(assetsOnly).toHaveLength(42)
     // 像素资产字节数必须与设计稿子集一致（新增/删帧会破坏预算）
-    expect(assetsOnly.reduce((sum, file) => sum + file.bytes, 0)).toBe(28263)
+    expect(assetsOnly.reduce((sum, file) => sum + file.bytes, 0)).toBe(28725)
     expect(manifest?.bytes ?? 0).toBeLessThanOrEqual(9 * 1024)
     expect(totalBytes).toBeLessThanOrEqual(37 * 1024)
   })
@@ -140,8 +139,8 @@ describe('splash · 内联海獭 loading（index.html）', () => {
       const base64 = uri.slice(uri.indexOf('base64,') + 'base64,'.length, -2)
       decodedSizes.push(Buffer.from(base64, 'base64').length)
     }
-    // v1 是 1,459/1,460 B；rev3 是 1,514/1,528 B —— 换装后旧串必须已被替换
-    expect(decodedSizes.sort()).toEqual([1514, 1528])
+    // rev3 是 1,514/1,528 B；rev3.1 是 1,518/1,532 B —— 换装后旧串必须已被替换
+    expect(decodedSizes.sort()).toEqual([1518, 1532])
   })
 
   it('逐帧：6 帧 ×80ms steps(6) loop + 最近邻放大', () => {
@@ -209,22 +208,6 @@ describe('pixel-otter.css · 动效契约', () => {
     )
     expect(OTTER_CSS).toMatch(
       /@media \(max-width: 1279px\) \{[\s\S]*?\.welcome-otter \{[\s\S]*?--otter-size: 96px/
-    )
-  })
-
-  it('氛围位（rev3 第四落点）：内容列右缘内缩 12/8、32→24（<900）、<720 隐藏、150ms 淡出', () => {
-    expect(OTTER_CSS).toMatch(
-      /\.welcome-ambient-otter \{[\s\S]*?position: absolute;[\s\S]*?top: 12px;[\s\S]*?right: calc\(max\(0px, \(100% - var\(--content-max-width, 800px\)\) \/ 2\) \+ 12px\)/
-    )
-    expect(OTTER_CSS).toContain('transition: opacity var(--motion-reveal, 150ms)')
-    expect(OTTER_CSS).toMatch(
-      /@media \(max-width: 899px\) \{[\s\S]*?\.welcome-ambient-otter \{[\s\S]*?top: 8px;[\s\S]*?--otter-size: 24px/
-    )
-    expect(OTTER_CSS).toMatch(
-      /@media \(max-width: 719px\) \{[\s\S]*?\.welcome-ambient-otter \{\s*display: none;/
-    )
-    expect(OTTER_CSS).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.welcome-ambient-otter \{\s*transition: none;/
     )
   })
 })
