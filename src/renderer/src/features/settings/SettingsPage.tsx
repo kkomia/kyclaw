@@ -178,7 +178,7 @@ function CloseWindowOptions(): React.JSX.Element {
   const update = useSettingsStore((state) => state.update)
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" title="Windows / Linux 有效；macOS 跟随 Dock。">
       <OptionRow
         label="关闭窗口时"
         options={closeToTrayModeSchema.options.map((mode) => ({
@@ -188,9 +188,6 @@ function CloseWindowOptions(): React.JSX.Element {
           onSelect: () => void update({ closeToTrayMode: mode })
         }))}
       />
-      <p data-testid="close-mode-hint" className="text-c1 text-ink-tertiary">
-        Windows / Linux 有效；macOS 跟随 Dock。
-      </p>
     </div>
   )
 }

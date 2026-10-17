@@ -228,10 +228,7 @@
   border-bottom: 1px solid var(--hairline);
 }
 .lt-sec-title {
-  font-size: clamp(24px, 2.4vw, 31px);
-  line-height: 1.12;
-  font-weight: 300;
-  letter-spacing: 0.005em;
+  /* 排版统一由 SectionTitle（衬线 24/28 × --ui-scale）提供；这里只留颜色语境 */
   color: var(--ink);
 }
 .lt-sec-count {
@@ -665,10 +662,7 @@
   border-bottom: 1px solid var(--hairline);
 }
 .lt-rail-title {
-  font-size: clamp(22px, 2.2vw, 29px);
-  line-height: 1.15;
-  font-weight: 300;
-  letter-spacing: 0.005em;
+  /* 同上：统一 SectionTitle 档，不再 clamp */
   color: var(--ink);
 }
 .lt-rail-count {
@@ -1038,10 +1032,6 @@
   .lt-meta {
     font-size: calc(10px * var(--ui-scale, 1));
   }
-  .lt-sec-title,
-  .lt-rail-title {
-    font-size: calc(24px * var(--ui-scale, 1));
-  }
   .lt-doc {
     padding: 12px 4px 12px 8px;
   }
@@ -1076,11 +1066,6 @@
   }
   .lt-sec-head-wrap {
     padding-bottom: 8px;
-  }
-  .lt-sec-title,
-  .lt-rail-title {
-    font-size: calc(22px * var(--ui-scale, 1));
-    line-height: calc(28px * var(--ui-scale, 1));
   }
   .lt-sec-sub {
     font-size: calc(10px * var(--ui-scale, 1));

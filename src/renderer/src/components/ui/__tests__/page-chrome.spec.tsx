@@ -121,6 +121,23 @@ describe('task-100 · 跨页源码契约', () => {
     expect(newtab).toContain('var(--motion-enter)')
   })
 
+  it('⑧ 新标签页 section 标题随 --ui-scale（不再 clamp 31）且 Office 状态栏文档名不落文本', () => {
+    const newtabCss = read('src/renderer/src/features/newtab/newtab.css')
+    expect(newtabCss).not.toContain('clamp(24px, 2.4vw, 31px)')
+    expect(newtabCss).not.toContain('clamp(22px, 2.2vw, 29px)')
+    for (const selector of ['\\.lt-sec-title', '\\.lt-rail-title']) {
+      const block = newtabCss.match(new RegExp(selector + ' \\{[^}]*\\}'))?.[0] ?? ''
+      expect(block).not.toContain('font-size')
+      expect(block).not.toContain('font-weight')
+    }
+    expect(read('src/renderer/src/features/newtab/NewTabView.tsx')).toContain('SectionTitle')
+    const status = read('src/renderer/src/features/office/OfficeStatusBar.tsx')
+    expect(status).toContain('aria-label={documentName}')
+    expect(status).not.toMatch(
+      /office-status-doc-title[\s\S]{0,200}className="sr-only"[^>]*>\s*\{documentName\}/
+    )
+  })
+
   it('⑦ 重复表达收敛：newtab 页脚 / Office 状态栏的名称只留 sr-only（一屏可见 ≤2 处）', () => {
     const newtab = read('src/renderer/src/features/newtab/NewTabView.tsx')
     expect(newtab).toContain('aria-label="关闭新标签页"')

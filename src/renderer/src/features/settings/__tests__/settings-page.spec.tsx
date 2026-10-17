@@ -593,11 +593,9 @@ describe('外观 · 关闭窗口行为（三档偏好）', () => {
     expect(screen.getByTestId('close-mode-tray')).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByTestId('close-mode-quit')).toHaveAttribute('aria-pressed', 'false')
 
-    const hint = screen.getByTestId('close-mode-hint')
-    expect(hint).toHaveTextContent('Windows')
-    expect(hint).toHaveTextContent('macOS')
-    // task-100：只留一行边界说明，不再解释每个选项的行为
-    expect(hint.textContent?.length ?? 0).toBeLessThan(40)
+    // task-100 第三轮：UI 不解释控件功能；Windows/Linux 与 macOS 的边界语义收进 tooltip
+    expect(screen.queryByTestId('close-mode-hint')).not.toBeInTheDocument()
+    expect(screen.getByTitle('Windows / Linux 有效；macOS 跟随 Dock。')).toBeInTheDocument()
   })
 
   it('点「直接退出」→ 选中态跟着走、落盘 {closeToTrayMode:"quit"}；再点回「每次询问」能撤销', async () => {

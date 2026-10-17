@@ -79,10 +79,17 @@ export function OfficeStatusBar({
       {/* 左：文档名 + 类型（类型是技术标签 → mono + tabular-nums） */}
       <span className="flex min-w-0 items-center gap-2">
         <Icon aria-hidden="true" className="size-(--icon-size-sm) shrink-0" />
-        {/* task-100 R1：文档名一屏最多 2 处（标签页 + ribbon）；状态栏只保留语义（sr-only） */}
-        <span data-testid="office-status-doc-title" className="sr-only" title={documentName}>
-          {documentName}
-        </span>
+        {/*
+          task-100 第三轮（验收残留）：文档名一屏可见只留 2 处（标签页 + ribbon）。
+          状态栏不再渲染文本节点（sr-only 文本仍会被 innerText/验收计数算作第 3 处），
+          只保留 aria-label/title 的可访问语义与既有 testid 契约。
+        */}
+        <span
+          data-testid="office-status-doc-title"
+          className="sr-only"
+          aria-label={documentName}
+          title={documentName}
+        />
         <span
           className="shrink-0 rounded-badge bg-selected px-1.5 py-0.5 font-mono text-c2 tabular-nums text-ink-tertiary"
           title={OFFICE_KIND_LABEL[kind]}

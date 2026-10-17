@@ -32,13 +32,12 @@ describe('OfficeStatusBar：字段与壳真值', () => {
     expect(bar).toHaveAttribute('data-readonly', 'false')
     expect(bar).toHaveAttribute('aria-label', '文档状态栏')
 
-    expect(screen.getByTestId('office-status-doc-title')).toHaveTextContent(
-      '数据仓管理系统建设技术方案.docx'
-    )
-    expect(screen.getByTestId('office-status-doc-title')).toHaveAttribute(
-      'title',
-      '数据仓管理系统建设技术方案.docx'
-    )
+    // task-100 第三轮：一屏可见文档名只留 2 处（标签页 + ribbon）；状态栏只留 a11y 语义
+    const statusTitle = screen.getByTestId('office-status-doc-title')
+    expect(statusTitle).toHaveAttribute('aria-label', '数据仓管理系统建设技术方案.docx')
+    expect(statusTitle).toHaveAttribute('title', '数据仓管理系统建设技术方案.docx')
+    expect(statusTitle).toHaveTextContent('')
+    expect(statusTitle.className).toContain('sr-only')
     // 类型是技术标签：mono 小写
     expect(screen.getByText('docx')).toHaveAttribute('title', 'Word 文档')
 
