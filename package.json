@@ -4,7 +4,11 @@
   "description": "kyclaw：Kimi 风格三栏桌面应用（Electron + React + 内嵌 Mastra agent）",
   "main": "./out/main/index.js",
   "author": "kkomia",
-  "homepage": "https://electron-vite.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kkomia/kyclaw.git"
+  },
+  "homepage": "https://github.com/kkomia/kyclaw",
   "engines": {
     "node": ">=22.13.0"
   },
