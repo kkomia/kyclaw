@@ -79,6 +79,8 @@ export type OfficeRibbonIcon =
   | 'Droplet'
   | 'FileCog'
   | 'Pilcrow'
+  | 'ArrowLeftToLine'
+  | 'ArrowRightToLine'
   | 'MessageSquareText'
   | 'ChevronLeft'
   | 'ChevronRight'
@@ -381,14 +383,14 @@ export const OFFICE_RIBBON_TABS = [
             type: 'button',
             id: 'setLtr',
             label: '从左到右',
-            icon: 'Pilcrow',
+            icon: 'ArrowRightToLine',
             enabledWhen: 'editable'
           },
           {
             type: 'button',
             id: 'setRtl',
             label: '从右到左',
-            icon: 'Pilcrow',
+            icon: 'ArrowLeftToLine',
             enabledWhen: 'editable'
           }
         ]

@@ -138,6 +138,18 @@
   --doc-page-bg: var(--Bg-Primary);
   --doc-page-shadow: 0 1px 2px var(--Shadows-S1), 0 8px 24px var(--Shadows-S1);
 
+  /* Office ribbon（A2 / office-ui-redesign-spec §5.2–§5.3）：纯布局与动效值，深浅同值。
+     面内自绘 chrome（office-chrome.css）消费；尺寸对齐 A0 打样与 HF 结构：
+     QAT/tab 行 32 + 工具带固定 80 + （A4 的）状态栏 26。
+     动效节奏按设计研究 §三.2：反馈 120ms、入场 150–320ms、离场 120ms；
+     面内 CSS 自己写 prefers-reduced-motion（隔离面不继承 tailwind.css 的全局兜底）。 */
+  --office-ribbon-tabs-height: 32px;
+  --office-ribbon-body-height: 80px;
+  --office-status-height: 26px; /* A4 状态栏先登记，A2 不改布局 */
+  --office-motion-feedback: 120ms;
+  --office-motion-enter: var(--duration-base);
+  --office-motion-exit: 120ms;
+
   /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
      2026-10-17 起会话侧栏在内容卡**内部**、是主列的 flex 兄弟：主列几何天然不含侧栏那 240，
      所以页面内容列（.content-column，见 styles/tailwind.css）只要"限宽 + 在自己的可用宽里居中"。

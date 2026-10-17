@@ -88,6 +88,9 @@ importers:
       '@betteroffice/docx':
         specifier: 0.4.3
         version: 0.4.3(@betteroffice/fonts@0.4.0(@betteroffice/fonts-cjk@0.4.0))
+      '@betteroffice/docx-i18n':
+        specifier: 0.4.3
+        version: 0.4.3
       '@betteroffice/docx-react':
         specifier: 0.4.3
         version: 0.4.3(@betteroffice/fonts@0.4.0(@betteroffice/fonts-cjk@0.4.0))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

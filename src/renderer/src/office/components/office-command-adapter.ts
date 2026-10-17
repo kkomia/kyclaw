@@ -101,6 +101,110 @@ export interface OfficeCommandSource {
 /** A2 实现真实 adapter 的工厂签名（B 档换实现时也实现这个签名） */
 export type OfficeCommandAdapterFactory = (source: OfficeCommandSource) => OfficeCommandAdapter
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
+function normalizeFailure(value: unknown): OfficeCommandFailure | null {
+  if (!isRecord(value)) return null
+  return {
+    code: typeof value.code === 'string' ? value.code : 'unknown',
+    message: typeof value.message === 'string' ? value.message : ''
+  }
+}
+
+function normalizeOptions(value: unknown): readonly OfficeCommandOption[] {
+  if (!Array.isArray(value)) return []
+  const options: OfficeCommandOption[] = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.label !== 'string') continue
+    options.push({
+      label: entry.label,
+      args: entry.args,
+      ...(entry.preview === undefined ? {} : { preview: entry.preview })
+    })
+  }
+  return options
+}
+
+/** 把内核 `CommandState`（未知形状）归一成适配层的可序列化状态 */
+export function normalizeCommandState(raw: unknown): OfficeCommandState {
+  if (!isRecord(raw)) return OFFICE_COMMAND_EMPTY_STATE
+  const enabled = raw.enabled !== false
+  return {
+    active: raw.active === 'mixed' ? 'mixed' : raw.active === true,
+    enabled,
+    disabledReason: enabled
+      ? null
+      : (normalizeFailure(raw.disabledReason) ?? {
+          code: 'unsupported-command',
+          message: ''
+        }),
+    value: raw.value ?? null,
+    options: normalizeOptions(raw.options)
+  }
+}
+
+/** 把内核 `DocxCommandResult`（未知形状）归一成适配层结果 */
+export function normalizeCommandOutcome(raw: unknown): OfficeCommandOutcome {
+  if (!isRecord(raw)) {
+    return { status: 'failed', failure: { code: 'adapter-unknown-result', message: '' } }
+  }
+  const status = raw.status
+  if (
+    status === 'executed' ||
+    status === 'noop' ||
+    status === 'opened' ||
+    status === 'requested' ||
+    status === 'failed'
+  ) {
+    const failure = normalizeFailure(raw.failure)
+    return failure === null ? { status } : { status, failure }
+  }
+  return { status: 'failed', failure: { code: 'adapter-unknown-status', message: '' } }
+}
+
+/**
+ * **面内真实 adapter**：把 `DocxCommandStore`（`useDocxCommands()` 的返回值）归一成表现层口径。
+ *
+ * A2 在 `OfficeRibbon` 里 `createDocxCommandAdapter(useDocxCommands())` 即可；
+ * B 档以后实现同一个 `OfficeCommandAdapter` 接口（命令转发到 postMessage 桥），UI 不用改。
+ */
+export function createDocxCommandAdapter(source: OfficeCommandSource): OfficeCommandAdapter {
+  return {
+    getDescriptor(id): OfficeCommandDescriptor | null {
+      const raw = source.getDescriptor(id)
+      if (raw === null) return null
+      return {
+        id,
+        shortcut: raw.shortcut ?? raw.shortcuts?.[0]?.chord ?? null,
+        mutatesDocument: raw.mutatesDocument ?? false
+      }
+    },
+    getState(id, args): OfficeCommandState {
+      return normalizeCommandState(source.getState(id, args))
+    },
+    async execute(id, args): Promise<OfficeCommandOutcome> {
+      try {
+        return normalizeCommandOutcome(await source.execute(id, args))
+      } catch (error) {
+        return {
+          status: 'failed',
+          failure: { code: 'adapter-exception', message: messageOf(error) }
+        }
+      }
+    },
+    subscribe(listener): () => void {
+      return source.subscribe(listener)
+    }
+  }
+}
+
 /** 适配层的空状态（命令还没算出来 / fake 的默认值） */
 export const OFFICE_COMMAND_EMPTY_STATE: OfficeCommandState = {
   active: false,

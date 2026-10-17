@@ -11,6 +11,8 @@ import '../styles/tokens/kimi-tokens.css'
 import '../styles/tokens/semantic.css'
 import '@betteroffice/docx-react/styles.css'
 import './surface.css'
+// A2：面内自绘 chrome（QAT + 5 tab + 工具带 + 折叠）；只消费 token，不另建颜色
+import './office-chrome.css'
 import { SurfaceBoot } from './SurfaceBoot'
 
 // M3-S3：office 隔离面的渲染入口（第二个 HTML 入口，见 electron.vite.config.ts）。

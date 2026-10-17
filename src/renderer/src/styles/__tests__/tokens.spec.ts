@@ -6,6 +6,7 @@ const SEMANTIC_CSS = '../tokens/semantic.css'
 const TAILWIND_CSS = '../tailwind.css'
 const MAIN_TSX = '../../main.tsx'
 const OFFICE_SURFACE_CSS = '../../office/surface.css'
+const OFFICE_CHROME_CSS = '../../office/office-chrome.css'
 const OFFICE_MAIN_TSX = '../../office/main.tsx'
 
 function readSource(relativePath: string): string {
@@ -20,6 +21,7 @@ const tokensCss = readSource(TOKENS_CSS)
 const semanticCss = readSource(SEMANTIC_CSS)
 const tailwindCss = readSource(TAILWIND_CSS)
 const officeSurfaceCss = readSource(OFFICE_SURFACE_CSS)
+const officeChromeCss = readSource(OFFICE_CHROME_CSS)
 const officeMainTsx = readSource(OFFICE_MAIN_TSX)
 
 type Decls = Map<string, string>
@@ -843,5 +845,50 @@ describe('Office 文档画布 token（A1：--doc-* 最小集）', () => {
     // .oox-root / .oox-root.dark 两档都覆盖（后者特异性相同、后写胜出）
     expect(officeSurfaceCss).toMatch(/\.oox-root,\s*\.oox-root\.dark\s*\{/)
     expect(officeSurfaceCss).toContain("[data-debug='false']")
+  })
+})
+
+/**
+ * Office ribbon 布局/动效 token（A2）。
+ * 纯布局/时长值：浅深同值，只进 :root，不进深色块；面内 office-chrome.css 消费。
+ * 动效节奏按设计研究 §三.2（反馈 120ms / 入场 150–320ms / 离场 120ms）令牌化。
+ */
+describe('Office ribbon 布局与动效 token（A2）', () => {
+  const ribbonRoot: Decls = semantic.get(':root') ?? new Map<string, string>()
+  const ribbonDark: Decls = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
+
+  it('布局 token：QAT/tab 行 32 / 工具带 80 / 状态栏 26（A4）', () => {
+    expectDecl(ribbonRoot, '--office-ribbon-tabs-height', '32px', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-ribbon-body-height', '80px', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-status-height', '26px', 'semantic :root')
+  })
+
+  it('动效 token：反馈 120ms / 入场取基准档 / 离场 120ms', () => {
+    expectDecl(ribbonRoot, '--office-motion-feedback', '120ms', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-motion-enter', 'var(--duration-base)', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-motion-exit', '120ms', 'semantic :root')
+  })
+
+  it('这六条深浅同值：深色块不重写', () => {
+    for (const name of [
+      '--office-ribbon-tabs-height',
+      '--office-ribbon-body-height',
+      '--office-status-height',
+      '--office-motion-feedback',
+      '--office-motion-enter',
+      '--office-motion-exit'
+    ] as const) {
+      expect(ribbonDark.get(name), `深色块不该重写 ${name}`).toBeUndefined()
+    }
+  })
+
+  it('面内入口 import office-chrome.css；该文件消费布局/动效 token 与语义色', () => {
+    expect(officeMainTsx).toContain("import './office-chrome.css'")
+    expect(officeChromeCss).toContain('var(--office-ribbon-tabs-height)')
+    expect(officeChromeCss).toContain('var(--office-ribbon-body-height)')
+    expect(officeChromeCss).toContain('var(--office-motion-feedback)')
+    expect(officeChromeCss).toContain('var(--text-primary)')
+    expect(officeChromeCss).toContain('var(--border-hairline)')
+    expect(officeChromeCss).toContain('prefers-reduced-motion')
   })
 })

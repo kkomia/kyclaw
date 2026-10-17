@@ -1,0 +1,530 @@
+/*
+ * Office 隔离面的自绘 chrome（A2：QAT + 5 tab + 工具带 + 折叠）。
+ *
+ * 只消费主界面 token（main.tsx 已 import kimi-tokens + semantic）：
+ *   --bg-primary / --text-primary|secondary|tertiary|quaternary|disabled
+ *   --border-hairline / --fill-hover|selected|active / --accent / --bg-menu
+ *   --radius-* / --space-* / --motion-* / --shadow-overlay
+ *   A1 的 --doc-canvas-bg / --doc-page-bg / --doc-page-shadow
+ *   A2 新增 --office-ribbon-tabs-height / --office-ribbon-body-height / --office-motion-*
+ * 不新建第二套颜色（用户 2026-10-17 定调 + 设计研究 §四：零 text-shadow、零霓虹）。
+ *
+ * 字体三声部（研究 §二）：
+ *   - chrome 文案/按钮 = 系统 sans（隔离面没有 tailwind.css 的 @theme 字体，故在此镜像同一栈）；
+ *   - 数字/快捷键/组标签等技术标签 = mono + tabular-nums（缩放/页码/保存计数不跳动）；
+ *   - 文档内容完全不碰（Word-faithful 红线；内核对 canvas 的绘制不由本文件改）。
+ *
+ * 动效（研究 §三.2）：反馈 120ms、入场/展开 --office-motion-enter、离场 --office-motion-exit；
+ * 只有保存态圆点用 spring（小元素），其余 settle；reduced-motion 全部压到 0.01ms（不是 0）。
+ */
+.ofr-ribbon {
+  /* 隔离面拿不到 tailwind.css 的 --font-sans/--font-mono，这里镜像同一套系统栈（不引外链字体）。 */
+  --ofr-font-sans:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
+  --ofr-font-mono:
+    'Geist Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+  --ofr-button-size: 30px;
+  --ofr-focus-halo: 0 0 0 1px var(--bg-primary);
+  --ofr-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 42%, transparent);
+  --ofr-ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
+
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--ofr-font-sans);
+  font-size: 12px;
+  line-height: 1.2;
+  border-bottom: 1px solid var(--border-hairline);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── QAT / tab 行：32px ─────────────────────────────────────────────── */
+.ofr-bar {
+  display: flex;
+  align-items: stretch;
+  height: var(--office-ribbon-tabs-height);
+  min-height: var(--office-ribbon-tabs-height);
+  padding: 0 8px;
+  box-sizing: border-box;
+  gap: 4px;
+}
+
+.ofr-qat {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.ofr-qat-btn,
+.ofr-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background-color var(--office-motion-feedback) ease-out,
+    color var(--office-motion-feedback) ease-out,
+    border-color var(--office-motion-feedback) ease-out,
+    box-shadow var(--office-motion-feedback) ease-out;
+}
+
+.ofr-qat-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.ofr-btn {
+  width: var(--ofr-button-size);
+  height: var(--ofr-button-size);
+}
+
+.ofr-qat-btn:hover:not(:disabled),
+.ofr-btn:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+.ofr-qat-btn:active:not(:disabled),
+.ofr-btn:active:not(:disabled) {
+  background: var(--fill-active);
+}
+
+.ofr-qat-btn:focus-visible,
+.ofr-btn:focus-visible,
+.ofr-tab:focus-visible,
+.ofr-select:focus-visible,
+.ofr-swatch:focus-visible {
+  outline: none;
+  box-shadow: var(--ofr-focus-halo), var(--ofr-focus-ring);
+}
+
+.ofr-btn[data-active='true'] {
+  background: var(--fill-selected);
+  color: var(--text-primary);
+}
+
+.ofr-btn[data-mixed='true'] {
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--text-tertiary);
+}
+
+.ofr-qat-btn:disabled,
+.ofr-btn:disabled,
+.ofr-select:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+  background: transparent;
+}
+
+/* 保存态（text swap + 小圆点 spring；只有"正在保存"才用扫光语义的 pulse） */
+.ofr-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-left: 6px;
+  padding: 0 6px 0 2px;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ofr-save-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-quaternary);
+  transition: background-color var(--office-motion-feedback) ease-out;
+}
+
+.ofr-save-dot[data-state='dirty'] {
+  background: var(--accent);
+  animation: ofr-pop 260ms var(--ofr-ease-spring);
+}
+
+.ofr-save-dot[data-state='saving'] {
+  background: var(--accent);
+  animation: ofr-pulse 1.2s ease-in-out infinite;
+}
+
+.ofr-save-text {
+  display: inline-block;
+  animation: ofr-swap var(--office-motion-feedback) var(--clp-ease-out);
+}
+
+/* tab 组 */
+.ofr-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-left: 6px;
+  min-width: 0;
+}
+
+.ofr-tab {
+  appearance: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--ofr-font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 6px 6px 0 0;
+  transition:
+    background-color var(--office-motion-feedback) ease-out,
+    color var(--office-motion-feedback) ease-out;
+}
+
+.ofr-tab:hover {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+.ofr-tab[data-active='true'] {
+  color: var(--text-primary);
+}
+
+.ofr-tab[data-active='true']::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--text-primary);
+}
+
+.ofr-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.ofr-doc-title {
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ofr-dirty-badge {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color var(--office-motion-feedback) ease-out;
+}
+
+.ofr-dirty-badge[data-dirty='true'] {
+  background: var(--accent);
+  animation: ofr-pop 260ms var(--ofr-ease-spring);
+}
+
+.ofr-ai-btn {
+  color: var(--text-secondary);
+}
+
+.ofr-ai-btn:disabled {
+  color: var(--text-quaternary);
+}
+
+/* ── 工具带：固定 80px，折叠时高度过渡到 0 ───────────────────────────── */
+.ofr-body {
+  height: var(--office-ribbon-body-height);
+  overflow: hidden;
+  transition: height var(--office-motion-enter) var(--clp-ease-out);
+}
+
+.ofr-ribbon[data-collapsed='true'] .ofr-body {
+  height: 0;
+}
+
+.ofr-band {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 3px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.ofr-band::-webkit-scrollbar {
+  display: none;
+}
+
+.ofr-group {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 6px;
+  border-right: 1px solid var(--border-hairline);
+  box-sizing: border-box;
+}
+
+.ofr-group:last-child {
+  border-right: 0;
+}
+
+.ofr-group-items {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-height: 0;
+}
+
+/* 组标签：HF 结构 + 研究 §二 的技术标签声部（mono / tabular-nums） */
+.ofr-group-label {
+  flex: 0 0 auto;
+  padding: 0 2px 3px;
+  font-family: var(--ofr-font-mono);
+  font-size: 9.5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ofr-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--border-hairline);
+}
+
+/* ── 自绘 select（字体/字号/样式/行距/编辑模式/缩放/图片环绕） ─────────── */
+.ofr-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 28px;
+  max-width: 118px;
+  min-width: 54px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 6px;
+  background-color: var(--bg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px 10px;
+  color: var(--text-primary);
+  font-family: var(--ofr-font-sans);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 20px 0 7px;
+  cursor: pointer;
+  color-scheme: light;
+  transition:
+    background-color var(--office-motion-feedback) ease-out,
+    border-color var(--office-motion-feedback) ease-out;
+}
+
+html[data-theme='dark'] .ofr-select {
+  color-scheme: dark;
+}
+
+.ofr-select:hover:not(:disabled) {
+  background: var(--fill-hover);
+}
+
+/* ── split 颜色按钮：主按钮 + 自绘色板 ──────────────────────────────── */
+.ofr-split {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ofr-split .ofr-btn {
+  width: 34px;
+  gap: 1px;
+}
+
+.ofr-color-strip {
+  position: absolute;
+  left: 7px;
+  right: 9px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  pointer-events: none;
+}
+
+.ofr-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(6, 18px);
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  box-shadow: var(--shadow-overlay);
+  animation: ofr-fade-in var(--office-motion-feedback) var(--clp-ease-out);
+}
+
+.ofr-swatch {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: transform var(--office-motion-feedback) ease-out;
+}
+
+.ofr-swatch:hover {
+  transform: scale(1.08);
+}
+
+.ofr-builtin {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+}
+
+/* 内核控件（insertTable / tableAction / imageTransform）自带按钮样式；
+   这里只收一下尺寸，避免把 80px 工具带撑破。 */
+.ofr-builtin-control {
+  max-height: 30px;
+}
+
+/* ── 动效关键帧 ────────────────────────────────────────────────────── */
+@keyframes ofr-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes ofr-pop {
+  0% {
+    transform: scale(0.4);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 扫光只给"正在保存"的状态点（研究 §四.2：不是给装饰用） */
+@keyframes ofr-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes ofr-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ofr-ribbon,
+  .ofr-ribbon * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 窄窗：优先保住命令，收紧文档名 */
+@media (max-width: 1100px) {
+  .ofr-doc-title {
+    max-width: 140px;
+  }
+}
+
+@media (max-width: 860px) {
+  .ofr-doc-title {
+    display: none;
+  }
+}
+
+/*
+ * 深色纸面（用户 2026-10-17 第 5 条：要灰色；A2 先查清楚，A4 再微调）。
+ *
+ * 内核 0.4.3 的分页视图是 **canvas**（`.canvas-pages > canvas.canvas-page`），
+ * editor.css 里 `.oox-root.dark .layout-page { filter: invert(...) }` 是旧 DOM 渲染期的选择器，
+ * canvas 路径不会命中（A1 真机截图里深色纸面仍是白纸即因此）。
+ * 这里只对**纸面 canvas**加 `filter`：纯视图层、不改文档字色字体、不写回文档。
+ * 用 `invert(0.8)`（不是 invert(1)）：白纸 → #333 深灰、黑字 → #ccc 浅灰，避免纯黑页；
+ * 再 hue-rotate(180deg) 把彩色拉回原色相。风险：canvas 内的图片/形状会被一起反相
+ * （内核当前无按元素豁免的能力），见 a2-report.md「用户 5 条定调落地情况」。
+ */
+.oox-root.dark .canvas-page {
+  filter: invert(0.8) hue-rotate(180deg) contrast(0.9);
+}
+
+@media print {
+  .oox-root.dark .canvas-page {
+    filter: none;
+  }
+}

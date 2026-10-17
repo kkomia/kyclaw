@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   OFFICE_COMMAND_EMPTY_STATE,
+  createDocxCommandAdapter,
   createFakeOfficeCommandAdapter,
+  normalizeCommandOutcome,
+  normalizeCommandState,
   officeCommandStateKey,
   type OfficeCommandAdapter,
   type OfficeCommandAdapterFactory,
-  type OfficeCommandOutcome
+  type OfficeCommandOutcome,
+  type OfficeCommandSource
 } from '../components/office-command-adapter'
 
 /**
@@ -175,5 +179,129 @@ describe('office-command-adapter：接口/工厂签名（给 A2/B 档共用）',
       subscribe: () => () => undefined
     })
     await expect(built.execute('bold')).resolves.toEqual({ status: 'executed' })
+  })
+})
+
+/**
+ * A2 的真实 adapter：`createDocxCommandAdapter(source)` 只做归一化，不改命令语义。
+ * 覆盖：descriptor.shortcuts[0] → shortcut；CommandState → OfficeCommandState；
+ * 分类结果/异常 → OfficeCommandOutcome；subscribe 直通（退订生效）。
+ */
+function sourceOf(overrides: Partial<OfficeCommandSource> = {}): OfficeCommandSource {
+  return {
+    getDescriptor: () => null,
+    getState: () => ({}),
+    execute: async () => ({ status: 'executed' }),
+    subscribe: () => () => undefined,
+    ...overrides
+  }
+}
+
+describe('office-command-adapter：面内真实 adapter（createDocxCommandAdapter）', () => {
+  it('descriptor：shortcuts[0].chord → shortcut；mutatesDocument 透传', () => {
+    const adapter = createDocxCommandAdapter(
+      sourceOf({
+        getDescriptor: (id) =>
+          id === 'bold' ? { shortcuts: [{ chord: 'Ctrl+B' }], mutatesDocument: true } : null
+      })
+    )
+    expect(adapter.getDescriptor('bold')).toEqual({
+      id: 'bold',
+      shortcut: 'Ctrl+B',
+      mutatesDocument: true
+    })
+    expect(adapter.getDescriptor('undo')).toBeNull()
+  })
+
+  it('state：enabled/disabledReason/active=mixed/value/options 归一化', () => {
+    const adapter = createDocxCommandAdapter(
+      sourceOf({
+        getState: (id) =>
+          id === 'bold'
+            ? { active: 'mixed', enabled: true, value: null, options: [] }
+            : {
+                enabled: false,
+                disabledReason: { code: 'read-only', message: '文档只读' },
+                value: '14',
+                options: [
+                  { label: '14', args: { points: 14 }, preview: { bold: true } },
+                  { label: '16', args: { points: 16 } }
+                ]
+              }
+      })
+    )
+    expect(adapter.getState('bold')).toEqual({
+      active: 'mixed',
+      enabled: true,
+      disabledReason: null,
+      value: null,
+      options: []
+    })
+    expect(adapter.getState('fontSize')).toEqual({
+      active: false,
+      enabled: false,
+      disabledReason: { code: 'read-only', message: '文档只读' },
+      value: '14',
+      options: [
+        { label: '14', args: { points: 14 }, preview: { bold: true } },
+        { label: '16', args: { points: 16 } }
+      ]
+    })
+  })
+
+  it('execute：分类结果透传、未知结果/异常都落成 failed（不抛给 UI）', async () => {
+    const adapter = createDocxCommandAdapter(
+      sourceOf({
+        execute: async (id) => {
+          if (id === 'bold') return { status: 'opened' }
+          if (id === 'italic') return { status: 'future-status' }
+          throw new Error('bridge down')
+        }
+      })
+    )
+    await expect(adapter.execute('bold')).resolves.toEqual({ status: 'opened' })
+    await expect(adapter.execute('italic')).resolves.toEqual({
+      status: 'failed',
+      failure: { code: 'adapter-unknown-status', message: '' }
+    })
+    await expect(adapter.execute('undo')).resolves.toEqual({
+      status: 'failed',
+      failure: { code: 'adapter-exception', message: 'bridge down' }
+    })
+  })
+
+  it('subscribe 直通 source：通知 + 退订', () => {
+    let listener: (() => void) | null = null
+    const unsubscribe = vi.fn()
+    const sourceListener = vi.fn()
+    const adapter = createDocxCommandAdapter(
+      sourceOf({
+        subscribe: (next) => {
+          listener = next
+          return () => {
+            unsubscribe()
+            sourceListener()
+          }
+        }
+      })
+    )
+    const onChange = vi.fn()
+    const off = adapter.subscribe(onChange)
+    ;(listener as (() => void) | null)?.()
+    expect(onChange).toHaveBeenCalledTimes(1)
+    off()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('normalizeCommandState / normalizeCommandOutcome 对未知形状是安全的', () => {
+    expect(normalizeCommandState(null)).toEqual(OFFICE_COMMAND_EMPTY_STATE)
+    expect(normalizeCommandState({ enabled: false })).toMatchObject({
+      enabled: false,
+      disabledReason: { code: 'unsupported-command' }
+    })
+    expect(normalizeCommandOutcome(null)).toEqual({
+      status: 'failed',
+      failure: { code: 'adapter-unknown-result', message: '' }
+    })
   })
 })
