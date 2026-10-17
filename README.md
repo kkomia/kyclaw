@@ -73,3 +73,11 @@ node scripts/make-feed.mjs update-feed 1.0.1   # 造 latest.yml + 假安装包�
 node scripts/serve-feed.mjs update-feed 8555   # 静态伺服
 KYCLAW_UPDATE_URL=http://127.0.0.1:8555/ pnpm dev
 ```
+
+## License
+
+本项目以 [MIT License](LICENSE) 开源（Copyright © 2026 kkomia）。
+
+第三方依赖与随包资源的许可见 `resources/skills/THIRD_PARTY_NOTICES.md`；随包的
+LibreOffice Kit 遵守 MPL-2.0（licenses/ 与 sources/ 必须随分发保留）。
+
