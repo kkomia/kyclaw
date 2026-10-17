@@ -37,6 +37,12 @@ import {
 import type { TextPageCursor, TextPageResult, TextVersionResult } from './workbench-text'
 import type { OfficePreviewPriority, OfficePreviewResult } from './office-preview'
 import {
+  OFFICE_IPC_CHANNELS,
+  type OfficeConfig,
+  type OfficeOpenResult,
+  type OfficeReadResult
+} from './office-editor'
+import {
   appSettingsPatchSchema,
   workspaceModeSchema,
   type AppSettings,
@@ -364,7 +370,12 @@ export const IPC_CHANNELS = {
      * 用户取消 = `added: null`，什么都不落盘。
      */
     importSkillLocal: 'plugins:import-skill-local'
-  }
+  },
+  /**
+   * M3-S2：Office 文档注册表（打开 / 读字节 / 释放）。通道名与入参/回包 schema 住
+   * `shared/office-editor.ts`；`save` / `save-as` 的常量在契约里先冻结，S3 才注册 handler。
+   */
+  office: OFFICE_IPC_CHANNELS
 } as const
 
 /** 窗口状态推送 payload（目前只有最大化标记） */
@@ -1138,6 +1149,33 @@ export interface KyclawWorkbenchApi {
 }
 
 /**
+ * preload 暴露给渲染端的 Office 文档面（M3-S2）：
+ *   - **打开**只有两个入口：原生选择器（路径由主进程给）与会话相对路径（主进程解析会话根 +
+ *     containment）。渲染端**永远不传绝对路径**；
+ *   - **读**只认 `documentId`，且只能读本窗口打开的文档（主进程按 webContents 校验 owner）；
+ *   - 回包都是判别联合：`ok:false` 是产品语言（取消 / 格式不支持 / 太大 / 读不了），不抛；
+ *     只有**结构不合法**（跨边界脏数据）与越权才抛。
+ */
+export interface KyclawOfficeApi {
+  /** 读隔离面配置（surfaceUrl / origin / 上限）：壳建 iframe 与显示上限用 */
+  config(): Promise<OfficeConfig>
+  /**
+   * 原生「打开文件」选择器（`.docx`）。**取消是一等结果**：回 `ok:false, code:'cancelled'`，
+   * 不抛；同一文件重复打开回同一个 `documentId` + `alreadyOpen:true`（壳只激活既有标签）。
+   */
+  openDialog(): Promise<OfficeOpenResult>
+  /**
+   * 打开会话根下的文件：`relative` 是树上那一条（正斜杠书写），会话根解析与越权拦截在主进程。
+   * 授权失败/文件不存在会抛人话；文件级失败（格式/大小/占用）回 `ok:false` 分类。
+   */
+  openFromSession(threadId: string, relative: string, readOnly?: boolean): Promise<OfficeOpenResult>
+  /** 按 documentId 重读字节，并复核/刷新注册表里的 stat/hash（重载/冲突复查用） */
+  read(documentId: string): Promise<OfficeReadResult>
+  /** 关标签时释放注册表条目（幂等：未知 id / 非本窗口的 id 都是空操作） */
+  release(documentId: string): Promise<void>
+}
+
+/**
  * preload 暴露给渲染端的终端面（右侧边栏「终端」工具）：
  * 一个渲染端 id ↔ 一个主进程 PTY。数据与退出都走推送（`onData` / `onExit`），
  * 应用退出时主进程会杀干净并推一次 exit（界面据此收尾，不留假终端）。
@@ -1164,6 +1202,8 @@ export interface KyclawApi {
   workspace: KyclawWorkspaceApi
   workbench: KyclawWorkbenchApi
   terminal: KyclawTerminalApi
+  /** M3-S2：Office 文档注册表（打开选择器 / 会话打开 / 按 id 读字节 / 释放） */
+  office: KyclawOfficeApi
   projects: KyclawProjectsApi
   agent: KyclawAgentApi
   /** 模块 2：附件能力（PDF 文字层抽取；抽取在主进程） */

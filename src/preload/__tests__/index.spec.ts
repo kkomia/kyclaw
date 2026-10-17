@@ -1098,3 +1098,116 @@ describe('preload：window.kyclaw.files（round 53，File → 绝对路径的小
     expect(kyclawApi.files.pathForFile(file)).toBe('')
   })
 })
+
+describe('preload：window.kyclaw.office（M3-S2 文档面）', () => {
+  /** 一份合法回包（documentId 等字段随便填，形状要对） */
+  const DOCUMENT = {
+    documentId: 'doc-1',
+    displayName: '方案.docx',
+    displayPath: 'D:\\工作\\方案.docx',
+    // realpath 归一后的绝对路径：只读回包字段（渲染端只用于匹配/展示，不作授权参数）
+    absolutePath: 'D:\\工作\\方案.docx',
+    size: 12,
+    mtimeMs: 1_700_000_000_000,
+    sha256: 'a'.repeat(64),
+    readOnly: false
+  }
+
+  it('暴露 office 一族（config / openDialog / openFromSession / read / release）', async () => {
+    const { kyclawApi } = await loadPreload()
+    expect(Object.keys(kyclawApi.office).sort()).toEqual([
+      'config',
+      'openDialog',
+      'openFromSession',
+      'read',
+      'release'
+    ])
+    expect(kyclawApi.office).toBe(kyclawApi.office)
+  })
+
+  it('config：过 schema 才交给上层（非法回包抛）', async () => {
+    const { kyclawApi } = await loadPreload()
+    const config = {
+      surfaceUrl: 'kyclaw-office://surface/',
+      surfaceOrigin: 'kyclaw-office://surface',
+      maxBytes: 64 * 1024 * 1024,
+      maxOpenDocuments: 24
+    }
+    mocks.invoke.mockResolvedValueOnce(config)
+    await expect(kyclawApi.office.config()).resolves.toEqual(config)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:config')
+
+    mocks.invoke.mockResolvedValueOnce({ surfaceUrl: '', maxBytes: 0 })
+    await expect(kyclawApi.office.config()).rejects.toThrow(/结构不合法/)
+  })
+
+  it('openDialog：取消是 ok:false 的一等结果（不当异常抛）', async () => {
+    const { kyclawApi } = await loadPreload()
+    const canceled = { ok: false, code: 'cancelled', message: '已取消' }
+    mocks.invoke.mockResolvedValueOnce(canceled)
+    await expect(kyclawApi.office.openDialog()).resolves.toEqual(canceled)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:open-dialog')
+
+    // 成功回包必须带 document + alreadyOpen
+    mocks.invoke.mockResolvedValueOnce({ ok: true, document: DOCUMENT, alreadyOpen: false })
+    await expect(kyclawApi.office.openDialog()).resolves.toEqual({
+      ok: true,
+      document: DOCUMENT,
+      alreadyOpen: false
+    })
+
+    // 缺 alreadyOpen / code 认不出：结构不合法
+    mocks.invoke.mockResolvedValueOnce({ ok: true, document: DOCUMENT })
+    await expect(kyclawApi.office.openDialog()).rejects.toThrow(/结构不合法/)
+    mocks.invoke.mockResolvedValueOnce({ ok: false, code: 'weird', message: 'x' })
+    await expect(kyclawApi.office.openDialog()).rejects.toThrow(/结构不合法/)
+  })
+
+  it('openFromSession：threadId + 相对路径 + 可选 readOnly 原样发出', async () => {
+    const { kyclawApi } = await loadPreload()
+    mocks.invoke.mockResolvedValue({ ok: true, document: DOCUMENT, alreadyOpen: true })
+
+    await expect(kyclawApi.office.openFromSession('t1', '子目录/方案.docx')).resolves.toMatchObject(
+      {
+        ok: true,
+        alreadyOpen: true
+      }
+    )
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      'office:open-from-session',
+      't1',
+      '子目录/方案.docx',
+      undefined
+    )
+
+    await kyclawApi.office.openFromSession('t1', 'a.docx', true)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:open-from-session', 't1', 'a.docx', true)
+  })
+
+  it('read：bytes 必须是 Uint8Array；结构不对抛（半截字节没法渲染）', async () => {
+    const { kyclawApi } = await loadPreload()
+    const bytes = new Uint8Array([1, 2, 3])
+    mocks.invoke.mockResolvedValueOnce({ ok: true, document: DOCUMENT, bytes })
+    const result = await kyclawApi.office.read('doc-1')
+    expect(result).toMatchObject({ ok: true })
+    if (result.ok) expect(Array.from(result.bytes)).toEqual([1, 2, 3])
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:read', 'doc-1')
+
+    mocks.invoke.mockResolvedValueOnce({ ok: true, document: DOCUMENT, bytes: [1, 2, 3] })
+    await expect(kyclawApi.office.read('doc-1')).rejects.toThrow(/结构不合法/)
+
+    // 分类失败是合法回包（ok:false），不抛
+    mocks.invoke.mockResolvedValueOnce({ ok: false, code: 'forbidden', message: '不能读' })
+    await expect(kyclawApi.office.read('doc-1')).resolves.toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: '不能读'
+    })
+  })
+
+  it('release：fire-and-forget（走通道、无回包）', async () => {
+    const { kyclawApi } = await loadPreload()
+    await kyclawApi.office.release('doc-1')
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:release', 'doc-1')
+  })
+})

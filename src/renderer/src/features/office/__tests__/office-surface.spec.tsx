@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
 import { OfficeSurface, type OfficeSurfaceStatus } from '../OfficeSurface'
 
 /**
@@ -130,5 +131,120 @@ describe('OfficeSurface：handshake 状态机', () => {
     expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'loading')
     // 顺带钉住：iframe 里的火候没影响父页交互
     expect(screen.getByTestId('office-surface-iframe')).toBeInTheDocument()
+  })
+})
+
+describe('OfficeSurface：M3-S2 文档投递与主题热切换', () => {
+  it('ready 后用 postMessage 把 bytes 结构化克隆成 doc:open（nonce 来自 hello）', async () => {
+    const info = officeDocumentFixture({ documentId: 'doc-open', displayName: '打开.docx' })
+    const bytes = new Uint8Array([1, 2, 3, 4])
+    render(
+      <OfficeSurface
+        surfaceUrl={SURFACE_URL}
+        theme="dark"
+        documentInfo={info}
+        documentBytes={bytes}
+      />
+    )
+    const frameWindow = getIframe().contentWindow as Window
+    const postMessage = vi.spyOn(frameWindow, 'postMessage')
+
+    dispatchFromSurface({ type: 'surface:hello', nonce: 'nonce-doc', version: 1 })
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'surface:init', nonce: 'nonce-doc', locale: 'zh-CN', theme: 'dark' },
+      '*'
+    )
+    // ready 之前不能发文档（面还没应用 init）
+    expect(
+      postMessage.mock.calls.some((call) => (call[0] as { type: string }).type === 'doc:open')
+    ).toBe(false)
+
+    dispatchFromSurface({ type: 'surface:ready', nonce: 'nonce-doc' })
+
+    await waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        {
+          type: 'doc:open',
+          nonce: 'nonce-doc',
+          documentId: 'doc-open',
+          name: '打开.docx',
+          sha256: info.sha256,
+          readOnly: false,
+          bytes
+        },
+        '*'
+      )
+    )
+  })
+
+  it('同一文档只发一次 doc:open；换文档（不同 documentId）会重发', async () => {
+    const first = officeDocumentFixture({ documentId: 'doc-1', displayName: '一.docx' })
+    const renderer = render(
+      <OfficeSurface
+        surfaceUrl={SURFACE_URL}
+        documentInfo={first}
+        documentBytes={new Uint8Array([1])}
+      />
+    )
+    const postMessage = vi.spyOn(getIframe().contentWindow as Window, 'postMessage')
+    dispatchFromSurface({ type: 'surface:hello', nonce: 'n1', version: 1 })
+    dispatchFromSurface({ type: 'surface:ready', nonce: 'n1' })
+    await waitFor(() =>
+      expect(
+        postMessage.mock.calls.filter((call) => (call[0] as { type: string }).type === 'doc:open')
+      ).toHaveLength(1)
+    )
+
+    // 父组件重渲染、同一 documentId：不重发
+    renderer.rerender(
+      <OfficeSurface
+        surfaceUrl={SURFACE_URL}
+        documentInfo={{ ...first }}
+        documentBytes={new Uint8Array([1])}
+      />
+    )
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(
+      postMessage.mock.calls.filter((call) => (call[0] as { type: string }).type === 'doc:open')
+    ).toHaveLength(1)
+
+    // 切到另一份文档：同一 iframe 内重发 doc:open
+    renderer.rerender(
+      <OfficeSurface
+        surfaceUrl={SURFACE_URL}
+        documentInfo={officeDocumentFixture({ documentId: 'doc-2', displayName: '二.docx' })}
+        documentBytes={new Uint8Array([2])}
+      />
+    )
+    await waitFor(() =>
+      expect(
+        postMessage.mock.calls.filter((call) => (call[0] as { type: string }).type === 'doc:open')
+      ).toHaveLength(2)
+    )
+  })
+
+  it('主题运行中切换：ready 后用同一 nonce 重发 init（不重载 iframe）', async () => {
+    const renderer = render(<OfficeSurface surfaceUrl={SURFACE_URL} theme="light" />)
+    const iframe = getIframe()
+    const postMessage = vi.spyOn(iframe.contentWindow as Window, 'postMessage')
+    dispatchFromSurface({ type: 'surface:hello', nonce: 'theme-nonce', version: 1 })
+    dispatchFromSurface({ type: 'surface:ready', nonce: 'theme-nonce' })
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+    const srcBefore = iframe.getAttribute('src')
+
+    renderer.rerender(<OfficeSurface surfaceUrl={SURFACE_URL} theme="dark" />)
+
+    await waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        { type: 'surface:init', nonce: 'theme-nonce', locale: 'zh-CN', theme: 'dark' },
+        '*'
+      )
+    )
+    expect(screen.getByTestId('office-surface')).toHaveAttribute('data-theme', 'dark')
+    // 主题切换不是重载：src 不变、状态仍是 ready
+    expect(iframe.getAttribute('src')).toBe(srcBefore)
+    expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
   })
 })

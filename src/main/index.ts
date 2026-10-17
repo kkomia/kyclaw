@@ -13,6 +13,7 @@ import { registerAgentIpc } from './ipc/agent'
 import { registerAttachmentsIpc } from './ipc/attachments'
 import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-models'
 import { registerMemoryIpc } from './ipc/memory'
+import { registerOfficeIpc } from './ipc/office'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
 import { registerRulesIpc } from './ipc/rules'
@@ -199,6 +200,11 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
     registerWorkspaceIpc(userDataDir, (threadId) => agentProjectIdOf?.(threadId) ?? null)
+    // M3-S2：Office 文档注册表（选择器 / 会话打开 / 按 id 读字节 / 释放）。
+    // 注册表只存元数据（不存文档内容）；webContents 销毁时由 handler 自己 releaseAll。
+    registerOfficeIpc(userDataDir, {
+      projectIdOf: (threadId) => agentProjectIdOf?.(threadId) ?? null
+    })
     // 工作台（右侧边栏四项工具）：文件树 / Git 用只读通道，终端是长会话（由一个服务持有 PTY）
     const workbench = registerWorkbenchIpc(userDataDir, {
       projectIdOf: (threadId) => agentProjectIdOf?.(threadId) ?? null

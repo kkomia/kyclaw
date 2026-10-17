@@ -27,6 +27,7 @@ import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { IPC_CHANNELS, type WindowState } from '../shared/ipc'
+import { isAllowedOfficeFrameNavigation } from '../shared/office-editor'
 import type { ThemeMode } from '../shared/settings'
 import { attachContextMenu } from './context-menu'
 import { readSettings, settingsPath, updateSettings } from './settings'
@@ -160,6 +161,20 @@ export function createMainWindow(): BrowserWindow {
   // persist:kyclaw-browser —— 渲染端写什么 partition 都进不来（安全面只在主进程这一处）。
   win.webContents.on('will-attach-webview', (_event, webPreferences) => {
     hardenWebviewPreferences(webPreferences)
+  })
+
+  /**
+   * M3-S2：子 frame 导航闸门（`setWindowOpenHandler` 只挡新窗口，挡不住 iframe 自己跳走）。
+   *
+   * 口径：**主 frame 不受影响**（调用方自己就是主窗口加载/刷新）；子 frame 只允许
+   *   - Office 隔离面内部：preview/打包 `kyclaw-office://surface/*`，dev 同源 `/office.html`；
+   *   - `about:blank` / `about:srcdoc`（初始空文档与既有 HTML 预览的 srcDoc；无网络能力）。
+   * 其余（外链、file://、被拖入的 URL、恶意 iframe 跳转）一律 `preventDefault`。
+   */
+  win.webContents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame) return
+    if (isAllowedOfficeFrameNavigation(details.url, process.env.ELECTRON_RENDERER_URL)) return
+    details.preventDefault()
   })
 
   // 还原上次的最大化态要在 loadURL 之前：窗口还藏着，先定好尺寸再让渲染端按最终尺寸布局

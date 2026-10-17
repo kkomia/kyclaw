@@ -10,15 +10,16 @@
  *
  * 不新增 preload/IPC：surface URL 完全由渲染端自己算（主进程只负责把资源供出来）。
  */
+import { OFFICE_DEV_SURFACE_PATH, OFFICE_SURFACE_ORIGIN } from '@shared/office-editor'
 
-/** 与 `src/main/office-protocol.ts` 的 OFFICE_SCHEME / OFFICE_HOST 一致（跨进程不能共享常量，靠单测钉） */
+/** 与 `src/main/office-protocol.ts` 的 OFFICE_SCHEME 一致（跨进程不能共享常量，靠单测钉） */
 export const OFFICE_SURFACE_SCHEME = 'kyclaw-office'
 
-/** 面的 origin（`kyclaw-office://surface`）；S2 起如需每文档独立 origin，扩 host 不扩 scheme */
-export const OFFICE_SURFACE_ORIGIN = 'kyclaw-office://surface'
+/** 面的 origin（`kyclaw-office://surface`）；与主进程 `office:config` 共用 shared 常量 */
+export { OFFICE_SURFACE_ORIGIN } from '@shared/office-editor'
 
 /** dev 下 Vite 出的第二个 HTML 入口（与 electron.vite.config.ts 的 input.office 一致） */
-const DEV_SURFACE_PATH = '/office.html'
+const DEV_SURFACE_PATH = OFFICE_DEV_SURFACE_PATH
 
 /** 只依赖 `protocol` / `origin` 两个字段，便于单测传假 Location */
 export type SurfaceLocation = Pick<Location, 'protocol' | 'origin'>

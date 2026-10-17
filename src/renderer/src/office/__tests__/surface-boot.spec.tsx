@@ -10,7 +10,26 @@ import { createSurfaceNonce, SURFACE_PROTOCOL_VERSION } from '../bridge-protocol
  */
 afterEach(() => {
   vi.restoreAllMocks()
+  delete document.documentElement.dataset.surfaceTheme
+  document.documentElement.removeAttribute('style')
+  document.body.removeAttribute('style')
 })
+
+/** 以"来自父页"的形态派发一条消息（jsdom 顶层页的 parent 就是自己） */
+function dispatchFromParent(data: unknown): void {
+  window.dispatchEvent(new MessageEvent('message', { data, source: window }))
+}
+
+/** 取面发出的 hello（第一帧） */
+function helloOf(postMessage: ReturnType<typeof vi.spyOn>): {
+  type: string
+  nonce: string
+  version: number
+} {
+  const call = postMessage.mock.calls[0]
+  if (call === undefined) throw new Error('还没有发 hello')
+  return call[0] as { type: string; nonce: string; version: number }
+}
 
 describe('SurfaceBoot：握手状态机', () => {
   it('先发 surface:hello（带版本与非空 nonce），收到匹配 nonce 的 init 后显示 surface ready', async () => {
@@ -19,11 +38,7 @@ describe('SurfaceBoot：握手状态机', () => {
 
     // ① 首帧 hello：攒到 nonce
     await waitFor(() => expect(postMessage).toHaveBeenCalled())
-    const hello = postMessage.mock.calls[0][0] as {
-      type: string
-      nonce: string
-      version: number
-    }
+    const hello = helloOf(postMessage)
     expect(hello.type).toBe('surface:hello')
     expect(hello.version).toBe(SURFACE_PROTOCOL_VERSION)
     expect(hello.nonce.length).toBeGreaterThan(0)
@@ -31,11 +46,12 @@ describe('SurfaceBoot：握手状态机', () => {
 
     // ② 父页回 init（nonce 原样带回）
     act(() => {
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          data: { type: 'surface:init', nonce: hello.nonce, locale: 'zh-CN', theme: 'dark' }
-        })
-      )
+      dispatchFromParent({
+        type: 'surface:init',
+        nonce: hello.nonce,
+        locale: 'zh-CN',
+        theme: 'dark'
+      })
     })
 
     await waitFor(() =>
@@ -56,11 +72,12 @@ describe('SurfaceBoot：握手状态机', () => {
     await waitFor(() => expect(postMessage).toHaveBeenCalled())
 
     act(() => {
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          data: { type: 'surface:init', nonce: 'forged-nonce', locale: 'zh-CN', theme: 'light' }
-        })
-      )
+      dispatchFromParent({
+        type: 'surface:init',
+        nonce: 'forged-nonce',
+        locale: 'zh-CN',
+        theme: 'light'
+      })
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(screen.getByTestId('surface-boot-state')).toHaveAttribute('data-state', 'booting')

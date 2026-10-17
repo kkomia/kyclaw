@@ -13,7 +13,8 @@
  *
  * 安全口径：父页是 `file://`，它的 origin 是 opaque，**不能用 `event.origin` 判断来源**；
  * 壳侧只认 `event.source === iframe.contentWindow`，面侧只认 init 里的 nonce 与自己的相同。
- * S2 起的数据面（MessagePort，只传字节/事件）单独扩展，不混进这里。
+ * S2 起的数据面先走 `postMessage` 的结构化克隆（`doc:open` 带字节）；MessagePort 到 S3 再换，
+ * 消息判别联合与 nonce 口径不变。
  */
 
 /** 协议版本：S1 起为 1；字段不兼容变更时 +1（壳与面同时改） */
@@ -42,7 +43,7 @@ export interface SurfaceFatalMessage {
 
 export type SurfaceToShellMessage = SurfaceHelloMessage | SurfaceReadyMessage | SurfaceFatalMessage
 
-/** 壳 → 面：一次性初始化（S1 只带 locale/theme；数据面到 S2 再加） */
+/** 壳 → 面：一次性初始化（S2 起也用于**运行时主题切换**：同 nonce 再发一次，幂等） */
 export interface SurfaceInitMessage {
   type: 'surface:init'
   nonce: string
@@ -50,7 +51,23 @@ export interface SurfaceInitMessage {
   theme: SurfaceTheme
 }
 
-export type ShellToSurfaceMessage = SurfaceInitMessage
+/**
+ * 壳 → 面：打开/替换文档（S2 用 postMessage 结构化克隆，字节随消息过去）。
+ *
+ * `nonce` 是面生成的握手凭据：面只接受与自己的 nonce 相同的消息，别的 frame 伪造不了。
+ * `sha256` 只为面的证据展示与 S3 保存前自检；面的 CSP 没有网络，拿不到父页任何东西。
+ */
+export interface DocOpenMessage {
+  type: 'doc:open'
+  nonce: string
+  documentId: string
+  name: string
+  sha256: string
+  readOnly: boolean
+  bytes: Uint8Array
+}
+
+export type ShellToSurfaceMessage = SurfaceInitMessage | DocOpenMessage
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -90,6 +107,22 @@ export function isSurfaceInit(value: unknown): value is SurfaceInitMessage {
     typeof value.locale === 'string' &&
     value.locale.length > 0 &&
     (value.theme === 'light' || value.theme === 'dark')
+  )
+}
+
+/** 运行时形状检查：`doc:open`（字节必须是 Uint8Array，nonce 必须非空） */
+export function isDocOpen(value: unknown): value is DocOpenMessage {
+  if (!isRecord(value)) return false
+  return (
+    value.type === 'doc:open' &&
+    isNonEmptyString(value.nonce) &&
+    isNonEmptyString(value.documentId) &&
+    isNonEmptyString(value.name) &&
+    typeof value.sha256 === 'string' &&
+    value.sha256.length > 0 &&
+    typeof value.readOnly === 'boolean' &&
+    value.bytes instanceof Uint8Array &&
+    value.bytes.byteLength > 0
   )
 }
 

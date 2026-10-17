@@ -35,6 +35,7 @@ import {
   type KyclawFilesApi,
   type KyclawLocalModelsApi,
   type KyclawMemoryApi,
+  type KyclawOfficeApi,
   type KyclawPluginsApi,
   type KyclawProjectsApi,
   type KyclawSearchApi,
@@ -104,6 +105,11 @@ import {
   type OfficePreviewPriority,
   type OfficePreviewResult
 } from '../shared/office-preview'
+import {
+  officeConfigSchema,
+  officeOpenResultSchema,
+  officeReadResultSchema
+} from '../shared/office-editor'
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -730,12 +736,52 @@ const terminalApi: KyclawTerminalApi = {
   }
 }
 
+/**
+ * Office 文档面（M3-S2）：打开（选择器 / 会话相对路径）/ 按 id 读字节 / 释放。
+ * 规则与其它面一致：回包过同一份 schema 才交给上层；**取消/格式不支持/太大/读不了都是
+ * `ok:false` 的判断结果，不抛**（只有结构不合法与主进程抛的人话错误才 reject）。
+ */
+const officeApi: KyclawOfficeApi = {
+  config: async () => {
+    const parsed = officeConfigSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.config)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 配置响应结构不合法')
+    return parsed.data
+  },
+  openDialog: async () => {
+    const parsed = officeOpenResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.openDialog)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 打开响应结构不合法')
+    return parsed.data
+  },
+  openFromSession: async (threadId, relative, readOnly) => {
+    const parsed = officeOpenResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.openFromSession, threadId, relative, readOnly)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 打开响应结构不合法')
+    return parsed.data
+  },
+  read: async (documentId) => {
+    const parsed = officeReadResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.read, documentId)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 读取响应结构不合法')
+    return parsed.data
+  },
+  release: async (documentId) => {
+    await ipcRenderer.invoke(IPC_CHANNELS.office.release, documentId)
+  }
+}
+
 export const kyclawApi: KyclawApi = {
   window: windowApi,
   settings: settingsApi,
   workspace: workspaceApi,
   workbench: workbenchApi,
   terminal: terminalApi,
+  office: officeApi,
   projects: projectsApi,
   agent: agentApi,
   attachments: attachmentsApi,

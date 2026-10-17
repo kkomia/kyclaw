@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
 import { OFFICE_TAB_KINDS, resetOfficeTabsStore, useOfficeTabsStore } from '../office-tabs-store'
 
 beforeEach(() => {
@@ -148,5 +149,48 @@ describe('office-tabs-store：独立于会话的标签模型', () => {
     markSaved(first)
     expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === first)?.dirty).toBe(false)
     expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === sheet)?.dirty).toBe(true)
+  })
+})
+
+describe('office-tabs-store：M3-S2 openDocument（按 documentId 去重）', () => {
+  it('documentId 去重：二次打开只激活，不重置 dirty/readOnly；不同 id 才开新标签', () => {
+    const first = officeDocumentFixture({ documentId: 'doc-1', displayName: '方案.docx' })
+    const id = useOfficeTabsStore.getState().openDocument(first)
+    const tab = useOfficeTabsStore.getState().tabs.find((item) => item.id === id)
+
+    expect(tab).toMatchObject({
+      kind: 'docx',
+      title: '方案.docx',
+      path: 'D:\\工作\\方案.docx',
+      documentId: 'doc-1',
+      dirty: false,
+      readOnly: false
+    })
+
+    useOfficeTabsStore.getState().markDirty(id)
+    // 同一 documentId、displayPath 换成会话相对路径：只激活，仍是同一个标签
+    const again = useOfficeTabsStore
+      .getState()
+      .openDocument(
+        officeDocumentFixture({ documentId: 'doc-1', displayPath: '方案.docx', readOnly: true })
+      )
+    expect(again).toBe(id)
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(useOfficeTabsStore.getState().tabs[0]).toMatchObject({ dirty: true, readOnly: false })
+
+    // 另一个 documentId（同一显示路径也不算同一份）：开新标签
+    const other = useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-2', displayName: '另一份.docx' }))
+    expect(other).not.toBe(id)
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(2)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(other)
+  })
+
+  it('readOnly 跟主进程回包走（只读打开的标签如实标记）', () => {
+    const id = useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-ro', readOnly: true }))
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === id)?.readOnly).toBe(true)
   })
 })

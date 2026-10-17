@@ -1,47 +1,82 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Briefcase, Plus } from 'lucide-react'
-import { navItemClass } from '@renderer/components/shell/nav-item'
+import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
-import { Dialog } from '@renderer/components/ui/dialog'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, OFFICE_PANEL_ID } from './office-kinds'
 import { OfficeSurface, type OfficeSurfaceStatus } from './OfficeSurface'
-import { useOfficeTabsStore, type OfficeOpenInput, type OfficeTab } from './office-tabs-store'
+import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
 import { useOfficeUiStore } from './office-ui-store'
+import { useDocumentTheme } from './use-document-theme'
 
 /**
- * Office 模块：独立于会话的多标签工作区（0.2.0 只做标签与宿主骨架）。
+ * Office 模块：独立于会话的多标签工作区。
  *
- * 2026-10-17（顶侧多标签页打样）：标签条搬进了 TitleBar（AppTabBar，跨路由常驻），这里只留
- * **当前激活标签的 workspace 占位**与空态；「打开文件」入口也从页面内那一行去掉了（顶栏「＋」
- * 与空态按钮都能打开同一个示例弹窗，弹窗开关走 office-ui-store）。
+ * 2026-10-17（M3-S2）：mook「打开文件（示例）」列表已删；入口换成主进程的真实选择器
+ * （`window.kyclaw.office.openDialog()`，取消是一等结果）。成功打开后由注册表回
+ * `OfficeDocumentInfo`，`openDocument` 按 **documentId** 去重/激活标签。
  *
- * 这里没有聊天、会话列表或第二个 ChatPage —— 主对话只属于 ModuleHost 里那个常驻实例。
- * 文件选择、编辑器接入与持久化都还没做，「打开文件」先弹一份示例列表，用来验证
- * 空态 → 标签 → 内容占位的切换。
+ * 顶栏「＋」仍走 office-ui-store 的 `pickerOpen` 标志（AppTabBar 与空态按钮共用一个动作）：
+ * 页面看到标志置位就发起一次真实选择器请求，然后立刻把标志清掉。用 ref 去重是为了
+ * React StrictMode 的 effect 双跑不会弹两次原生对话框。
  */
-const MOCK_ENTRIES: readonly OfficeOpenInput[] = [
-  { kind: 'docx', path: '示例文档/项目计划.docx', title: '项目计划' },
-  { kind: 'pptx', path: '示例文档/季度汇报.pptx', title: '季度汇报' },
-  { kind: 'xlsx', path: '示例文档/预算表.xlsx', title: '预算表' },
-  { kind: 'pdf', path: '示例文档/产品说明.pdf', title: '产品说明' },
-  { kind: 'image', path: '示例文档/界面截图.png', title: '界面截图' },
-  { kind: 'text', path: '示例文档/会议记录.txt', title: '会议记录' },
-  { kind: 'web', url: 'https://example.com/handbook', title: '示例网页' }
-]
-
 export function OfficePage(): React.JSX.Element {
   const tabs = useOfficeTabsStore((state) => state.tabs)
   const activeTabId = useOfficeTabsStore((state) => state.activeTabId)
-  const open = useOfficeTabsStore((state) => state.open)
+  const openDocument = useOfficeTabsStore((state) => state.openDocument)
   const pickerOpen = useOfficeUiStore((state) => state.pickerOpen)
   const setPickerOpen = useOfficeUiStore((state) => state.setPickerOpen)
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
 
-  const openMock = (entry: OfficeOpenInput): void => {
-    open(entry)
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+  const [opening, setOpening] = useState(false)
+  const [openError, setOpenError] = useState('')
+  /** 面 URL 由主进程下发（dev 端口随 Vite 走；preview/打包是 kyclaw-office://surface/） */
+  const [surfaceUrl, setSurfaceUrl] = useState<string | undefined>(undefined)
+  /** 标志消费去重（StrictMode 双跑 / 连点「＋」时只发一次） */
+  const openingFromFlagRef = useRef(false)
+
+  useEffect(() => {
+    let alive = true
+    void window.kyclaw?.office
+      .config()
+      .then((config) => {
+        if (alive) setSurfaceUrl(config.surfaceUrl)
+      })
+      .catch(() => {
+        // 读不到配置就退回渲染端自算（surface-url.ts），不拦打开文档
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const openViaDialog = useCallback(async (): Promise<void> => {
+    setOpening(true)
+    setOpenError('')
+    try {
+      const result = await window.kyclaw.office.openDialog()
+      if (result.ok) {
+        openDocument(result.document)
+        return
+      }
+      // 取消是用户自己的动作，不报错；其余分类原样显示主进程给的人话
+      if (result.code !== 'cancelled') setOpenError(result.message)
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOpening(false)
+    }
+  }, [openDocument])
+
+  // 顶栏「＋」→ 标志置位 → 这里发起一次真实选择器（并立刻消费掉标志）
+  useEffect(() => {
+    if (!pickerOpen || openingFromFlagRef.current) return
+    openingFromFlagRef.current = true
     setPickerOpen(false)
-  }
+    void openViaDialog().finally(() => {
+      openingFromFlagRef.current = false
+    })
+  }, [pickerOpen, setPickerOpen, openViaDialog])
 
   return (
     <section data-testid="office-page" className="animate-page-in flex min-h-0 flex-1 flex-col">
@@ -66,64 +101,50 @@ export function OfficePage(): React.JSX.Element {
           <div className="flex max-w-md flex-col gap-1">
             <h2 className="text-t2 font-medium text-ink">还没有打开的文档</h2>
             <p className="text-b2 text-ink-secondary">
-              打开 Word、PPT、Excel、PDF、图片或文本文件，也可以加一个网页。标签不绑定会话，
-              切换会话不会关掉这里。
+              打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
             </p>
           </div>
-          <Button data-testid="office-open" icon={<Plus />} onClick={() => setPickerOpen(true)}>
+          <Button
+            data-testid="office-open"
+            icon={<Plus />}
+            loading={opening}
+            disabled={opening}
+            onClick={() => void openViaDialog()}
+          >
             打开文件
           </Button>
+          {openError === '' ? null : (
+            <p
+              data-testid="office-open-error"
+              role="alert"
+              className="max-w-md text-c1 text-warning"
+            >
+              {openError}
+            </p>
+          )}
         </div>
       ) : activeTab === undefined ? null : (
-        <OfficeWorkspace tab={activeTab} />
+        // key 把每一份文档的隔离面隔开：切标签时重建 iframe（S4 的保活/多实例策略再改）
+        <OfficeWorkspace key={activeTab.id} tab={activeTab} surfaceUrl={surfaceUrl} />
       )}
-
-      <Dialog
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        title="打开文件（示例）"
-        description="真实文件选择还没接入；先打开一份示例，验证标签骨架。"
-        footer={
-          <Button variant="ghost" onClick={() => setPickerOpen(false)}>
-            取消
-          </Button>
-        }
-      >
-        <ul data-testid="office-mock-files" className="flex flex-col gap-0.5">
-          {MOCK_ENTRIES.map((entry) => {
-            const Icon = OFFICE_KIND_ICON[entry.kind]
-            const detail = entry.kind === 'web' ? entry.url : entry.path
-            return (
-              <li key={`${entry.kind}:${detail}`}>
-                <button
-                  type="button"
-                  data-testid={`office-mock-open-${entry.kind}`}
-                  className={cn(navItemClass(), 'text-left')}
-                  onClick={() => openMock(entry)}
-                >
-                  <Icon
-                    aria-hidden="true"
-                    className="size-(--icon-size-md) shrink-0 text-ink-tertiary"
-                  />
-                  <span className="min-w-0 flex-1 truncate">{entry.title}</span>
-                  <span className="max-w-40 truncate text-c1 text-ink-tertiary">{detail}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </Dialog>
     </section>
   )
 }
 
 /** 有标签时的内容区：当前标签的标题/来源 + dirty 状态 + 编辑器占位 */
-function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
+function OfficeWorkspace({
+  tab,
+  surfaceUrl
+}: {
+  tab: OfficeTab
+  surfaceUrl?: string
+}): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
-  // M3-S1（临时调试）：DOCX 标签挂隔离面，状态条把 loading/ready/fatal 露出来；
-  // 不接编辑器，其它格式仍是占位。S2 起由文档注册表/编辑器取代这块。
+  // M3-S2（临时）：DOCX 标签挂隔离面；字节由 office:read 取回，ready 后经 postMessage 投递。
+  // 编辑器内核在 S3；其它格式仍是占位。
   const isDocx = tab.kind === 'docx'
+  const theme = useDocumentTheme()
   // 状态带 tabId：同一个 OfficeWorkspace 实例跨标签复用，切走再切回来时旧状态自动失效
   // （不用 effect 复位——render 期按 tab.id 过滤，天然回到 loading）
   const [surfaceState, setSurfaceState] = useState<{ tabId: string; status: OfficeSurfaceStatus }>({
@@ -135,12 +156,53 @@ function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
     setSurfaceState({ tabId: tab.id, status })
   }
 
+  /** 主进程回包里的文档信息 + 字节（S2 只在内存里中转给面，壳不持久化） */
+  const [loaded, setLoaded] = useState<{
+    info: OfficeDocumentInfo
+    bytes: Uint8Array
+  } | null>(null)
+  const [docError, setDocError] = useState('')
+
+  useEffect(() => {
+    // 每个标签一份 OfficeWorkspace（父组件用 key=tab.id），切标签会重建 → 这里不需要复位状态
+    if (!isDocx || tab.documentId === undefined) return
+    let alive = true
+    const read = window.kyclaw?.office?.read
+    if (typeof read !== 'function') {
+      // 桥缺失：异步回调置错（effect 体内不直接 setState，避免级联渲染告警）
+      void Promise.resolve().then(() => {
+        if (alive) setDocError('Office 通道不可用')
+      })
+      return () => {
+        alive = false
+      }
+    }
+    void read(tab.documentId)
+      .then((result) => {
+        if (!alive) return
+        if (result.ok) {
+          setLoaded({ info: result.document, bytes: result.bytes })
+        } else {
+          setDocError(result.message)
+        }
+      })
+      .catch((error: unknown) => {
+        if (alive) setDocError(error instanceof Error ? error.message : String(error))
+      })
+    return () => {
+      alive = false
+    }
+  }, [isDocx, tab.documentId])
+
   return (
     <div
       id={OFFICE_PANEL_ID}
       role="tabpanel"
       aria-labelledby={`office-tab-${tab.id}`}
       data-testid="office-workspace"
+      data-kind={tab.kind}
+      data-document-id={tab.documentId ?? ''}
+      data-document-state={loaded === null ? (docError === '' ? 'loading' : 'error') : 'loaded'}
       className="flex min-h-0 flex-1 flex-col p-4"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border-(length:--hairline-width) border-hairline bg-secondary">
@@ -189,7 +251,24 @@ function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
           </div>
         </div>
         {isDocx ? (
-          <OfficeSurface onStatusChange={handleSurfaceStatus} />
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <OfficeSurface
+              onStatusChange={handleSurfaceStatus}
+              theme={theme}
+              documentInfo={loaded?.info}
+              documentBytes={loaded?.bytes}
+              surfaceUrl={surfaceUrl}
+            />
+            {docError === '' ? null : (
+              <p
+                data-testid="office-doc-error"
+                role="alert"
+                className="absolute inset-x-0 bottom-0 border-t border-hairline bg-secondary px-4 py-2 text-c1 text-warning"
+              >
+                {docError}
+              </p>
+            )}
+          </div>
         ) : (
           <div
             data-testid="office-editor-placeholder"

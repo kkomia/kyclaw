@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { OfficeDocumentInfo } from '@shared/office-editor'
 
 /**
  * Office 工作区的标签模型（0.2.0 只做骨架，编辑器后续接）。
@@ -22,8 +23,13 @@ export interface OfficeTab {
   id: string
   kind: OfficeTabKind
   title: string
-  /** 文档/文件类：打开时的路径（同时是去重键） */
+  /** 文档/文件类：打开时的路径（同时是兜底去重键） */
   path?: string
+  /**
+   * M3-S2：主进程文档注册表的不透明 id（第一步 docx 必有）。
+   * 有它时去重以它为准——同一真实文件的选择器绝对路径与会话相对路径不同，路径不能当身份。
+   */
+  documentId?: string
   /** web 类：打开时的网址（同时是去重键） */
   url?: string
   dirty: boolean
@@ -53,6 +59,12 @@ export interface OfficeTabsState {
   activeTabId: string
   /** 按路径（文件类）/ URL（web）去重并激活；返回标签 id */
   open: (input: OfficeOpenInput) => string
+  /**
+   * M3-S2：按主进程的 `OfficeDocumentInfo` 打开/激活 DOCX 标签。
+   * **按 documentId 去重**（realpath 同一文件只开一个标签）；title=displayName、
+   * path=displayPath、kind='docx'、readOnly 跟主进程回包。已存在时只激活，不重置 dirty/readOnly。
+   */
+  openDocument: (info: OfficeDocumentInfo) => string
   /** 关标签；返回是否真的关掉（未知 id = false） */
   close: (id: string) => boolean
   activate: (id: string) => void
@@ -72,8 +84,16 @@ function nextTabId(kind: OfficeTabKind): string {
   return `${kind}-${seq}`
 }
 
-/** 去重键：文件类比路径、web 类比 URL（同类资源只开一个标签） */
-function resourceKeyOf(source: { kind: OfficeTabKind; path?: string; url?: string }): string {
+/** 去重键：文档优先用主进程 documentId；文件类比路径、web 类比 URL（同类资源只开一个标签） */
+function resourceKeyOf(source: {
+  kind: OfficeTabKind
+  path?: string
+  url?: string
+  documentId?: string
+}): string {
+  if (source.documentId !== undefined && source.documentId !== '') {
+    return `doc:${source.documentId}`
+  }
   return source.kind === 'web' ? `url:${source.url ?? ''}` : `path:${source.path ?? ''}`
 }
 
@@ -110,6 +130,26 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       readOnly: input.readOnly === true,
       lastActiveAt: Date.now(),
       ...(input.kind === 'web' ? { url: input.url } : { path: input.path })
+    }
+    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }))
+    return tab.id
+  },
+  openDocument: (info) => {
+    const existing = get().tabs.find((tab) => tab.documentId === info.documentId)
+    if (existing !== undefined) {
+      // 同一真实文件（选择器/会话/聊天入口都可能点第二次）：只激活，不重置 dirty/readOnly
+      get().activate(existing.id)
+      return existing.id
+    }
+    const tab: OfficeTab = {
+      id: nextTabId('docx'),
+      kind: 'docx',
+      title: info.displayName,
+      path: info.displayPath,
+      documentId: info.documentId,
+      dirty: false,
+      readOnly: info.readOnly,
+      lastActiveAt: Date.now()
     }
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }))
     return tab.id

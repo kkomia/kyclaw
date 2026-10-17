@@ -40,6 +40,16 @@ import type {
   WorkbenchSearchResult
 } from '@shared/workbench'
 import type { OfficePreviewPriority, OfficePreviewResult } from '@shared/office-preview'
+import {
+  OFFICE_EDITOR_MAX_BYTES,
+  OFFICE_MAX_OPEN_DOCUMENTS,
+  OFFICE_SURFACE_ORIGIN,
+  OFFICE_SURFACE_URL,
+  type OfficeConfig,
+  type OfficeDocumentInfo,
+  type OfficeOpenResult,
+  type OfficeReadResult
+} from '@shared/office-editor'
 import type { TextPageCursor, TextPageResult, TextVersionResult } from '@shared/workbench-text'
 
 /**
@@ -614,6 +624,63 @@ export function pluginsApiStub(
   }
 }
 
+/**
+ * Office 文档面（M3-S2）：默认"取消打开 + 读不到"——**不假装打开成功**，
+ * 没关心过 Office 的用例不会被一条假文档带偏。用例自己 `mockResolvedValue` 喂
+ * `officeDocumentFixture()` 与字节。
+ */
+export interface OfficeApiStub {
+  config: Mock<() => Promise<OfficeConfig>>
+  openDialog: Mock<() => Promise<OfficeOpenResult>>
+  openFromSession: Mock<
+    (threadId: string, relative: string, readOnly?: boolean) => Promise<OfficeOpenResult>
+  >
+  read: Mock<(documentId: string) => Promise<OfficeReadResult>>
+  release: Mock<(documentId: string) => Promise<void>>
+}
+
+/** 造一份 `OfficeDocumentInfo`（用例只改关心的字段） */
+export function officeDocumentFixture(patch: Partial<OfficeDocumentInfo> = {}): OfficeDocumentInfo {
+  return {
+    documentId: 'doc-1',
+    displayName: '方案.docx',
+    displayPath: 'D:\\工作\\方案.docx',
+    absolutePath: 'D:\\工作\\方案.docx',
+    size: 12,
+    mtimeMs: 1_700_000_000_000,
+    sha256: 'a'.repeat(64),
+    readOnly: false,
+    ...patch
+  }
+}
+
+export function officeApiStub(): OfficeApiStub {
+  return {
+    config: vi.fn(async (): Promise<OfficeConfig> => ({
+      surfaceUrl: OFFICE_SURFACE_URL,
+      surfaceOrigin: OFFICE_SURFACE_ORIGIN,
+      maxBytes: OFFICE_EDITOR_MAX_BYTES,
+      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS
+    })),
+    openDialog: vi.fn(async (): Promise<OfficeOpenResult> => ({
+      ok: false,
+      code: 'cancelled',
+      message: '已取消'
+    })),
+    openFromSession: vi.fn(async (): Promise<OfficeOpenResult> => ({
+      ok: false,
+      code: 'cancelled',
+      message: '已取消'
+    })),
+    read: vi.fn(async (): Promise<OfficeReadResult> => ({
+      ok: false,
+      code: 'forbidden',
+      message: '这个文档没有打开或已关闭'
+    })),
+    release: vi.fn(async () => undefined)
+  }
+}
+
 /** 记忆面（round 28）：只有远程嵌入密钥的状态（默认没配过） */
 export interface MemoryApiStub {
   embeddingKeyState: Mock<() => Promise<ProviderKeyState>>
@@ -766,6 +833,7 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
   workbench: WorkbenchApiStub
   terminal: TerminalApiStub
+  office: OfficeApiStub
   projects: ProjectsApiStub
   updates: UpdatesApiStub
   telemetry: TelemetryApiStub
@@ -785,6 +853,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const workspace = workspaceApi(state)
   const workbench = workbenchApiStub()
   const terminal = terminalApiStub()
+  const office = officeApiStub()
   const projects = projectsApi(state)
   const updates = updatesApiStub()
   const telemetry = telemetryApiStub(() => state.current.langfuse.endpoint)
@@ -801,6 +870,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     workspace,
     workbench,
     terminal,
+    office,
     projects,
     agent: agentApiStub(),
     attachments,
@@ -820,6 +890,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     workspace,
     workbench,
     terminal,
+    office,
     projects,
     updates,
     telemetry,

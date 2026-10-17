@@ -20,7 +20,8 @@
  *
  * 证据：`.superpowers/office-docx/s1/`（screenshot + probe-result.json；本地，不入库）。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { closeApp, launchApp, waitForChat } from './harness'
@@ -86,7 +87,14 @@ test.describe('M3-S1 · kyclaw-office:// 隔离面（真机 preview）', () => {
     test.setTimeout(180_000)
     mkdirSync(EVIDENCE_DIR, { recursive: true })
 
-    const launched = await launchApp()
+    // M3-S2：mock 打开入口已删，真实「打开文件」走测试 env 绕过原生选择器。
+    // S1 只关心"面能加载并完成握手"，字节内容不重要 → 一个只有 .docx 后缀的占位文件即可
+    // （注册表 S2 只按扩展名/大小/读字节，不解析 OOXML；内核在 S3）。
+    const probeDir = mkdtempSync(join(tmpdir(), 'kyclaw-s1-probe-'))
+    const probeDocx = join(probeDir, 'office-surface-probe.docx')
+    writeFileSync(probeDocx, Buffer.from('kyclaw M3-S1 surface probe placeholder'))
+
+    const launched = await launchApp({ env: { KYCLAW_OFFICE_OPEN: probeDocx } })
     const { app, page } = launched
     /** console error + 它来自哪个 URL（资源加载失败时 location 就是那个资源的 URL） */
     const consoleErrors: { text: string; url: string }[] = []
@@ -136,11 +144,11 @@ test.describe('M3-S1 · kyclaw-office:// 隔离面（真机 preview）', () => {
         })
       })
 
-      // 打开 Office 模块 → 示例 DOCX（第一次打开 DOCX 才懒创建 iframe）
+      // 打开 Office 模块 → 真实「打开文件」（env 绕过原生对话框）→ 第一次打开 DOCX 才懒创建 iframe
       await page.getByTestId('primary-nav-office').click()
       await expect(page.getByTestId('office-page')).toBeVisible({ timeout: 30_000 })
       await page.getByTestId('office-open').click()
-      await page.getByTestId('office-mock-open-docx').click()
+      await expect(page.getByTestId('office-workspace')).toBeVisible({ timeout: 30_000 })
       await expect(page.getByTestId('office-surface-iframe')).toBeVisible({ timeout: 30_000 })
 
       // 握手成功 = 面加载 + hello/init/ready 全链路通（fatal 会卡在 loading，这里直接失败）
@@ -348,6 +356,7 @@ test.describe('M3-S1 · kyclaw-office:// 隔离面（真机 preview）', () => {
       throw error
     } finally {
       await closeApp(launched)
+      rmSync(probeDir, { recursive: true, force: true })
     }
   })
 })
