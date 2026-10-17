@@ -634,6 +634,7 @@ function OfficeWorkspace({
       <div
         data-testid="office-workspace-debug"
         data-debug={debugVisible ? 'true' : 'false'}
+        aria-hidden={!debugVisible}
         hidden={!debugVisible}
         className={cn(
           'shrink-0 items-center gap-2 border-b border-hairline bg-(--doc-page-bg) px-3 py-1 text-c1 text-ink-tertiary',
@@ -645,8 +646,10 @@ function OfficeWorkspace({
           data-testid="office-doc-title"
           className="min-w-0 truncate font-medium text-ink"
           title={tab.title}
+          aria-label={tab.title}
         >
-          {tab.title}
+          {/* 正常态不渲染文本（hidden strip 里也不留同一文件名的重复文本节点）；仅 debug 展开时显示 */}
+          {debugVisible ? tab.title : null}
         </p>
         <p className="min-w-0 truncate" title={source}>
           {source}

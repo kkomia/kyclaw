@@ -150,4 +150,11 @@ describe('task-100 · 跨页源码契约', () => {
     expect(settings).not.toContain('font-size-hint')
     expect(settings).not.toContain('动画会给设备带来渲染压力')
   })
+
+  it('⑨ 加载态也不重复：Office debug strip 正常态不渲染文档名文本', () => {
+    const officePage = read('src/renderer/src/features/office/OfficePage.tsx')
+    // 正常态只留 aria-label/title 语义与 testid；debug 展开才渲染文本
+    expect(officePage).toMatch(/office-doc-title[\s\S]{0,280}debugVisible \? tab\.title : null/)
+    expect(officePage).toContain('aria-label={tab.title}')
+  })
 })

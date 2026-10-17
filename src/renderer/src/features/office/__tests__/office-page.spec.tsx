@@ -70,7 +70,10 @@ describe('OfficePage：空态与真实「打开文件」（M3-S2）', () => {
 
     await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
     expect(bridge.office.openDialog).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('office-workspace')).toHaveTextContent('项目计划.docx')
+    // task-100 第三轮：文档名一屏可见只留标签页 + ribbon；workspace 内不再留隐藏重复文本
+    // （debug strip 默认 hidden 且正常态不渲染标题文本，只保留 aria-label/title 语义）
+    expect(screen.getByTestId('office-workspace')).not.toHaveTextContent('项目计划.docx')
+    expect(screen.getByTestId('office-doc-title')).toHaveAttribute('aria-label', '项目计划.docx')
     expect(screen.getByTestId('office-workspace')).toHaveAttribute('data-document-id', 'doc-42')
     expect(screen.getByTestId('office-surface-iframe')).toBeInTheDocument()
     expect(screen.getByTestId('office-surface-status')).toHaveAttribute('data-state', 'loading')
