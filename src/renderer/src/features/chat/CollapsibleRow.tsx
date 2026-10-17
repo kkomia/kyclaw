@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 
 /**
- * 初始页那两行（卡片上方的「选择项目」、卡片下方的能力入口 + PPT）的**离场**（round 76）。
+ * 初始页卡外那一行（「选择项目」）的**离场**（round 76）。
  *
- * 为什么要有它（用户点名的雷点 5"禁止闪现"）：这两行原来是 `{hero ? <div/> : null}` —— 第一句
+ * 为什么要有它（用户点名的雷点 5"禁止闪现"）：这一行原来是 `{hero ? <div/> : null}` —— 第一句
  * 话发出去的那一刻**整块卸载**：进场有动画（跟着宿主的 `animate-message-in`），离场却是硬切。
  * 现在改成**常挂**，离场走 welcome-spacer 同一条路子：高度用容器级 `grid-template-rows`
  * 1fr → 0fr 收合（行自己的 `mb-2`/`mt-2` 被 `overflow-hidden` 一起裁掉，收到底就是 0 高、不留缝），
@@ -12,7 +12,8 @@ import { cn } from '@renderer/components/ui/cn'
  * 与 `.trace-fold`（tailwind.css round 6 那段）是同一种收合手法，只是这里收的是"初始页的装饰行"。
  *
  * 进场不在这里管：宿主那一格（页脚的 `animate-message-in`）已经带着整块淡入上浮，
- * 这里再叠一套动画就是两段动画打架（口径同 CapabilityRow 头注）。所以这里只有"常驻 + 收合"。
+ * 这里再叠一套动画就是两段动画打架（口径同初始页行头注）。所以这里只有"常驻 + 收合"。
+ * （2026-10-18：卡片下方那排能力/PPT 胶囊整行移除后，本组件只剩「选择项目」一处在用。）
  *
  * 出场之后不卸载（要有对象可动，否则又变回硬切）：`inert` + `pointer-events-none` 保证收起来
  * 的那一行既不吃点击、也进不了 Tab 序列。压根没进过初始页的会话（挂载时就有历史）不渲染它。

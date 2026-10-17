@@ -50,14 +50,13 @@ import { hasPendingAskUser, chatStreamActive } from './ask-user'
 import { askUserResumeBody } from '@renderer/lib/ask-user-api'
 import { askUserAcceptedMetadata } from '@renderer/lib/agent'
 import { mapStoredMessages } from '@renderer/lib/message-map'
-import { CapabilityRow } from './CapabilityRow'
+import { WelcomeAmbientOtter } from '@renderer/features/brand/WelcomeAmbientOtter'
 import { ChatHeader } from './ChatHeader'
 import type { ChatView } from './ChatHeader'
 import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { MessageList } from './MessageList'
-import { PptTemplateChip } from './PptTemplatePicker'
 import { ProjectChip } from './ProjectChip'
 import { usePptTemplatesStore } from './ppt-templates-store'
 import { WelcomeHero } from './WelcomeHero'
@@ -1359,15 +1358,17 @@ function ActiveChat({
    * round 64：除布局外它还给两处定档（同一枚"这一屏是不是初始页"的事实，不另算一套）——
    * 输入区在初始页高一档（Composer 的 `hero`）。
    *
-   * round 66：它同时是**两枚能力 chip 的生死线**（同一个生命周期，用户口径"进入到对话之后就不要
-   * 显示这个「选择项目」了"）——卡片上方的「选择项目」行与卡片下方的 PPT 行都只在初始页出现，
-   * 进对话两行一起退场（round 76 起是常挂 + 收合，见 CollapsibleRow）。三处共用这一枚判定。
+   * round 66：它同时是初始页「选择项目」行的**生死线**（用户口径"进入到对话之后就不要显示
+   * 这个「选择项目」了"）—— 这一行只在初始页出现，进对话常挂 + 收合（round 76 起，见
+   * CollapsibleRow）。2026-10-18 用户又拍板：输入卡**下方**那排能力胶囊（文档/表格/报告/研究
+   * + PPT 模板）整行移除（"chat页面下面这一排按钮可以去掉了"）—— 卡片下方现在没有行，
+   * 能力入口后续收进输入卡的 ＋ 菜单（PPT 模板选择器组件保留，下一轮接）。
    *
    * round 76：**加一个前提 `ready`** —— 会话实例就绪前不算初始页。两个理由：
-   *   ① 那两行里的「选择项目」与「PPT」都是会话级控件（按 threadId 读写映射），实例没就绪时
-   *      没有可动的对象（threadId 还是占位 id）；
+   *   ① 那行里的「选择项目」是会话级控件（按 threadId 读写映射），实例没就绪时没有可动的对象
+   *      （threadId 还是占位 id）；
    *   ② 就绪那一刻整页才"落位"成初始页 —— 页脚带 `animate-message-in`（淡入 + 上浮）、
-   *      标题与两行跟着它一起进场、占位撑开把输入框送到竖直中位。就绪之前是"还没开始"的
+   *      标题与那一行跟着它一起进场、占位撑开把输入框送到竖直中位。就绪之前是"还没开始"的
    *      常规底部布局（输入区常态档），不是硬切：档位与占位都带主档过渡。
    */
   const hero = ready && messages.length === 0 && !error && !waitingInteraction && !compacting
@@ -1403,6 +1404,10 @@ function ActiveChat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* rev3 第四落点（task-49）：初始页右上角氛围小海獭 —— 只在 hero 时渲染，首条消息发出后
+          150ms 淡出再卸载（不硬切）；绝对定位/内缩/尺寸由 `.welcome-ambient-otter` 负责，不参与布局。
+          它和 ChatHeader 的状态灯互斥（hero 时只有它；进对话后只有 header 状态灯），见 ChatHeader。 */}
+      <WelcomeAmbientOtter active={hero} />
       {/* 消息区：常规布局里占满剩余高度；初始页里消息为空，它只是上半格的弹性占位。
           **必须自带 flex 列身份**（round 59 用户实拍回归）：MessageList 的 frame 是
           `flex min-h-0 flex-1 flex-col`，包在块级父级里 flex-1 不生效、滚动区不受高度约束，
@@ -1603,12 +1608,13 @@ function ActiveChat({
             />
           </div>
           {/* round 66：「选择项目」在输入卡**上方**单独一行（用户口径："放到对话框上面，
-              不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片下方那行同一口径），
+              不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片内容同一口径），
               不描边、不铺底，只 hover 铺一层浅灰（它是卡片外的独立控件，不是卡内嵌件）。
-              **只在初始页（空会话）出现**：与卡片下方那枚 PPT 胶囊同一个生命周期，进对话两行一起退场
-              （用户口径："进入到对话之后就不要显示这个「选择项目」了"）。
+              **只在初始页（空会话）出现**（用户口径："进入到对话之后就不要显示这个「选择项目」了"）。
               round 76：退场不再是 `{hero ? … : null}` 的整块卸载（离场硬切、雷点 5）——
-              改成常挂 + 收合（见 CollapsibleRow）：淡出 + 高度收到 0（含外边距），主档时长。 */}
+              改成常挂 + 收合（见 CollapsibleRow）：淡出 + 高度收到 0（含外边距），主档时长。
+              2026-10-18：卡片下方那排能力/PPT 胶囊已按用户口径整行移除 —— 上方这一行是初始页
+              现在唯一的卡外行（将来会收进卡片，见下面 welcome-spacer 注释里的恢复值）。 */}
           <CollapsibleRow
             active={hero}
             testId="composer-project-row"
@@ -1639,23 +1645,11 @@ function ActiveChat({
             // R92：草稿过桥放行位（只有"系统初始化落位"那一次为 true，见 ChatPage 的判定）
             allowCarryover={carryoverAllowed}
           />
-          {/* round 65：输入卡正下方这一行（与卡片同列宽、左缘对齐），**只在初始页**（空会话）出现；
-              已经有对话在跑时整行收合。
-              round 66：PPT 的选择是**会话级**的（按 threadId 读/写）—— 换个会话就是另一份，新会话不预选。
-              round 75：这一行从"只放 PPT"变成**一排能力入口**（用户口径：第一次打开的人不知道这个 agent
-              能干什么）——左起是四枚能力胶囊（文档 / 表格 / 报告 / 研究，点一下把起始提示词追加进输入框，
-              见 CapabilityRow），右侧仍是 PPT 模板胶囊（**没有重复**：那枚是模板选择器，不是能力入口）。
-              两者同一个生命周期，由上面这道判定一起出现、一起退场。
-              画廊展开方向因此固定朝下（初始页下方是空白；Radix 还会做碰撞避让，避不开自己翻边）。
-              round 76：退场同样改成常挂 + 收合（见 CollapsibleRow），与上面那行**同拍**一起走。 */}
-          <CollapsibleRow
-            active={hero}
-            testId="composer-capabilities"
-            className="mx-auto mt-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
-          >
-            <CapabilityRow threadId={threadId} />
-            <PptTemplateChip threadId={threadId} side="bottom" />
-          </CollapsibleRow>
+          {/* 2026-10-18（用户原话「chat页面下面这一排按钮可以去掉了」）：输入卡下方的能力行
+              （文档 / 表格 / 报告 / 研究 + PPT 模板胶囊）整行移除；能力行组件与 spec 一并删除。
+              能力入口后续收进输入卡的 ＋ 菜单，PPT 模板选择器（PptTemplatePicker）组件保留、
+              下一轮接。所以卡片下方现在只有 pb-6 的 24px 留白，初始页居中偏移的重算见下面
+              welcome-spacer 注释。 */}
         </div>
       </div>
 
@@ -1664,32 +1658,21 @@ function ActiveChat({
           输入框平滑落到常规底部，不硬切。
           round 64 修正（用户实拍"对话框有些偏下，居中一点好"）：等分只让**页脚**居中，页脚里卡片
           上下还有别的件，卡片的实际中心并不在窗口中心上。
-          round 66 重推（「选择项目」从卡内移到卡片**上方**单独一行，卡片矮了 36、上方多 40）：
+          round 66 推导 + 2026-10-18 重算（卡片下方那排能力/PPT 胶囊整行移除后）：
             记 above = 卡上方那段（pt-4 16 + 选择行 8+32 = 56）
-               below = 卡下方那段（PPT 行 8+32 + pb-6 24 = 64）
+               below = 卡下方那段（现在只剩 pb-6 24）
             自由高度在「消息区」与「本占位」之间等分，于是
               卡片中心 − 窗口中心 = (above − below − mt) / 2     ← 卡片高度在两边约掉，与它无关
-            取 mt = 72px（mt-18 = 4.5rem）：(56 − 64 − 72) / 2 = **−40px** —— 卡片中心落在窗口中心
-            上方 40px，与 round 64/65 两轮用户已看过、未再提"偏下"的那个位置**逐像素一致**
-            （上一轮卡片中心也是 −40：那枚 chip 从卡内移到卡上方，卡片只是变矮，中心不动）。
-            附：本布局里 above ≈ below，所以卡片中心 ≈ 这条"卡上/卡下两行 + 卡片"整组的中心，
-            即这 40px 偏上就是整组的视觉居中略偏上（大约光学中心）。margin 与 flex-grow 一起过渡，
-            首条消息到达时与占位收合同步落回（不硬切）。要再上提/下移，旋钮就是这条 mt。
-          round 76 复核（两行从"条件渲染"改成"常挂 + 收合"，见 CollapsibleRow）：**结论不变，仍是
-            mt-18**。把两行的"在/不在"四种组合都代进去就能看出为什么 —— 两行都是 **+40 一段**
-            （外边距 8 + 内容 32），只是分居卡片上下：
-              两行都在（初始页/展开）：above = 16+40 = 56，below = 40+24 = 64 → 差 −8
-              两行都不在（进对话/收合）：above = 16     ，below = 24      → 差 −8
-            收合是**含外边距**一起收的（grid 项 overflow-hidden 把 mb-2/mt-2 一起裁掉），所以中间
-            那些"只在一行"的过渡帧同样满足 above−below = −(8 + 仍在的那行 40 − 已在的那行 40)……
-            两行同拍一起走，每帧两边同步加减同一个 40，差值恒为 −8。于是 (above − below − mt)/2
-            = (−8 − 72)/2 = −40 与上一轮逐像素一致：**卡片中心不上不下地停在同一个位置**，
-            收合过程里它也不会飘（mt 与占位收合一起过渡，同一档时长）。 */}
+            要保持卡片中心在窗口中心上方 40px（round 64/65 用户看过、未再提"偏下"的位置）：
+              (56 − 24 − mt) / 2 = −40 ⇒ mt = 112px = **mt-28（临时值）**
+            将来「选择项目」行收进卡片后：above 回到 16、below 仍是 24 ⇒ mt = 72px = **mt-18**
+            （那一步落地时恢复 mt-18，两处注释一起改）。margin 与 flex-grow 一起过渡，
+            首条消息到达时与占位收合同步落回（不硬切）。要再上提/下移，旋钮就是这条 mt。 */}
       <div
         data-testid="welcome-spacer"
         className={cn(
           'h-0 basis-0 transition-[flex-grow,margin-top] duration-(--motion-main) ease-main motion-reduce:transition-none',
-          hero ? 'grow mt-18' : 'grow-0'
+          hero ? 'grow mt-28' : 'grow-0'
         )}
       />
     </div>

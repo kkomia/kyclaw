@@ -197,7 +197,7 @@ describe('历史回灌之前：输入卡就在，发送挡着', () => {
     expect(userTexts(control, 0)).toEqual(['上次聊到哪了', '半句话'])
   })
 
-  it('就绪那一刻才落位成初始页：就绪前不是初始页（标题/两行都不在），就绪后一起进场', async () => {
+  it('就绪那一刻才落位成初始页：就绪前不是初始页（标题/行都不在），就绪后一起进场', async () => {
     const control = createMockTransport()
     const history = deferred<UIMessage[]>()
     render(
@@ -222,16 +222,15 @@ describe('历史回灌之前：输入卡就在，发送挡着', () => {
     await waitFor(() => {
       expect(screen.getByTestId('welcome-hero')).toHaveAttribute('data-active', 'true')
     })
-    // 落位：标题进场、占位撑开、两行展开
-    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow', 'mt-18')
+    // 落位：标题进场、占位撑开、选择项目行展开（2026-10-18 起卡片下方的能力/PPT 行已整行移除，
+    // 初始页只剩「选择项目」这一行卡外控件，因此 mt 重算为 112px = mt-28）
+    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow', 'mt-28')
     expect(screen.getByTestId('composer-project-row-collapse')).toHaveAttribute(
       'data-active',
       'true'
     )
-    expect(screen.getByTestId('composer-capabilities-collapse')).toHaveAttribute(
-      'data-active',
-      'true'
-    )
+    expect(screen.queryByTestId('composer-capabilities')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('composer-ppt-template')).not.toBeInTheDocument()
   })
 })
 
