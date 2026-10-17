@@ -11,6 +11,8 @@
  *   - **A2 自绘 chrome**：给 `DocxEditor` 传 `toolbar={<OfficeRibbon/>}`（替换默认 File/Format/
  *     Insert/Help 菜单条 + 默认工具条），`showZoomControl=false`（缩放进了视图 tab），
  *     i18n 用 zh-CN，默认缩放按 860px 纸面宽算（`officeDefaultZoom`）。
+ *   - **A4.5**：QAT 保存态是**壳真值的事件驱动**（`saveState` 由 SurfaceBoot 按壳的
+ *     `doc:save-result` 回执给下来），面里没有任何乐观计时器。
  *
  * 不 import 任何网络/CDN 字体；主题走 `colorMode`（壳的解析明暗）。
  */
@@ -45,6 +47,11 @@ export interface DocxEditorPaneProps {
   bytes: Uint8Array
   readOnly: boolean
   theme: SurfaceTheme
+  /**
+   * A4.5：QAT 保存态**由壳的事件驱动**（`doc:save-result` → SurfaceBoot 的状态机 → 这里）。
+   * 面自己不再猜：没有 1.5s 乐观窗口，`saving` 只在"已发保存请求、还没收到回执"时为真。
+   */
+  saveState: OfficeSaveState
   /** 用户编辑（壳据此推进 editSeq / dirty） */
   onChanged(): void
   /** 编辑器内部保存请求（Ctrl+S / QAT 保存）→ 壳的保存状态机 */
@@ -54,14 +61,6 @@ export interface DocxEditorPaneProps {
   /** 面内错误（打开/布局/保存/运行时） */
   onError(phase: DocxErrorPhase, message: string): void
 }
-
-/**
- * 保存态在面内是 **best-effort**：壳写盘成功/失败没有回传通道（bridge 协议只有
- * `doc:save-request`/`doc:save-bytes`，写盘结果在壳）；这里在"已请求保存"后等一个
- * settle 窗口就回「已保存」，失败时壳侧的 `office-save-error` 错误条才是真相。
- * A4/A5 若加 `doc:saved` 回传，换成事件驱动即可（见 a2-report.md）。
- */
-const SAVE_STATE_SETTLE_MS = 1500
 
 /** DocxEditor 视图开关（视图 tab 的宿主 props；不是内核命令） */
 interface OfficeViewSettings {
@@ -90,9 +89,6 @@ export const DocxEditorPane = forwardRef<DocxEditorPaneHandle, DocxEditorPanePro
       propsRef.current = props
     })
 
-    /** QAT 保存态（面内 best-effort；见上面 SAVE_STATE_SETTLE_MS 注释） */
-    const [saveState, setSaveState] = useState<OfficeSaveState>('saved')
-    const saveStateTimerRef = useRef<number | null>(null)
     /** 视图 tab 的宿主开关（标尺/大纲/页边距参考线） */
     const [viewSettings, setViewSettings] = useState<OfficeViewSettings>(INITIAL_VIEW_SETTINGS)
     /** 默认缩放：用户定调「1280 窗口下纸面视觉宽 ≈ 860px」（office-zoom.ts） */
@@ -125,19 +121,6 @@ export const DocxEditorPane = forwardRef<DocxEditorPaneHandle, DocxEditorPanePro
       }
     }, [initialZoom])
 
-    useEffect(
-      () => () => {
-        if (saveStateTimerRef.current !== null) window.clearTimeout(saveStateTimerRef.current)
-      },
-      []
-    )
-
-    const clearSaveStateTimer = useCallback((): void => {
-      if (saveStateTimerRef.current === null) return
-      window.clearTimeout(saveStateTimerRef.current)
-      saveStateTimerRef.current = null
-    }, [])
-
     useImperativeHandle(
       ref,
       () => ({
@@ -168,23 +151,18 @@ export const DocxEditorPane = forwardRef<DocxEditorPaneHandle, DocxEditorPanePro
     )
 
     const handleChange = useCallback(() => {
-      // 保存请求还没落定就又有修改 → 重新变脏（QAT 的保存态以本地编辑为准）
-      clearSaveStateTimer()
-      setSaveState('dirty')
+      // 保存态由壳的事件驱动（A4.5）：这里只把"又有修改"报给壳/DocChanged，
+      // QAT 的「未保存修改」由 SurfaceBoot 状态机翻（面不再自己猜）。
       propsRef.current.onChanged()
-    }, [clearSaveStateTimer])
+    }, [])
 
     const handleSaveRequest = useCallback(() => {
-      clearSaveStateTimer()
-      setSaveState('saving')
+      // A4.5：QAT 保存按钮与编辑器内部 Ctrl+S 同一条路 —— 打给 SurfaceBoot 的统一保存入口
+      // （它会发带 requestId 的 doc:save-request，并等壳的 doc:save-result 才回「已保存」）。
       propsRef.current.onSaveRequest()
-      saveStateTimerRef.current = window.setTimeout(() => {
-        saveStateTimerRef.current = null
-        setSaveState((current) => (current === 'saving' ? 'saved' : current))
-      }, SAVE_STATE_SETTLE_MS)
       // false = 不走编辑器内置保存（下载/写盘都由宿主负责）
       return false
-    }, [clearSaveStateTimer])
+    }, [])
 
     const handleError = useCallback((error: Error) => {
       propsRef.current.onError('runtime', messageOf(error))
@@ -250,7 +228,7 @@ export const DocxEditorPane = forwardRef<DocxEditorPaneHandle, DocxEditorPanePro
           toolbar={
             <OfficeRibbon
               documentName={props.name}
-              saveState={saveState}
+              saveState={props.saveState}
               readOnly={props.readOnly}
               onRequestSave={handleSaveRequest}
               hostToggles={{

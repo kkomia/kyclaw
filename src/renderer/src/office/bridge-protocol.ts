@@ -13,9 +13,10 @@
  *   壳 → 面  `doc:open`         { nonce, documentId, name, sha256, readOnly, bytes }
  *   面 → 壳  `doc:loaded`       { nonce, documentId, pages }    文档挂载 + 首次布局完成
  *   面 → 壳  `doc:changed`      { nonce, documentId, revision } 用户编辑（revision 单调）
- *   面 → 壳  `doc:save-request` { nonce, documentId }           用户点了编辑器自己的保存/菜单
+ *   面 → 壳  `doc:save-request` { nonce, requestId, documentId } 用户发起保存（QAT / 面内 Ctrl+S）
  *   壳 → 面  `doc:save`         { nonce, requestId }            要求面生成保存字节
  *   面 → 壳  `doc:save-bytes`   { nonce, requestId, documentId, bytes }
+ *   壳 → 面  `doc:save-result`  { nonce, requestId, ok, code?, message? } 写盘结果回执（A4.5）
  *   壳 → 面  `doc:reload`       { nonce, bytes }                冲突后从磁盘重载（丢内存修改）
  *   壳 → 面  `doc:close`        { nonce, documentId }           卸载编辑器
  *   面 → 壳  `doc:error`        { nonce, documentId?, phase, message }
@@ -71,10 +72,16 @@ export interface DocChangedMessage {
   revision: number
 }
 
-/** 面 → 壳：用户触发了编辑器内部的保存（Ctrl+S / File > Save）→ 由壳跑保存状态机 */
+/**
+ * 面 → 壳：用户发起了保存（A2 QAT 按钮 / 面内 Ctrl+S 同一路）。
+ *
+ * A4.5 起带 `requestId`：壳在**写盘结果落定**后用同一条 id 回 `doc:save-result`，
+ * 面内 QAT 据此驱动 已保存/未保存/错误（不再靠 1.5s 乐观窗口猜）。
+ */
 export interface DocSaveRequestMessage {
   type: 'doc:save-request'
   nonce: string
+  requestId: string
   documentId: string
 }
 
@@ -149,6 +156,26 @@ export interface DocSaveMessage {
   requestId: string
 }
 
+/**
+ * 壳 → 面：**保存结果回执**（A4.5）：壳的保存状态机写盘落定后回发，把面内 QAT 从乐观窗口
+ * 改成事件驱动。
+ *
+ * - `ok:true`：写盘 + commit 成功（面据此进「已保存」；若保存期间又有编辑，面自己按 revision
+ *   判定仍显示「未保存修改」——真相与壳的 save-machine 对齐）；
+ * - `ok:false`：失败（`code` 是壳的分类：`write-locked` / `conflict` / `write-failed` /
+ *   `no-space` / `save-failed` …），面进「未保存修改」+ 错误态，文案只用壳给 `message`（不自造）；
+ * - `requestId`：面发起的那次保存的 id（原样回带）；壳侧主动发起的保存（壳按钮/壳侧 Ctrl+S）
+ *   也会回一条，面按"没有在途请求 → 直接采信"处理。
+ */
+export interface DocSaveResultMessage {
+  type: 'doc:save-result'
+  nonce: string
+  requestId: string
+  ok: boolean
+  code?: string
+  message?: string
+}
+
 /** 壳 → 面：从磁盘字节重载（冲突后用户选择"重新载入"；丢内存修改前壳必须二次确认） */
 export interface DocReloadMessage {
   type: 'doc:reload'
@@ -164,7 +191,12 @@ export interface DocCloseMessage {
 }
 
 export type ShellToSurfaceMessage =
-  SurfaceInitMessage | DocOpenMessage | DocSaveMessage | DocReloadMessage | DocCloseMessage
+  | SurfaceInitMessage
+  | DocOpenMessage
+  | DocSaveMessage
+  | DocSaveResultMessage
+  | DocReloadMessage
+  | DocCloseMessage
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -252,6 +284,7 @@ export function isDocSaveRequest(value: unknown): value is DocSaveRequestMessage
   return (
     value.type === 'doc:save-request' &&
     isNonEmptyString(value.nonce) &&
+    isNonEmptyString(value.requestId) &&
     isNonEmptyString(value.documentId)
   )
 }
@@ -304,6 +337,20 @@ export function isDocSave(value: unknown): value is DocSaveMessage {
   return (
     value.type === 'doc:save' && isNonEmptyString(value.nonce) && isNonEmptyString(value.requestId)
   )
+}
+
+/**
+ * 保存结果回执（壳 → 面）的形状检查：`ok` 必须是布尔、`code`/`message` 若给必须是非空字符串
+ * （面只显示壳给的人话，不收半截/伪造的回执）。
+ */
+export function isDocSaveResult(value: unknown): value is DocSaveResultMessage {
+  if (!isRecord(value)) return false
+  if (value.type !== 'doc:save-result') return false
+  if (!isNonEmptyString(value.nonce) || !isNonEmptyString(value.requestId)) return false
+  if (typeof value.ok !== 'boolean') return false
+  if (value.code !== undefined && !isNonEmptyString(value.code)) return false
+  if (value.message !== undefined && !isNonEmptyString(value.message)) return false
+  return true
 }
 
 export function isDocReload(value: unknown): value is DocReloadMessage {

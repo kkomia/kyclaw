@@ -12,6 +12,8 @@
  * S3：消息面扩成保存链路 —— 面 `doc:changed` / `doc:save-request` / `doc:error` 回调给壳；
  *     壳经命令式句柄 `requestSaveBytes()`（`doc:save` → 等 `doc:save-bytes`）、
  *     `reloadDocument()`（`doc:reload`）、`closeDocument()`（`doc:close`）驱动面。
+ * A4.5：面发起保存时带 requestId（`doc:save-request`），壳写盘落定后用 `resolveSaveResult()`
+ *     回 `doc:save-result` —— 面内 QAT 的保存态因此是事件驱动的（没有乐观计时器）。
  *
  * 安全要点：
  *   - `sandbox="allow-scripts allow-same-origin"` 就这两项；跨源下**不给** allow-top-navigation；
@@ -35,6 +37,7 @@ import {
   type DocOpenMessage,
   type DocReloadMessage,
   type DocSaveMessage,
+  type DocSaveResultMessage,
   type ShellToSurfaceMessage,
   type SurfaceShortcutAction,
   type SurfaceTheme
@@ -62,8 +65,8 @@ export interface OfficeSurfaceProps {
   onDocLoaded?: (pages: number) => void
   /** 面报告用户编辑（revision 单调；壳的 editSeq 只信这条） */
   onDocChanged?: (revision: number) => void
-  /** 面内触发保存（编辑器自己的 Ctrl+S / File > Save）→ 壳保存状态机 */
-  onDocSaveRequest?: () => void
+  /** 面内触发保存（A4.5：QAT 按钮 / 面内 Ctrl+S，带 requestId）→ 壳保存状态机；结果用 resolveSaveResult 回执 */
+  onDocSaveRequest?: (request: { requestId: string; documentId: string }) => void
   /** 面内错误（打开/布局/保存/运行时） */
   onDocError?: (phase: OfficeSurfaceErrorPhase, message: string) => void
   /**
@@ -81,6 +84,16 @@ export interface OfficeSurfaceProps {
 export interface OfficeSurfaceHandle {
   /** 保存三阶段的 generate：doc:save → 等 doc:save-bytes；失败/超时回 null */
   requestSaveBytes(): Promise<Uint8Array | null>
+  /**
+   * A4.5：把壳的写盘结果回执给面（`doc:save-result`）→ 面内 QAT 从「保存中」落到 已保存/错误。
+   * 只有当前这个 iframe 会收到（每个 workspace 一份 surface，多 iframe 天然隔离）。
+   */
+  resolveSaveResult(result: {
+    requestId: string
+    ok: boolean
+    code?: string
+    message?: string
+  }): void
   /** 冲突后从磁盘字节重载（会丢内存修改；调用方负责确认） */
   reloadDocument(bytes: Uint8Array): void
   /** 卸载面内编辑器（关标签/整面重载前） */
@@ -214,6 +227,16 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           const message: Omit<DocReloadMessage, 'nonce'> = { type: 'doc:reload', bytes }
           postToSurface(message)
         },
+        resolveSaveResult(result): void {
+          const message: Omit<DocSaveResultMessage, 'nonce'> = {
+            type: 'doc:save-result',
+            requestId: result.requestId,
+            ok: result.ok,
+            ...(result.code === undefined ? {} : { code: result.code }),
+            ...(result.message === undefined ? {} : { message: result.message })
+          }
+          postToSurface(message)
+        },
         closeDocument(): void {
           const info = documentInfoRef.current
           if (info === undefined) return
@@ -233,6 +256,18 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       let disposed = false
       // 清理时按"挂载那一刻"的 Map 兑现在途 generate（effect 期内不会换 Map 实例）
       const pendingSaves = pendingSavesRef.current
+
+      /**
+       * 就绪超时定时器（A5 真机验收 P1 bug）：收到 surface:ready 后必须清掉它，否则
+       * 15s 后必然误报「隔离面启动失败」（文档其实早已 ready、可编辑）。
+       * 只有 hello/ready 之前超时才是真的 fatal。
+       */
+      let readyTimer: number | null = null
+      const clearReadyTimer = (): void => {
+        if (readyTimer === null) return
+        window.clearTimeout(readyTimer)
+        readyTimer = null
+      }
 
       const update = (next: OfficeSurfaceStatus, message = ''): void => {
         if (disposed || statusRef.current === next) return
@@ -274,10 +309,13 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           return
         }
         if (isSurfaceReady(data) && data.nonce === nonceRef.current) {
+          // A5 P1 bug：ready 后清就绪超时，否则 15s 后误报 fatal（文档正常却弹「启动失败」）
+          clearReadyTimer()
           update('ready')
           return
         }
         if (isSurfaceFatal(data)) {
+          clearReadyTimer()
           update('fatal', data.message)
           return
         }
@@ -291,7 +329,10 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           return
         }
         if (isDocSaveRequest(data) && data.nonce === nonceRef.current) {
-          onDocSaveRequestRef.current?.()
+          onDocSaveRequestRef.current?.({
+            requestId: data.requestId,
+            documentId: data.documentId
+          })
           return
         }
         if (isDocSaveBytes(data) && data.nonce === nonceRef.current) {
@@ -313,7 +354,8 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       // 监听挂上之后再设 src（JSX 里不写 src）：避免面先加载完、hello 落在监听之前。
       // 面侧另有 250ms 重发兜底，两道保险都只为把竞态窗口压到 0。
       if (iframeRef.current !== null) iframeRef.current.src = url
-      const timeout = window.setTimeout(() => {
+      readyTimer = window.setTimeout(() => {
+        readyTimer = null
         update(
           'fatal',
           'surface 初始化超时（若为 dev 形态，确认 Vite 已起来且 CSP 的 localhost:5173 与端口一致）'
@@ -325,7 +367,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         // 在途的 generate 一律以 null 兑现（避免壳的保存状态机永远等）
         for (const settle of [...pendingSaves.values()]) settle(null)
         pendingSaves.clear()
-        window.clearTimeout(timeout)
+        clearReadyTimer()
         window.removeEventListener('message', onMessage)
       }
     }, [url, readyTimeoutMs])

@@ -25,6 +25,7 @@ import {
   isDocOpen,
   isDocReload,
   isDocSave,
+  isDocSaveResult,
   isSurfaceInit,
   SURFACE_PROTOCOL_VERSION,
   type DocChangedMessage,
@@ -38,11 +39,18 @@ import {
   type SurfaceTheme
 } from './bridge-protocol'
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
+import type { OfficeSaveState } from './components/OfficeRibbonView'
 import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
 
 /** hello 重发间隔与总窗口：父页监听挂晚了也能对上 */
 const HELLO_RETRY_MS = 250
 const HELLO_RETRY_WINDOW_MS = 5000
+
+/**
+ * A4.5：面发保存请求后等壳 `doc:save-result` 的上限。超时**不假装已保存**：回「未保存修改」+
+ * 「保存未确认」提示（壳的写盘可能仍在进行，用户可重试；壳侧的真实结果会在之后到达并被采信）。
+ */
+const SAVE_RESULT_TIMEOUT_MS = 15_000
 
 /**
  * 把主题落到面的文档根上（A1：颜色不再写字面值，全部走 token）。
@@ -99,6 +107,19 @@ export function SurfaceBoot(): React.JSX.Element {
   const editorPaneRef = useRef<DocxEditorPaneHandle | null>(null)
   /** 字体注册只启动一次（面内单实例；注册本身在 fonts.ts 里还做了一层幂等） */
   const fontsStartedRef = useRef(false)
+  /**
+   * A4.5：面发起的保存请求（QAT / 面内 Ctrl+S）。QAT 保存态不再靠计时器猜：
+   *   - 请求发出 = `saving`；收到壳 `doc:save-result` 才落定（ok → saved / 失败 → dirty + 错误）；
+   *   - `requestId` 只认最新一个（连点保存/多次请求时旧回执忽略）；
+   *   - 15s 没回执 = 「保存未确认」回 dirty（不假装已保存）。
+   */
+  const pendingSaveRef = useRef<{
+    requestId: string
+    revisionAtRequest: number
+    timer: number
+  } | null>(null)
+  const [saveState, setSaveState] = useState<OfficeSaveState>('saved')
+  const [saveError, setSaveError] = useState('')
 
   /** 安全地把消息发给父页（父页没了就忽略） */
   const post = useCallback((message: Omit<DocErrorMessage, 'nonce'> | object): void => {
@@ -149,6 +170,8 @@ export function SurfaceBoot(): React.JSX.Element {
     if (current === null) return
     revisionRef.current += 1
     setRevision(revisionRef.current)
+    // A4.5：只要有编辑就绝不再显示「已保存」（在飞的保存等壳回执时按 revision 再判一次）
+    setSaveState('dirty')
     const message: Omit<DocChangedMessage, 'nonce'> = {
       type: 'doc:changed',
       documentId: current.documentId,
@@ -157,16 +180,77 @@ export function SurfaceBoot(): React.JSX.Element {
     post(message)
   }, [post])
 
-  /** 编辑器内部保存（Ctrl+S / File > Save）：交给壳的保存状态机（不自己做内置保存） */
-  const handleSaveRequest = useCallback((): void => {
+  /** 清掉在飞的保存请求（换文档/关标签/卸载时用；不伪造结果） */
+  const clearPendingSave = useCallback((): void => {
+    const pending = pendingSaveRef.current
+    if (pending === null) return
+    window.clearTimeout(pending.timer)
+    pendingSaveRef.current = null
+  }, [])
+
+  /**
+   * A4.5：面内唯一的保存入口（QAT 按钮 / QAT Ctrl+S / 面内 Ctrl+S 都到这里）。
+   * 发带 requestId 的 `doc:save-request`，等壳写盘结果回执；**不在这里假装已保存**。
+   */
+  const requestSave = useCallback((): void => {
     const current = docRef.current
-    if (current === null) return
+    if (current === null || current.readOnly || nonceRef.current === null) return
+    clearPendingSave()
+    const requestId = createSurfaceNonce()
+    const revisionAtRequest = revisionRef.current
+    setSaveState('saving')
+    setSaveError('')
+    const timer = window.setTimeout(() => {
+      const pending = pendingSaveRef.current
+      if (pending === null || pending.requestId !== requestId) return
+      pendingSaveRef.current = null
+      // 超时兜底：不假装已保存（壳的写盘可能仍在进行，真实结果到达后仍会被采信）
+      setSaveState('dirty')
+      setSaveError('保存未确认：等待壳的写盘回执超时（修改仍在编辑器里，可重试保存）')
+    }, SAVE_RESULT_TIMEOUT_MS)
+    pendingSaveRef.current = { requestId, revisionAtRequest, timer }
     const message: Omit<DocSaveRequestMessage, 'nonce'> = {
       type: 'doc:save-request',
+      requestId,
       documentId: current.documentId
     }
     post(message)
-  }, [post])
+  }, [clearPendingSave, post])
+
+  /** 壳的保存结果回执（A4.5）：ok → saved（期间又编辑过则仍 dirty）；失败 → dirty + 壳给的人话 */
+  const handleSaveResult = useCallback(
+    (result: { requestId: string; ok: boolean; code?: string; message?: string }): void => {
+      const pending = pendingSaveRef.current
+      // 只认最新一个：有在途请求时，旧 requestId 的回执一律忽略（连点保存/多次请求）
+      if (pending !== null && pending.requestId !== result.requestId) return
+      if (pending !== null) {
+        window.clearTimeout(pending.timer)
+        pendingSaveRef.current = null
+      }
+      const revisionUnchanged =
+        pending !== null && revisionRef.current === pending.revisionAtRequest
+      if (result.ok) {
+        // 保存期间又改过 → 壳的 save-machine 也仍算脏，面这边同样显示未保存
+        setSaveState(revisionUnchanged || pending === null ? 'saved' : 'dirty')
+        setSaveError('')
+        return
+      }
+      setSaveState('dirty')
+      setSaveError(
+        result.message ??
+          (result.code === undefined ? '保存失败（壳未给原因）' : `保存失败：${result.code}`)
+      )
+    },
+    []
+  )
+
+  /** 卸载 / 换面时清计时器（不伪造任何结果） */
+  useEffect(
+    () => () => {
+      clearPendingSave()
+    },
+    [clearPendingSave]
+  )
 
   const handleEditorError = useCallback(
     (phase: DocxErrorPhase, message: string): void => {
@@ -269,11 +353,28 @@ export function SurfaceBoot(): React.JSX.Element {
         setError('')
         revisionRef.current = 0
         setRevision(0)
+        // A4.5：换文档 = 保存态归零（不继承上一篇的 saving/dirty/错误）
+        clearPendingSave()
+        setSaveState('saved')
+        setSaveError('')
         return
       }
 
       if (isDocSave(data) && data.nonce === nonce) {
         void generateSaveBytes(data.requestId)
+        return
+      }
+
+      // A4.5：壳的写盘回执 → QAT 保存态（事件驱动，不猜）
+      if (isDocSaveResult(data) && data.nonce === nonce) {
+        const current = docRef.current
+        if (current === null) return
+        handleSaveResult({
+          requestId: data.requestId,
+          ok: data.ok,
+          ...(data.code === undefined ? {} : { code: data.code }),
+          ...(data.message === undefined ? {} : { message: data.message })
+        })
         return
       }
 
@@ -295,8 +396,11 @@ export function SurfaceBoot(): React.JSX.Element {
         setEditorState('idle')
         setEditorReadyMs(null)
         setError('')
-        setRevision(0)
         revisionRef.current = 0
+        setRevision(0)
+        clearPendingSave()
+        setSaveState('saved')
+        setSaveError('')
       }
     }
 
@@ -315,17 +419,23 @@ export function SurfaceBoot(): React.JSX.Element {
       window.clearTimeout(stopTimer)
       window.removeEventListener('message', onMessage)
     }
-  }, [post, postError])
+  }, [post, postError, handleSaveResult, clearPendingSave])
 
-  // M3-S4：面内快捷键转发（capture 阶段拦下并吞掉，避免编辑器自己的 Ctrl+S 再走一遍；
-  // 保存只从壳的 office-actions 走一条路）。未握手 / 无文档时不抢键。
+  // M3-S4/A4.5：面内快捷键转发（capture 阶段拦下并吞掉）。
+  // Ctrl+S 不再转 `surface:shortcut`：走**面自己的保存入口**（带 requestId 的 doc:save-request），
+  // 这样壳的写盘结果能回执给面内 QAT —— 与 QAT 保存按钮同一条路（A4.5 去掉了乐观窗口）。
   useEffect(() => {
     if (bootState !== 'ready' || doc === null) return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      if (event.key === 's' || event.key === 'S') {
+        event.preventDefault()
+        event.stopPropagation()
+        requestSave()
+        return
+      }
       let action: SurfaceShortcutMessage['action'] | null = null
-      if (event.key === 's' || event.key === 'S') action = 'save'
-      else if ((event.key === 'w' || event.key === 'W') && !event.shiftKey) action = 'close'
+      if ((event.key === 'w' || event.key === 'W') && !event.shiftKey) action = 'close'
       else if (event.key === 'Tab') action = event.shiftKey ? 'prev-tab' : 'next-tab'
       if (action === null) return
       event.preventDefault()
@@ -335,7 +445,7 @@ export function SurfaceBoot(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [bootState, doc, post])
+  }, [bootState, doc, post, requestSave])
 
   // 文档到达后先注册本地字体（只启动一次；失败不阻塞页面，但编辑器不挂）
   useEffect(() => {
@@ -404,11 +514,23 @@ export function SurfaceBoot(): React.JSX.Element {
           data-testid="surface-save-stats"
           data-save-count={saveStats.count}
           data-last-bytes={saveStats.bytes}
+          data-save-state={saveState}
+          data-save-error={saveError}
           data-fonts-ms={fontStats?.ms ?? ''}
           data-fonts-bytes={fontStats?.fetchedBytes ?? 0}
         >
           保存 {saveStats.count} 次
         </span>
+        {saveError === '' ? null : (
+          <span
+            data-testid="surface-save-error"
+            role="alert"
+            style={{ color: 'var(--danger)' }}
+            title={saveError}
+          >
+            {saveError}
+          </span>
+        )}
         {error === '' ? null : (
           <span data-testid="surface-error" style={{ color: 'var(--danger)' }}>
             {error}
@@ -434,9 +556,10 @@ export function SurfaceBoot(): React.JSX.Element {
             readOnly={doc.readOnly}
             theme={theme}
             onChanged={handleChanged}
-            onSaveRequest={handleSaveRequest}
+            onSaveRequest={requestSave}
             onLoaded={handleLoaded}
             onError={handleEditorError}
+            saveState={saveState}
           />
         ) : (
           <div className="office-surface-loading" data-testid="surface-fonts-loading">

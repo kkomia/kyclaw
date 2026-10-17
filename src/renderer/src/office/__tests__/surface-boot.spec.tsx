@@ -21,6 +21,7 @@ const editorMock = vi.hoisted(() => ({
     name: string
     readOnly: boolean
     theme: string
+    saveState: string
     onChanged: () => void
     onSaveRequest: () => void
     onLoaded: (pages: number) => void
@@ -63,6 +64,7 @@ import { SurfaceBoot } from '../SurfaceBoot'
 import { createSurfaceNonce } from '../bridge-protocol'
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   delete document.documentElement.dataset.surfaceTheme
   document.documentElement.removeAttribute('style')
@@ -215,11 +217,18 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     const changes = sentMessages(postMessage).filter((message) => message.type === 'doc:changed')
     expect(changes.map((message) => message.revision)).toEqual([1, 2])
     expect(changes[0]).toMatchObject({ documentId: 'doc-1', nonce })
+    // A4.5：编辑 = 未保存（QAT 状态由壳事件驱动，面只标脏）
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
 
     act(() => editorMock.lastProps?.onSaveRequest())
-    expect(
-      sentMessages(postMessage).find((message) => message.type === 'doc:save-request')
-    ).toMatchObject({ documentId: 'doc-1' })
+    const saveRequest = sentMessages(postMessage).find(
+      (message) => message.type === 'doc:save-request'
+    )
+    expect(saveRequest).toMatchObject({ documentId: 'doc-1', nonce })
+    // A4.5：保存请求带 requestId（壳按它回执），面进 saving
+    expect(typeof saveRequest?.requestId).toBe('string')
+    expect((saveRequest?.requestId as string).length).toBeGreaterThan(0)
+    expect(editorMock.lastProps?.saveState).toBe('saving')
   })
 
   it('壳 doc:save → 面 flush+save 并回 doc:save-bytes（requestId 原样带回）', async () => {
@@ -291,6 +300,196 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-state', 'empty')
   })
 })
+describe('SurfaceBoot：A4.5 保存结果回传（doc:save-result 事件驱动）', () => {
+  /** 握手 + 开文档 + 布局完成（可交互） */
+  async function openReadyDoc(): Promise<{
+    postMessage: ReturnType<typeof vi.spyOn>
+    nonce: string
+  }> {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    act(() => dispatchFromParent({ ...DOC, nonce }))
+    await waitFor(() => expect(screen.getByTestId('surface-docx-editor')).toBeInTheDocument())
+    act(() => editorMock.lastProps?.onLoaded(1))
+    await waitFor(() =>
+      expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+    )
+    return { postMessage, nonce }
+  }
+
+  function saveRequests(postMessage: ReturnType<typeof vi.spyOn>): SentMessage[] {
+    return sentMessages(postMessage).filter((message) => message.type === 'doc:save-request')
+  }
+
+  it('回执 ok → 已保存；失败 → 未保存 + 只用壳给的人话（面不自己造）', async () => {
+    const { postMessage, nonce } = await openReadyDoc()
+
+    act(() => editorMock.lastProps?.onSaveRequest())
+    const first = saveRequests(postMessage).at(-1)
+    expect(editorMock.lastProps?.saveState).toBe('saving')
+
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: first?.requestId,
+        ok: true
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saved')
+    expect(screen.getByTestId('surface-save-stats')).toHaveAttribute('data-save-state', 'saved')
+    expect(screen.queryByTestId('surface-save-error')).not.toBeInTheDocument()
+
+    // 失败：QAT 回未保存 + 错误行显示壳给的人话（不是面自己编的）
+    act(() => editorMock.lastProps?.onSaveRequest())
+    const second = saveRequests(postMessage).at(-1)
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: second?.requestId,
+        ok: false,
+        code: 'write-locked',
+        message: '文件被其他程序占用，可以先另存为再替换'
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
+    expect(screen.getByTestId('surface-save-error')).toHaveTextContent(
+      '文件被其他程序占用，可以先另存为再替换'
+    )
+    expect(screen.getByTestId('surface-save-stats')).toHaveAttribute('data-save-state', 'dirty')
+  })
+
+  it('保存期间又编辑：回执 ok 也仍显示未保存（与壳 save-machine 的 seq 口径一致）', async () => {
+    const { postMessage, nonce } = await openReadyDoc()
+
+    act(() => editorMock.lastProps?.onSaveRequest())
+    const request = saveRequests(postMessage).at(-1)
+    // 保存请求已发出后用户继续编辑
+    act(() => editorMock.lastProps?.onChanged())
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
+
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: request?.requestId,
+        ok: true
+      })
+    )
+    // 写盘只覆盖到"发起那一刻"的内容，期间的新编辑仍是未保存
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
+  })
+
+  it('旧 requestId 的回执忽略：只认最新那一次保存', async () => {
+    const { postMessage, nonce } = await openReadyDoc()
+
+    act(() => editorMock.lastProps?.onSaveRequest())
+    const first = saveRequests(postMessage).at(-1)
+    act(() => editorMock.lastProps?.onSaveRequest())
+    const second = saveRequests(postMessage).at(-1)
+    expect(second?.requestId).not.toBe(first?.requestId)
+
+    // 旧请求的回执：不落定（仍在保存中）
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: first?.requestId,
+        ok: true
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saving')
+
+    // 最新请求的回执才生效
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: second?.requestId,
+        ok: true
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saved')
+  })
+
+  it('15s 没有回执：回未保存 + 「保存未确认」（绝不假装已保存）；晚到的真实回执仍采信', async () => {
+    const { postMessage, nonce } = await openReadyDoc()
+    vi.useFakeTimers()
+
+    act(() => editorMock.lastProps?.onSaveRequest())
+    expect(editorMock.lastProps?.saveState).toBe('saving')
+
+    act(() => vi.advanceTimersByTime(15_000))
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
+    expect(screen.getByTestId('surface-save-error')).toHaveTextContent('保存未确认')
+
+    // 壳的写盘其实成功了、回执只是晚到：仍按真实结果落定
+    const request = saveRequests(postMessage).at(-1)
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: request?.requestId,
+        ok: true
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saved')
+  })
+
+  it('壳侧发起的保存（面没有在途请求）：回执同样采信（QAT 与状态栏一致）', async () => {
+    const { nonce } = await openReadyDoc()
+
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: 'shell-initiated-1',
+        ok: false,
+        code: 'conflict',
+        message: '文件在打开后被其他程序改过，需要先决定怎么处理'
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('dirty')
+    expect(screen.getByTestId('surface-save-error')).toHaveTextContent('文件在打开后被其他程序改过')
+
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: 'shell-initiated-2',
+        ok: true
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saved')
+  })
+
+  it('伪造 nonce / 畸形回执丢弃（不改保存态、不抛）', async () => {
+    const { nonce } = await openReadyDoc()
+
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce: 'forged',
+        requestId: 'x',
+        ok: false,
+        message: '假失败'
+      })
+    )
+    act(() =>
+      dispatchFromParent({
+        type: 'doc:save-result',
+        nonce,
+        requestId: 'x',
+        ok: 'yes'
+      })
+    )
+    expect(editorMock.lastProps?.saveState).toBe('saved')
+    expect(screen.queryByTestId('surface-save-error')).not.toBeInTheDocument()
+  })
+})
+
 describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
   /** 打开一个文档并等编辑器可交互 */
   async function openDoc(nonce: string): Promise<void> {
@@ -308,9 +507,13 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     const nonce = await handshake(postMessage)
     await openDoc(nonce)
 
-    // Ctrl+S：preventDefault（dispatchEvent 返回 false）+ 发 surface:shortcut save
+    // Ctrl+S：preventDefault（dispatchEvent 返回 false）+ 走面自己的保存入口（A4.5：带 requestId，
+    // 不再转 surface:shortcut —— 这样壳的写盘回执能回给 QAT）
     const saveEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
     expect(window.dispatchEvent(saveEvent)).toBe(false)
+    expect(
+      sentMessages(postMessage).filter((message) => message.type === 'doc:save-request')
+    ).toHaveLength(1)
     // Ctrl+W：close
     expect(
       window.dispatchEvent(
@@ -337,12 +540,8 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     const shortcuts = sentMessages(postMessage).filter(
       (message) => message.type === 'surface:shortcut'
     )
-    expect(shortcuts.map((message) => message.action)).toEqual([
-      'save',
-      'close',
-      'next-tab',
-      'prev-tab'
-    ])
+    // A4.5：Ctrl+S 不再是 surface:shortcut 动作（走保存回执链路）
+    expect(shortcuts.map((message) => message.action)).toEqual(['close', 'next-tab', 'prev-tab'])
     expect(shortcuts[0]?.nonce).toBe(nonce)
 
     // 没有 Ctrl 的 S/W、Ctrl+Shift+W（不归我们管）、Ctrl+Alt+S 都不发
@@ -355,7 +554,11 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     )
     expect(
       sentMessages(postMessage).filter((message) => message.type === 'surface:shortcut')
-    ).toHaveLength(4)
+    ).toHaveLength(3)
+    // 这些也不该触发保存请求（只发了一条：上面那个 Ctrl+S）
+    expect(
+      sentMessages(postMessage).filter((message) => message.type === 'doc:save-request')
+    ).toHaveLength(1)
   })
 
   it('握手未完成 / 还没有文档时不抢键（不 preventDefault、不发消息）', async () => {

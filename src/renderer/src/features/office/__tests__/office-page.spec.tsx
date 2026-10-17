@@ -302,10 +302,27 @@ async function bootEditorSurface(documentId: string): Promise<Window> {
 function sentToSurface(
   frameWindow: Window,
   type: string
-): Array<{ type: string; requestId?: string; documentId?: string }> {
+): Array<{
+  type: string
+  requestId?: string
+  documentId?: string
+  ok?: boolean
+  code?: string
+  message?: string
+}> {
   const spy = vi.mocked(frameWindow.postMessage)
   return spy.mock.calls
-    .map((call) => call[0] as { type: string; requestId?: string; documentId?: string })
+    .map(
+      (call) =>
+        call[0] as {
+          type: string
+          requestId?: string
+          documentId?: string
+          ok?: boolean
+          code?: string
+          message?: string
+        }
+    )
     .filter((message) => message.type === type)
 }
 
@@ -430,6 +447,184 @@ describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误
     // 失败绝不清脏
     expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
     expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未保存修改')
+  })
+
+  it('A4.5 面发起保存（doc:save-request）→ 壳写盘成功→ 回 doc:save-result（requestId 原样带回）', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-a45-ok', displayName: '回执.docx' }),
+      new Uint8Array([1, 2, 3])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-a45-ok', displayName: '回执.docx' }),
+      alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: true,
+      documentId: 'doc-a45-ok',
+      mtimeMs: 2,
+      sha256: 'b'.repeat(64),
+      size: 4,
+      savedAt: 1
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-a45-ok')
+
+    // 面内 QAT 保存 = doc:save-request（带 requestId）；壳照既有保存入口跑保存状态机
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-request',
+        nonce: 'n-1',
+        requestId: 'surface-save-1',
+        documentId: 'doc-a45-ok'
+      })
+    )
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    const generate = sentToSurface(frameWindow, 'doc:save')[0]
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId: generate?.requestId,
+        documentId: 'doc-a45-ok',
+        bytes: new Uint8Array([9, 9])
+      })
+    )
+    await waitFor(() => expect(bridge.office.save).toHaveBeenCalledTimes(1))
+
+    // 写盘落定 → 壳把结果回执给面（同一 requestId）→ 面内 QAT 才允许进「已保存」
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save-result')).toHaveLength(1))
+    expect(sentToSurface(frameWindow, 'doc:save-result')[0]).toMatchObject({
+      type: 'doc:save-result',
+      requestId: 'surface-save-1',
+      ok: true
+    })
+  })
+
+  it('A4.5 面发起保存失败（write-locked）→ 回 doc:save-result ok:false + 壳的分类与人话', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-a45-fail', displayName: '占用.docx' }),
+      new Uint8Array([1])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-a45-fail', displayName: '占用.docx' }),
+      alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: false,
+      code: 'write-locked',
+      message: '文件被其他程序占用，可以先另存为再替换'
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-a45-fail')
+
+    // 先有真实编辑（dirty），失败后必须仍脏
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:changed',
+        nonce: 'n-1',
+        documentId: 'doc-a45-fail',
+        revision: 1
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    )
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-request',
+        nonce: 'n-1',
+        requestId: 'surface-save-2',
+        documentId: 'doc-a45-fail'
+      })
+    )
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    const generate = sentToSurface(frameWindow, 'doc:save')[0]
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId: generate?.requestId,
+        documentId: 'doc-a45-fail',
+        bytes: new Uint8Array([2])
+      })
+    )
+
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save-result')).toHaveLength(1))
+    expect(sentToSurface(frameWindow, 'doc:save-result')[0]).toMatchObject({
+      type: 'doc:save-result',
+      requestId: 'surface-save-2',
+      ok: false,
+      code: 'write-locked'
+    })
+    // 壳自己的错误面同时出现（失败不丢脏）
+    expect(await screen.findByTestId('office-save-error')).toHaveTextContent('文件被其他程序占用')
+    expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+  })
+
+  it('A4.5 壳侧保存（保存按钮）成功后也回执给面：QAT 与状态栏一致', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-a45-shell', displayName: '壳保存.docx' }),
+      new Uint8Array([1, 2, 3])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({
+        documentId: 'doc-a45-shell',
+        displayName: '壳保存.docx'
+      }),
+      alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: true,
+      documentId: 'doc-a45-shell',
+      mtimeMs: 2,
+      sha256: 'b'.repeat(64),
+      size: 4,
+      savedAt: 1
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-a45-shell')
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:changed',
+        nonce: 'n-1',
+        documentId: 'doc-a45-shell',
+        revision: 1
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    )
+
+    // 壳侧入口（保存按钮）发起的保存：面没有在途请求，回执用壳生成的 id → 面直接采信
+    fireEvent.click(screen.getByTestId('office-save'))
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    const generate = sentToSurface(frameWindow, 'doc:save')[0]
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId: generate?.requestId,
+        documentId: 'doc-a45-shell',
+        bytes: new Uint8Array([7])
+      })
+    )
+    await waitFor(() => expect(bridge.office.save).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save-result')).toHaveLength(1))
+    const result = sentToSurface(frameWindow, 'doc:save-result')[0]
+    expect(result).toMatchObject({ ok: true })
+    expect(typeof result?.requestId).toBe('string')
+    expect((result?.requestId as string).length).toBeGreaterThan(0)
   })
 
   it('面内 Ctrl+S（surface:shortcut）→ 壳统一分发 → doc:save → 保存成功清脏', async () => {

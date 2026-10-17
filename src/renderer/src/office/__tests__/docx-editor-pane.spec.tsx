@@ -73,26 +73,33 @@ vi.mock('@betteroffice/docx-i18n/zh-CN', () => ({
   zhCN: { _lang: 'zh-CN' }
 }))
 
-function renderPane(): {
+function renderPane(saveState: 'saved' | 'dirty' | 'saving' = 'saved'): {
   onSaveRequest: ReturnType<typeof vi.fn>
   onChanged: ReturnType<typeof vi.fn>
+  rerenderWithSaveState: (state: 'saved' | 'dirty' | 'saving') => void
 } {
   const onSaveRequest = vi.fn()
   const onChanged = vi.fn()
-  render(
+  const pane = (state: 'saved' | 'dirty' | 'saving'): React.JSX.Element => (
     <DocxEditorPane
       documentId="doc-1"
       name="数据仓管理系统建设技术方案.docx"
       bytes={new Uint8Array([1, 2, 3])}
       readOnly={false}
       theme="light"
+      saveState={state}
       onChanged={onChanged}
       onSaveRequest={onSaveRequest}
       onLoaded={vi.fn()}
       onError={vi.fn()}
     />
   )
-  return { onSaveRequest, onChanged }
+  const rendered = render(pane(saveState))
+  return {
+    onSaveRequest,
+    onChanged,
+    rerenderWithSaveState: (state) => rendered.rerender(pane(state))
+  }
 }
 
 function editorProps(): Record<string, unknown> {
@@ -129,27 +136,35 @@ describe('DocxEditorPane × OfficeRibbon（A2 接线）', () => {
     expect(props.showMarginGuides).toBe(false)
   })
 
-  it('QAT 保存 → onSaveRequest；编辑 → dirty；保存态 text swap 后回到已保存', () => {
+  it('QAT 保存 → onSaveRequest（面不再自己猜保存态，没有乐观计时器）；保存态由 props 驱动', () => {
     vi.useFakeTimers()
-    const { onSaveRequest, onChanged } = renderPane()
+    const { onSaveRequest, onChanged, rerenderWithSaveState } = renderPane()
 
     expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('已保存')
     const onChange = editorProps().onChange as () => void
     act(() => onChange())
     expect(onChanged).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('未保存修改')
+    // 面自己不改保存态（真相在壳）：props 还是 saved 就仍显示已保存
+    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('已保存')
 
     fireEvent.click(screen.getByTestId('office-qat-save'))
     expect(onSaveRequest).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('保存中…')
-
+    // 没有 1.5s 乐观窗口：时间推进不会让状态自己变成「已保存」
     act(() => {
       vi.advanceTimersByTime(1500)
     })
     expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('已保存')
+
+    // 壳事件驱动的三个状态：saving / dirty / saved 都是 props
+    rerenderWithSaveState('saving')
+    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('保存中…')
+    rerenderWithSaveState('dirty')
+    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('未保存修改')
+    rerenderWithSaveState('saved')
+    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('已保存')
   })
 
-  it('Ctrl+S 通路（DocxEditor onSaveRequest）返回 false，且同样进入保存态', () => {
+  it('Ctrl+S 通路（DocxEditor onSaveRequest）返回 false，且同样打给 onSaveRequest', () => {
     const { onSaveRequest } = renderPane()
     const saveRequest = editorProps().onSaveRequest as () => boolean
     let result: boolean | undefined
@@ -158,7 +173,6 @@ describe('DocxEditorPane × OfficeRibbon（A2 接线）', () => {
     })
     expect(result).toBe(false)
     expect(onSaveRequest).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId('office-ribbon-save-state')).toHaveTextContent('保存中…')
   })
 
   it('视图 tab 的宿主开关落到 DocxEditor props（showRuler/showOutline/showMarginGuides）', () => {

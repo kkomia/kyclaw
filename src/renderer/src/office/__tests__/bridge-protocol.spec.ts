@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isDocSaveRequest,
+  isDocSaveResult,
   isSurfaceFatal,
   isSurfaceHello,
   isSurfaceInit,
@@ -66,5 +68,62 @@ describe('bridge-protocol：M3-S4 面内快捷键', () => {
     expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: 'n1' })).toBe(false)
     expect(isSurfaceShortcut({ type: 'doc:save', nonce: 'n1', action: 'save' })).toBe(false)
     expect(isSurfaceShortcut(null)).toBe(false)
+  })
+})
+
+describe('bridge-protocol：A4.5 保存请求与结果回执', () => {
+  it('doc:save-request：必须带 requestId + documentId（面发起保存，回执按它兑现）', () => {
+    expect(
+      isDocSaveRequest({
+        type: 'doc:save-request',
+        nonce: 'n1',
+        requestId: 'r1',
+        documentId: 'doc-1'
+      })
+    ).toBe(true)
+    // 缺 requestId（A4.5 之前的形状）→ 不认
+    expect(isDocSaveRequest({ type: 'doc:save-request', nonce: 'n1', documentId: 'doc-1' })).toBe(
+      false
+    )
+    expect(
+      isDocSaveRequest({
+        type: 'doc:save-request',
+        nonce: 'n1',
+        requestId: '',
+        documentId: 'doc-1'
+      })
+    ).toBe(false)
+    expect(
+      isDocSaveRequest({ type: 'doc:save-request', nonce: 'n1', requestId: 'r1', documentId: '' })
+    ).toBe(false)
+    expect(isDocSaveRequest({ type: 'doc:save', nonce: 'n1', requestId: 'r1' })).toBe(false)
+    expect(isDocSaveRequest(null)).toBe(false)
+  })
+
+  it('doc:save-result：ok 布尔 + requestId；code/message 可选，给了就必须非空字符串', () => {
+    const base = { type: 'doc:save-result', nonce: 'n1', requestId: 'r1' } as const
+    expect(isDocSaveResult({ ...base, ok: true })).toBe(true)
+    expect(isDocSaveResult({ ...base, ok: false })).toBe(true)
+    expect(
+      isDocSaveResult({
+        ...base,
+        ok: false,
+        code: 'write-locked',
+        message: '文件被其他程序占用'
+      })
+    ).toBe(true)
+    // 缺 ok / ok 不是布尔
+    expect(isDocSaveResult(base)).toBe(false)
+    expect(isDocSaveResult({ ...base, ok: 'true' })).toBe(false)
+    // 空 requestId
+    expect(isDocSaveResult({ ...base, requestId: '', ok: true })).toBe(false)
+    // 半截字符串不收
+    expect(isDocSaveResult({ ...base, ok: true, code: '' })).toBe(false)
+    expect(isDocSaveResult({ ...base, ok: true, message: '' })).toBe(false)
+    // 别的类型 / 非对象
+    expect(isDocSaveResult({ type: 'doc:save', nonce: 'n1', requestId: 'r1', ok: true })).toBe(
+      false
+    )
+    expect(isDocSaveResult(null)).toBe(false)
   })
 })

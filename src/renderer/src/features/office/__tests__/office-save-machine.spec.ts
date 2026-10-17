@@ -31,6 +31,7 @@ function makeMachine(
   dirty: ReturnType<typeof vi.fn>
   saving: ReturnType<typeof vi.fn>
   error: ReturnType<typeof vi.fn>
+  saveResult: ReturnType<typeof vi.fn>
   saveIpc: ReturnType<typeof vi.fn>
   saveAsIpc: ReturnType<typeof vi.fn>
   requests: typeof requests
@@ -38,6 +39,7 @@ function makeMachine(
   const dirty = vi.fn()
   const saving = vi.fn()
   const error = vi.fn()
+  const saveResult = vi.fn()
   const saveIpc = vi.fn(async () => SAVED_OK)
   const saveAsIpc = vi.fn(async () => ({
     ok: true as const,
@@ -65,9 +67,10 @@ function makeMachine(
     onDirtyChange: dirty,
     onSavingChange: saving,
     onError: error,
+    onSaveResult: saveResult,
     ...overrides
   })
-  return { machine, dirty, saving, error, saveIpc, saveAsIpc, requests }
+  return { machine, dirty, saving, error, saveResult, saveIpc, saveAsIpc, requests }
 }
 
 describe('office-save-machine：三阶段成功路径', () => {
@@ -232,5 +235,88 @@ describe('office-save-machine：重载基线', () => {
     expect(machine.isDirty()).toBe(false)
     expect(machine.lastKnownSha256()).toBe('d'.repeat(64))
     expect(dirty).toHaveBeenLastCalledWith(false)
+  })
+})
+
+describe('office-save-machine：A4.5 保存结果回执（onSaveResult）', () => {
+  it('成功：回执 ok:true（面内 QAT 据此才进「已保存」）', async () => {
+    const { machine, saveResult } = makeMachine()
+    machine.onChanged()
+
+    await expect(machine.save()).resolves.toBe(true)
+    expect(saveResult).toHaveBeenCalledTimes(1)
+    expect(saveResult).toHaveBeenCalledWith({ ok: true })
+  })
+
+  it('主进程分类失败（write-locked/conflict…）：回执 ok:false + 原样 code/message，dirty 保持', async () => {
+    const saveIpc = vi.fn(async () => ({
+      ok: false as const,
+      code: 'write-locked' as const,
+      message: '文件被其他程序占用，可以先另存为再替换'
+    }))
+    const { machine, saveResult, error } = makeMachine({ saveIpc })
+    machine.onChanged()
+
+    await expect(machine.save()).resolves.toBe(false)
+    expect(saveResult).toHaveBeenCalledWith({
+      ok: false,
+      code: 'write-locked',
+      message: '文件被其他程序占用，可以先另存为再替换'
+    })
+    expect(error).toHaveBeenCalledWith('文件被其他程序占用，可以先另存为再替换')
+    expect(machine.isDirty()).toBe(true)
+  })
+
+  it('generate 失败 / 抛错：回执也是 ok:false（不假装成功）', async () => {
+    const generated = makeMachine({ requestSaveBytes: async () => null })
+    generated.machine.onChanged()
+    await expect(generated.machine.save()).resolves.toBe(false)
+    expect(generated.saveResult).toHaveBeenCalledWith({
+      ok: false,
+      code: 'save-failed',
+      message: '没能生成保存内容'
+    })
+
+    const thrown = makeMachine({
+      saveIpc: vi.fn(async () => {
+        throw new Error('IPC 断了')
+      })
+    })
+    thrown.machine.onChanged()
+    await expect(thrown.machine.save()).resolves.toBe(false)
+    expect(thrown.saveResult).toHaveBeenCalledWith({
+      ok: false,
+      code: 'write-failed',
+      message: 'IPC 断了'
+    })
+  })
+
+  it('保存中重入：只回执一次（同一次写盘）', async () => {
+    const { machine, saveResult } = makeMachine()
+    machine.onChanged()
+
+    const first = machine.save()
+    const second = machine.save()
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+    expect(saveResult).toHaveBeenCalledTimes(1)
+  })
+
+  it('另存为：成功回执 ok:true；用户取消不回执（不算错误、不改 QAT）', async () => {
+    const ok = makeMachine()
+    ok.machine.onChanged()
+    await expect(ok.machine.saveAs()).resolves.toBe(true)
+    expect(ok.saveResult).toHaveBeenLastCalledWith({ ok: true })
+
+    const cancelled = makeMachine({
+      saveAsIpc: vi.fn(async () => ({
+        ok: false as const,
+        code: 'cancelled' as const,
+        message: '已取消'
+      }))
+    })
+    cancelled.machine.onChanged()
+    await expect(cancelled.machine.saveAs()).resolves.toBe(false)
+    expect(cancelled.saveResult).not.toHaveBeenCalled()
   })
 })

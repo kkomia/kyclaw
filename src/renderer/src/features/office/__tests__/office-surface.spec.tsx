@@ -1,6 +1,6 @@
 import { createRef } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
 import { OfficeSurface, type OfficeSurfaceStatus } from '../OfficeSurface'
 
@@ -111,6 +111,59 @@ describe('OfficeSurface：handshake 状态机', () => {
     })
     expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'fatal')
     expect(screen.getByTestId('office-surface-fatal')).toHaveTextContent('超时')
+  })
+
+  /**
+   * A5 真机验收 P1 回归（Lead 修、本用例补）：就绪超时定时器必须在收到 `surface:ready` 时清掉，
+   * 否则 15s 后必然误报「隔离面启动失败」——而实际上文档早已 ready、可编辑。
+   */
+  describe('A5 P1 回归：ready 后不误报就绪超时', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('hello → ready 后推进 ≥15s：状态保持 ready、不出现 fatal 横幅', () => {
+      vi.useFakeTimers()
+      const onStatusChange = vi.fn<(status: OfficeSurfaceStatus) => void>()
+      render(
+        <OfficeSurface
+          surfaceUrl={SURFACE_URL}
+          onStatusChange={onStatusChange}
+          readyTimeoutMs={15_000}
+        />
+      )
+
+      act(() => {
+        dispatchFromSurface({ type: 'surface:hello', nonce: 'n-ready', version: 1 })
+        dispatchFromSurface({ type: 'surface:ready', nonce: 'n-ready' })
+      })
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+
+      act(() => {
+        vi.advanceTimersByTime(20_000)
+      })
+
+      // 关键回归：过了就绪超时也不能翻成 fatal
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+      expect(screen.queryByTestId('office-surface-fatal')).not.toBeInTheDocument()
+      expect(onStatusChange).not.toHaveBeenCalledWith('fatal')
+    })
+
+    it('防回归另一侧：ready 之前超时仍然 fatal（真没起来不能假装 ready）', () => {
+      vi.useFakeTimers()
+      render(<OfficeSurface surfaceUrl={SURFACE_URL} readyTimeoutMs={15_000} />)
+
+      // 只 hello、没 ready：确实起不来
+      act(() => {
+        dispatchFromSurface({ type: 'surface:hello', nonce: 'n-stuck', version: 1 })
+      })
+      act(() => {
+        vi.advanceTimersByTime(15_000)
+      })
+
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'fatal')
+      expect(screen.getByTestId('office-surface-fatal')).toHaveTextContent('超时')
+    })
   })
 
   it('畸形消息（不是对象 / type 不认识 / nonce 为空）不改变状态', async () => {
@@ -308,7 +361,13 @@ describe('OfficeSurface：S3 数据面（保存/重载/关闭/事件回调）', 
 
     dispatchFromSurface({ type: 'doc:loaded', nonce: 'n-1', documentId: 'doc-1', pages: 3 })
     dispatchFromSurface({ type: 'doc:changed', nonce: 'n-1', documentId: 'doc-1', revision: 7 })
-    dispatchFromSurface({ type: 'doc:save-request', nonce: 'n-1', documentId: 'doc-1' })
+    // A4.5：面发起保存带 requestId（壳按它回 doc:save-result）
+    dispatchFromSurface({
+      type: 'doc:save-request',
+      nonce: 'n-1',
+      requestId: 'save-1',
+      documentId: 'doc-1'
+    })
     dispatchFromSurface({
       type: 'doc:error',
       nonce: 'n-1',
@@ -329,8 +388,43 @@ describe('OfficeSurface：S3 数据面（保存/重载/关闭/事件回调）', 
     expect(onDocLoaded).toHaveBeenCalledWith(3)
     expect(onDocChanged).toHaveBeenCalledTimes(1)
     expect(onDocChanged).toHaveBeenCalledWith(7)
+    // A4.5：保存请求把 requestId + documentId 一起交给壳（壳回执时原样带回 requestId）
     expect(onDocSaveRequest).toHaveBeenCalledTimes(1)
+    expect(onDocSaveRequest).toHaveBeenCalledWith({ requestId: 'save-1', documentId: 'doc-1' })
     expect(onDocError).toHaveBeenCalledWith('save', '没能生成保存内容')
+  })
+
+  it('resolveSaveResult → 面收到 doc:save-result（成功/失败都带 requestId 与壳的分类）', async () => {
+    const ref = createRef<import('../OfficeSurface').OfficeSurfaceHandle>()
+    const frameWindow = readySurface(ref)
+    const postMessage = vi.spyOn(frameWindow, 'postMessage')
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+
+    ref.current?.resolveSaveResult({ requestId: 'save-9', ok: true })
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'doc:save-result', nonce: 'n-1', requestId: 'save-9', ok: true },
+      '*'
+    )
+
+    ref.current?.resolveSaveResult({
+      requestId: 'save-10',
+      ok: false,
+      code: 'write-locked',
+      message: '文件被其他程序占用，可以先另存为再替换'
+    })
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: 'doc:save-result',
+        nonce: 'n-1',
+        requestId: 'save-10',
+        ok: false,
+        code: 'write-locked',
+        message: '文件被其他程序占用，可以先另存为再替换'
+      },
+      '*'
+    )
   })
 
   it('closeDocument → doc:close；reloadDocument → doc:reload（字节随消息过结构化克隆）', async () => {

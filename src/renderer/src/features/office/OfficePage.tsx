@@ -313,6 +313,28 @@ function OfficeWorkspace({
   // 保存状态机：文档字节到手后创建，并把运行时注册进模块级 registry（S4 的标签条也走它）
   const loadedDocumentId = loaded?.info.documentId
   const loadedSha256 = loaded?.info.sha256
+
+  /**
+   * A4.5：待回执的**面发起**保存请求（QAT / 面内 Ctrl+S 的 requestId）。
+   * 壳侧主动保存时它是 null → 回执用一个新 id（面"没有在途请求就直接采信"）。
+   */
+  const pendingSurfaceSaveRequestRef = useRef<string | null>(null)
+
+  /** A4.5：把保存结果回执给**本标签的** iframe（多 workspace 各自一份 surface，天然隔离） */
+  const notifySurfaceSaveResult = useCallback(
+    (result: { ok: boolean; code?: string; message?: string }): void => {
+      const pendingRequestId = pendingSurfaceSaveRequestRef.current
+      pendingSurfaceSaveRequestRef.current = null
+      surfaceRef.current?.resolveSaveResult({
+        requestId: pendingRequestId ?? crypto.randomUUID(),
+        ok: result.ok,
+        ...(result.code === undefined ? {} : { code: result.code }),
+        ...(result.message === undefined ? {} : { message: result.message })
+      })
+    },
+    []
+  )
+
   useEffect(() => {
     if (loadedDocumentId === undefined) return
     const markDirty = (dirty: boolean): void => {
@@ -332,6 +354,8 @@ function OfficeWorkspace({
       onDirtyChange: markDirty,
       onSavingChange: setSaving,
       onError: setSaveError,
+      // A4.5：写盘结果回执给面内 QAT（面发起的请求用它的 requestId，壳发起的用一个新 id）
+      onSaveResult: notifySurfaceSaveResult,
       onSavedAs: (document) => {
         // 另存为成功：标签标题/路径跟新文件（documentId 不变），错误条清掉
         useOfficeTabsStore.getState().replaceDocument(document)
@@ -352,7 +376,7 @@ function OfficeWorkspace({
     }
     // loadedSha256 只作为初始基线：之后由 machine 自己维护，不随 loaded 更新而重建
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadedDocumentId, tab.id])
+  }, [loadedDocumentId, tab.id, notifySurfaceSaveResult])
 
   // 注意：render 期不读 ref（react-hooks/refs）。editorReady 只会在保存状态机建好之后变真，
   // 因此这个门足够；运行时缺失时 saveOfficeTab 自己会返回 false（不伪造成功）。
@@ -379,9 +403,25 @@ function OfficeWorkspace({
     useOfficeTabsStore.getState().markDirty(tab.id, true)
   }
 
-  /** 面内保存请求（编辑器自己的 Ctrl+S / File > Save）→ 壳的保存状态机 */
-  const handleDocSaveRequest = (): void => {
-    requestSave()
+  /**
+   * 面内保存请求（A4.5：QAT 按钮 / 面内 Ctrl+S，带 requestId）→ 走既有保存入口；
+   * 写盘结果由 save-machine 的 `onSaveResult` 回执给面（见 notifySurfaceSaveResult）。
+   * 只处理**本标签 documentId** 的请求（多 workspace 隔离的双保险）。
+   */
+  const handleDocSaveRequest = (request: { requestId: string; documentId: string }): void => {
+    if (loaded?.info.documentId !== request.documentId) return
+    pendingSurfaceSaveRequestRef.current = request.requestId
+    setSaveError('')
+    void saveOfficeTab(tab).then((saved) => {
+      // 兜底：状态机没走到（没有运行时 / 编辑器没就绪）时也回一个结果，别让面内 QAT 悬空
+      if (pendingSurfaceSaveRequestRef.current !== request.requestId) return
+      notifySurfaceSaveResult({
+        ok: saved,
+        ...(saved
+          ? {}
+          : { code: 'cancelled', message: '保存未能执行：编辑器还没准备好或当前不可保存' })
+      })
+    })
   }
 
   /** 面内错误：保存阶段进保存错误条，其余进文档错误条 */
