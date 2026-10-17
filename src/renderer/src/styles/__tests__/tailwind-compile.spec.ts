@@ -116,7 +116,16 @@ describe('Tailwind 编译护栏', () => {
     // （常态 / hover·聚焦展开态）——变量简写必须真编译得出 height
     ['h-(--rail-row)', ['height: var(--rail-row)']],
     ['hover:h-(--rail-row-open)', ['height: var(--rail-row-open)']],
-    ['focus-visible:h-(--rail-row-open)', ['height: var(--rail-row-open)']]
+    ['focus-visible:h-(--rail-row-open)', ['height: var(--rail-row-open)']],
+    // P0 设计语言（2026-10-18）：三声部字体映射、唯一新增字阶 text-hero、输入卡圆角 16、
+    // 12px 可读档颜色 —— 这些都是工具类真正会用到的新命名空间，必须真编译得出。
+    ['font-sans', ['font-family: var(--font-ui)']],
+    ['font-serif', ['font-family: var(--font-reading)']],
+    ['font-mono', ['font-family: var(--font-code)']],
+    ['text-hero', ['font-size: var(--text-hero-size)', 'line-height: var(--text-hero-line)']],
+    ['rounded-input', ['border-radius: 16px']],
+    ['text-ink-tertiary-readable', ['color: var(--text-tertiary-readable)']],
+    ['text-on-accent', ['color: var(--on-accent)']]
   ]
 
   it.each(UTILITY_CASES)('工具类 %s 生成 token 引用', async (candidate, declarations) => {

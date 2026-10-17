@@ -54,6 +54,42 @@ describe('markdown.css · Shiki 变量映射', () => {
   })
 })
 
+describe('markdown.css · P0 三声部与极简配方（2026-10-18）', () => {
+  it('正文/标题走阅读声部 --font-reading（拉丁衬线 + 中文 Noto Sans SC 混排）', () => {
+    expect(markdownBody).toMatch(/\.markdown-body \{[\s\S]*?font-family:\s*var\(--font-reading\)/)
+    expect(markdownBody).toMatch(
+      /\.markdown-body h1,[\s\S]*?\.markdown-body h6 \{[^}]*font-family:\s*var\(--font-reading\)/
+    )
+    // 行高 1.8（中文阅读下限，章程 §2.4）
+    expect(markdownBody).toMatch(/\.markdown-body \{[\s\S]*?line-height:\s*1\.8/)
+  })
+
+  it('叙事行宽 = --prose-measure（只压叙事块；代码块/表格可更宽）', () => {
+    expect(markdownBody).toMatch(/max-width:\s*var\(--prose-measure\)/)
+    expect(markdownBody).toContain('.markdown-body > p')
+  })
+
+  it('行内码 .88em + 500 + 代码语义色；代码块 500（不换暗底主题）', () => {
+    expect(markdownBody).toMatch(
+      /:not\(pre\) > code \{[\s\S]*?color:\s*var\(--code-ink\);[\s\S]*?font-size:\s*0\.88em;[\s\S]*?font-weight:\s*500;/
+    )
+    expect(markdownBody).toMatch(/\.code-block-body \{[\s\S]*?font-weight:\s*500/)
+    // 代码块底仍走语义凹槽，不引入第二套暗底
+    expect(markdownBody).toMatch(/\.code-block \{[\s\S]*?background-color:\s*var\(--bg-secondary\)/)
+  })
+
+  it('表格数字 tabular-nums（读数/计数不跳动）', () => {
+    expect(markdownBody).toMatch(
+      /\.markdown-body th,\s*\n\.markdown-body td \{[\s\S]*?font-variant-numeric:\s*tabular-nums/
+    )
+  })
+
+  it('链接用陶土橙链接档 --link / --link-hover（单一强调色，D-30）', () => {
+    expect(markdownBody).toMatch(/\.markdown-body a \{[^}]*color:\s*var\(--link\)/)
+    expect(markdownBody).toMatch(/\.markdown-body a:hover \{[^}]*color:\s*var\(--link-hover\)/)
+  })
+})
+
 describe('markdown.css · 流式光标', () => {
   it('细竖线：2px 宽、背景色画线（不用 border，避免渲染后边框残留）', () => {
     expect(markdownBody).toMatch(/\.markdown-body\[data-streaming='true'\][^{]*::after/)

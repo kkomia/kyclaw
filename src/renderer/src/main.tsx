@@ -1,3 +1,8 @@
+// P0 产品设计语言的三层 token：identity（Claude 保底色板，`--k-*`）与 motion（动效角色令牌）
+// 必须**先于** tailwind.css 引入 —— tailwind.css 里的 semantic.css 只写 `var(--k-*)` 别名，
+// 身份层缺席就会丢色；动效角色令牌给新组件用，隔离面入口也按同一顺序引。
+import './styles/tokens/identity.css'
+import './styles/tokens/motion.css'
 import './styles/tailwind.css'
 
 import { StrictMode } from 'react'

@@ -70,9 +70,11 @@ describe('全局焦点环 · 去墨色（round 5，用户实拍 #7）', () => {
   const SEMANTIC_CSS = readSource('../tokens/semantic.css')
   const MENU_TSX = readSource('../../components/ui/menu.tsx')
 
-  it('焦点环是分隔线灰（Separators-S1），不再是 Labels-Primary 墨色', () => {
-    expect(SEMANTIC_CSS).toContain('--focus-ring: inset 0 0 0 1px var(--Separators-S1);')
+  it('焦点环是暖灰（Claude tertiary），不再是 Labels-Primary 墨色、也不是 accent 陶土橙', () => {
+    // P0（章程 §3.7/D-11）：焦点环保底「暖灰」拍板 —— 浅 #8f8a7e / 深 #8f8d84 = identity --k-ink-3
+    expect(SEMANTIC_CSS).toContain('--focus-ring: inset 0 0 0 1px var(--k-ink-3);')
     expect(SEMANTIC_CSS).not.toContain('--focus-ring: inset 0 0 0 1px var(--Labels-Primary);')
+    expect(SEMANTIC_CSS).not.toContain('--focus-ring: inset 0 0 0 1px var(--k-accent)')
     // 全局规则本身保持"内环不占布局"的机制（只换颜色，不删指示）
     expect(TAILWIND_CSS).toContain('box-shadow: var(--focus-ring)')
   })

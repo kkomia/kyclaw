@@ -1,0 +1,144 @@
+/**
+ * 身份层（P0 · 2026-10-18 用户拍板「Claude 主题色保底」）：**原样值**，只放 `--k-*`。
+ *
+ * 值逐条来自 `C:\Users\小又\Downloads\调研\repo-src\packages__client__src__theme__tokens.json`
+ * 的 `palette.claude` 组（行号见章程 `.superpowers/handover/product-design-language.md` §3.8）；
+ * 例外只有两条，都在定义处标了出处：
+ *   - `--k-ink-3-readable`：章程 D-29 的可读性偏离（Claude tertiary #8f8a7e 在 12px 只有 3.35:1，
+ *     同色相压深最小一档到 #776f62 ≈4.86:1）；
+ *   - `--k-paper*`：Office 文档纸（Word-faithful，章程 §3.1/D-06 的早前硬决定，不来自 tokens.json）。
+ *
+ * 三层口径（章程 §2.6/§3.8）：
+ *   1. 本文件 = 身份原样层（Claude palette 的 `--k-*`，浅/深两段）；
+ *   2. `kimi-tokens.css` = Kimi 原样层（**冻结不改**，只作回滚/对照）；
+ *   3. `semantic.css` = 语义层（只引用 `--k-*`，组件只认语义名）。
+ * 暗色：本文件用 `:root[data-theme='dark']` 整段重写 `--k-*`（暗色的「边」是白 alpha 高光，
+ * 不是把浅色边框调暗 —— tokens.json 注释原话）；语义层因此**不再需要**自己的深色块。
+ *
+ * 零外链、零 CDN、零渐变/阴影字：值不改字，只做映射。
+ */
+
+:root {
+  /* ── 底：Claude palette.claude（bg-base / overlay / sidebar / layer-2 / table-head / bubble） ── */
+  --k-canvas: #fcfcfb; /* --dsw-alias-bg-base */
+  --k-card: #ffffff; /* --dsh-claude-card / --dsw-alias-bg-overlay（浮面） */
+  --k-sidebar: #fbfbf9; /* --dsh-claude-sidebar-canvas */
+  --k-inset: #f0f0ef; /* --dsh-claude-table-head（凹槽：Office 画布/code 底/seg 容器） */
+  --k-menu: #ffffff; /* --dsw-alias-bg-overlay（菜单/弹窗） */
+  --k-chip: #f6f6f4; /* --dsh-claude-chip */
+  --k-bubble: #f0f0ef; /* --dsw-specific-bubble（用户气泡/凹槽面） */
+  --k-input: #ffffff; /* --dsw-specific-input-major */
+
+  /* ── 墨：Claude 三级 + caption + 可读档（D-29） ── */
+  --k-ink: #141413; /* --dsw-alias-label-primary */
+  --k-ink-2: #6e6a60; /* --dsw-alias-label-secondary */
+  --k-ink-3: #8f8a7e; /* --dsw-alias-label-tertiary（大字号/装饰） */
+  --k-ink-3-readable: #776f62; /* 章程 D-29：12px 承载信息的同色相压深档 */
+  --k-ink-4: #a6a094; /* --dsw-alias-label-caption（只装饰/禁用） */
+
+  /* ── 强调：陶土橙（字标括号 / 链接 / 运行点 / 主按钮；一屏克制） ── */
+  --k-accent: #d97757; /* --dsw-alias-brand-primary / button-primary-fill */
+  --k-accent-hover: #c6613f; /* --dsw-alias-button-primary-hover（浅） */
+  --k-on-accent: #faf9f5; /* --dsw-alias-brand-text */
+  --k-link: #c6613f; /* --dsw-alias-link */
+  --k-link-hover: #a94f2f; /* --dsh-claude-link-hover */
+
+  /* ── 边框：Claude 暖灰梯 l1 < l2 < l3 ── */
+  --k-border-l1: #e8e6dc; /* --dsw-alias-border-l1（输入框/内部分隔，最轻） */
+  --k-border-l2: #dedcd2; /* --dsw-alias-border-l2（组件边框/卡外沿，默认） */
+  --k-border-l3: #d0cdc1; /* --dsw-alias-border-l3（抬起面板自然边，最强） */
+
+  /* ── 交互填充：hover wash / hover-solid / accent 30% active ── */
+  --k-hover: rgba(0, 0, 0, 0.08); /* --dsh-claude-hover-bg */
+  --k-hover-solid: #f0efe9; /* --dsw-alias-interactive-bg-hover-solid（列表选中） */
+  --k-active: rgba(217, 119, 87, 0.3); /* --dsw-alias-interactive-bg-active（选中/激活） */
+
+  /* ── 代码语义色（行内码是代码语义色，不是 accent；章程 §3.5/D-30） ── */
+  --k-code-bg: #ffffff; /* --dsw-alias-markdown-code-block */
+  --k-code-ink: #943333; /* --dsh-claude-inline-code-fg */
+  --k-inline-code-bg: rgba(0, 0, 0, 0.05); /* --dsh-claude-inline-code-bg */
+
+  /* ── 状态色（可追溯 meter-valley / meter-peak / inline-code-fg，不做霓虹） ── */
+  --k-positive: #3d7550; /* --dsh-claude-meter-valley */
+  --k-positive-soft: rgba(61, 117, 80, 0.1);
+  --k-warning: #a4621d; /* --dsh-claude-meter-peak */
+  --k-warning-soft: rgba(164, 98, 29, 0.1);
+  --k-danger: #943333; /* --dsh-claude-inline-code-fg */
+  --k-danger-soft: rgba(148, 51, 51, 0.1);
+  --k-selection: rgba(217, 119, 87, 0.3); /* --dsw-alias-interactive-bg-active（文本选中） */
+
+  /* ── 阴影：只有三级（章程 §4.1；shadow-lv2 是 paper/overlay 同源，composer 是拆出轻档） ── */
+  --k-shadow-lv2: 0 4px 18px rgba(20, 20, 19, 0.1), 0 1px 3px rgba(20, 20, 19, 0.05);
+  --k-shadow-paper: var(--k-shadow-lv2);
+  --k-shadow-composer: 0 1px 2px rgba(20, 20, 19, 0.05), 0 6px 18px rgba(20, 20, 19, 0.06);
+
+  /* ── 滚动条（--dsh-claude-scrollbar / -hover） ── */
+  --k-scrollbar: rgba(208, 205, 193, 0.9);
+  --k-scrollbar-hover: rgba(143, 138, 126, 0.8);
+
+  /* ── Office 文档纸（不来自 tokens.json：Word-faithful 纸面，章程 §3.1/D-06 的硬决定） ── */
+  --k-paper: #ffffff;
+  --k-paper-ink: #141413;
+  --k-paper-rule: #d0cdc1;
+
+  /* 暗色顶边高光（浅色档没有这道光；暗色档在下面重写） */
+  --k-edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0);
+}
+
+/* 暗色 = Claude 暖黑（#141413），不是蓝黑/纯黑；边 = 白 alpha 高光 .09/.18/.30 */
+:root[data-theme='dark'] {
+  --k-canvas: #141413;
+  --k-card: #1e1e1d;
+  --k-sidebar: #141413;
+  --k-inset: #1c1b1a;
+  --k-menu: #242320;
+  --k-chip: #242320;
+  --k-bubble: rgba(255, 255, 255, 0.06);
+  --k-input: #0f0e0d;
+
+  --k-ink: #faf9f5;
+  --k-ink-2: #b0aea5;
+  --k-ink-3: #8f8d84;
+  --k-ink-3-readable: #8f8d84;
+  --k-ink-4: #6b6a65;
+
+  --k-accent: #d97757; /* 陶土橙深浅同值（Claude 的做法） */
+  --k-accent-hover: #e08a6d;
+  --k-on-accent: #faf9f5;
+  --k-link: #e08a6d;
+  --k-link-hover: #f0a488;
+
+  --k-border-l1: rgba(255, 255, 255, 0.09);
+  --k-border-l2: rgba(255, 255, 255, 0.18);
+  --k-border-l3: rgba(255, 255, 255, 0.3);
+
+  --k-hover: rgba(255, 255, 255, 0.08);
+  --k-hover-solid: #2e2c29;
+  --k-active: rgba(217, 119, 87, 0.3);
+
+  --k-code-bg: #1c1b1a;
+  --k-code-ink: #e8a08a;
+  --k-inline-code-bg: rgba(255, 255, 255, 0.05);
+
+  --k-positive: #8cbf96;
+  --k-positive-soft: rgba(140, 191, 150, 0.14);
+  --k-warning: #e2a45f;
+  --k-warning-soft: rgba(226, 164, 95, 0.14);
+  --k-danger: #e8a08a;
+  --k-danger-soft: rgba(232, 160, 138, 0.14);
+  --k-selection: rgba(217, 119, 87, 0.3);
+
+  --k-shadow-lv2: 0 4px 16px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.14);
+  --k-shadow-paper: var(--k-shadow-lv2);
+  --k-shadow-composer: 0 2px 6px rgba(0, 0, 0, 0.22), 0 10px 26px rgba(0, 0, 0, 0.3);
+
+  --k-scrollbar: rgba(58, 56, 51, 0.9);
+  --k-scrollbar-hover: rgba(107, 106, 101, 0.9);
+
+  /* Office 深色纸面 = 灰纸（#cfd1cb，早前硬决定），不是把白纸调暗 */
+  --k-paper: #cfd1cb;
+  --k-paper-ink: #1b1b1b;
+  --k-paper-rule: #b9bab4;
+
+  --k-edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}

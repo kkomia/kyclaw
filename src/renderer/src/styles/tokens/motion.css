@@ -1,0 +1,69 @@
+/**
+ * 动效角色层（P0 · 章程 §5.1）：**一种效果只有一档**，按「语义角色」命名，不按数值命名。
+ *
+ * 来源：`tokens.json` 的 motion 组（`--dsh-claude-duration-*` / `--dsh-claude-ease-*` /
+ * distance / blur / scale 组），数值与曲线逐条对齐章程 §5.1 表。
+ *
+ * 与既有 `--duration-*` / `--clp-ease-*` 的关系（章程 §5.1 尾注）：
+ *   - `kimi-tokens.css` 里的工程阶梯（--duration-quick/base/main…）与 CLP 曲线**保留**，
+ *     服务既有组件（它们已经按那套写死了 transition）；
+ *   - 本文件只提供**角色层**给新组件与 P1–P4 迁移用：新代码读 `--motion-feedback` 这类角色名，
+ *     不再挑"150ms 还是 200ms"。
+ *
+ * reduced-motion：所有角色时长在媒体查询里整体压到 `--motion-reduced`（0.01ms，**不是 0** ——
+ * 保留 `transitionend`/`animationend` 的触发与终态可读帧）；距离/缩放/模糊不归零，靠时长趋零即可。
+ */
+
+:root {
+  /* ── 12 条角色时长（§5.1） ── */
+  --motion-feedback: 120ms; /* hover / press / focus 的颜色或小位移 */
+  --motion-reveal: 150ms; /* 小元素出现、状态换词 */
+  --motion-exit: 120ms; /* 离场（永远短于入场） */
+  --motion-open: 250ms; /* 面开合：工作台 / AI 面板 / 设置切页 */
+  --motion-enter: 320ms; /* 一屏一次的入场（欢迎 hero） */
+  --motion-flight: 400ms; /* FLIP 共享元素飞行（v2） */
+  --motion-spring: 500ms; /* 小元素落地（数字滚动、保存点） */
+  --motion-stagger: 70ms; /* 列表首次出现，每项偏移 */
+  --motion-dot: 500ms; /* 等待三点 bounce 周期 */
+  --motion-sweep: 1500ms; /* 生成中文字的扫光周期 */
+  --motion-reduced: 0.01ms; /* reduced-motion 压档（不是 0） */
+
+  /* ── 曲线（§5.1；数值同 tokens.json --dsh-claude-ease-*） ── */
+  --motion-ease-enter: cubic-bezier(0.34, 1.3, 0.64, 1); /* 轻微过冲：只给 hero/发送气泡 */
+  --motion-ease-glide: cubic-bezier(0.22, 0.61, 0.36, 1); /* 顺滑滑行：reveal / flight */
+  --motion-ease-settle: cubic-bezier(0.22, 1, 0.36, 1); /* 大面板 settle：不回弹 */
+  --motion-ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1); /* 弹簧：只给小元素 */
+
+  /* ── 配套位移 / 模糊 / 缩放（tokens.json motion 组，供配方 1/2/4 直接用） ── */
+  --motion-distance-nudge: 4px; /* 换词时旧词上浮 / 新词升起 */
+  --motion-distance-travel: 8px; /* 小元素滑入 */
+  --motion-distance-rise: 12px; /* 入场上浮上限（6–12px） */
+  --motion-blur-soft: 2px; /* 换词两半的模糊 */
+  --motion-blur-enter: 3px; /* 设置切页旧页模糊 */
+  --motion-scale-surface: 0.98; /* 面开合 scale */
+  --motion-scale-dropdown: 0.97; /* 菜单出现 */
+  --motion-scale-dropdown-exit: 0.99; /* 菜单离场（比出现更接近 1） */
+  --motion-scale-dialog: 0.96; /* 弹窗出现 */
+  --motion-scale-dot-mid: 0.55; /* 等待三点中间帧 */
+  --motion-swap: 150ms; /* 换词每一半（= reveal 档，配方 2） */
+  --motion-swap-gap: 50ms; /* 新词比旧词晚 50ms 起步 */
+}
+
+/* reduced-motion：角色时长整组压到 0.01ms（终态仍可见；不做 animate-none 硬切）。
+   隔离面（office）没有 tailwind.css 的全局兜底，所以这一层必须写在共享 token 里。 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-feedback: var(--motion-reduced);
+    --motion-reveal: var(--motion-reduced);
+    --motion-exit: var(--motion-reduced);
+    --motion-open: var(--motion-reduced);
+    --motion-enter: var(--motion-reduced);
+    --motion-flight: var(--motion-reduced);
+    --motion-spring: var(--motion-reduced);
+    --motion-stagger: var(--motion-reduced);
+    --motion-dot: var(--motion-reduced);
+    --motion-sweep: var(--motion-reduced);
+    --motion-swap: var(--motion-reduced);
+    --motion-swap-gap: var(--motion-reduced);
+  }
+}

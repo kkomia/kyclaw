@@ -1,77 +1,112 @@
 /**
- * 语义层：工程名 → 原样层（docs/superpowers/specs/2026-10-10-kyclaw-design.md §6.1）。
- * 组件只用这一层；工程阶梯（--space-* / --radius-* / --duration-*，台账 R7）允许组件直接引用。
- * 不直接引用 Kimi 名（--Bg-* / --Labels-* 等）。
+ * 语义层（P0 · 2026-10-18 产品设计语言落地）：**工程名 → 身份层 `--k-*`**。
+ * 组件只认这一层；工程阶梯（--space-* / --radius-* / --duration-*）允许组件直接引用。
  *
- * 条目分四类，取值都有出处：
- *   1. 纯别名——指向原样层，深色档不用重写（var() 在使用处解析，翻档后跟着翻）；
- *   2. 文档点名的字面值——--motion-ease-inout（§6.3 的组合）、--accent-text（§7：Kimi 只有填充蓝，
- *      没有蓝字档）、--blur-glass（§5.5 的 blur(15px)）；
- *      （--focus-ring 原也是这类的墨色字面值，R2 round 5 被用户实拍证伪 → 改成分隔线灰，
- *      出处见其定义处的注释。）
- *      2026-10-16 起三档边框色（--border-hairline / -surface / -field）与 --hairline-width 也进这一类：
- *      用户实拍"圆角边框太浅"，按"比原样层深一档"重取值，理由写在各自定义处。
- *   3. 控件尺寸与状态——§4.7 控件高度阶梯、§4.8 图标尺度与不透明度、§7 点名的按钮/菜单/弹层值。
- *      Kimi 侧是组件级字面量（没有原样 token），在这里各起一个工程名；
- *   4. 滚动条——尺寸取 §4.6 实测槽宽 5–7px 的中间值 6px；滑块用 §2.4 的填充档，
- *      不照抄 §2.14 的浅色取色（那格与画布同值、分辨不出，照抄会看不见）。
+ * 三级数据源（章程 §2.6/§3.8，`.superpowers/handover/product-design-language.md`）：
+ *   1. `tokens/identity.css` = 身份原样层（Claude palette `--k-*`，浅/深两段）；
+ *   2. `tokens/kimi-tokens.css` = Kimi 原样层（**冻结**，只作回滚/对照；本文件不再引用它取色）；
+ *   3. 本文件 = 语义层（只引用 `--k-*` 与技术性原样值，如边框宽度/工程阶梯）。
+ * 深色档：**本文件不再有深色块** —— `--k-*` 在 identity.css 里按 `[data-theme='dark']` 整段重写，
+ * 语义名都是别名（var() 在使用处解析），翻档自动跟随。
  *
- * 刻意偏离（spec §6.5、台账 R6）：三级/四级灰用达标档（三级 ≥4.5:1、四级 ≥3:1），
- * 不照抄 --Labels-Tertiary / --Labels-Quaternary 的 3.35:1 / 2.11:1。
+ * 声部规则（章程 §2）：正文/标题 = 衬线（--font-reading，拉丁衬线 + 中文 Noto Sans SC）、
+ * 界面 = sans（--font-ui）、数据/代码 = mono（--font-code）；中文段三声部共用 DSH 同一条链。
+ *
+ * 刻意偏离只有一条（章程 D-29）：`--text-tertiary-readable` 比 Claude tertiary 同色相压深一档
+ * （浅 #776f62 ≈4.86:1），专给 12px 承载信息的文字；`--text-tertiary` / `--text-quaternary`
+ * 保留 Claude 原值，只做大字号辅助与装饰/禁用。
  */
 
 :root {
-  /* 底 */
-  --bg-canvas: var(--Bg-GroundPC);
-  --bg-primary: var(--Bg-Primary);
-  --bg-secondary: var(--Bg-Secondary);
-  --bg-menu: var(--Bg-Tertiary);
-  --bg-overlay: var(--Bg-Tertiary);
+  /* ── 底（Claude：暖纸画布 / 白浮面 / 暖灰凹槽 / 菜单浮层） ── */
+  --bg-canvas: var(--k-canvas);
+  --bg-primary: var(--k-card);
+  --bg-secondary: var(--k-inset);
+  --bg-menu: var(--k-menu);
+  --bg-overlay: var(--k-menu);
+  /* 侧栏/知识库等次级列：与画布同族的暖纸（比卡面低一档） */
+  --bg-sidebar: var(--k-sidebar);
+  /* 气泡/凹槽面（用户消息便条、seg 容器） */
+  --bg-bubble: var(--k-bubble);
+  /* hover 固态底（只做交互态，不做静态面） */
+  --surface-3: var(--k-hover-solid);
 
-  /* 文字 */
-  --text-primary: var(--Labels-Primary);
-  --text-secondary: var(--Labels-Secondary);
-  --text-tertiary: #0000008c;
-  --text-quaternary: #00000070;
-  --text-disabled: var(--Labels-Quaternary);
+  /* ── 文字（Claude 三级 + caption + 可读偏离档） ── */
+  --text-primary: var(--k-ink);
+  --text-secondary: var(--k-ink-2);
+  /* 大字号辅助 / 装饰性 meta：Claude 原值（3.35:1），不承载 12px 信息 */
+  --text-tertiary: var(--k-ink-3);
+  /* 12px 承载信息的说明/占位/meta：D-29 可读档（浅 ≈4.86:1） */
+  --text-tertiary-readable: var(--k-ink-3-readable);
+  /* caption：只做装饰线/禁用态/大字号辅助，不承载信息 */
+  --text-quaternary: var(--k-ink-4);
+  --text-disabled: var(--k-ink-4);
 
-  /* 分隔、自然表面边缘与填充。
-     边框可见度（2026-10-16 用户口径：**整套圆角边框太浅、快看不出边框轮廓**；对照 Kimi 页面
-     认为那边的边框更明显）：原样层的 Separators-S1 / S1-active / Fills-F1 是设计稿里的值
-     （13% / 17% / 3%，见 kimi-tokens.css §2.4/§2.5）——但**卡片边缘不是分隔线**：13% 黑压在
-     白卡上只有 #dedede，用户对着 Kimi 那句"更明显"说的就是它。三档各往深里挪一档
-     （浅 20% / 26% / 14%，深 18% / 26% / 13%），阶梯仍是 field < hairline < surface，
-     口径与 --text-tertiary 那类刻意偏离一致（原样层数值一个字不改，改的是我们用的这一档）。
-     逐像素前后读数见 e2e/_r92-border-probe.spec.ts。 */
-  --border-hairline: #00000033;
-  /* 圆角面板/卡片的自然边缘：比分隔线略强，避免在背景上消失；不用于输入框、分隔线或焦点环。 */
-  --border-surface: #00000042;
-  --border-field: #00000024;
-  /* 组件边框宽度：设计稿的 hairline 是 0.5px（原样层不动 —— markdown 表格 / 预览里那些真·分隔线
-     照旧 0.5px），但 0.5px 在高分屏上只占**一个设备像素**：探针实测（e2e/_r92-border-probe）
-     2.25x 下这条边框就是 1 设备像素宽的线，看着比 Kimi 实况的 1 CSS px 细一半。
-     组件的圆角边框改吃 base（1px）；1x 屏上 0.5px 本来就被抬到 1 设备像素 = 1 CSS px，
-     那一档等于零变化。 */
+  /* ── 边框：Claude 暖灰梯 field(l1) < hairline(l2) < surface(l3)；暗色 = 白 alpha .09/.18/.30 ── */
+  --border-field: var(--k-border-l1);
+  --border-hairline: var(--k-border-l2);
+  --border-surface: var(--k-border-l3);
+  /* 内部细分隔（ribbon 组间、菜单分组线）：语义别名，永远比组件边框轻一档 */
+  --hairline-soft: var(--k-border-l1);
+  /* 组件边框宽度：设计稿 hairline 是 .5px，但组件圆角边框吃 1px（2026-10-16 边框可见度轮定的口径） */
   --hairline-width: var(--border-width-base);
-  --fill-hover: var(--Fills-F1);
-  --fill-selected: var(--Fills-F2);
-  --fill-active: var(--Fills-F3);
-  --fill-disabled: var(--Fills-F3);
 
-  /* 强调与语义状态 */
-  --accent: var(--Colors-KMBlue);
-  --accent-text: #0065dd;
-  --positive: var(--Colors-PositiveGreen);
-  --positive-bg: var(--Others-LightGreenBg);
-  --warning: var(--Colors-Orange);
-  --warning-bg: var(--Others-LightOrangeBg);
-  --danger: var(--Colors-Red);
-  --danger-bg: var(--Others-LightRedBg);
-  --diff-add: var(--Colors-DiffAdd);
-  --diff-delete: var(--Colors-DiffDelete);
+  /* ── 交互填充 ── */
+  --fill-hover: var(--k-hover);
+  --fill-selected: var(--k-hover-solid);
+  --fill-active: var(--k-active);
+  --fill-disabled: var(--k-hover);
 
-  /* 控件尺寸（§4.7：按钮 26/32/44、图标按钮 36、输入框/下拉 40；chip 高 36 见 §4.6。
-     图标与 spinner 共用一把尺：§4.7 spinner 16/18/20、§4.8 通用图标 18） */
+  /* ── 强调（陶土橙只做字标括号/链接/运行点/主按钮；选中态仍用暖灰填充） ── */
+  --accent: var(--k-accent);
+  --accent-hover: var(--k-accent-hover);
+  --on-accent: var(--k-on-accent);
+  /* 链接：Claude 陶土橙（D-30：不另引 dsh 皮肤的蓝链接，保持单一强调色） */
+  --link: var(--k-link);
+  --link-hover: var(--k-link-hover);
+  --accent-text: var(--k-link);
+
+  /* ── 状态色（可追溯 meter-valley / meter-peak / inline-code-fg；不做霓虹） ── */
+  --positive: var(--k-positive);
+  --positive-bg: var(--k-positive-soft);
+  --warning: var(--k-warning);
+  --warning-bg: var(--k-warning-soft);
+  --danger: var(--k-danger);
+  --danger-bg: var(--k-danger-soft);
+  --diff-add: var(--k-positive);
+  --diff-delete: var(--k-danger);
+
+  /* ── 代码语义色（行内码是代码语义色，不是 accent） ── */
+  --code-ink: var(--k-code-ink);
+  --code-bg: var(--k-code-bg);
+  --inline-code-bg: var(--k-inline-code-bg);
+
+  /* ── 字体三声部 + 文档字（隔离面也读这里；A2 的 office-chrome.css 之后改读这三条） ──
+     中文段三声部逐字共用 DSH 现用链（章程 §2.2 / D-27；本机实际命中 Noto Sans SC）：
+     'Noto Sans SC' → 'Source Han Sans SC' → 'PingFang SC' → 'Hiragino Sans GB' → 'Microsoft YaHei'
+     拉丁部分用系统栈替代 Anthropic 商业字体（Sitka/Georgia、Segoe UI、Cascadia Mono）。 */
+  --font-ui:
+    'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-reading:
+    'Sitka Text', 'Sitka Display', Georgia, 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-code:
+    'Cascadia Mono', 'Cascadia Code', Consolas, 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  /* 文档内容 Word-faithful（章程 §9.7#4）：文档字体由文档决定，这三条只给「纸面之外」的自绘占位用 */
+  --font-doc: 'SimSun', 'Songti SC', 'Noto Serif SC', serif;
+  --font-doc-head: 'SimHei', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-doc-num: 'Times New Roman', 'SimSun', serif;
+
+  /* ── 字号：六档之外只加一个 hero（只给欢迎字标；章程 §2.4/D-04） ── */
+  --text-hero-size: 30px;
+  --text-hero-line: 1.2;
+  /* 叙事行宽 44em（≈660px @15px；中文约 44 字/行，章程 §2.5/D-05） */
+  --prose-measure: 44em;
+
+  /* ── 控件尺寸（§4.7：按钮 26/32/44、图标按钮 36、输入框/下拉 40；chip 高 36 见 §4.6。
+     图标与 spinner 共用一把尺：§4.7 spinner 16/18/20、§4.8 通用图标 18） ── */
   --control-height-sm: 26px;
   --control-height-md: 32px;
   --control-height-lg: 44px;
@@ -89,158 +124,112 @@
   --icon-opacity-disabled: 0.26;
   --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
 
-  /* 输入卡内部两段（§4.5：输入框内部最小 / 最大高 48px / 170px；§0.2 实测 111 与 114
-     那对是"首屏整张输入框"，不是常态高度 —— 常态取自适应 + 这两个界）。
-     工具条：Kimi 实测 49（像素扫描误差 ±1），取 4 的倍数 48 —— 36 的按钮 + 上下 6。
-     round 64（用户实拍"默认对话输入框高度偏低，可以调整高一点"）：最小高 48 → 56。
-     初始页（空会话）另有一档 -hero 72：那一屏没有消息，输入框是这一屏的主角，给得更高一点
-     （组件侧只引用语义名，见 ComposerProps.hero；px 值只在本文件出现）。 */
+  /* ── 输入卡内部两段（§4.5 / round 64：最小高 48 → 56；初始页 hero 72） ── */
   --composer-input-min-height: 56px;
   --composer-input-min-height-hero: 72px;
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 
-  /* 中列（聊天）的最小可读宽（round 77）：工作台以 docked 宽度摆开后，中列只剩这么点宽就
-     判定"放不下"——面板改铺满内容区（中列 hidden 但不卸载），而不是把聊天挤成逐字一行。
-     判据是**实测**的：内容卡宽 − 卡内侧栏占宽 − 工作台实际宽（拖过的也算）< 这一格 ⇒ 铺满。
-     AppShell 读这条 token（jsdom 读不到时退回同值的兜底常量）。
-     旧口径（R2 D4 的 --work-panel-collapse-width = 1120 = 240+480+400）在这里退休：它把
-     "工作台 400"和"侧栏必开"写死了，拖宽面板 / 收起侧栏 / 更宽的窗口都判不准。 */
+  /* ── 中列（聊天）的最小可读宽（round 77）：内容卡宽 − 侧栏占宽 − 工作台实际宽 < 这一格 ⇒ 铺满 ── */
   --chat-min-readable-width: 480px;
 
-  /* 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
-     几何在明暗两套下一致，所以只在这里声明、不进深色块。 */
+  /* ── 壳布局（spec §6.2 三栏骨架 / 附录 A：顶栏 42、侧栏 240、工作台 400、导航项 36、新建会话 41）。
+     几何在明暗两套下一致，所以只在这里声明、不进深色块。 ── */
   --titlebar-height: 42px;
-  /* 0.2.0 一级导航：只有图标栏一种形态（2026-10-17 用户拍板，参考 Codex 布局）——
-     流式竖栏固定 56；旧的 200 展开态与 --primary-nav-width 一档退休。 */
+  /* 一级导航：只有图标栏一种形态（2026-10-17 用户拍板，参考 Codex 布局），固定 56 */
   --primary-nav-rail-width: 56px;
-  /* 会话二级栏：在内容卡内部、与主列是 flex 兄弟（2026-10-17 起不再是覆盖层），可折叠成 0 */
+  /* 会话二级栏：在内容卡内部、与主列是 flex 兄弟，可折叠成 0 */
   --sidebar-width: 240px;
   --work-panel-width: 400px;
-  --nav-item-height: 36px; /* 导航项 / 侧栏会话项：实测 35.9 ≈ 36 */
-  --new-session-height: 41px; /* 侧栏「新建会话」块按钮：实测 41.3（宽 224 = 240 − 2×8，走 w-full） */
-  /* 内容卡与窗右缘、窗底的留缝（R2 修复轮 round 3）：Kimi 桌面实测每侧 12 设备像素 @2x = 6 ——
-     内容区是"四角圆角卡"，右、底两侧留出画布缝。左缘、顶缘不留缝：一级导航与顶栏直接贴着卡边
-     （2026-10-17 起会话侧栏已进卡内，覆盖层时代的 shell-notch 补角随之退休）。 */
+  --nav-item-height: 36px;
+  --new-session-height: 41px;
+  /* 内容卡与窗右缘、窗底的留缝：四角圆角卡右、底各留 6（左缘/顶缘贴导航与顶栏） */
   --shell-edge-gap: var(--space-1-5);
 
-  /* Office 文档画布（A1 / office-ui-redesign-spec §5.2）：灰画布上的白纸。
-     映射（office-ui-redesign-spec §5.1）：画布 = Bg-Secondary（HF `--canvas:#e6e6e6` 的
-     "比 chrome 暗一档" 对应档；浅色 #f5f5f5 上的白纸层次清楚，深色 #1f1f1f 比 chrome 抬起）、
-     纸 = Bg-Primary（浅色 #fff；深色 #121212）；
-     阴影走 Shadows-S1（与 --shadow-overlay 同一档基色，暗色下自动加深）。
-     这三条都是**纯别名**：深色档不重写（var() 在使用处解析，data-theme 翻档后跟着翻）；
-     隔离面（office.html）也 import 本文件 + kimi-tokens.css，并用 `html[data-theme]` 走同一套档。
-     注意：`--doc-page-bg` 与 @betteroffice/docx-react 内部同名 CV（内核目前未消费）撞名——
-     面内 .oox-root 里以内核值为准（Word-faithful，纸面不套皮肤）；本仓语义值在 :root，
-     给 shell 的空态"纸卡"和 A2 起的自绘 chrome 用。 */
-  --doc-canvas-bg: var(--Bg-Secondary);
-  --doc-page-bg: var(--Bg-Primary);
-  --doc-page-shadow: 0 1px 2px var(--Shadows-S1), 0 8px 24px var(--Shadows-S1);
+  /* ── Office 文档画布（A1）──
+     画布 = 语义凹槽 `--bg-secondary`（Claude inset：浅 #f0f0ef / 深 #1c1b1a，章程 §9.7#3）；
+     纸 = 身份层 `--k-paper`（浅白纸 / 深灰纸 #cfd1cb —— Office 硬决定，Word-faithful）；
+     页影 = 阴影三级里的 paper（lv2）。
+     隔离面（office.html）import 同一套 identity + semantic（office/main.tsx），用 html[data-theme] 翻档。 */
+  --doc-canvas-bg: var(--bg-secondary);
+  --doc-page-bg: var(--k-paper);
+  --doc-page-shadow: var(--k-shadow-paper);
 
-  /* Office ribbon（A2 / office-ui-redesign-spec §5.2–§5.3）：纯布局与动效值，深浅同值。
-     面内自绘 chrome（office-chrome.css）消费；尺寸对齐 A0 打样与 HF 结构：
-     QAT/tab 行 32 + 工具带固定 80 + （A4 的）状态栏 26。
-     动效节奏按设计研究 §三.2：反馈 120ms、入场 150–320ms、离场 120ms；
-     面内 CSS 自己写 prefers-reduced-motion（隔离面不继承 tailwind.css 的全局兜底）。 */
+  /* ── Office ribbon（A2）：纯布局与动效值，深浅同值。面内 office-chrome.css 消费 ── */
   --office-ribbon-tabs-height: 32px;
   --office-ribbon-body-height: 80px;
   --office-status-height: 26px; /* A4 状态栏先登记，A2 不改布局 */
   --office-motion-feedback: 120ms;
   --office-motion-enter: var(--duration-base);
   --office-motion-exit: 120ms;
-  /* A3：右侧 AI 面板宽度（用户拍板 320 够；窄窗自动收起不挤压画布）。
-     也是面板开合动画的宽度终点（只动 width/opacity，--motion-main 300ms settle）。 */
+  /* A3：右侧 AI 面板宽度（用户拍板 320 够；窄窗自动收起不挤压画布） */
   --office-ai-panel-width: 320px;
 
-  /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
-     2026-10-17 起会话侧栏在内容卡**内部**、是主列的 flex 兄弟：主列几何天然不含侧栏那 240，
-     所以页面内容列（.content-column，见 styles/tailwind.css）只要"限宽 + 在自己的可用宽里居中"。
-     --content-safe-left 是覆盖层时代"可见左缘"的安全线，现在机制已退休：值恒为 0；
-     仍保留这一条是因为 ChatPage.tsx（不在本轮写域）还引用着 ml-/pl-(--content-safe-left)，
-     值恒 0 无行为 —— 清理 ChatPage 那两处后即可删掉本 token。 */
+  /* ── 内容层（spec §6.2：消息列 max 800、输入区 max 768） ── */
   --content-max-width: 800px;
+  /* 覆盖层时代的"可见左缘"安全线已退休，值恒 0（ChatPage 还有两处引用，清掉后可删） */
   --content-safe-left: 0px;
   /* 对话输入卡（T7）：UI 参考 §4.6 实测输入框宽 768.3 */
   --chat-input-max-width: 768px;
 
-  /* 按钮（§7：主按钮＝墨色 Labels-Primary 实心、禁用＝Fills-F3 底 + Labels-Quaternary 字；
-     hover/active 取同族档，深浅两套由原样层解析） */
-  --button-primary-bg: var(--Labels-Primary);
-  --button-primary-bg-hover: var(--Labels-Primary-hover);
-  --button-primary-bg-active: var(--Labels-Primary-active);
-  --button-primary-fg: var(--Bg-Primary);
-  --button-danger-bg: var(--Colors-Red);
-  --button-danger-bg-hover: var(--Colors-Red-hover);
-  --button-danger-bg-active: var(--Colors-Red-active);
-  --button-danger-fg: var(--Always-White);
+  /* ── 按钮（章程 §3.5/§3.7/D-07）：主按钮 = 陶土橙实心 + #faf9f5 字（全产品唯一实心按钮）；
+     次按钮/ghost 走透明底 + hairline；危险按钮用 danger 档 ── */
+  --button-primary-bg: var(--k-accent);
+  --button-primary-bg-hover: var(--k-accent-hover);
+  --button-primary-bg-active: var(--k-accent-hover);
+  --button-primary-fg: var(--k-on-accent);
+  --button-danger-bg: var(--k-danger);
+  --button-danger-bg-hover: var(--k-danger);
+  --button-danger-bg-active: var(--k-danger);
+  --button-danger-fg: var(--k-on-accent);
 
-  /* 输入框底（§2.14 实测：浅 #ffffff = Bg-Primary、深 #1f1f1f = Bg-Secondary；
-     两档都是"相对页面抬起"的那一格，故按主题分档，见深色块） */
-  --field-bg: var(--Bg-Primary);
+  /* ── 输入框底：Claude input-major（浅白 / 深 #0f0e0d），相对卡面微微抬起 ── */
+  --field-bg: var(--k-input);
 
-  /* 菜单（§7：条目高 36、面板内边距 8、菜单项圆角 10） */
+  /* ── 菜单（§7：条目高 36、面板内边距 8、菜单项圆角 10） ── */
   --menu-item-height: 36px;
   --menu-pad: var(--space-2);
   --menu-item-radius: var(--radius-control);
 
-  /* 弹层（§4.5：small 360 / medium 560、最大宽 calc(100vw - 32px)。
-     阴影＝§5.4 特征值 0 4px 16.4px × §2.12 阴影基色 → 浅色与验收表的 #0000001a 逐字一致） */
+  /* ── 弹层（§4.5：small 360 / medium 560、最大宽 calc(100vw − 32px)；阴影 = Claude shadow-lv2） ── */
   --overlay-width-sm: 360px;
   --overlay-width-md: 560px;
   --overlay-max-width: calc(100vw - var(--space-8));
-  --shadow-overlay: 0 4px 16.4px var(--Shadows-S1);
+  --shadow-overlay: var(--k-shadow-lv2);
+  /* 纸面/输入卡两条阴影（章程 §4.1 只有三级：paper = overlay 同源 lv2、composer 是拆出轻档） */
+  --shadow-paper: var(--k-shadow-paper);
+  --shadow-composer: var(--k-shadow-composer);
 
-  /* 提示气泡（§2.9 深色填充 60% 黑 + 84% 白字，两主题同值） */
-  --tooltip-bg: var(--Always-TransparencyDarkFill);
-  --tooltip-fg: var(--Always-WhiteSecondary);
+  /* ── 提示气泡（深墨底/纸字，暗色反相；章程 §9.5） ── */
+  --tooltip-bg: var(--k-ink);
+  --tooltip-fg: var(--k-canvas);
 
-  /* 骨架屏（shimmer 关键帧在 tailwind.css，§6.6）：底 Fills-F2；高光浅色比底更亮，深色换白高光 */
-  --skeleton-base: var(--Fills-F2);
-  --skeleton-highlight: var(--Bg-Primary);
+  /* ── 骨架屏（shimmer 关键帧在 tailwind.css）：底 = 凹槽，高光 = 浮面 ── */
+  --skeleton-base: var(--k-inset);
+  --skeleton-highlight: var(--k-card);
 
-  /* 圆角（对应原样层的十个组件级 token 与工程阶梯）
-     --radius-input 指"输入区/输入卡"（§5.1 --chat-input-radius 24px）；
-     普通 input / select 元素用 --radius-field（§4.7 .kimi-select 12px）。 */
+  /* ── 圆角（章程 §4.3/D-13：4/8/10/12/16/20/999；内层永远不比外框圆）
+     --radius-input 从 Kimi 的 24 收到 16（brand input）；普通 input/select 用 --radius-field(12) ── */
   --radius-field: var(--kimi-select-radius);
   --radius-panel: var(--settings-card-radius);
   --radius-overlay: var(--km-modal-radius);
   --radius-icon-button: var(--linear-icon-button-radius);
-  --radius-input: var(--chat-input-radius);
+  --radius-input: 16px;
 
-  /* 动效 */
+  /* ── 动效：既有主档保留（新组件读 tokens/motion.css 的角色令牌） ── */
   --motion-fast: var(--duration-quick);
   --motion-main: var(--duration-main);
   --motion-ease-inout: ease-in-out;
   --motion-ease-out: var(--clp-ease-out);
 
-  /* 焦点环、蒙层、玻璃、滚动条。
-     焦点环颜色（R2 round 5，用户实拍 #7）：**不再是墨色** —— 墨色环在浅色下近黑、深色下近白，
-     就是用户点名的"黑色框线"（hover/选中/聚焦一律不得出现墨色或纯黑/纯白描边）。
-     全局焦点环统一取分隔线灰 Separators-S1（与发送框 round 2 已确立的口径同一档）；
-     条目类的 hover/选中仍靠填充档（Fills-F1 / Fills-F2），焦点环只留给"没有填充可表达"的控件。 */
-  --focus-ring: inset 0 0 0 1px var(--Separators-S1);
-  --selection: var(--Others-TextSelected);
+  /* ── 焦点环：暖灰（Claude tertiary #8f8a7e / #8f8d84），不是墨色、不是 accent（章程 §3.7/D-11） ── */
+  --focus-ring: inset 0 0 0 1px var(--k-ink-3);
+  --selection: var(--k-active);
   --mask: var(--MaskBg-Base);
   --blur-glass: 15px;
   --scrollbar-size: 6px;
-  --scrollbar-thumb: var(--Fills-F2);
-  --scrollbar-thumb-hover: var(--Fills-F3);
-  /* 静置档（round 50）：左栏那两个滚动区（tailwind.css 的 scrollbar-auto-hide）没被交互时的滑块色。
-     换档机制（元素上换一条 @property 注册过的颜色 → 伪元素才重绘、才能淡入）写在 tailwind.css 那段；
-     这里给 :root 一条静置值，类没挂上时也只是"不隐藏"，不会错色。 */
+  --scrollbar-thumb: var(--k-scrollbar);
+  --scrollbar-thumb-hover: var(--k-scrollbar-hover);
+  /* 静置档（round 50）：左栏滚动区静置时的滑块色（换档机制在 tailwind.css 的 scrollbar-auto-hide） */
   --scrollbar-thumb-auto: transparent;
-}
-
-:root[data-theme='dark'] {
-  /* 深色档只重写"必须分档"的字面值：别名（var() 指向原样层）在使用处解析，不在这里重复声明。 */
-  --accent-text: #3194ff;
-  --text-tertiary: #ffffff85;
-  --text-quaternary: #ffffff5c;
-  /* 深色档的边框同样加深一档（白 alpha；浅色档那三条的理由与阶梯见上） */
-  --border-hairline: #ffffff2e;
-  --border-surface: #ffffff42;
-  --border-field: #ffffff21;
-  --field-bg: var(--Bg-Secondary);
-  --skeleton-highlight: var(--Always-TransparencyWhite15);
 }

@@ -10,8 +10,11 @@ import { cn } from '@renderer/components/ui/cn'
  * 把输入框整体压下标题高度的一半）。页脚那格由 ChatPage 加 `relative` 当挂点；`pointer-events-none`
  * 让这块盖在消息区上的区域不吞点击。
  *
- * 标题形态对齐 KIMI `<Code>`：品牌名带尖括号，**括号用强调色**（`text-accent-text`）、
- * 中间的 `kyclaw` 用主文字色；下面一行次级品牌语，同一个字族、次要层级。
+ * 标题形态对齐 KIMI `<Code>`：品牌名带尖括号，**括号用强调色**（`text-accent-text`，P0 起 = 陶土橙
+ * `--link`/`--accent-text`；token 自动跟随）、中间的 `kyclaw` 用主文字色。
+ * tagline（章程 §9.2/D-25，用户 2026-10-18 拍板）：英文禅意 **`What needs doing, done.`**，
+ * 衬线 16/1.6（`welcome-tagline`，阅读声部）、次墨色；下面保留一行中文小字「本地运行，文件不出这台机器」
+ * （sans 12、三级可读档 —— 它是承载信息的小字，不是 caption 装饰档）。
  * **不加任何多余小字 / 提示 / 菜单**（用户口径：首页必须简洁）。
  *
  * 动效（都不硬切）：
@@ -44,7 +47,12 @@ export function WelcomeHero({ active }: { active: boolean }): React.JSX.Element 
         kyclaw
         <span className="text-accent-text">&gt;</span>
       </h1>
-      <p className="pt-3 text-b2 text-ink-tertiary">帮你把活干完</p>
+      <p data-testid="welcome-tagline" className="welcome-tagline pt-3 text-ink-secondary">
+        What needs doing, done.
+      </p>
+      <p data-testid="welcome-local-note" className="pt-1 text-c1 text-ink-tertiary-readable">
+        本地运行，文件不出这台机器
+      </p>
     </div>
   )
 }

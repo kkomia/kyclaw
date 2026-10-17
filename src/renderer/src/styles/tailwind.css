@@ -1,7 +1,10 @@
 /**
- * 样式入口（唯一）：Tailwind v4 + 两层设计 token。
- * 由 src/renderer/src/main.tsx 引入；模板残留的 assets/main.css 已删除（不留双重来源）。
- * 数值口径见 tokens/kimi-tokens.css 与 tokens/semantic.css。
+ * 样式入口（唯一）：Tailwind v4 + 三层 token（P0 设计语言，2026-10-18）。
+ * 由 src/renderer/src/main.tsx 引入 —— main.tsx 在它之前先引 `tokens/identity.css`（身份层）
+ * 与 `tokens/motion.css`（动效角色层），身份层因此一定早于 semantic.css；
+ * 隔离面入口 `office/main.tsx` 自己按同一顺序引 identity + motion（不引 tailwind）。
+ * 数值口径见 tokens/identity.css（Claude 保底）、tokens/semantic.css（工程语义）、
+ * tokens/kimi-tokens.css（Kimi 原样层，冻结只作回滚/对照）。
  */
 @import 'tailwindcss';
 @import './tokens/kimi-tokens.css';
@@ -25,7 +28,12 @@
   --color-menu: var(--bg-menu);
   --color-ink: var(--text-primary);
   --color-ink-secondary: var(--text-secondary);
-  --color-ink-tertiary: var(--text-tertiary);
+  /* P0 兼容口径：既有几百处 12px meta/说明文字用的是 `text-ink-tertiary`，它们是**承载信息**的小字，
+     所以这个工具类映射到 D-29 可读档（≈4.86:1），避免气质落地后正文小字变浅；
+     纯装饰/大字号场景直接消费 `var(--text-tertiary)`（Claude 原值 3.35:1，大字号够用）。 */
+  --color-ink-tertiary: var(--text-tertiary-readable);
+  /* 显式可读档（新代码优先用这个语义名） */
+  --color-ink-tertiary-readable: var(--text-tertiary-readable);
   --color-hairline: var(--border-hairline);
   --color-surface-border: var(--border-surface);
   --color-hover: var(--fill-hover);
@@ -33,6 +41,8 @@
   --color-active: var(--fill-active);
   --color-accent: var(--accent);
   --color-accent-text: var(--accent-text);
+  /* 陶土橙主按钮（章程 §3.5/D-07）：唯一实心按钮 */
+  --color-on-accent: var(--on-accent);
   --color-positive: var(--positive);
   --color-positive-bg: var(--positive-bg);
   --color-warning: var(--warning);
@@ -55,10 +65,12 @@
   --radius-panel: var(--settings-card-radius);
   --radius-overlay: var(--km-modal-radius);
   --radius-icon-button: var(--linear-icon-button-radius);
-  --radius-input: var(--chat-input-radius);
+  /* P0：输入卡圆角从 Kimi 的 24 收到 16（brand input，章程 §4.3/D-13） */
+  --radius-input: 16px;
   --radius-pill: 999px;
 
-  /* 字号：ui-* 六档，字号与行高成对 → text-t1 / text-t2 / text-b1 / text-b2 / text-c1 / text-c2 */
+  /* 字号：ui-* 六档，字号与行高成对 → text-t1 / text-t2 / text-b1 / text-b2 / text-c1 / text-c2；
+     P0 只新增一档 display：text-hero（30/1.2，只给欢迎字标，章程 §2.4） */
   --text-t1: var(--ui-T1-font-size);
   --text-t1--line-height: var(--ui-T1-line-height);
   --text-t2: var(--ui-T2-font-size);
@@ -71,13 +83,15 @@
   --text-c1--line-height: var(--ui-C1-line-height);
   --text-c2: var(--ui-C2-font-size);
   --text-c2--line-height: var(--ui-C2-line-height);
+  --text-hero: var(--text-hero-size);
+  --text-hero--line-height: var(--text-hero-line);
 
-  /* 字族：UI 参考 §3.3 只查到「全是字面值、没有 --font-sans」，栈按 spec §6.3 的
-     系统字链；等宽按 spec §11 先挂 Geist Mono（本机没装则逐级回退）。 */
-  --font-sans:
-    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
-    'Noto Sans CJK SC', sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  /* 字族三声部（章程 §2.1）：sans = 操作声部、serif = 阅读声部、mono = 数据声部。
+     全栈定义下沉在 semantic.css（隔离面也读），这里只做 Tailwind 命名空间映射：
+     font-sans / font-serif / font-mono 三个工具类因此与产品声部一一对应。 */
+  --font-sans: var(--font-ui);
+  --font-serif: var(--font-reading);
+  --font-mono: var(--font-code);
 
   /* 缓动 → ease-main（主档 .3s ease-in-out 的曲线部分；时长走 --motion-main） */
   --ease-main: var(--motion-ease-inout);
@@ -437,13 +451,29 @@
   }
 }
 
-/* ===== 对话初始页的品牌标题（round 59）=====
-   UI 里唯一一处"展示级"字号：正文 15px 的约两倍，但**不写死 px** —— 跟着 [data-font-size]
-   的三档缩放走（16 / 18 / 20 → 28.8 / 32.4 / 36）。行高收紧，避免大字把初始页顶得过高。 */
+/* ===== 对话初始页的品牌区（round 59；P0 设计语言对齐）=====
+   字标 `<kyclaw>`：唯一的 display 档 —— 衬线 30/1.2（--text-hero），字距收紧 -0.02em；
+   900 窄窗按章程 §6.3 收到 0.85×（26px）；字号走 token、不写死中间档。
+   tagline：英文 `What needs doing, done.` —— 衬线 16/1.6、次墨色（阅读声部的小字）。 */
 @layer components {
   .welcome-title {
-    font-size: calc(var(--ui-T1-font-size) * 1.8);
-    line-height: 1.15;
+    font-family: var(--font-reading);
+    font-size: var(--text-hero-size);
+    line-height: var(--text-hero-line);
+    letter-spacing: -0.02em;
+  }
+
+  .welcome-tagline {
+    font-family: var(--font-reading);
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: 0.002em;
+  }
+
+  @media (max-width: 900px) {
+    .welcome-title {
+      font-size: calc(var(--text-hero-size) * 0.85);
+    }
   }
 }
 

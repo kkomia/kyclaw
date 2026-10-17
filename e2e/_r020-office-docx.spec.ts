@@ -334,9 +334,9 @@ test.describe('M3-S2 · Office 文档注册表 + 打开/读字节（真机 previ
       })
       expect(surfaceDark.surfaceTheme).toBe('dark')
       expect(surfaceDark.colorScheme).toBe('dark')
-      // A1 起面的底色走 token：深色档画布 = Bg-Secondary #1f1f1f（原先是硬编码 #181817）
-      expect(surfaceDark.canvasToken).toBe('#1f1f1f')
-      expect(surfaceDark.bodyBackground).toBe('rgb(31, 31, 31)')
+      // P0 起画布走 Claude 身份层：深色凹槽 = --k-inset #1c1b1a（旧 Kimi Bg-Secondary #1f1f1f）
+      expect(surfaceDark.canvasToken).toBe('#1c1b1a')
+      expect(surfaceDark.bodyBackground).toBe('rgb(28, 27, 26)')
       // 不重载 iframe：面还是 ready、文档还在（重载会回到 booting / doc:open 重来）
       expect(surfaceDark.bootState).toBe('surface ready')
       expect(await officeFrame.getByTestId('surface-doc-open').getAttribute('data-state')).toBe(

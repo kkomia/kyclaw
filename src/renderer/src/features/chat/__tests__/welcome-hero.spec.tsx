@@ -13,7 +13,8 @@ import { createMockTransport, type MockTransport } from './mock-transport'
  * 触发：当前会话消息为空、没有错误、没有待审批（草稿与空会话都算）。
  * 布局：标题 `absolute bottom-full` 挂在页脚（输入框那一格）之上、**不占布局高度** ——
  *   消息区与 welcome-spacer 等分剩余高度，输入框因此是真·竖直居中（用户实拍"偏下"的修正）。
- * 标题形态：`<kyclaw>`（尖括号强调色 / 中间主文字色）+ 一行次级品牌语。
+ * 标题形态：`<kyclaw>`（尖括号强调色 / 中间主文字色）+ 英文 tagline
+ *   「What needs doing, done.」（衬线 16/1.6）+ 一行中文小字「本地运行，文件不出这台机器」。
  * 动效：进场淡入 + 上浮（`animate-message-in`；页脚晚 80ms 起步）；离场换 `animate-fade-out`
  *   —— 绝对定位没有高度可收合，"收过"内容仍在 DOM（不硬切、也不重挂，输入框全程可用）。
  * 有历史消息的会话（挂载时就没有初始页）压根不渲染它。
@@ -82,9 +83,20 @@ describe('空会话的初始页', () => {
     expect(brackets[1]?.textContent).toBe('>')
     for (const bracket of brackets) expect(bracket).toHaveClass('text-accent-text')
 
-    expect(screen.getByText('帮你把活干完')).toBeInTheDocument()
-    // 不多加任何小字/提示/菜单：标题块里只有这两行
-    expect(hero.querySelectorAll('h1, p')).toHaveLength(2)
+    expect(screen.getByTestId('welcome-tagline')).toHaveTextContent('What needs doing, done.')
+    // P0（章程 §9.2/D-25）：英文 tagline 走阅读声部（衬线 16/1.6）+ 次墨色
+    expect(screen.getByTestId('welcome-tagline')).toHaveClass(
+      'welcome-tagline',
+      'text-ink-secondary'
+    )
+    // 字标下保留中文小字「本地运行，文件不出这台机器」（sans 12、三级可读档）
+    expect(screen.getByTestId('welcome-local-note')).toHaveTextContent('本地运行，文件不出这台机器')
+    expect(screen.getByTestId('welcome-local-note')).toHaveClass(
+      'text-c1',
+      'text-ink-tertiary-readable'
+    )
+    // 不多加任何小字/提示/菜单：标题块里只有字标 + 两行文案（tagline / 本地小字）
+    expect(hero.querySelectorAll('h1, p')).toHaveLength(3)
 
     // round 66：初始页三样各就各位 —— 标题（页脚之上）→「选择项目」行（卡片上方）→ 输入卡 →
     // PPT 行（卡片下方）。两枚 chip 都在**卡片外**，见下面那条竖排顺序用例

@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const TOKENS_CSS = '../tokens/kimi-tokens.css'
+const IDENTITY_CSS = '../tokens/identity.css'
+const MOTION_CSS = '../tokens/motion.css'
 const SEMANTIC_CSS = '../tokens/semantic.css'
 const TAILWIND_CSS = '../tailwind.css'
 const MAIN_TSX = '../../main.tsx'
@@ -19,6 +21,8 @@ function readSource(relativePath: string): string {
 }
 
 const tokensCss = readSource(TOKENS_CSS)
+const identityCss = readSource(IDENTITY_CSS)
+const motionCss = readSource(MOTION_CSS)
 const semanticCss = readSource(SEMANTIC_CSS)
 const tailwindCss = readSource(TAILWIND_CSS)
 const officeSurfaceCss = readSource(OFFICE_SURFACE_CSS)
@@ -61,9 +65,16 @@ function canonical(value: string): string {
 }
 
 const tokens = collectBlocks(tokensCss)
+const identity = collectBlocks(identityCss)
+/** motion.css 的 reduced-motion 媒体块里也有一个 :root（覆盖角色时长）——平铺解析器会把它与
+ *  基础 :root 合并、后写覆盖。这里只取「媒体块之外」的基础令牌，媒体块单独用正则断言。 */
+const motion = collectBlocks(motionCss.replace(/@media[^{]*\{[\s\S]*?\n\}\n/, ''))
 const semantic = collectBlocks(semanticCss)
 const light: Decls = tokens.get(':root') ?? new Map<string, string>()
 const dark: Decls = tokens.get(":root[data-theme='dark']") ?? new Map<string, string>()
+const identityLight: Decls = identity.get(':root') ?? new Map<string, string>()
+const identityDark: Decls = identity.get(":root[data-theme='dark']") ?? new Map<string, string>()
+const motionRoot: Decls = motion.get(':root') ?? new Map<string, string>()
 const small: Decls = tokens.get(":root[data-font-size='small']") ?? new Map<string, string>()
 const large: Decls = tokens.get(":root[data-font-size='large']") ?? new Map<string, string>()
 
@@ -386,29 +397,129 @@ describe('工程阶梯 · 间距（UI 参考 §4.3 的推断阶梯）', () => {
   })
 })
 
-describe('语义层（semantic.css）', () => {
+/**
+ * 身份层（identity.css，P0 2026-10-18）：Claude palette.claude 的 `--k-*` 原样值，浅/深两段。
+ * 值来源见章程 §3.8；这里钉「浅深两段齐全 + 关键角色逐值」，防止后续迁移把色板改回 Kimi 或自造色。
+ */
+describe('身份层（identity.css）· Claude 保底色板', () => {
+  const IDENTITY_CASES: Array<[string, string, string]> = [
+    // [token, 浅色, 深色]（逐条对应 tokens.json palette.claude）
+    ['--k-canvas', '#fcfcfb', '#141413'],
+    ['--k-card', '#ffffff', '#1e1e1d'],
+    ['--k-sidebar', '#fbfbf9', '#141413'],
+    ['--k-inset', '#f0f0ef', '#1c1b1a'],
+    ['--k-menu', '#ffffff', '#242320'],
+    ['--k-chip', '#f6f6f4', '#242320'],
+    ['--k-bubble', '#f0f0ef', 'rgba(255, 255, 255, 0.06)'],
+    ['--k-ink', '#141413', '#faf9f5'],
+    ['--k-ink-2', '#6e6a60', '#b0aea5'],
+    ['--k-ink-3', '#8f8a7e', '#8f8d84'],
+    // D-29：12px 承载信息的同色相压深档（浅 #776f62 ≈4.86:1）
+    ['--k-ink-3-readable', '#776f62', '#8f8d84'],
+    ['--k-ink-4', '#a6a094', '#6b6a65'],
+    ['--k-accent', '#d97757', '#d97757'],
+    ['--k-accent-hover', '#c6613f', '#e08a6d'],
+    ['--k-on-accent', '#faf9f5', '#faf9f5'],
+    ['--k-link', '#c6613f', '#e08a6d'],
+    ['--k-border-l1', '#e8e6dc', 'rgba(255, 255, 255, 0.09)'],
+    ['--k-border-l2', '#dedcd2', 'rgba(255, 255, 255, 0.18)'],
+    ['--k-border-l3', '#d0cdc1', 'rgba(255, 255, 255, 0.3)'],
+    ['--k-hover', 'rgba(0, 0, 0, 0.08)', 'rgba(255, 255, 255, 0.08)'],
+    ['--k-hover-solid', '#f0efe9', '#2e2c29'],
+    ['--k-active', 'rgba(217, 119, 87, 0.3)', 'rgba(217, 119, 87, 0.3)'],
+    ['--k-code-ink', '#943333', '#e8a08a'],
+    ['--k-positive', '#3d7550', '#8cbf96'],
+    ['--k-warning', '#a4621d', '#e2a45f'],
+    ['--k-danger', '#943333', '#e8a08a'],
+    ['--k-selection', 'rgba(217, 119, 87, 0.3)', 'rgba(217, 119, 87, 0.3)'],
+    // Office 纸面不来自 tokens.json（Word-faithful 硬决定）：浅白纸 / 深灰纸
+    ['--k-paper', '#ffffff', '#cfd1cb']
+  ]
+
+  it.each(IDENTITY_CASES)('浅色 %s = %s', (name, lightValue) => {
+    expectDecl(identityLight, name, lightValue, 'identity :root')
+  })
+
+  it.each(IDENTITY_CASES)('深色 %s = %s', (name, _lightValue, darkValue) => {
+    expectDecl(identityDark, name, darkValue, "identity :root[data-theme='dark']")
+  })
+
+  it('阴影三级：paper/overlay 同源 lv2，composer 是拆出的轻档（暗色加深，不开彩色阴影）', () => {
+    expectDecl(identityLight, '--k-shadow-paper', 'var(--k-shadow-lv2)', 'identity :root')
+    expect(identityLight.get('--k-shadow-lv2')).toContain('rgba(20, 20, 19, 0.1)')
+    expect(identityLight.get('--k-shadow-composer')).toContain('rgba(20, 20, 19, 0.06)')
+    expect(identityDark.get('--k-shadow-lv2')).toContain('rgba(0, 0, 0, 0.3)')
+    // 暗色顶边高光（边 = 光，不是轮廓；章程 §3.4）
+    expect(identityDark.get('--k-edge-highlight')).toContain('rgba(255, 255, 255, 0.06)')
+  })
+
+  it('kimi 原样层冻结：身份层不写 Kimi 名，Kimi 层不出现 --k-*', () => {
+    for (const name of identityLight.keys()) {
+      expect(name.startsWith('--k-'), `身份层混入了非 --k- token：${name}`).toBe(true)
+    }
+    expect(tokensCss).not.toContain('--k-canvas')
+    // Kimi 品牌蓝仍在原样层（只作回滚/对照，不进语义层）
+    expect(light.get('--Colors-KMBlue')).toBe('#1783ff')
+  })
+})
+
+/**
+ * 语义层（semantic.css）：工程名只引用身份层 `--k-*`（+ 技术性原样值）。
+ * 深色切换全部交给 identity.css 的 `--k-*` 重写 —— 语义层**不再有自己的深色块**。
+ */
+describe('语义层（semantic.css）· 重映射到身份层', () => {
   const root = semantic.get(':root') ?? new Map<string, string>()
-  const darkSemantic = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
 
   const ALIASES: Array<[string, string]> = [
-    ['--bg-canvas', 'var(--Bg-GroundPC)'],
-    ['--bg-primary', 'var(--Bg-Primary)'],
-    ['--bg-secondary', 'var(--Bg-Secondary)'],
-    ['--bg-menu', 'var(--Bg-Tertiary)'],
-    ['--text-primary', 'var(--Labels-Primary)'],
-    ['--text-secondary', 'var(--Labels-Secondary)'],
-    ['--fill-hover', 'var(--Fills-F1)'],
-    ['--fill-selected', 'var(--Fills-F2)'],
-    ['--fill-active', 'var(--Fills-F3)'],
-    ['--accent', 'var(--Colors-KMBlue)'],
-    ['--positive', 'var(--Colors-PositiveGreen)'],
-    ['--positive-bg', 'var(--Others-LightGreenBg)'],
-    ['--warning', 'var(--Colors-Orange)'],
-    ['--warning-bg', 'var(--Others-LightOrangeBg)'],
-    ['--danger', 'var(--Colors-Red)'],
-    ['--danger-bg', 'var(--Others-LightRedBg)'],
-    ['--diff-add', 'var(--Colors-DiffAdd)'],
-    ['--diff-delete', 'var(--Colors-DiffDelete)'],
+    ['--bg-canvas', 'var(--k-canvas)'],
+    ['--bg-primary', 'var(--k-card)'],
+    ['--bg-secondary', 'var(--k-inset)'],
+    ['--bg-menu', 'var(--k-menu)'],
+    ['--bg-overlay', 'var(--k-menu)'],
+    ['--bg-sidebar', 'var(--k-sidebar)'],
+    ['--bg-bubble', 'var(--k-bubble)'],
+    ['--surface-3', 'var(--k-hover-solid)'],
+    ['--text-primary', 'var(--k-ink)'],
+    ['--text-secondary', 'var(--k-ink-2)'],
+    ['--text-tertiary', 'var(--k-ink-3)'],
+    ['--text-tertiary-readable', 'var(--k-ink-3-readable)'],
+    ['--text-quaternary', 'var(--k-ink-4)'],
+    ['--text-disabled', 'var(--k-ink-4)'],
+    ['--border-hairline', 'var(--k-border-l2)'],
+    ['--border-surface', 'var(--k-border-l3)'],
+    ['--border-field', 'var(--k-border-l1)'],
+    ['--hairline-soft', 'var(--k-border-l1)'],
+    ['--fill-hover', 'var(--k-hover)'],
+    ['--fill-selected', 'var(--k-hover-solid)'],
+    ['--fill-active', 'var(--k-active)'],
+    ['--accent', 'var(--k-accent)'],
+    ['--accent-hover', 'var(--k-accent-hover)'],
+    ['--on-accent', 'var(--k-on-accent)'],
+    ['--accent-text', 'var(--k-link)'],
+    ['--link', 'var(--k-link)'],
+    ['--link-hover', 'var(--k-link-hover)'],
+    ['--positive', 'var(--k-positive)'],
+    ['--positive-bg', 'var(--k-positive-soft)'],
+    ['--warning', 'var(--k-warning)'],
+    ['--warning-bg', 'var(--k-warning-soft)'],
+    ['--danger', 'var(--k-danger)'],
+    ['--danger-bg', 'var(--k-danger-soft)'],
+    ['--diff-add', 'var(--k-positive)'],
+    ['--diff-delete', 'var(--k-danger)'],
+    ['--code-ink', 'var(--k-code-ink)'],
+    ['--code-bg', 'var(--k-code-bg)'],
+    ['--inline-code-bg', 'var(--k-inline-code-bg)'],
+    ['--selection', 'var(--k-active)'],
+    ['--focus-ring', 'inset 0 0 0 1px var(--k-ink-3)'],
+    ['--mask', 'var(--MaskBg-Base)'],
+    ['--blur-glass', '15px'],
+    ['--hairline-width', 'var(--border-width-base)'],
+    ['--scrollbar-size', '6px'],
+    ['--scrollbar-thumb', 'var(--k-scrollbar)'],
+    ['--scrollbar-thumb-hover', 'var(--k-scrollbar-hover)'],
+    ['--shadow-overlay', 'var(--k-shadow-lv2)'],
+    ['--shadow-paper', 'var(--k-shadow-paper)'],
+    ['--shadow-composer', 'var(--k-shadow-composer)'],
     ['--motion-fast', 'var(--duration-quick)'],
     ['--motion-main', 'var(--duration-main)'],
     ['--motion-ease-inout', 'ease-in-out'],
@@ -417,58 +528,59 @@ describe('语义层（semantic.css）', () => {
     ['--radius-panel', 'var(--settings-card-radius)'],
     ['--radius-overlay', 'var(--km-modal-radius)'],
     ['--radius-icon-button', 'var(--linear-icon-button-radius)'],
-    ['--radius-input', 'var(--chat-input-radius)'],
-    ['--focus-ring', 'inset 0 0 0 1px var(--Separators-S1)'],
-    ['--selection', 'var(--Others-TextSelected)'],
-    ['--mask', 'var(--MaskBg-Base)'],
-    ['--blur-glass', '15px'],
-    ['--hairline-width', 'var(--border-width-base)'],
-    ['--scrollbar-size', '6px'],
-    ['--scrollbar-thumb', 'var(--Fills-F2)'],
-    ['--scrollbar-thumb-hover', 'var(--Fills-F3)']
+    ['--radius-input', '16px'],
+    ['--field-bg', 'var(--k-input)'],
+    ['--tooltip-bg', 'var(--k-ink)'],
+    ['--tooltip-fg', 'var(--k-canvas)'],
+    ['--skeleton-base', 'var(--k-inset)'],
+    ['--skeleton-highlight', 'var(--k-card)']
   ]
 
   it.each(ALIASES)('语义 token %s = %s', (name, value) => {
     expectDecl(root, name, value, 'semantic :root')
   })
 
-  it('三档边框色是「比原样层深一档」的刻意偏离（2026-10-16 用户实拍：边框太浅）', () => {
-    expectDecl(root, '--border-hairline', '#00000033', 'semantic :root')
-    expectDecl(root, '--border-surface', '#00000042', 'semantic :root')
-    expectDecl(root, '--border-field', '#00000024', 'semantic :root')
-    expectDecl(darkSemantic, '--border-hairline', '#ffffff2e', "semantic :root[data-theme='dark']")
-    expectDecl(darkSemantic, '--border-surface', '#ffffff42', "semantic :root[data-theme='dark']")
-    expectDecl(darkSemantic, '--border-field', '#ffffff21', "semantic :root[data-theme='dark']")
-    expect(root.get('--border-surface')).not.toBe(root.get('--border-hairline'))
+  it('主按钮 = 陶土橙实心 + on-accent 字（全产品唯一实心按钮，章程 D-07）', () => {
+    expectDecl(root, '--button-primary-bg', 'var(--k-accent)', 'semantic :root')
+    expectDecl(root, '--button-primary-bg-hover', 'var(--k-accent-hover)', 'semantic :root')
+    expectDecl(root, '--button-primary-bg-active', 'var(--k-accent-hover)', 'semantic :root')
+    expectDecl(root, '--button-primary-fg', 'var(--k-on-accent)', 'semantic :root')
+    // 危险按钮保留 danger 档（不做霓虹红）
+    expectDecl(root, '--button-danger-bg', 'var(--k-danger)', 'semantic :root')
+    expectDecl(root, '--button-danger-fg', 'var(--k-on-accent)', 'semantic :root')
   })
 
-  it('新增 token --accent-text：浅 #0065dd / 深 #3194ff（Kimi 没有蓝字档）', () => {
-    expectDecl(root, '--accent-text', '#0065dd', 'semantic :root')
-    expectDecl(darkSemantic, '--accent-text', '#3194ff', "semantic :root[data-theme='dark']")
+  it('语义层不再有深色块：暗色由 identity.css 的 --k-* 整段重写承担', () => {
+    expect(semantic.get(":root[data-theme='dark']")).toBeUndefined()
+    // 暗色差异确实在身份层（同名 token 两段值不同）
+    expect(identityLight.get('--k-canvas')).not.toBe(identityDark.get('--k-canvas'))
   })
 
-  it('语义层的每个 var() 引用都能在原样层找到定义', () => {
-    const declared = new Set([...tokens.values()].flatMap((decls) => [...decls.keys()]))
+  it('语义层的每个 var() 引用都能在身份层 / Kimi 原样层 / 语义层自身找到定义', () => {
+    const declared = new Set([
+      ...[...tokens.values()].flatMap((decls) => [...decls.keys()]),
+      ...[...identity.values()].flatMap((decls) => [...decls.keys()]),
+      ...[...semantic.values()].flatMap((decls) => [...decls.keys()])
+    ])
     const referenced = [
       ...new Set([...semanticCss.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]))
     ].sort()
 
     expect(referenced.length).toBeGreaterThan(20)
     for (const name of referenced) {
-      expect(declared.has(name), `原样层没有定义 ${name}`).toBe(true)
+      expect(declared.has(name), `三层 token 都没有定义 ${name}`).toBe(true)
     }
   })
 })
 
 describe('T3 控件尺寸与组件级 token（UI 验收表数值）', () => {
   const t3root = semantic.get(':root') ?? new Map<string, string>()
-  const t3dark = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
 
-  it('三级/四级灰用达标档（spec §6.5 刻意偏离；台账 R6）', () => {
-    expectDecl(t3root, '--text-tertiary', '#0000008c', 'semantic :root')
-    expectDecl(t3root, '--text-quaternary', '#00000070', 'semantic :root')
-    expectDecl(t3dark, '--text-tertiary', '#ffffff85', "semantic :root[data-theme='dark']")
-    expectDecl(t3dark, '--text-quaternary', '#ffffff5c', "semantic :root[data-theme='dark']")
+  it('文字层级用 Claude 三级 + caption + 可读偏离档（D-29）；旧「达标档」literal 退休', () => {
+    expectDecl(t3root, '--text-tertiary', 'var(--k-ink-3)', 'semantic :root')
+    expectDecl(t3root, '--text-quaternary', 'var(--k-ink-4)', 'semantic :root')
+    expectDecl(t3root, '--text-tertiary-readable', 'var(--k-ink-3-readable)', 'semantic :root')
+    expect(t3root.has('--text-tertiary-readable'), '缺少 12px 可读档').toBe(true)
   })
 
   const CONTROL_TOKENS: Array<[string, string]> = [
@@ -490,50 +602,174 @@ describe('T3 控件尺寸与组件级 token（UI 验收表数值）', () => {
     ['--icon-opacity-hover', '0.84'],
     ['--icon-opacity-disabled', '0.26'],
     ['--spinner-stroke', '1.5px'],
-    // 按钮（§7）
-    ['--button-primary-bg', 'var(--Labels-Primary)'],
-    ['--button-primary-bg-hover', 'var(--Labels-Primary-hover)'],
-    ['--button-primary-bg-active', 'var(--Labels-Primary-active)'],
-    ['--button-primary-fg', 'var(--Bg-Primary)'],
-    ['--button-danger-bg', 'var(--Colors-Red)'],
-    ['--button-danger-bg-hover', 'var(--Colors-Red-hover)'],
-    ['--button-danger-bg-active', 'var(--Colors-Red-active)'],
-    ['--button-danger-fg', 'var(--Always-White)'],
-    ['--text-disabled', 'var(--Labels-Quaternary)'],
-    ['--fill-disabled', 'var(--Fills-F3)'],
+    // 按钮（章程 §3.5/§3.7：主按钮 = 陶土橙实心 + on-accent 字）
+    ['--button-primary-bg', 'var(--k-accent)'],
+    ['--button-primary-bg-hover', 'var(--k-accent-hover)'],
+    ['--button-primary-bg-active', 'var(--k-accent-hover)'],
+    ['--button-primary-fg', 'var(--k-on-accent)'],
+    ['--button-danger-bg', 'var(--k-danger)'],
+    ['--button-danger-fg', 'var(--k-on-accent)'],
+    ['--text-disabled', 'var(--k-ink-4)'],
+    ['--fill-disabled', 'var(--k-hover)'],
     // 输入框（§4.7 .kimi-select）、菜单（§7）、弹层（§4.5）
-    ['--border-field', '#00000024'],
-    ['--field-bg', 'var(--Bg-Primary)'],
+    ['--border-field', 'var(--k-border-l1)'],
+    ['--field-bg', 'var(--k-input)'],
     ['--menu-item-height', '36px'],
     ['--menu-pad', 'var(--space-2)'],
     ['--menu-item-radius', 'var(--radius-control)'],
     ['--overlay-width-sm', '360px'],
     ['--overlay-width-md', '560px'],
     ['--overlay-max-width', 'calc(100vw - var(--space-8))'],
-    ['--shadow-overlay', '0 4px 16.4px var(--Shadows-S1)'],
-    ['--bg-overlay', 'var(--Bg-Tertiary)'],
-    // 提示与骨架屏
-    ['--tooltip-bg', 'var(--Always-TransparencyDarkFill)'],
-    ['--tooltip-fg', 'var(--Always-WhiteSecondary)'],
-    ['--skeleton-base', 'var(--Fills-F2)'],
-    ['--skeleton-highlight', 'var(--Bg-Primary)']
+    ['--shadow-overlay', 'var(--k-shadow-lv2)'],
+    ['--bg-overlay', 'var(--k-menu)'],
+    // 提示与骨架屏（tooltip = 深墨底/纸字，暗色自动反相）
+    ['--tooltip-bg', 'var(--k-ink)'],
+    ['--tooltip-fg', 'var(--k-canvas)'],
+    ['--skeleton-base', 'var(--k-inset)'],
+    ['--skeleton-highlight', 'var(--k-card)']
   ]
 
   it.each(CONTROL_TOKENS)('T3 token %s = %s', (name, value) => {
     expectDecl(t3root, name, value, 'semantic :root')
   })
+})
 
-  it('深色档只重写必须分档的，别名不重复声明（翻档交给原样层）', () => {
-    expectDecl(t3dark, '--field-bg', 'var(--Bg-Secondary)', "semantic :root[data-theme='dark']")
-    expectDecl(
-      t3dark,
-      '--skeleton-highlight',
-      'var(--Always-TransparencyWhite15)',
-      "semantic :root[data-theme='dark']"
-    )
-    for (const name of ['--button-primary-bg', '--bg-overlay', '--menu-pad', '--icon-opacity']) {
-      expect(t3dark.has(name), `深色档不该重写别名 ${name}`).toBe(false)
+/**
+ * P0 字体系统（章程 §2）：三声部 + 中文链逐字 = DSH typeface 组；
+ * 六档不增不减，只新增一个 text-hero；叙事行宽 --prose-measure；输入卡圆角 16。
+ */
+describe('P0 字体三声部与字号（章程 §2）', () => {
+  const root = semantic.get(':root') ?? new Map<string, string>()
+  /** DSH 现用中文链（tokens.json typeface 组，顺序一字不改；本机实际命中 Noto Sans SC） */
+  const DSH_CJK_CHAIN =
+    /'Noto Sans SC',\s*'Source Han Sans SC',\s*'PingFang SC',\s*'Hiragino Sans GB',\s*'Microsoft YaHei',\s*sans-serif/
+
+  it('三条声部的字体栈都在语义层，且中文段逐字 = DSH 链', () => {
+    for (const name of ['--font-ui', '--font-reading', '--font-code']) {
+      const value = root.get(name)
+      expect(value, `缺少字体声部 ${name}`).toBeDefined()
+      expect(value as string, `${name} 的中文段不是 DSH 链`).toMatch(DSH_CJK_CHAIN)
     }
+  })
+
+  it('拉丁声部各就各位：UI Segoe / 阅读 Sitka·Georgia / 技术 Cascadia·Consolas', () => {
+    expect(root.get('--font-ui')).toContain("'Segoe UI Variable Text'")
+    expect(root.get('--font-reading')).toContain("'Sitka Text'")
+    expect(root.get('--font-reading')).toContain('Georgia')
+    expect(root.get('--font-code')).toContain("'Cascadia Mono'")
+    expect(root.get('--font-code')).toContain('Consolas')
+  })
+
+  it('文档字（Word-faithful）另起三条，不混进三声部', () => {
+    expect(root.get('--font-doc')).toContain("'SimSun'")
+    expect(root.get('--font-doc-head')).toContain("'SimHei'")
+    expect(root.get('--font-doc-num')).toContain("'Times New Roman'")
+  })
+
+  it('text-hero 30/1.2 只给欢迎字标；行宽 --prose-measure = 44em', () => {
+    expectDecl(root, '--text-hero-size', '30px', 'semantic :root')
+    expectDecl(root, '--text-hero-line', '1.2', 'semantic :root')
+    expectDecl(root, '--prose-measure', '44em', 'semantic :root')
+  })
+
+  it('输入卡圆角从 Kimi 的 24 收到 16（D-13）；Tailwind 三声部映射同步', () => {
+    expectDecl(root, '--radius-input', '16px', 'semantic :root')
+    expect(tailwindCss).toContain('--font-sans: var(--font-ui);')
+    expect(tailwindCss).toContain('--font-serif: var(--font-reading);')
+    expect(tailwindCss).toContain('--font-mono: var(--font-code);')
+    expect(tailwindCss).toContain('--text-hero: var(--text-hero-size);')
+    expect(tailwindCss).toContain('--text-hero--line-height: var(--text-hero-line);')
+    expect(tailwindCss).toContain('--radius-input: 16px;')
+  })
+
+  it('欢迎字标不写死 px：字号/行高/字距都走 token 与声部（900 窄窗 0.85×）', () => {
+    const welcome = /@layer components \{[\s\S]*?\.welcome-title \{([\s\S]*?)\n\s{2}\}/.exec(
+      tailwindCss
+    )?.[1]
+    expect(welcome).toContain('font-family: var(--font-reading)')
+    expect(welcome).toContain('font-size: var(--text-hero-size)')
+    expect(welcome).toContain('letter-spacing: -0.02em')
+    expect(tailwindCss).toMatch(
+      /@media \(max-width: 900px\) \{[\s\S]*?calc\(var\(--text-hero-size\) \* 0\.85\)/
+    )
+  })
+})
+
+/**
+ * P0 动效角色层（章程 §5.1）：12 条角色时长 + 4 条曲线 + 配套位移/模糊/缩放；
+ * 一种效果只有一档，新组件读角色名而不是挑数值。
+ */
+describe('P0 动效角色层（motion.css）', () => {
+  const ROLES: Array<[string, string]> = [
+    ['--motion-feedback', '120ms'],
+    ['--motion-reveal', '150ms'],
+    ['--motion-exit', '120ms'],
+    ['--motion-open', '250ms'],
+    ['--motion-enter', '320ms'],
+    ['--motion-flight', '400ms'],
+    ['--motion-spring', '500ms'],
+    ['--motion-stagger', '70ms'],
+    ['--motion-dot', '500ms'],
+    ['--motion-sweep', '1500ms'],
+    ['--motion-reduced', '0.01ms']
+  ]
+
+  it.each(ROLES)('角色时长 %s = %s', (name, value) => {
+    expectDecl(motionRoot, name, value, 'motion :root')
+  })
+
+  it('四条曲线与 tokens.json 一致（enter/glide/settle/spring）', () => {
+    expectDecl(
+      motionRoot,
+      '--motion-ease-enter',
+      'cubic-bezier(0.34, 1.3, 0.64, 1)',
+      'motion :root'
+    )
+    expectDecl(
+      motionRoot,
+      '--motion-ease-glide',
+      'cubic-bezier(0.22, 0.61, 0.36, 1)',
+      'motion :root'
+    )
+    expectDecl(motionRoot, '--motion-ease-settle', 'cubic-bezier(0.22, 1, 0.36, 1)', 'motion :root')
+    expectDecl(
+      motionRoot,
+      '--motion-ease-spring',
+      'cubic-bezier(0.34, 1.45, 0.64, 1)',
+      'motion :root'
+    )
+  })
+
+  it('配套位移/模糊/缩放来自 tokens.json，供配方 1/2/4 直接用', () => {
+    expectDecl(motionRoot, '--motion-distance-nudge', '4px', 'motion :root')
+    expectDecl(motionRoot, '--motion-distance-travel', '8px', 'motion :root')
+    expectDecl(motionRoot, '--motion-distance-rise', '12px', 'motion :root')
+    expectDecl(motionRoot, '--motion-blur-soft', '2px', 'motion :root')
+    expectDecl(motionRoot, '--motion-blur-enter', '3px', 'motion :root')
+    expectDecl(motionRoot, '--motion-scale-surface', '0.98', 'motion :root')
+    expectDecl(motionRoot, '--motion-scale-dialog', '0.96', 'motion :root')
+    expectDecl(motionRoot, '--motion-swap', '150ms', 'motion :root')
+    expectDecl(motionRoot, '--motion-swap-gap', '50ms', 'motion :root')
+  })
+
+  it('reduced-motion：角色时长整组压到 0.01ms（不是 0：transitionend 仍触发）', () => {
+    expect(motionCss).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?:root \{/)
+    for (const name of [
+      '--motion-feedback',
+      '--motion-enter',
+      '--motion-open',
+      '--motion-exit',
+      '--motion-sweep'
+    ]) {
+      expect(motionCss, `${name} 没有 reduced 压档`).toMatch(
+        new RegExp(`${name}: var\\(--motion-reduced\\)`)
+      )
+    }
+    // 既有工程阶梯未受影响（--duration-* / --clp-* 仍在 Kimi 原样层）
+    expect(canonical(light.get('--duration-main') ?? '')).toBe(canonical('.3s'))
+    expect(canonical(light.get('--clp-ease-out') ?? '')).toBe(
+      canonical('cubic-bezier(.23, 1, .32, 1)')
+    )
   })
 })
 
@@ -563,12 +799,19 @@ describe('tailwind.css 接线', () => {
     expect(tailwindCss).toContain('--text-b1: var(--ui-B1-font-size)')
     expect(tailwindCss).toContain('--text-b1--line-height: var(--ui-B1-line-height)')
     expect(tailwindCss).toContain('--radius-overlay: var(--km-modal-radius)')
-    expect(tailwindCss).toContain('--font-sans:')
+    // P0：三声部映射（sans/serif/mono）+ 唯一新增字阶 text-hero + 输入卡圆角 16
+    expect(tailwindCss).toContain('--font-sans: var(--font-ui);')
+    expect(tailwindCss).toContain('--font-serif: var(--font-reading);')
+    expect(tailwindCss).toContain('--font-mono: var(--font-code);')
+    expect(tailwindCss).toContain('--text-hero: var(--text-hero-size);')
+    expect(tailwindCss).toContain('--radius-input: 16px;')
   })
 
   it('@theme inline 引用的 token 都能找到定义（Tailwind 自带的 --font-* 除外）', () => {
     const declared = new Set([
       ...tokens.values().flatMap((decls) => [...decls.keys()]),
+      ...identity.values().flatMap((decls) => [...decls.keys()]),
+      ...motion.values().flatMap((decls) => [...decls.keys()]),
       ...semantic.values().flatMap((decls) => [...decls.keys()])
     ])
     const referenced = [
@@ -577,8 +820,9 @@ describe('tailwind.css 接线', () => {
 
     for (const name of referenced) {
       if (name === '--font-sans' || name === '--font-mono') continue // Tailwind 主题命名空间
+      if (name === '--font-serif') continue // 同上（@theme 里的 font-serif）
       if (name.startsWith('--radix-')) continue // Radix 运行时注入（浮层变形原点），不是我们的 token
-      expect(declared.has(name), `两层 token 都没有定义 ${name}`).toBe(true)
+      expect(declared.has(name), `三层 token 都没有定义 ${name}`).toBe(true)
     }
   })
 
@@ -596,7 +840,8 @@ describe('tailwind.css 接线', () => {
     ['--color-menu', '--bg-menu'],
     ['--color-ink', '--text-primary'],
     ['--color-ink-secondary', '--text-secondary'],
-    ['--color-ink-tertiary', '--text-tertiary'],
+    ['--color-ink-tertiary', '--text-tertiary-readable'],
+    ['--color-ink-tertiary-readable', '--text-tertiary-readable'],
     ['--color-hairline', '--border-hairline'],
     ['--color-surface-border', '--border-surface'],
     ['--color-hover', '--fill-hover'],
@@ -604,6 +849,7 @@ describe('tailwind.css 接线', () => {
     ['--color-active', '--fill-active'],
     ['--color-accent', '--accent'],
     ['--color-accent-text', '--accent-text'],
+    ['--color-on-accent', '--on-accent'],
     ['--color-positive', '--positive'],
     ['--color-positive-bg', '--positive-bg'],
     ['--color-warning', '--warning'],
@@ -618,6 +864,11 @@ describe('tailwind.css 接线', () => {
 
   it.each(COLOR_MAPPING)('颜色映射 %s ← %s 指向语义层', (tailwindName, semanticName) => {
     expectDecl(themeDecls, tailwindName, `var(${semanticName})`, '@theme')
+  })
+
+  it('工具类 text-ink-tertiary 走 D-29 可读档（兼容既有 12px 承载信息小字）；装饰原值仍可达', () => {
+    expectDecl(themeDecls, '--color-ink-tertiary', 'var(--text-tertiary-readable)', '@theme')
+    expect(semanticRoot.get('--text-tertiary')).toBe('var(--k-ink-3)')
   })
 
   const RADIUS_MAPPING: Array<[string, string]> = [
@@ -639,7 +890,7 @@ describe('tailwind.css 接线', () => {
     expectDecl(themeDecls, tailwindName, source, '@theme')
   })
 
-  it('字号映射：ui-* 六档的字号与行高都进主题', () => {
+  it('字号映射：ui-* 六档的字号与行高都进主题；P0 只多一个 text-hero', () => {
     const tiers = ['t1', 't2', 'b1', 'b2', 'c1', 'c2']
 
     for (const tier of tiers) {
@@ -656,6 +907,8 @@ describe('tailwind.css 接线', () => {
         '@theme'
       )
     }
+    expectDecl(themeDecls, '--text-hero', 'var(--text-hero-size)', '@theme')
+    expectDecl(themeDecls, '--text-hero--line-height', 'var(--text-hero-line)', '@theme')
   })
 
   it('缓动映射与语义层一致', () => {
@@ -679,12 +932,25 @@ describe('tailwind.css 接线', () => {
   })
 })
 
-describe('样式入口接线', () => {
+describe('样式入口接线（P0 三层 token：identity → motion → kimi/semantic）', () => {
   const mainSource = readSource(MAIN_TSX)
 
-  it('main.tsx 引 tailwind.css 入口，不再引模板 main.css', () => {
+  it('main.tsx：identity 与 motion 先于 tailwind.css（semantic 在 tailwind 里 ⇒ identity 必早于 semantic）', () => {
+    expect(mainSource).toContain("import './styles/tokens/identity.css'")
+    expect(mainSource).toContain("import './styles/tokens/motion.css'")
     expect(mainSource).toContain("import './styles/tailwind.css'")
+    expect(mainSource.indexOf('tokens/identity.css')).toBeLessThan(
+      mainSource.indexOf('styles/tailwind.css')
+    )
+    expect(mainSource.indexOf('tokens/motion.css')).toBeLessThan(
+      mainSource.indexOf('styles/tailwind.css')
+    )
     expect(mainSource).not.toContain('assets/main.css')
+  })
+
+  it('身份层不在 tailwind.css 里重复 import（单一入口，防双份级联）', () => {
+    expect(tailwindCss).not.toContain("import './tokens/identity.css'")
+    expect(tailwindCss).not.toContain("import './tokens/motion.css'")
   })
 
   it('模板样式文件已删除（不留双重来源）', () => {
@@ -804,42 +1070,36 @@ describe('壳 · 内容卡留缝（R2 修复轮 round 3；2026-10-17 侧栏进�
 })
 
 /**
- * A1（Office UI 改版 · 外壳与画布）：`--doc-*` 最小 token 集。
+ * Office 文档画布 token（A1；P0 映射到身份层）。
  *
- * 契约：画布/纸面/页影都从**既有原样层**别名出来（不新增颜色档）；深色档不重写
- * （var() 在使用处解析，data-theme 翻档后跟着翻——与 semantic.css 头注"纯别名"同一口径）。
- * 隔离面也 import 同一套 token（office/main.tsx），画布底由 surface.css 把内核 `--doc-bg` 映射过去。
+ * 契约：画布 = 语义凹槽（--bg-secondary，Claude inset）；纸 = 身份层 --k-paper
+ * （浅白纸 / 深灰纸 #cfd1cb，Office 硬决定）；页影 = shadow-paper（lv2）。
+ * 隔离面也 import 同一套 identity + motion + kimi + semantic（office/main.tsx），
+ * 画布底由 surface.css 把内核 `--doc-bg` 映射过去。A2/A3 在用的 token 名与尺寸一律不动。
  */
-describe('Office 文档画布 token（A1：--doc-* 最小集）', () => {
+describe('Office 文档画布 token（A1；P0 映射到身份层）', () => {
   const docRoot = semantic.get(':root') ?? new Map<string, string>()
-  const docDark = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
 
-  it('三条 token 都是原样层别名（画布=Bg-Secondary / 纸=Bg-Primary / 页影=Shadows-S1）', () => {
-    expectDecl(docRoot, '--doc-canvas-bg', 'var(--Bg-Secondary)', 'semantic :root')
-    expectDecl(docRoot, '--doc-page-bg', 'var(--Bg-Primary)', 'semantic :root')
-    expectDecl(
-      docRoot,
-      '--doc-page-shadow',
-      '0 1px 2px var(--Shadows-S1), 0 8px 24px var(--Shadows-S1)',
-      'semantic :root'
-    )
+  it('三条 token 映射到语义凹槽 / 身份纸面 / 阴影三级（名字不变，值随语义映射）', () => {
+    expectDecl(docRoot, '--doc-canvas-bg', 'var(--bg-secondary)', 'semantic :root')
+    expectDecl(docRoot, '--doc-page-bg', 'var(--k-paper)', 'semantic :root')
+    expectDecl(docRoot, '--doc-page-shadow', 'var(--k-shadow-paper)', 'semantic :root')
   })
 
-  it('深色档不重写这三条（纯别名），但原样层的值确实分档', () => {
-    expect(docDark.get('--doc-canvas-bg')).toBeUndefined()
-    expect(docDark.get('--doc-page-bg')).toBeUndefined()
-    expect(docDark.get('--doc-page-shadow')).toBeUndefined()
-    // 引用到的原样 token 必须两档都有定义（浅/深各一份）
-    for (const name of ['--Bg-Secondary', '--Bg-Primary', '--Shadows-S1'] as const) {
-      expect(light.get(name), `原样层浅色缺 ${name}`).toBeDefined()
-      expect(dark.get(name), `原样层深色缺 ${name}`).toBeDefined()
-      expect(light.get(name)).not.toBe(dark.get(name))
-    }
+  it('深色纸 = 灰纸 #cfd1cb（Office 硬决定；不是把白纸调暗、不是反相滤镜）', () => {
+    expectDecl(identityDark, '--k-paper', '#cfd1cb', "identity :root[data-theme='dark']")
+    expectDecl(identityDark, '--k-paper-ink', '#1b1b1b', "identity :root[data-theme='dark']")
+    expectDecl(identityLight, '--k-paper', '#ffffff', 'identity :root')
   })
 
-  it('隔离面复用同一套 token：office/main.tsx 引 kimi-tokens + semantic', () => {
+  it('隔离面复用同一套 token：office/main.tsx 前置 identity + motion，且都早于 semantic', () => {
+    expect(officeMainTsx).toContain("import '../styles/tokens/identity.css'")
+    expect(officeMainTsx).toContain("import '../styles/tokens/motion.css'")
     expect(officeMainTsx).toContain("import '../styles/tokens/kimi-tokens.css'")
     expect(officeMainTsx).toContain("import '../styles/tokens/semantic.css'")
+    const semanticAt = officeMainTsx.indexOf('tokens/semantic.css')
+    expect(officeMainTsx.indexOf('tokens/identity.css')).toBeLessThan(semanticAt)
+    expect(officeMainTsx.indexOf('tokens/motion.css')).toBeLessThan(semanticAt)
   })
 
   it('surface.css：内核画布底 --doc-bg 映射到 --doc-canvas-bg；调试条默认隐藏', () => {
