@@ -235,7 +235,7 @@ export function ReasoningPart({
             ref={reasoningRef}
             data-testid="reasoning-text"
             data-showing={translation.showing ? 'translated' : 'original'}
-            className="max-h-[268px] overflow-auto text-c1 break-words whitespace-pre-wrap text-ink-tertiary [overflow-wrap:anywhere]"
+            className="font-prose max-h-[268px] overflow-auto text-c1 break-words whitespace-pre-wrap text-ink-tertiary [overflow-wrap:anywhere]"
           >
             {/* 原文 ⇄ 译文的替换：换 key 让它重挂一次，走一次淡入（雷点 5：整站不许硬切） */}
             <span

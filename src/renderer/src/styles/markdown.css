@@ -31,20 +31,36 @@
   --shiki-token-link: var(--Syntax-String);
 }
 
-/* ===== markdown 正文（2026-10-18 用户实拍修订：正文拉丁+数字统一无衬线）=====
-   章程 §2.5/§9.2 原口径是「对话正文 = 拉丁衬线 + 中文 Noto Sans SC」；真实截图里
-   `Gemini 4 Argon` / `19.2%` / `1200+` / `10-18` 这些拉丁与数字走 Sitka 衬线、中文走黑体，
-   两套骨架混排显突兀（且 Sitka 默认 proportional figures：1111 宽 27.64px、9999 宽 36.16px）。
-   修订（A 方案，证据见 `.superpowers/handover/chat-number-font-report.md`）：
-     - 正文拉丁+数字统一 `--font-ui`（Noto Sans SC 自带拉丁字形 → 中英数同族）；
-     - 数字 `tabular-nums`（成组数字/时间/百分比不跳动）；
-     - **标题 h1-h6 与字标/欢迎 tagline 仍走 `--font-reading`**（阅读声部只在"标题声部"保留）。
-   行高 15/1.8、叙事行宽 --prose-measure 44em、字距 0.002em 均不变。 */
+/* ===== 随包拉丁衬线（task-51 / D-16 例外）=====
+   Noto Serif 可变字体（OFL，76,552B，仅拉丁字形；中文无字形 → 自动回落 DSH 黑体链）。
+   唯一随包的商业外观替代字体（不拷 Anthropic 商业字体）；见 assets/fonts/OFL-NotoSerif.txt
+   与 resources/skills/THIRD_PARTY_NOTICES.md。 */
+@font-face {
+  font-family: 'kyclaw-serif-latin';
+  src: url('../assets/fonts/NotoSerifVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 需要"书生气拉丁 + 黑体中文"的正文容器（markdown 正文 / 思考内容 / 工具过程） */
+.font-prose {
+  font-family: var(--font-prose);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+/* ===== markdown 正文（2026-10-18 书生气修订：英文/数字走随包拉丁衬线，中文仍黑体）=====
+   用户口径：「英文字体改更有书生气一点，参考我的截图。包括正文和思考内容。」
+   栈 = `--font-prose`：'kyclaw-serif-latin'（Noto Serif 可变字体，仅拉丁）+ DSH 中文黑体链；
+   英文/数字是衬线，中文自动落到 Noto Sans SC → 与 DSH claude-style 主题同款观感。
+   数字口径不回退：`lining-nums tabular-nums`（1111 = 9999 等宽；Noto Serif 默认是 lining
+   figures，显式声明防 oldstyle）。标题 h1-h6 仍 `--font-reading`（Sitka 系衬线），
+   代码块/行内码仍 mono；行高 15/1.8、叙事行宽 44em、字距 0.002em 均不变。 */
 .markdown-body {
-  /* 正文中英数同族：--font-ui（DSH 中文链含 Noto Sans SC 的拉丁字形） */
-  font-family: var(--font-ui);
-  /* 数字等宽：追加/滚动时字宽不跳（Sitka 默认 proportional: 1111=27.64 / 9999=36.16） */
-  font-variant-numeric: tabular-nums;
+  /* 正文：英文/数字衬线（书生气）+ 中文 DSH 黑体 */
+  font-family: var(--font-prose);
+  /* 数字等宽 + 等高（lining figures；防 oldstyle 回退） */
+  font-variant-numeric: lining-nums tabular-nums;
   font-size: var(--ui-B1-font-size);
   line-height: 1.8;
   letter-spacing: 0.002em;
@@ -223,8 +239,8 @@
   padding: var(--space-1) var(--space-3);
   border: var(--border-width-hairline) solid var(--border-hairline);
   text-align: left;
-  /* P0：表格里的数字一律等宽（读数不跳动，章程 §2.4/§10.1#10） */
-  font-variant-numeric: tabular-nums;
+  /* P0：表格里的数字一律等宽 + lining（读数不跳动、不出现 oldstyle，章程 §2.4/§10.1#10） */
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .markdown-body th {

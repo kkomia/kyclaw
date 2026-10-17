@@ -55,19 +55,25 @@ describe('markdown.css · Shiki 变量映射', () => {
 })
 
 describe('markdown.css · P0 三声部与极简配方（2026-10-18）', () => {
-  it('正文拉丁+数字统一 --font-ui（2026-10-18 实拍修订），数字 tabular-nums；标题仍 --font-reading', () => {
-    // 正文块本身：中英数同族（--font-ui），不再用拉丁衬线阅读声部混排中文黑体
+  it('正文 = --font-prose（随包 Noto Serif 拉丁 + DSH 黑体中文），数字 lining+tabular；标题仍 --font-reading', () => {
+    // 正文块本身：拉丁衬线（书生气）由 --font-prose 给；中文链仍由该 token 逐字回落
     const bodyBlock = /\.markdown-body \{([^}]*)\}/.exec(markdownBody)?.[1] ?? ''
-    expect(bodyBlock).toContain('font-family: var(--font-ui);')
+    expect(bodyBlock).toContain('font-family: var(--font-prose);')
     expect(bodyBlock).not.toContain('--font-reading')
-    // 数字等宽：Sitka 默认 proportional figures 会跳（1111 vs 9999 宽度不同）
-    expect(bodyBlock).toContain('font-variant-numeric: tabular-nums;')
+    // 数字：lining（等高，不出现 oldstyle）+ tabular（等宽，1111=9999）
+    expect(bodyBlock).toContain('font-variant-numeric: lining-nums tabular-nums;')
     // 标题仍走阅读声部（衬线只保留在标题/字标）
     expect(markdownBody).toMatch(
       /\.markdown-body h1,[\s\S]*?\.markdown-body h6 \{[^}]*font-family:\s*var\(--font-reading\)/
     )
     // 行高 1.8（中文阅读下限，章程 §2.4）
     expect(bodyBlock).toContain('line-height: 1.8;')
+  })
+
+  it('@font-face 随包 Noto Serif（kyclaw-serif-latin，100–900，swap）', () => {
+    expect(markdownBody).toMatch(
+      /@font-face\s*\{[^}]*font-family:\s*'kyclaw-serif-latin';[^}]*url\('\.\.\/assets\/fonts\/NotoSerifVariable\.woff2'\)\s*format\('woff2'\);[^}]*font-weight:\s*100 900;[^}]*font-display:\s*swap;/
+    )
   })
 
   it('叙事行宽 = --prose-measure（只压叙事块；代码块/表格可更宽）', () => {
@@ -84,9 +90,9 @@ describe('markdown.css · P0 三声部与极简配方（2026-10-18）', () => {
     expect(markdownBody).toMatch(/\.code-block \{[\s\S]*?background-color:\s*var\(--bg-secondary\)/)
   })
 
-  it('表格数字 tabular-nums（读数/计数不跳动）', () => {
+  it('表格数字 lining + tabular-nums（读数/计数不跳动、不出现 oldstyle）', () => {
     expect(markdownBody).toMatch(
-      /\.markdown-body th,\s*\n\.markdown-body td \{[\s\S]*?font-variant-numeric:\s*tabular-nums/
+      /\.markdown-body th,\s*\n\.markdown-body td \{[\s\S]*?font-variant-numeric:\s*lining-nums tabular-nums/
     )
   })
 

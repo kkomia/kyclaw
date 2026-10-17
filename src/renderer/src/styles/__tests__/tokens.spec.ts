@@ -645,19 +645,26 @@ describe('P0 字体三声部与字号（章程 §2）', () => {
     /'Noto Sans SC',\s*'Source Han Sans SC',\s*'PingFang SC',\s*'Hiragino Sans GB',\s*'Microsoft YaHei',\s*sans-serif/
 
   it('三条声部的字体栈都在语义层，且中文段逐字 = DSH 链', () => {
-    for (const name of ['--font-ui', '--font-reading', '--font-code']) {
+    for (const name of ['--font-ui', '--font-reading', '--font-prose', '--font-code']) {
       const value = root.get(name)
       expect(value, `缺少字体声部 ${name}`).toBeDefined()
       expect(value as string, `${name} 的中文段不是 DSH 链`).toMatch(DSH_CJK_CHAIN)
     }
   })
 
-  it('拉丁声部各就各位：UI Segoe / 阅读 Sitka·Georgia / 技术 Cascadia·Consolas', () => {
+  it('拉丁声部各就各位：UI Segoe / 标题 Sitka·Georgia / 正文随包 Noto Serif / 技术 Cascadia·Consolas', () => {
     expect(root.get('--font-ui')).toContain("'Segoe UI Variable Text'")
     expect(root.get('--font-reading')).toContain("'Sitka Text'")
     expect(root.get('--font-reading')).toContain('Georgia')
+    // task-51：正文/思考的拉丁是随包 Noto Serif（OFL），不是系统 Sitka；中文段仍 DSH 链
+    expect(root.get('--font-prose')).toContain("'kyclaw-serif-latin'")
+    expect(root.get('--font-prose')).not.toContain('Sitka')
     expect(root.get('--font-code')).toContain("'Cascadia Mono'")
     expect(root.get('--font-code')).toContain('Consolas')
+    // D-16 边界：不许出现 Anthropic 商业字体名
+    for (const name of ['--font-ui', '--font-reading', '--font-prose', '--font-code']) {
+      expect(root.get(name) ?? '').not.toContain('Anthropic')
+    }
   })
 
   it('文档字（Word-faithful）另起三条，不混进三声部', () => {

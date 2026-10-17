@@ -15,6 +15,7 @@ const read = (relative: string): string => readFileSync(new URL(relative, import
 
 const messageTsx = read('../Message.tsx')
 const textPartTsx = read('../parts/TextPart.tsx')
+const reasoningPartTsx = read('../parts/ReasoningPart.tsx')
 const toolCardTsx = read('../parts/ToolCard.tsx')
 const composerTsx = read('../Composer.tsx')
 const errorCardTsx = read('../ErrorCard.tsx')
@@ -29,11 +30,20 @@ describe('AI 回复 = 阅读声部', () => {
     expect(messageTsx).toContain('pl-[18px]')
   })
 
-  it('Markdown 正文容器 = 阅读车道 + UI 字体族（2026-10-18 实拍修订：正文不再衬线）', () => {
-    // 车道语义保留在 data-font-role；字体族改为 --font-ui（Sitka 数字/英文与中文黑体混排被用户否掉）
+  it('Markdown 正文容器 = 阅读车道 + 书生气衬线（--font-prose，2026-10-18 task-51）', () => {
+    // 车道语义保留在 data-font-role；字体族 = --font-prose（Noto Serif 拉丁 + DSH 黑体中文）
     expect(textPartTsx).toContain('data-font-role="reading"')
-    expect(textPartTsx).toContain('markdown-body font-sans')
+    expect(textPartTsx).toContain('markdown-body font-prose')
+    expect(textPartTsx).not.toContain('markdown-body font-sans')
     expect(textPartTsx).not.toContain('markdown-body font-serif')
+  })
+
+  it('思考内容 = 书生气衬线（reasoning-text 加 font-prose；标签/时间等 chrome 仍 sans）', () => {
+    expect(reasoningPartTsx).toContain('data-testid="reasoning-text"')
+    expect(reasoningPartTsx).toMatch(/data-testid="reasoning-text"[\s\S]{0,200}font-prose/)
+    // 折叠行标签（reasoning-toggle）不是正文，保持 UI 声部
+    expect(reasoningPartTsx).toMatch(/data-testid="reasoning-toggle"/)
+    expect(reasoningPartTsx).not.toMatch(/data-testid="reasoning-toggle"[^>]*font-prose/)
   })
 
   it('用户消息 = 右侧便条：UI 声部 14、气泡底、12/4 圆角、65% 上限', () => {
@@ -46,12 +56,19 @@ describe('AI 回复 = 阅读声部', () => {
   })
 })
 
-describe('工具/读数 = 技术声部（mono + tabular）', () => {
-  it('工具名/路径/详情用 font-mono 且标 code 声部；状态是 UI 声部', () => {
-    expect(toolCardTsx).toMatch(/font-mono text-c1/)
+describe('工具/读数 = 书生气正文 + 技术声部（task-51）', () => {
+  it('工具名/自由文本详情走 --font-prose；路径/URL 详情仍 mono；状态是 UI 声部', () => {
+    // 工具名（含 MCP 英文名）书生气衬线；自由文本详情（query/pattern/command）同样
+    expect(toolCardTsx).toContain('data-font-role="prose"')
+    expect(toolCardTsx).toContain('font-prose text-c1')
+    // 路径/URL 等"技术串"保留 mono + code 声部 + tabular
+    expect(toolCardTsx).toMatch(/isTechnicalDetail\(shownDetail\)[\s\S]*?font-mono text-c1/)
     expect(toolCardTsx).toContain('data-font-role="code"')
     expect(toolCardTsx).toContain('data-font-role="ui"')
-    expect(toolCardTsx).toMatch(/data-testid="tool-detail"[\s\S]*?tabular-nums/)
+    expect(toolCardTsx).toMatch(/isTechnicalDetail\(shownDetail\)[\s\S]*?tabular-nums/)
+    // 入参/回执面板仍是 mono（不改）
+    expect(toolCardTsx).toMatch(/data-testid="tool-input"[\s\S]{0,200}font-mono/)
+    expect(toolCardTsx).toMatch(/data-testid="tool-output"[\s\S]{0,200}font-mono/)
   })
 
   it('消息时间戳和导览轮次号 = mono + tabular-nums', () => {

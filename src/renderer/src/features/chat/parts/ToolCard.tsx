@@ -122,6 +122,23 @@ function rowClass(interactive: boolean): string {
   )
 }
 
+/**
+ * 行详情分类（task-51）：路径 / URL 等"技术串"保持 mono（现有口径）；
+ * 自由英文文本（query / pattern / command）走书生气衬线（--font-prose）。
+ */
+function isTechnicalDetail(detail: string): boolean {
+  return (
+    /^[a-zA-Z]:[\\/]/.test(detail) ||
+    detail.startsWith('/') ||
+    detail.startsWith('~') ||
+    detail.startsWith('./') ||
+    detail.startsWith('../') ||
+    detail.includes('\\') ||
+    detail.includes('/') ||
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(detail)
+  )
+}
+
 export interface ToolCardProps {
   part: ToolCardPart
   /** 这一轮还在流式：input-available 显示"调用中"（否则是"已调用"——没回执的调用不该永远装进行中） */
@@ -172,14 +189,22 @@ export function ToolCard({
       <span aria-hidden="true" className="inline-flex size-5 shrink-0 items-center justify-center">
         <ToolIcon toolName={part.toolName} className="size-[15px] text-ink-tertiary" />
       </span>
-      <span data-font-role="code" className="shrink-0 font-mono text-c1">
+      <span data-font-role="prose" className="shrink-0 font-prose text-c1">
         {displayName}
       </span>
-      {shownDetail === null ? null : (
+      {shownDetail === null ? null : isTechnicalDetail(shownDetail) ? (
         <span
           data-testid="tool-detail"
           data-font-role="code"
           className="min-w-0 truncate font-mono text-c1 text-ink-tertiary tabular-nums"
+        >
+          {shownDetail}
+        </span>
+      ) : (
+        <span
+          data-testid="tool-detail"
+          data-font-role="prose"
+          className="min-w-0 truncate font-prose text-c1 text-ink-tertiary"
         >
           {shownDetail}
         </span>

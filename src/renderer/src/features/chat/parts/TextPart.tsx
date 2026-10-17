@@ -384,11 +384,11 @@ export function TextPart({
         <div
           ref={markdownRef}
           data-testid="message-text"
-          // 阅读**车道**语义（外层 lane 仍是 reading）；2026-10-18 用户实拍后正文拉丁+数字
-          // 统一 UI 声部（--font-ui）——font-serif 会再次引入 Sitka 数字/英文与中文黑体混排。
+          // 阅读**车道**语义（外层 lane 仍是 reading）；2026-10-18 书生气修订：正文英文/数字
+          // 走随包 Noto Serif（--font-prose），中文自动回落 DSH 黑体链；不能用 font-sans 覆盖。
           data-font-role="reading"
           data-streaming={live ? 'true' : undefined}
-          className="markdown-body font-sans"
+          className="markdown-body font-prose"
         >
           {live ? (
             <StreamingMarkdown text={shown} tables={withTables} />
