@@ -119,7 +119,7 @@ export function DeliverableCard({ deliverable }: DeliverableCardProps): React.JS
       ? [
           {
             id: 'open-in-office',
-            label: '在 Office 中编辑',
+            label: '在 Office 标签页中打开',
             icon: <Briefcase />,
             testId: 'deliverable-open-office',
             disabled: noOffice || officeOpening,

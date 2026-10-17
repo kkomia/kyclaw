@@ -312,7 +312,7 @@ export function ProjectList({
                         />
                       ) : null}
                       <Tooltip label={project.path} side="bottom" align="start">
-                        <span className="min-w-0 flex-1 truncate text-left text-[11px] font-medium text-ink-tertiary">
+                        <span className="min-w-0 flex-1 truncate text-left text-b2 text-ink-secondary">
                           {project.name}
                         </span>
                       </Tooltip>

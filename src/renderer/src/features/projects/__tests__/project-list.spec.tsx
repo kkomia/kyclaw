@@ -63,6 +63,10 @@ describe('ProjectList', () => {
 
     expect(screen.getByTestId('project-section-title')).toHaveTextContent('项目')
     expect(screen.getByTestId('project-item-p1')).toHaveTextContent('插件')
+    // task-93：项目行标签与工作区/会话行同级（b2 14），不再用 11px 小字
+    expect(screen.getByTestId('project-item-p1').querySelector('span.truncate')).toHaveClass(
+      'text-b2'
+    )
     expect(screen.getByTestId('project-item-p2')).toHaveTextContent('资料')
     // 会话由 SessionList 渲染（同一套行）挂在项目下；p2 名下没有会话 → 没有空态行
     expect(screen.getByTestId('project-group-p1')).toContainElement(

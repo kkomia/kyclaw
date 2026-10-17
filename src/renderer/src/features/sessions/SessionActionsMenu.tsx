@@ -95,7 +95,6 @@ export function SessionActionsMenu({
       id: 'pin',
       label: context.pinned ? '取消置顶' : '置顶',
       icon: <Pin />,
-      description: context.pinned ? '从会话列表顶部移回时间分组' : '固定在会话列表顶部',
       testId: `session-pin-${threadId}`,
       onSelect: () => togglePin(!context.pinned)
     },
@@ -104,7 +103,6 @@ export function SessionActionsMenu({
       type: 'submenu',
       label: '移至项目',
       icon: <FolderInput />,
-      description: '归到某个项目下',
       testId: `session-move-${threadId}`,
       items: moveItems
     },
@@ -116,7 +114,6 @@ export function SessionActionsMenu({
             id: 'leave-project',
             label: `从「${currentProject.name}」中移除`,
             icon: <FolderMinus />,
-            description: '不改变会话内容，只清掉项目归属',
             testId: `session-leave-project-${threadId}`,
             onSelect: () => moveToProject(null)
           } satisfies MenuEntry
@@ -125,7 +122,6 @@ export function SessionActionsMenu({
       id: 'open-explorer',
       label: '在文件资源管理器中打开',
       icon: <FolderOpen />,
-      description: '定位到会话的工作目录',
       testId: `session-open-${threadId}`,
       disabled: !context.canOpenExplorer,
       onSelect: openInExplorer
@@ -135,7 +131,6 @@ export function SessionActionsMenu({
       id: 'rename',
       label: '重命名',
       icon: <Pencil />,
-      description: '只改显示名，不改文件',
       testId: `session-rename-${threadId}`,
       onSelect: openRename
     },
@@ -143,7 +138,6 @@ export function SessionActionsMenu({
       id: 'archive',
       label: '归档',
       icon: <Archive />,
-      description: '从当前列表移入归档，可再找回',
       testId: `session-archive-${threadId}`,
       onSelect: archive
     },
@@ -152,7 +146,6 @@ export function SessionActionsMenu({
       id: 'delete',
       label: '删除',
       icon: <Trash2 />,
-      description: '连同全部消息删除，不可撤销',
       danger: true,
       testId: `session-delete-${threadId}`,
       onSelect: () => setDeleteOpen(true)

@@ -123,7 +123,6 @@ export function PlusMenu({
     {
       id: 'add-file',
       label: '添加文件',
-      description: '上传图片、PDF 或文本附件',
       icon: <Paperclip />,
       testId: 'composer-add-file',
       onSelect: () => onAddFile()
@@ -133,7 +132,6 @@ export function PlusMenu({
       id: 'skills',
       type: 'submenu',
       label: '引用技能',
-      description: '把已安装技能作为上下文引用',
       icon: <Sparkles />,
       testId: 'composer-ref-skills',
       items:
@@ -150,7 +148,6 @@ export function PlusMenu({
       id: 'plugins',
       type: 'submenu',
       label: '引用插件',
-      description: '把已启用插件的说明带进这一轮',
       icon: <Plug />,
       testId: 'composer-ref-plugins',
       items:
@@ -166,7 +163,6 @@ export function PlusMenu({
     {
       id: 'context',
       label: '引用上下文',
-      description: contextLabel === null ? '当前没有可引用的上下文' : contextLabel,
       icon: <AtSign />,
       testId: 'composer-ref-context',
       disabled: contextLabel === null,
@@ -185,7 +181,6 @@ export function PlusMenu({
         id: 'plan',
         label: PLAN_ENTER_LABEL,
         icon: <Compass />,
-        description: '先出计划、批准后再动手',
         testId: 'composer-mode-plan',
         disabled: mode.plan.disabled,
         onSelect: () => mode.plan?.onSelect()
@@ -196,7 +191,6 @@ export function PlusMenu({
         id: 'tasks',
         label: mode.tasks.expanded ? '收起任务清单' : '任务清单',
         icon: <ListChecks />,
-        description: mode.tasks.expanded ? '把任务清单收进过程块' : '展开本轮任务进度',
         testId: 'composer-mode-tasks',
         onSelect: () => mode.tasks?.onSelect()
       })
@@ -343,7 +337,6 @@ function DecidedPermissionChip({
     {
       id: 'ask',
       label: MODE_LABELS.ask,
-      description: '工作区的写操作每次先问你',
       selected: workspace.mode === 'ask',
       testId: 'composer-permission-ask',
       onSelect: () => {
@@ -353,7 +346,6 @@ function DecidedPermissionChip({
     {
       id: 'full',
       label: MODE_LABELS.full,
-      description: '工作区内读写不再逐次询问（移动/删除仍确认）',
       selected: workspace.mode === 'full',
       testId: 'composer-permission-full',
       onSelect: () => {
@@ -958,7 +950,6 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
       type: 'submenu',
       label: '对话长度',
       icon: <TextQuote />,
-      description: '上下文占模型窗口的比例',
       testId: 'model-context',
       trailing: `${pct}%`,
       items: [

@@ -362,8 +362,8 @@ describe('Message：交付卡单出（过程块之外）', () => {
   })
 })
 
-/* M3-S4：docx 交付物 →「在 Office 中编辑」（与文件树共用 workbench/office-open 的同一份逻辑） */
-describe('DeliverableCard：在 Office 中编辑（M3-S4）', () => {
+/* M3-S4：docx 交付物 →「在 Office 标签页中打开」（与文件树共用 workbench/office-open 的同一份逻辑） */
+describe('DeliverableCard：在 Office 标签页中打开（M3-S4）', () => {
   const DOCX_PATH = 'docs/方案.docx'
 
   function docxDeliverable(): Deliverable {
@@ -385,7 +385,7 @@ describe('DeliverableCard：在 Office 中编辑（M3-S4）', () => {
     })
   }
 
-  it('菜单只为 .docx 出「在 Office 中编辑」；非 docx 交付物没有这一项（不给假入口）', () => {
+  it('菜单只为 .docx 出「在 Office 标签页中打开」；非 docx 交付物没有这一项（不给假入口）', () => {
     setup()
     render(<DeliverableCard deliverable={deliverableOfOrThrow()} />)
 
@@ -400,7 +400,7 @@ describe('DeliverableCard：在 Office 中编辑（M3-S4）', () => {
 
     openMenu()
     const item = screen.getByTestId('deliverable-open-office')
-    expect(item).toHaveTextContent('在 Office 中编辑')
+    expect(item).toHaveTextContent('在 Office 标签页中打开')
 
     fireEvent.click(item)
 

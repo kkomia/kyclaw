@@ -107,7 +107,7 @@ export function ComposerSuggest({
                     onClick={() => onPick(row)}
                     onMouseEnter={() => onHover(flatIndex)}
                     className={cn(
-                      'flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 py-0.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                      'flex min-h-[32px] w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 py-0.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
                       active ? 'bg-hover' : 'hover:bg-hover',
                       disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
