@@ -67,6 +67,22 @@ describe('P1b：动效时长全部来自 motion.css 角色令牌', () => {
     expect(css).toContain('--motion-sweep')
   })
 
+  it('光标/自绘 caret 用主题色 --accent（2px 不变；不写死墨色/hex）', () => {
+    const css = stripComments(CHAT_MOTION_CSS)
+    // 流式尾部光标 + Composer 自绘 caret 两处竖条都读 --accent
+    expect((css.match(/background-color: var\(--accent\)/g) ?? []).length).toBeGreaterThanOrEqual(2)
+    expect(css).not.toContain('background-color: var(--text-primary)')
+    // 自绘档隐藏原生 caret；composition / 引用 chip 的原生 caret 也取主题色
+    expect(css).toContain('caret-color: var(--accent)')
+    expect(css).toContain('caret-color: transparent')
+    // 主题色必须用 token，不写死号
+    expect(css).not.toMatch(/background-color:\s*#d97757/i)
+    expect(css).not.toMatch(/caret-color:\s*#d97757/i)
+    // 尺寸/闪频契约不变
+    expect(css).toContain('width: 2px')
+    expect(css).toContain('steps(2, end)')
+  })
+
   it('reduced-motion：无限循环停成静态（不是 0.01ms 的循环闪烁）', () => {
     const css = stripComments(CHAT_MOTION_CSS)
     const reduce = css.slice(css.indexOf('prefers-reduced-motion'))

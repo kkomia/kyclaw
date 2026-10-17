@@ -48,14 +48,14 @@
   }
 }
 
-/* ── 2) 尾部自绘光标（2px 墨色竖条，1s 闪；流式结束由 data-streaming/节点消失） ── */
+/* ── 2) 尾部自绘光标（2px 主题色竖条，1s 闪；流式结束由 data-streaming/节点消失） ── */
 .markdown-body .streaming-cursor,
 .markdown-body[data-streaming='true'] > :last-child:not(.streaming-cursor)::after {
   width: 2px;
   height: 1em;
   margin-left: 2px;
   vertical-align: -0.15em;
-  background-color: var(--text-primary);
+  background-color: var(--accent);
   animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite;
 }
 
@@ -71,15 +71,22 @@
   }
 }
 
-/* ── 3) Composer 自绘 caret ─────────────────────────────────────────── */
-/* 原生 caret 只有「自绘档」才隐藏；composition 或含引用 chip 时 data-caret=native，
-   原生 caret 照常显示（IME 候选框/选区不被抢）。 */
+/* ── 3) Composer 自绘 caret（主题色；80ms 移动 + 1s 闪；IME composition 回原生） ── */
+/* 自绘档隐藏原生 caret；composition 或含引用 chip 时 data-caret=native，原生 caret 照常
+   显示（IME 候选框/选区不被抢），原生 caret 也取主题色，和自绘条同一声部。
+   浅纸/暗纸实测（WCAG 1.4.11 非文本 3:1）：--accent 对白卡 3.12:1、对画布 #fcfcfb 3.04:1、
+   对暗卡 #1e1e1d 5.34:1，都是"可辨的强调色"；如某输入法候选下看不清，可把
+   [data-composing='true'] 这一档单独改回 var(--text-primary)，不必动自绘档。 */
+.composer-caret-input {
+  caret-color: var(--accent);
+}
+
 .composer-caret-input[data-caret='custom'] {
   caret-color: transparent;
 }
 
 .composer-caret-input[data-caret='custom'][data-composing='true'] {
-  caret-color: auto;
+  caret-color: var(--accent);
 }
 
 .composer-caret {
@@ -87,7 +94,7 @@
   z-index: 30;
   width: 2px;
   border-radius: 1px;
-  background-color: var(--text-primary);
+  background-color: var(--accent);
   pointer-events: none;
   animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite;
   transition:
