@@ -1,3 +1,4 @@
+import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
 import { MemorySpaceEntry } from '@renderer/features/memory/MemoryPage'
@@ -5,16 +6,17 @@ import { UsagePanel } from '@renderer/features/usage/UsagePage'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import {
   closeToTrayModeSchema,
-  fontTierSchema,
   themeModeSchema,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
   type CloseToTrayMode,
-  type FontTier,
   type ThemeMode
 } from '@shared/settings'
 import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
+import { MotionSettings } from './MotionSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
 import { RulesEntry } from './RulesSettings'
@@ -39,12 +41,6 @@ const THEME_LABELS: Record<ThemeMode, string> = {
   system: '跟随系统',
   light: '亮色',
   dark: '暗色'
-}
-
-const FONT_LABELS: Record<FontTier, string> = {
-  small: '小',
-  default: '默认',
-  large: '大'
 }
 
 /** 关闭窗口偏好的三档（0.1.3 托盘驻留；取值来自 shared/settings 的 schema，这里只给文案） */
@@ -97,15 +93,80 @@ function AppearanceOptions(): React.JSX.Element {
           onSelect: () => void update({ theme: mode })
         }))}
       />
-      <OptionRow
-        label="字号"
-        options={fontTierSchema.options.map((tier) => ({
-          key: `font-${tier}`,
-          label: FONT_LABELS[tier],
-          selected: settings.fontTier === tier,
-          onSelect: () => void update({ fontTier: tier })
-        }))}
+      <FontSizeRow />
+    </div>
+  )
+}
+
+/** 字号允许的步进（px）：步进器/滑杆都用 1，范围由 shared schema 常量给 */
+const FONT_SIZE_STEP = 1
+
+/**
+ * 字号（task-69：三档 → 连续数值）：显示「字号 14 px」+ −/+ 步进 + 滑杆（12–18），
+ * 改动实时预览（`--ui-scale`）并走 settings:update 落盘；不新增字阶，全 UI 六档按 scale 同步缩放。
+ */
+function FontSizeRow(): React.JSX.Element {
+  const size = useSettingsStore((state) => state.settings.uiFontSize)
+  const update = useSettingsStore((state) => state.update)
+
+  const apply = (next: number): void => {
+    const clamped = Math.min(
+      UI_FONT_SIZE_MAX,
+      Math.max(UI_FONT_SIZE_MIN, Math.round(next / FONT_SIZE_STEP) * FONT_SIZE_STEP)
+    )
+    if (clamped === size) return
+    void update({ uiFontSize: clamped })
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-b2 text-ink-secondary">字号</span>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="font-size-decrease"
+            aria-label="减小字号"
+            disabled={size <= UI_FONT_SIZE_MIN}
+            onClick={() => apply(size - FONT_SIZE_STEP)}
+          >
+            −
+          </Button>
+          <span
+            data-testid="font-size-value"
+            aria-live="polite"
+            className="min-w-14 text-center font-mono text-b2 text-ink tabular-nums"
+          >
+            {size} px
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="font-size-increase"
+            aria-label="增大字号"
+            disabled={size >= UI_FONT_SIZE_MAX}
+            onClick={() => apply(size + FONT_SIZE_STEP)}
+          >
+            +
+          </Button>
+        </div>
+      </div>
+      <input
+        data-testid="font-size-slider"
+        type="range"
+        aria-label="字号"
+        min={UI_FONT_SIZE_MIN}
+        max={UI_FONT_SIZE_MAX}
+        step={FONT_SIZE_STEP}
+        value={size}
+        onChange={(event) => apply(Number(event.target.value))}
+        className="h-1 w-full cursor-pointer accent-(--accent)"
       />
+      <p data-testid="font-size-hint" className="text-c1 text-ink-tertiary">
+        默认 14px；整站界面字号跟着这一档缩放（范围 {UI_FONT_SIZE_MIN}–{UI_FONT_SIZE_MAX}
+        px）。调小会更紧凑。
+      </p>
     </div>
   )
 }
@@ -149,8 +210,15 @@ export function SettingsPage(): React.JSX.Element {
       data-testid="settings-page"
       className="animate-page-in flex min-h-0 flex-1 flex-col overflow-y-auto"
     >
-      <div data-testid="settings-page-column" className="content-column flex flex-col gap-6 p-6">
-        <h1 className="text-t1 font-medium text-ink">{meta.label}</h1>
+      {/* task-69 密度收口：页面列 spacing 6→5、内边距 24→20（字号档之外再收一档，避免整页偏大） */}
+      <div
+        data-testid="settings-page-column"
+        className="content-column flex flex-col gap-5 px-(--page-gutter) py-5"
+      >
+        {/* 标题声部 = reading（章程 §9.4-2：设置大标题 22/600 衬线；表单/开关保持 sans） */}
+        <h1 className="font-serif text-[22px] leading-[30px] font-semibold text-ink">
+          {meta.label}
+        </h1>
 
         {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
         <div key={meta.id} className="animate-page-in flex flex-col gap-6">
@@ -165,6 +233,9 @@ export function SettingsPage(): React.JSX.Element {
               </SettingsGroup>
             </>
           ) : null}
+          {/* task-58：动效（照抄 DSH claude-style「动画效果」面板；9 键模型/默认值在 shared/settings，
+            行为接线由 task B 做 —— 本栏只负责设置与 demo 预览） */}
+          {meta.id === 'motion' ? <MotionSettings /> : null}
           {meta.id === 'model' ? (
             <>
               {/* round 48：「模型」组的内容自己就是 SettingsGroup（标题行右端带「新增」，见 ModelSettings） */}

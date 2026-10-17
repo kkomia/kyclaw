@@ -20,12 +20,14 @@ export function SettingsGroup({
   children: ReactNode
 }): React.JSX.Element {
   return (
-    <section data-testid={testId} className="flex flex-col gap-3">
+    <section data-testid={testId} className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-b2 text-ink-secondary">{title}</h2>
+        {/* 分组标题 = reading 声部（章程：分组标题 16/600 衬线；行内控件仍是 sans） */}
+        <h2 className="font-serif text-t2 font-semibold text-ink">{title}</h2>
         {action}
       </div>
-      <div className="rounded-panel bg-secondary p-4">{children}</div>
+      {/* task-69 密度收口：卡片内边距 16→14（分组之间 12→10），整页更紧凑 */}
+      <div className="rounded-panel bg-secondary p-3.5">{children}</div>
     </section>
   )
 }

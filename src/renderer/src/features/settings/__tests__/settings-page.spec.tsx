@@ -8,8 +8,8 @@ import { DEFAULT_SETTINGS, defaultSettings } from '@shared/settings'
 import { SettingsPage } from '../SettingsPage'
 
 /**
- * 设置页（UI 返工 R1 起是栏目页）：默认栏是「外观」（主题三选 → setTheme、字号三档 → setFontTier，
- * 断言落在 html[data-theme] / html[data-font-size] 与落盘调用上）；其余栏目各自的占位文案。
+ * 设置页（UI 返工 R1 起是栏目页）：默认栏是「外观」（主题三选 → setTheme、字号数值 → --ui-scale，
+ * task-69）；断言落在 html[data-theme] / html 的 --ui-scale 与落盘调用上；其余栏目各自的占位文案。
  * 栏目切换与左列设置菜单由 routes.spec 走真实路由钉（这里只渲一栏的内容）。
  *
  * 本轮（设置页重组）：「记忆」栏合栏 —— 三块依次是语义召回 / 记忆空间（入口弹窗）/
@@ -108,7 +108,7 @@ function installFakeMemory(initial: Record<string, string> = {}): { calls: Memor
 
 beforeEach(() => {
   html().removeAttribute('data-theme')
-  html().removeAttribute('data-font-size')
+  html().style.removeProperty('--ui-scale')
   window.matchMedia = undefined as unknown as typeof window.matchMedia
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -500,29 +500,52 @@ describe('外观 · 主题三选', () => {
   })
 })
 
-describe('外观 · 字号三档', () => {
-  it('三档都在（小 / 默认 / 大），默认档是默认', () => {
+describe('外观 · 字号（task-69：三档 → 12–18 连续数值，默认 14）', () => {
+  it('默认显示「14 px」；步进/滑杆都在，两端按钮按范围禁用', () => {
     renderPage()
 
-    expect(screen.getByTestId('font-small')).toHaveTextContent('小')
-    expect(screen.getByTestId('font-default')).toHaveTextContent('默认')
-    expect(screen.getByTestId('font-large')).toHaveTextContent('大')
-    expect(screen.getByTestId('font-default')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('14 px')
+    const slider = screen.getByTestId('font-size-slider') as HTMLInputElement
+    expect(slider).toHaveAttribute('min', '12')
+    expect(slider).toHaveAttribute('max', '18')
+    expect(slider).toHaveValue('14')
+    expect(screen.getByTestId('font-size-hint')).toHaveTextContent('默认 14px')
+    expect(screen.getByTestId('font-size-decrease')).toBeEnabled()
+    expect(screen.getByTestId('font-size-increase')).toBeEnabled()
   })
 
-  it('三档各切一遍 → html[data-font-size] 跟着走，落盘只带改动的字段', async () => {
+  it('−/+ 与滑杆各改一次 → --ui-scale 跟着走、落盘只带 { uiFontSize }', async () => {
     const bridge = installKyclawBridge()
     renderPage()
 
-    for (const tier of ['small', 'large', 'default']) {
-      fireEvent.click(screen.getByTestId(`font-${tier}`))
-      expect(html().getAttribute('data-font-size'), tier).toBe(tier)
-      expect(screen.getByTestId(`font-${tier}`), tier).toHaveAttribute('aria-pressed', 'true')
-    }
+    fireEvent.click(screen.getByTestId('font-size-increase'))
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.071')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('15 px')
 
-    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ fontTier: 'default' }))
-    expect(bridge.update).toHaveBeenCalledWith({ fontTier: 'small' })
-    expect(bridge.update).toHaveBeenCalledWith({ fontTier: 'large' })
+    fireEvent.click(screen.getByTestId('font-size-decrease'))
+    fireEvent.click(screen.getByTestId('font-size-decrease'))
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('0.929')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('13 px')
+
+    fireEvent.change(screen.getByTestId('font-size-slider'), { target: { value: '18' } })
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.286')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('18 px')
+
+    await waitFor(() => expect(bridge.update).toHaveBeenCalledWith({ uiFontSize: 15 }))
+    expect(bridge.update).toHaveBeenCalledWith({ uiFontSize: 13 })
+    expect(bridge.update).toHaveBeenCalledWith({ uiFontSize: 18 })
+  })
+
+  it('12 与 18 两端：按钮各自禁用；滑杆夹在 range 内', () => {
+    renderPage()
+
+    fireEvent.change(screen.getByTestId('font-size-slider'), { target: { value: '12' } })
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('12 px')
+    expect(screen.getByTestId('font-size-decrease')).toBeDisabled()
+
+    fireEvent.change(screen.getByTestId('font-size-slider'), { target: { value: '18' } })
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('18 px')
+    expect(screen.getByTestId('font-size-increase')).toBeDisabled()
   })
 
   it('切字号不动主题（显式暗色仍是暗色）', () => {
@@ -530,25 +553,25 @@ describe('外观 · 字号三档', () => {
     renderPage()
 
     fireEvent.click(screen.getByTestId('theme-dark'))
-    fireEvent.click(screen.getByTestId('font-large'))
+    fireEvent.click(screen.getByTestId('font-size-increase'))
 
     expect(html().getAttribute('data-theme')).toBe('dark')
-    expect(html().getAttribute('data-font-size')).toBe('large')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('15 px')
     expect(screen.getByTestId('theme-dark')).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
 describe('外观 · 与落盘设置一致', () => {
-  it('启动读到 dark + large 后，页面显示的选中态与 html 属性一致', async () => {
-    installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'large' })
+  it('启动读到 dark + 16px 后，页面显示的值与 html scale 一致', async () => {
+    installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 16 })
     await useSettingsStore.getState().load()
 
     renderPage()
 
     expect(html().getAttribute('data-theme')).toBe('dark')
-    expect(html().getAttribute('data-font-size')).toBe('large')
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.143')
     expect(screen.getByTestId('theme-dark')).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByTestId('font-large')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('font-size-value')).toHaveTextContent('16 px')
   })
 })
 
@@ -650,5 +673,21 @@ describe('「追踪」/「关于」栏（T17）', () => {
     expect(screen.getByRole('heading', { level: 1, name: '归档' })).toBeInTheDocument()
     expect(screen.getByTestId('archive-empty')).toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-usage')).not.toBeInTheDocument()
+  })
+
+  it('字体声部（task-64）：页面大标题与分组标题走衬线 reading；表单区仍是 sans', () => {
+    installKyclawBridge()
+    renderPage('/settings/appearance')
+
+    // h1 = 章程「设置大标题」衬线档（22/600）
+    const h1 = screen.getByRole('heading', { level: 1 })
+    expect(h1).toHaveClass('font-serif', 'font-semibold')
+    expect(h1).not.toHaveClass('font-sans')
+
+    // 分组标题（SettingsGroup 的 h2）= 16/600 衬线
+    const group = screen.getByTestId('settings-group-appearance')
+    const groupTitle = within(group).getByRole('heading', { level: 2 })
+    expect(groupTitle).toHaveClass('font-serif', 'font-semibold')
+    expect(groupTitle).not.toHaveClass('font-sans')
   })
 })

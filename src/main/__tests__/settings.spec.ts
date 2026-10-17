@@ -31,7 +31,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const file = settingsPath(dir)
     const settings = {
       theme: 'dark' as const,
-      fontTier: 'large' as const,
+      uiFontSize: 16 as const,
       motion: defaultMotionSettings(),
       globalRules: '',
       providers: [],
@@ -102,7 +102,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
     for (const bad of [
       { ...DEFAULT_SETTINGS, theme: 'blue' },
-      { theme: 'dark', fontTier: 'large' },
+      { theme: 'dark', uiFontSize: 16 },
       { ...DEFAULT_SETTINGS, evil: 1 }
     ]) {
       writeFileSync(file, JSON.stringify(bad), 'utf8')
@@ -138,13 +138,13 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
-      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      JSON.stringify({ theme: 'dark', uiFontSize: 16, providers: [], workspaces: [] }),
       'utf8'
     )
 
     expect(readSettings(file)).toEqual({
       theme: 'dark',
-      fontTier: 'large',
+      uiFontSize: 16,
       // task-58：旧文件没有 motion 段 → 补默认 9 键（默认值 = 用户截图选择）
       motion: defaultMotionSettings(),
       globalRules: '',
@@ -200,7 +200,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     // 老文件：完全没有 modelOverrides 这一节（strict schema 会整份丢掉，所以迁移必须补空表）
     writeFileSync(
       file,
-      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      JSON.stringify({ theme: 'dark', uiFontSize: 16, providers: [], workspaces: [] }),
       'utf8'
     )
     const migrated = readSettings(file)
@@ -238,7 +238,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'dark',
-        fontTier: 'large',
+        uiFontSize: 16,
         providers: [],
         workspaces: [],
         langfuse: { endpoint: 'http://192.168.31.18:3000' }
@@ -266,7 +266,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const file = settingsPath(dir)
     const base = {
       theme: 'dark',
-      fontTier: 'large',
+      uiFontSize: 16,
       providers: [],
       workspaces: [],
       langfuse: { endpoint: 'https://cloud.langfuse.com', proxyUrl: '' }
@@ -327,7 +327,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     // 1) 老文件什么都没有（既没有新键也没有旧键）→ ask
     writeFileSync(
       file,
-      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      JSON.stringify({ theme: 'dark', uiFontSize: 16, providers: [], workspaces: [] }),
       'utf8'
     )
     const fresh = readSettings(file)
@@ -387,7 +387,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'dark',
-        fontTier: 'large',
+        uiFontSize: 16,
         providers: [],
         workspaces: [],
         modelCapabilities: { 'deepseek-flash': { vision: true } }
@@ -397,7 +397,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
     const settings = readSettings(file)
     expect(settings.theme).toBe('dark')
-    expect(settings.fontTier).toBe('large')
+    expect(settings.uiFontSize).toBe(16)
     expect(Object.keys(settings)).not.toContain('modelCapabilities')
     // 落盘回写时也不会再带上那个键
     expect(JSON.stringify(settings)).not.toContain('modelCapabilities')
@@ -410,7 +410,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'dark',
-        fontTier: 'large',
+        uiFontSize: 16,
         providers: [],
         workspaces: [],
         pptTemplate: '学术紫'
@@ -420,10 +420,39 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
     const settings = readSettings(file)
     expect(settings.theme).toBe('dark')
-    expect(settings.fontTier).toBe('large')
+    expect(settings.uiFontSize).toBe(16)
     expect(Object.keys(settings)).not.toContain('pptTemplate')
     // 会话级的那份映射在 libsql 里（session_ppt_templates），settings 这一侧一个残留都不留
     expect(JSON.stringify(settings)).not.toContain('学术紫')
+  })
+
+  it('task-69：旧字号三档（fontTier）迁到连续 uiFontSize（small→13 / default→14 / large→16），旧键剥掉；坏值回默认', () => {
+    const file = settingsPath(dir)
+    const readWith = (payload: Record<string, unknown>): number => {
+      writeFileSync(
+        file,
+        JSON.stringify({ theme: 'dark', providers: [], workspaces: [], ...payload }),
+        'utf8'
+      )
+      return readSettings(file).uiFontSize
+    }
+
+    expect(readWith({ fontTier: 'small' })).toBe(13)
+    expect(readWith({ fontTier: 'default' })).toBe(14)
+    expect(readWith({ fontTier: 'large' })).toBe(16)
+    // 新值优先：两键都在时听新值（旧键仍会被剥掉——strict 校验不认它）
+    expect(readWith({ fontTier: 'large', uiFontSize: 12 })).toBe(12)
+    // 坏新值 / 坏旧值都回默认 14，不把整份设置当坏文件（主题/provider 因此保住）
+    expect(readWith({ uiFontSize: 99 })).toBe(14)
+    expect(readWith({ uiFontSize: 14.5 })).toBe(14)
+    expect(readWith({ fontTier: 'huge' })).toBe(14)
+    // 迁移后的对象里不再有旧键
+    writeFileSync(
+      file,
+      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      'utf8'
+    )
+    expect(Object.keys(readSettings(file))).not.toContain('fontTier')
   })
 
   it('思考翻译（round 32）：老文件没有这个字段时补成缺省（关着 + 预置服务）；落过盘的取值原样保留', () => {
@@ -431,7 +460,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
 
     writeFileSync(
       file,
-      JSON.stringify({ theme: 'system', fontTier: 'default', providers: [], workspaces: [] }),
+      JSON.stringify({ theme: 'system', uiFontSize: 14, providers: [], workspaces: [] }),
       'utf8'
     )
     expect(readSettings(file).reasoningTranslate).toEqual(DEFAULT_REASONING_TRANSLATE)
@@ -440,7 +469,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'system',
-        fontTier: 'default',
+        uiFontSize: 14,
         providers: [],
         workspaces: [],
         reasoningTranslate: {
@@ -471,7 +500,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'system',
-        fontTier: 'default',
+        uiFontSize: 14,
         providers: [],
         workspaces: [],
         semanticRecall: {
@@ -497,7 +526,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
       file,
       JSON.stringify({
         theme: 'system',
-        fontTier: 'default',
+        uiFontSize: 14,
         providers: [],
         workspaces: [],
         semanticRecall: { enabled: false, source: 'remote', baseUrl: '', model: '' }
@@ -602,7 +631,7 @@ describe('首次默认工作区初始化', () => {
       file,
       JSON.stringify({
         theme: 'dark',
-        fontTier: 'large',
+        uiFontSize: 16,
         providers: [],
         workspaces: [],
         defaultWorkspace: null
@@ -618,7 +647,7 @@ describe('首次默认工作区初始化', () => {
     )
     expect(settings.workspaces).toEqual([{ path: settings.defaultWorkspace, mode: 'ask' }])
     expect(settings.theme).toBe('dark')
-    expect(settings.fontTier).toBe('large')
+    expect(settings.uiFontSize).toBe(16)
 
     updateSettings(file, { workspaces: [], defaultWorkspace: null })
     initializeDefaultWorkspace(dir, join(dir, 'other-home'))
@@ -634,7 +663,7 @@ describe('首次默认工作区初始化', () => {
       file,
       JSON.stringify({
         theme: 'dark',
-        fontTier: 'large',
+        uiFontSize: 16,
         providers: [],
         workspaces: [workspace],
         defaultWorkspace: null
@@ -652,7 +681,7 @@ describe('首次默认工作区初始化', () => {
     const file = settingsPath(dir)
     writeFileSync(
       file,
-      JSON.stringify({ theme: 'dark', fontTier: 'large', providers: [], workspaces: [] }),
+      JSON.stringify({ theme: 'dark', uiFontSize: 16, providers: [], workspaces: [] }),
       'utf8'
     )
 
@@ -677,20 +706,20 @@ describe('首次默认工作区初始化', () => {
 describe('updateSettings（打补丁 → 合并 → 校验 → 落盘）', () => {
   it('只改补丁里的字段，其余保持原值，并把合并结果落盘', () => {
     const file = settingsPath(dir)
-    writeSettings(file, { ...DEFAULT_SETTINGS, fontTier: 'small' })
+    writeSettings(file, { ...DEFAULT_SETTINGS, uiFontSize: 13 })
 
     const next = updateSettings(file, { theme: 'dark' })
 
-    expect(next).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'small' })
+    expect(next).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 13 })
     expect(readSettings(file)).toEqual(next)
   })
 
   it('文件还没写过时打补丁：以默认值为底再合并', () => {
     const file = settingsPath(dir)
 
-    expect(updateSettings(file, { fontTier: 'large' })).toEqual({
+    expect(updateSettings(file, { uiFontSize: 16 })).toEqual({
       ...DEFAULT_SETTINGS,
-      fontTier: 'large'
+      uiFontSize: 16
     })
   })
 

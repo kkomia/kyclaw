@@ -58,7 +58,7 @@ const html = (): HTMLElement => document.documentElement
 
 beforeEach(() => {
   html().removeAttribute('data-theme')
-  html().removeAttribute('data-font-size')
+  html().style.removeProperty('--ui-scale')
 })
 
 describe('initTheme', () => {
@@ -82,14 +82,14 @@ describe('initTheme', () => {
 
   it('补默认字号档，但不覆盖已显式设置过的档', async () => {
     installMatchMedia(false)
-    const { initTheme, setFontTier } = await loadTheme()
+    const { initTheme, setUiFontSize } = await loadTheme()
 
     initTheme()
-    expect(html().getAttribute('data-font-size')).toBe('default')
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.000')
 
-    setFontTier('large')
+    setUiFontSize(16)
     initTheme()
-    expect(html().getAttribute('data-font-size')).toBe('large')
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.143')
   })
 
   it('系统主题切换时跟随（matchMedia change 事件）', async () => {
@@ -217,27 +217,50 @@ describe('setTheme', () => {
   })
 })
 
-describe('setFontTier', () => {
-  it('写 html[data-font-size] 三档', async () => {
+describe('setUiFontSize（task-69：连续字号 → --ui-scale）', () => {
+  it('默认 14 → scale=1.000；12/16/18 三档按 /14 保留 3 位（两端也钉住）', async () => {
     installMatchMedia(false)
-    const { setFontTier } = await loadTheme()
+    const { setUiFontSize, getUiFontSize } = await loadTheme()
 
-    setFontTier('small')
-    expect(html().getAttribute('data-font-size')).toBe('small')
+    setUiFontSize(14)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.000')
+    expect(getUiFontSize()).toBe(14)
 
-    setFontTier('default')
-    expect(html().getAttribute('data-font-size')).toBe('default')
+    setUiFontSize(12)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('0.857')
+    expect(getUiFontSize()).toBe(12)
 
-    setFontTier('large')
-    expect(html().getAttribute('data-font-size')).toBe('large')
+    setUiFontSize(18)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.286')
+    expect(getUiFontSize()).toBe(18)
+
+    setUiFontSize(16)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.143')
+  })
+
+  it('越界 / 非整数按最近整数夹取（属性永远合法，不写 NaN/越界）', async () => {
+    installMatchMedia(false)
+    const { setUiFontSize, getUiFontSize } = await loadTheme()
+
+    setUiFontSize(11)
+    expect(getUiFontSize()).toBe(12)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('0.857')
+
+    setUiFontSize(25)
+    expect(getUiFontSize()).toBe(18)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.286')
+
+    setUiFontSize(13.6)
+    expect(getUiFontSize()).toBe(14)
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.000')
   })
 
   it('不触碰 data-theme', async () => {
     installMatchMedia(false)
-    const { initTheme, setFontTier } = await loadTheme()
+    const { initTheme, setUiFontSize } = await loadTheme()
 
     initTheme()
-    setFontTier('large')
+    setUiFontSize(16)
 
     expect(html().getAttribute('data-theme')).toBe('light')
   })

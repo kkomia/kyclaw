@@ -200,7 +200,7 @@ describe('settings 通道 handler', () => {
     const onThemeSaved = vi.fn()
     registerSettingsIpc(dir, { onThemeSaved })
 
-    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { fontTier: 'large' })
+    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { uiFontSize: 16 })
 
     expect(onThemeSaved).not.toHaveBeenCalled()
   })
@@ -224,7 +224,7 @@ describe('settings 通道 handler', () => {
 
     for (const bad of [
       [{ theme: 'blue' }],
-      [{ fontTier: 'huge' }],
+      [{ uiFontSize: 99 }],
       [{ outsideWorkspaceMode: 'always' }],
       [{ evil: 1 }],
       [null],

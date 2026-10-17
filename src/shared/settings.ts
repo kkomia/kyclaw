@@ -32,8 +32,16 @@ export const SETTINGS_FILE = 'settings.json'
 /** 主题模式：跟随系统 / 显式亮色 / 显式暗色（对应 html[data-theme] 的解析结果，见 lib/theme.ts） */
 export const themeModeSchema = z.enum(['system', 'light', 'dark'])
 
-/** 字号用户档：整组换值，不做乘法缩放（spec §6.3） */
-export const fontTierSchema = z.enum(['small', 'default', 'large'])
+/**
+ * UI 字号（task-69：三档 small/default/large → 连续数值 px）。
+ *   - 默认 14、范围 12–18 整数（设置页用步进/滑杆；取值范围也在这里给，UI 与校验同源）；
+ *   - 应用机制：渲染端把它换算成 `html` 上的 `--ui-scale = uiFontSize / 14`（见 lib/theme.ts），
+ *     semantic.css 的六档字号/行高按 scale 缩放；旧三档落盘值由 main/settings.ts 迁移。
+ */
+export const UI_FONT_SIZE_DEFAULT = 14
+export const UI_FONT_SIZE_MIN = 12
+export const UI_FONT_SIZE_MAX = 18
+export const uiFontSizeSchema = z.number().int().min(UI_FONT_SIZE_MIN).max(UI_FONT_SIZE_MAX)
 
 /**
  * 关闭窗口的偏好（0.1.3 托盘驻留，三档；Windows / Linux 适用）：
@@ -442,7 +450,8 @@ export function defaultMotionSettings(): MotionSettings {
 
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
-  fontTier: fontTierSchema,
+  /** 连续字号（px，12–18，默认 14）；应用见 lib/theme.ts 的 --ui-scale 注入 */
+  uiFontSize: uiFontSizeSchema,
   /** 动效（task-58）：9 键，默认值 = 用户截图选择，见上方 motionSettingsSchema */
   motion: motionSettingsSchema,
   globalRules: globalRulesSchema,
@@ -558,7 +567,8 @@ export const appSettingsPatchSchema = appSettingsSchema.partial().omit({
 })
 
 export type ThemeMode = z.infer<typeof themeModeSchema>
-export type FontTier = z.infer<typeof fontTierSchema>
+/** 连续字号的 TS 别名（数值，12–18；默认 14） */
+export type UiFontSize = z.infer<typeof uiFontSizeSchema>
 export type CloseToTrayMode = z.infer<typeof closeToTrayModeSchema>
 export type WorkspaceMode = z.infer<typeof workspaceModeSchema>
 export type Workspace = z.infer<typeof workspaceSchema>
@@ -649,7 +659,7 @@ export function effectiveReasoningTranslate(settings: ReasoningTranslateSettings
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
-  fontTier: 'default',
+  uiFontSize: UI_FONT_SIZE_DEFAULT,
   motion: defaultMotionSettings(),
   globalRules: '',
   providers: [],

@@ -154,7 +154,7 @@ function scenarioRow(
 
 beforeEach(() => {
   document.documentElement.removeAttribute('data-theme')
-  document.documentElement.removeAttribute('data-font-size')
+  document.documentElement.style.removeProperty('--ui-scale')
 })
 
 afterEach(() => {

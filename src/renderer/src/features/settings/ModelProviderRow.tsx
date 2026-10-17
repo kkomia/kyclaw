@@ -234,7 +234,7 @@ export function ProviderRow({
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'size-4 shrink-0 text-ink-tertiary transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
+            'size-(--icon-size-sm) shrink-0 text-ink-tertiary transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
             open && 'rotate-90'
           )}
         />

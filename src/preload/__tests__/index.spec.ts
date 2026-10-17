@@ -198,7 +198,7 @@ describe('preload：window.kyclaw.settings', () => {
 
   it('get 打 settings:get，返回值按同一份 schema 解析后交给上层', async () => {
     const { kyclawApi } = await loadPreload()
-    const persisted = { ...defaultSettings(), theme: 'dark' as const, fontTier: 'large' as const }
+    const persisted = { ...defaultSettings(), theme: 'dark' as const, uiFontSize: 16 as const }
     mocks.invoke.mockResolvedValueOnce(persisted)
 
     await expect(kyclawApi.settings.get()).resolves.toEqual(persisted)

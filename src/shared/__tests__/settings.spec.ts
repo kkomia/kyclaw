@@ -19,7 +19,7 @@ describe('AppSettings schema', () => {
   it('默认值：跟随系统 / 默认字号 / providers、workspaces、projects、mcpServers、插件与置顶/归档/探测字段为空 / 权限规则为空 / 默认工作区未指认 / Langfuse 未配置 / 语义召回默认开（本地）/ 思考翻译默认关 / 联网搜索默认免费档 / 更新源跟随内置 / PPT 模板自动', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
-      fontTier: 'default',
+      uiFontSize: 14,
       // task-58：动效 9 键默认值 = 用户截图里的选择（随系统 / 全开 / 扫光 / 打字光标 / 淡入 / 飞上来）
       motion: {
         mode: 'system',
@@ -109,24 +109,25 @@ describe('AppSettings schema', () => {
     expect(defaultSettings()).toEqual(DEFAULT_SETTINGS)
   })
 
-  it('主题只收 system / light / dark，字号只收 small / default / large', () => {
+  it('主题只收 system / light / dark，字号只收 12–18 整数', () => {
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: 'light' }).success).toBe(true)
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: 'dark' }).success).toBe(true)
-    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontTier: 'small' }).success).toBe(
-      true
-    )
-    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontTier: 'large' }).success).toBe(
-      true
-    )
+    // task-69：字号是连续数值（12–18 整数）；旧三档已退场
+    for (const size of [12, 13, 14, 16, 18]) {
+      expect(
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, uiFontSize: size }).success,
+        String(size)
+      ).toBe(true)
+    }
 
     for (const bad of ['blue', 'System', '', 'darkk']) {
       expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, theme: bad }).success, bad).toBe(
         false
       )
     }
-    for (const bad of ['huge', 'big', 'Default', 1]) {
+    for (const bad of [11, 19, 14.5, '14', null, 'small', 'large']) {
       expect(
-        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontTier: bad }).success,
+        appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, uiFontSize: bad }).success,
         String(bad)
       ).toBe(false)
     }
@@ -154,9 +155,9 @@ describe('AppSettings schema', () => {
 
   it('缺键与多键都不合法（strict：落盘文件的字段集合就是 schema 的字段集合）', () => {
     expect(appSettingsSchema.safeParse({ theme: 'system' }).success).toBe(false)
-    expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, fontTier: undefined }).success).toBe(
-      false
-    )
+    expect(
+      appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, uiFontSize: undefined }).success
+    ).toBe(false)
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, extra: 1 }).success).toBe(false)
     expect(appSettingsSchema.safeParse(null).success).toBe(false)
   })
@@ -545,15 +546,15 @@ describe('AppSettings 补丁 schema（settings:update 的入参）', () => {
   it('只给要改的字段就是合法补丁（空补丁也合法，等于不改）', () => {
     expect(appSettingsPatchSchema.parse({ theme: 'dark' })).toEqual({ theme: 'dark' })
     expect(appSettingsPatchSchema.parse({})).toEqual({})
-    expect(appSettingsPatchSchema.parse({ fontTier: 'large', providers: [] })).toEqual({
-      fontTier: 'large',
+    expect(appSettingsPatchSchema.parse({ uiFontSize: 16, providers: [] })).toEqual({
+      uiFontSize: 16,
       providers: []
     })
   })
 
   it('非法取值 / 多余键 / 非对象都拒绝', () => {
     expect(appSettingsPatchSchema.safeParse({ theme: 'blue' }).success).toBe(false)
-    expect(appSettingsPatchSchema.safeParse({ fontTier: 'huge' }).success).toBe(false)
+    expect(appSettingsPatchSchema.safeParse({ uiFontSize: 99 }).success).toBe(false)
     expect(appSettingsPatchSchema.safeParse({ evil: 1 }).success).toBe(false)
     expect(appSettingsPatchSchema.safeParse('dark').success).toBe(false)
     expect(appSettingsPatchSchema.safeParse(null).success).toBe(false)

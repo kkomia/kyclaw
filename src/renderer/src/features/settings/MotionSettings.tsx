@@ -278,7 +278,8 @@ export function MotionSettings(): React.JSX.Element {
       data-motion={reduced ? 'reduced' : 'full'}
       className="motion-group flex flex-col gap-3"
     >
-      <h2 className="text-b2 text-ink-secondary">动效</h2>
+      {/* 区块标题与 SettingsGroup 同口径：16/600 衬线（task-67 字体统一 P2 收尾） */}
+      <h2 className="font-serif text-t2 font-semibold text-ink">动效</h2>
       <div className="motion-panel">
         <Row
           title="动画效果"

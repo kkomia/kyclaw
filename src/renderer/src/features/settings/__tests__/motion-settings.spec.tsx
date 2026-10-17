@@ -260,3 +260,23 @@ describe('reduced 三档 · CSS 契约', () => {
     )
   })
 })
+
+describe('字体声部 / 字阶（task-67 字体统一 P2 收尾）', () => {
+  it('区块标题与设置页分组同口径（16/600 衬线）；面板字号归到 12/14 两档', () => {
+    withMotion()
+    render(<MotionSettingsPanel />)
+
+    const heading = screen.getByRole('heading', { level: 2, name: '动效' })
+    expect(heading).toHaveClass('font-serif', 'font-semibold', 'text-t2')
+
+    const PANEL_CSS = readFileSync(
+      resolve(REPO_ROOT, 'src/renderer/src/features/settings/motion-settings.css'),
+      'utf8'
+    )
+    // 审计 P2：13/11 不是六档 → 说明/demo 全归 12（C1），行标题仍 14（B2）
+    expect(PANEL_CSS).not.toContain('font-size: 13px')
+    expect(PANEL_CSS).not.toContain('font-size: 11px')
+    expect(PANEL_CSS).toContain('font-size: 14px')
+    expect(PANEL_CSS).toContain('font-size: 12px')
+  })
+})

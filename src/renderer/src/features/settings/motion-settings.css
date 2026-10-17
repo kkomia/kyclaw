@@ -129,7 +129,8 @@
 .motion-demo-status {
   position: relative;
   display: inline-block;
-  font-size: 13px;
+  /* 字阶收敛（task-67）：13px 非六档 → C1 12/18；下同 */
+  font-size: 12px;
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -205,7 +206,7 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -260,7 +261,7 @@
 
 /* ── demo ③：新文字淡入（逐字淡入 / 直接出现）─────────────────────────────── */
 .motion-demo-reveal {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
   letter-spacing: 0.02em;
   color: var(--text-secondary);
@@ -305,7 +306,8 @@
   border: 1px solid var(--border-hairline);
   border-radius: 12px;
   background: var(--bg-primary);
-  font-size: 11px;
+  /* 字阶收敛（task-67）：11px 非六档 → C1 12（demo 气泡文字） */
+  font-size: 12px;
   line-height: 1.4;
   color: var(--text-secondary);
   text-overflow: ellipsis;

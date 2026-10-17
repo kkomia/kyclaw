@@ -17,7 +17,7 @@ import type { KyclawProjectsApi, KyclawWorkspaceApi } from '@shared/ipc'
 import { withAllowedRule } from '@shared/permissions'
 import type { ModelOverride } from '@shared/models'
 import type { ProviderConfig } from '@shared/providers'
-import { setFontTier, setTheme } from './theme'
+import { setTheme, setUiFontSize } from './theme'
 
 /**
  * 设置的渲染端副本 + 外观副作用。落盘在主进程（settings:* 通道），这里只管两件事：
@@ -38,7 +38,8 @@ import { setFontTier, setTheme } from './theme'
  */
 function applyAppearance(settings: AppSettings): void {
   setTheme(settings.theme)
-  setFontTier(settings.fontTier)
+  // task-69：连续字号 → html 上的 --ui-scale（六档 token 按 scale 缩放）
+  setUiFontSize(settings.uiFontSize)
 }
 
 /** 工作区通道（缺失=浏览器/单测环境）：所有工作区动作共用这一个入口与同一句交代 */

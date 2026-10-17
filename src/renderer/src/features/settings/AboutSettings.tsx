@@ -240,7 +240,10 @@ export function AboutSettings(): React.JSX.Element {
     <div data-testid="about-settings" className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <span data-testid="about-version" className="text-b2 text-ink">
-          版本 {state?.currentVersion ?? '—'}
+          版本{' '}
+          <span data-testid="about-version-value" className="font-mono tabular-nums">
+            {state?.currentVersion ?? '—'}
+          </span>
         </span>
         <span className="min-w-2 flex-1" />
         {downloaded ? (
@@ -271,7 +274,10 @@ export function AboutSettings(): React.JSX.Element {
               {release.title}
             </span>
             {release.date === undefined ? null : (
-              <span data-testid="about-release-date" className="text-c1 text-ink-secondary">
+              <span
+                data-testid="about-release-date"
+                className="font-mono text-c1 text-ink-secondary tabular-nums"
+              >
                 {release.date}
               </span>
             )}

@@ -16,7 +16,7 @@ function store(): ReturnType<typeof useSettingsStore.getState> {
 
 beforeEach(() => {
   html().removeAttribute('data-theme')
-  html().removeAttribute('data-font-size')
+  html().style.removeProperty('--ui-scale')
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -28,13 +28,13 @@ afterEach(() => {
 
 describe('settings store · load（启动时读落盘）', () => {
   it('把落盘的主题与字号应用到 html，并标 loaded', async () => {
-    installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'large' })
+    installKyclawBridge({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 16 })
 
     await store().load()
 
     expect(html().getAttribute('data-theme')).toBe('dark')
-    expect(html().getAttribute('data-font-size')).toBe('large')
-    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'large' })
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.143')
+    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 16 })
     expect(store().loaded).toBe(true)
   })
 
@@ -43,7 +43,7 @@ describe('settings store · load（启动时读落盘）', () => {
 
     await expect(store().load()).resolves.toBeUndefined()
     expect(store().settings).toEqual(DEFAULT_SETTINGS)
-    expect(html().getAttribute('data-font-size')).toBe('default')
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.000')
     expect(store().loaded).toBe(true)
   })
 
@@ -72,12 +72,12 @@ describe('settings store · update（用户改动）', () => {
 
   it('以主进程回吐的合并结果为准（落盘后的那份才是真相）', async () => {
     const bridge = installKyclawBridge()
-    bridge.update.mockResolvedValueOnce({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'small' })
+    bridge.update.mockResolvedValueOnce({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 13 })
 
     await store().update({ theme: 'dark' })
 
-    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', fontTier: 'small' })
-    expect(html().getAttribute('data-font-size')).toBe('small')
+    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', uiFontSize: 13 })
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('0.929')
   })
 
   it('落盘失败：本次改动仍生效，不抛，留日志（写失败不该让 UI 跳回去）', async () => {
@@ -94,10 +94,10 @@ describe('settings store · update（用户改动）', () => {
   it('没有 preload 桥时只在本地生效，不抛', async () => {
     clearKyclawBridge()
 
-    await expect(store().update({ fontTier: 'large' })).resolves.toBeUndefined()
+    await expect(store().update({ uiFontSize: 16 })).resolves.toBeUndefined()
 
-    expect(html().getAttribute('data-font-size')).toBe('large')
-    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, fontTier: 'large' })
+    expect(html().style.getPropertyValue('--ui-scale')).toBe('1.143')
+    expect(store().settings).toEqual({ ...DEFAULT_SETTINGS, uiFontSize: 16 })
   })
 })
 

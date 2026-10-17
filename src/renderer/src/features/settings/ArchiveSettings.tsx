@@ -146,7 +146,8 @@ export function ArchiveSettings(): React.JSX.Element {
                   disabled={pendingKey !== null && pendingKey !== `thread:${row.entry.threadId}`}
                   onClick={() => restoreThread(row.entry)}
                 >
-                  <ArchiveRestore aria-hidden="true" className="size-4" />
+                  {/* 图标随字号 scale（task-69）：走 --icon-size-sm token，不写死 16px */}
+                  <ArchiveRestore aria-hidden="true" className="size-(--icon-size-sm)" />
                   取消归档
                 </Button>
               </section>
@@ -184,7 +185,8 @@ export function ArchiveSettings(): React.JSX.Element {
                   disabled={pendingKey !== null && pendingKey !== `project:${entry.projectId}`}
                   onClick={() => restoreProject(entry)}
                 >
-                  <ArchiveRestore aria-hidden="true" className="size-4" />
+                  {/* 图标随字号 scale（task-69）：走 --icon-size-sm token，不写死 16px */}
+                  <ArchiveRestore aria-hidden="true" className="size-(--icon-size-sm)" />
                   取消归档
                 </Button>
               </section>

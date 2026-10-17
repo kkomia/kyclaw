@@ -74,6 +74,8 @@ describe('「关于」组', () => {
     const bridge = renderAbout()
 
     await waitFor(() => expect(screen.getByTestId('about-version')).toHaveTextContent('版本 1.0.0'))
+    // task-67：版本号是读数 → code 声部 + tabular（标签「版本」仍 sans）
+    expect(screen.getByTestId('about-version-value')).toHaveClass('font-mono', 'tabular-nums')
     expect(screen.getByTestId('about-update-status')).toHaveTextContent('未配置更新源')
     expect(screen.getByTestId('about-check')).toBeDisabled()
     expect(screen.queryByTestId('about-install')).not.toBeInTheDocument()
@@ -388,6 +390,8 @@ describe('「关于」组：更新内容（发行日志，0.1.1）', () => {
     expect(screen.getByTestId('about-release-date')).toHaveTextContent(
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/
     )
+    // task-67：发行日期是读数 → mono + tabular
+    expect(screen.getByTestId('about-release-date')).toHaveClass('font-mono', 'tabular-nums')
     // 日志就是一行普通文字，不是对话框、也不是新窗口
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })

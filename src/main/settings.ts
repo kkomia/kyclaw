@@ -21,6 +21,9 @@ import {
   defaultSettings,
   LANGFUSE_PRESET,
   SETTINGS_FILE,
+  UI_FONT_SIZE_DEFAULT,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
   type AppSettings,
   type MotionSettings
 } from '../shared/settings'
@@ -62,6 +65,25 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
   const record = raw as Record<string, unknown>
   const next = { ...record }
+  // task-69：字号从三档（small/default/large）迁到连续 px（12–18，默认 14）。
+  //   映射：small→13、default→14、large→16（新默认 14 与旧 default 观感一致）。
+  //   旧键 `fontTier` 必须剥掉：新 schema 是 strictObject，留着会让整份设置当坏文件回默认。
+  //   新值本体再归一一次（非整数/越界/非数字 → 默认 14）：一个坏字号不该连带主题/provider 全丢。
+  if (next.uiFontSize === undefined) {
+    const legacyTier = next.fontTier
+    next.uiFontSize =
+      legacyTier === 'small' ? 13 : legacyTier === 'large' ? 16 : UI_FONT_SIZE_DEFAULT
+  }
+  delete next.fontTier
+  const fontSize = next.uiFontSize
+  if (
+    typeof fontSize !== 'number' ||
+    !Number.isInteger(fontSize) ||
+    fontSize < UI_FONT_SIZE_MIN ||
+    fontSize > UI_FONT_SIZE_MAX
+  ) {
+    next.uiFontSize = UI_FONT_SIZE_DEFAULT
+  }
   if (next.globalRules === undefined) next.globalRules = ''
   if (next.permissions === undefined) next.permissions = { rules: [] }
   if (next.mcpServers === undefined) next.mcpServers = []
