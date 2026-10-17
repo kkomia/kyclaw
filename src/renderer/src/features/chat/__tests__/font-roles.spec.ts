@@ -22,11 +22,10 @@ const errorCardTsx = read('../ErrorCard.tsx')
 const messageRailTsx = read('../MessageRail.tsx')
 
 describe('AI 回复 = 阅读声部', () => {
-  it('Message 有阅读车道容器：44em + 左侧 1px 页边线 + 18px 缩进', () => {
+  it('Message 有阅读车道容器：task-83 去左竖线、保留 18px 缩进、宽度占满内容列', () => {
     expect(messageTsx).toContain('message-reading-lane')
     expect(messageTsx).toContain('data-font-role="reading"')
-    expect(messageTsx).toContain('--prose-measure')
-    expect(messageTsx).toMatch(/border-l border-\(--hairline-soft\)/)
+    expect(messageTsx).not.toMatch(/border-l border-\(--hairline-soft\)/)
     expect(messageTsx).toContain('pl-[18px]')
   })
 

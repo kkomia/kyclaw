@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from '@renderer/features/chat/Composer'
 import { publishContextItem, publishDraft } from '@renderer/features/chat/composer-inbox'
@@ -10,6 +11,7 @@ import {
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultMotionSettings, defaultSettings, type AppSettings } from '@shared/settings'
+import { useThreadRunStore, resetThreadRunStore } from '@renderer/features/chat/thread-run-store'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 
 /**
@@ -997,34 +999,66 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     await tick()
   }
 
-  it('两截：上=模型列表；分隔线后是「思考强度 / 对话长度」，右侧显示当前档', () => {
+  it('两截：上=模型列表；分隔线后只剩「对话长度」；思考强度已拆成独立触发器', () => {
     setup()
 
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
-    expect(screen.getByTestId('model-efforts')).toHaveTextContent('思考强度')
-    expect(screen.getByTestId('model-efforts')).toHaveTextContent('默认')
     expect(screen.getByTestId('model-context')).toHaveTextContent('对话长度')
     expect(screen.getByTestId('model-context')).toHaveTextContent('100%')
+    // task-70：模型菜单里不再有「思考强度 / 刷新模型信息」
+    expect(screen.queryByTestId('model-efforts')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-refresh-meta')).not.toBeInTheDocument()
+    // 独立触发器在模型名旁，显示当前档位（task-78：英文，照抄 dsh-claude-style）
+    expect(screen.getByTestId('composer-effort')).toHaveTextContent('Default')
   })
 
-  it('思考强度：按注册表动态给挡位（v4-pro 四档）；选「高」→ 落 settings.modelPrefs', async () => {
+  it('独立思考强度面板（v2）：英文档位 + 无极滑杆；拖到高档 → 落 settings.modelPrefs', async () => {
     setup()
-    await openSubmenu('model-efforts')
 
-    expect(screen.getByTestId('model-effort-default')).toHaveTextContent('默认')
-    expect(screen.getByTestId('model-effort-low')).toHaveTextContent('低')
-    expect(screen.getByTestId('model-effort-high')).toHaveTextContent('高')
-    expect(screen.getByTestId('model-effort-max')).toHaveTextContent('最高')
-    expect(screen.getByTestId('model-effort-default')).toHaveAttribute('aria-current', 'page')
+    fireEvent.click(screen.getByTestId('composer-effort'))
+    expect(await screen.findByTestId('composer-effort-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('effort-slider')).toHaveAttribute('aria-label', '推理等级')
+    expect(screen.getByTestId('composer-effort-panel')).toHaveTextContent('推理等级')
+    expect(screen.getByTestId('composer-effort-panel')).toHaveTextContent('更快')
+    expect(screen.getByTestId('composer-effort-panel')).toHaveTextContent('更强')
+    expect(screen.getByTestId('effort-current-label')).toHaveTextContent('Default')
+    // 用户反馈：滑杆下方重复的中文档位行已删
+    expect(screen.queryByTestId('effort-tier-default')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByTestId('model-effort-high'))
+    fireEvent.change(screen.getByTestId('effort-slider'), { target: { value: '60' } })
 
     await waitFor(() =>
       expect(bridge.update).toHaveBeenCalledWith({
         modelPrefs: { 'deepseek/deepseek-v4-pro': { thinkingEffort: 'high' } }
       })
     )
+  })
+
+  it('模型名与推理强度触发器同版式（task-84 对齐：h-8 / px-2 / mono 12 / rounded-control）', () => {
+    setup()
+
+    const model = screen.getByTestId('composer-model')
+    const effort = screen.getByTestId('composer-effort')
+    for (const trigger of [model, effort]) {
+      expect(trigger).toHaveClass(
+        'h-8',
+        'px-2',
+        'rounded-control',
+        'font-mono',
+        'text-c1',
+        'items-center'
+      )
+      // 同版式：不允许一个 13/500、一个 12/mono（之前就是这里不齐）
+      expect(trigger).not.toHaveClass('text-[13px]')
+      expect(trigger).not.toHaveClass('font-medium')
+    }
+
+    // task-87：两者收成一组，组内 gap-1（4px，要求 4–6px）；组不吞掉两侧其它控件
+    const group = screen.getByTestId('composer-model-effort-group')
+    expect(group).toHaveClass('gap-1.5', 'inline-flex', 'items-center')
+    expect(group).toContainElement(model)
+    expect(group).toContainElement(effort)
   })
 
   it('对话长度：滑块 10–100，拖动只改草稿、松手（pointerUp）才落盘；显示百分比与换算', async () => {
@@ -1149,8 +1183,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
 
     expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
-    expect(screen.getByTestId('model-efforts')).toBeInTheDocument()
     expect(screen.getByTestId('model-context')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-effort')).toBeInTheDocument()
     expect(screen.queryByTestId('context-menu-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('menu-custom-context-usage')).not.toBeInTheDocument()
     expect(screen.queryByText('上下文已用')).not.toBeInTheDocument()
@@ -1448,17 +1482,14 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
     expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 1M / 1M')
   })
 
-  it('思考挡位用实测 supported_levels，初始档 = default_level（high 选中）', async () => {
+  it('思考挡位用实测 supported_levels，初始档 = default_level（trigger 显示英文 high）', async () => {
     mountChip(probedNow())
-    await openSubmenu('model-efforts')
 
-    expect(screen.getByTestId('model-effort-default')).toHaveTextContent('默认')
-    expect(screen.getByTestId('model-effort-low')).toHaveTextContent('低')
-    expect(screen.getByTestId('model-effort-high')).toHaveTextContent('高')
-    expect(screen.getByTestId('model-effort-max')).toHaveTextContent('最高')
-    // 没存过偏好 + 端点 default_level=high → 初始档就是 high（显示与透传同值）
-    expect(screen.getByTestId('model-effort-high')).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByTestId('model-efforts')).toHaveTextContent('高')
+    // 没存过偏好 + 端点 default_level=high → 独立触发器初始档就是 high（task-78 显示英文 High）
+    expect(screen.getByTestId('composer-effort')).toHaveTextContent('High')
+    fireEvent.click(screen.getByTestId('composer-effort'))
+    expect(await screen.findByTestId('effort-current-label')).toHaveTextContent('High')
+    expect(screen.getByTestId('effort-slider')).toHaveValue('67')
   })
 
   it('菜单打开且实测缓存缺失 → 后台触发一次探测（不挡菜单）', async () => {
@@ -1478,48 +1509,15 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
     expect(bridge.probeModels).not.toHaveBeenCalled()
   })
 
-  it('手动「刷新模型信息」：**不看 TTL**，缓存新鲜也再探一次（手动可重试）', async () => {
+  it('模型菜单不再提供「刷新模型信息」（task-70 用户口径），也没有思考强度子菜单', async () => {
     const bridge = mountChip(probedNow())
 
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     await tick()
-    // 自动那条路：缓存新鲜 → 不问
+    expect(screen.queryByTestId('model-refresh-meta')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-efforts')).not.toBeInTheDocument()
+    // 自动刷新这条路仍保留（缓存新鲜时打开菜单不额外探测）
     expect(bridge.probeModels).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByTestId('model-refresh-meta'))
-
-    await waitFor(() => expect(bridge.probeModels).toHaveBeenCalledWith('deepseek'))
-    expect(bridge.probeModels).toHaveBeenCalledTimes(1)
-  })
-
-  it('手动刷新的反馈：拿到新时间戳 → "已刷新"', async () => {
-    const bridge = mountChip(probedNow())
-    bridge.probeModels.mockResolvedValueOnce({
-      ...defaultSettings(),
-      providers: [FLASH],
-      probedModels: {
-        'deepseek:deepseek-flash': {
-          contextWindow: 1_048_576,
-          fetchedAt: new Date(Date.now() + 60_000).toISOString()
-        }
-      }
-    })
-
-    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    fireEvent.click(screen.getByTestId('model-refresh-meta'))
-
-    expect(await screen.findByTestId('composer-notice')).toHaveTextContent('模型信息已刷新')
-  })
-
-  it('手动刷新没问出新时间戳（端点不可达 / 没给元数据）→ 如实说"没能刷新"，不假装成功', async () => {
-    const bridge = mountChip(probedNow())
-
-    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    fireEvent.click(screen.getByTestId('model-refresh-meta'))
-
-    // 默认 stub 回吐的设置里 fetchedAt 没变 = 这一趟什么也没问出来
-    expect(await screen.findByTestId('composer-notice')).toHaveTextContent('没能刷新')
-    expect(bridge.probeModels).toHaveBeenCalledWith('deepseek')
   })
 })
 
@@ -2289,6 +2287,16 @@ describe('P1b · Composer 自绘 caret', () => {
     expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument()
     expect(input).toHaveAttribute('data-caret', 'native')
   })
+
+  it('task-83：空值 focus 也显示自绘 caret（不再等有字）；宽度恒定走 CSS/ui-scale', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    // 空输入：镜像层没有 text node，走空 Range/容器兜底也必须显示
+    expect(await screen.findByTestId('composer-caret')).toBeInTheDocument()
+    expect(input).toHaveAttribute('data-caret', 'custom')
+    expect(screen.getByTestId('composer-caret')).toHaveClass('composer-caret')
+  })
 })
 
 /** 动效 B §2.4：caret=off 时不自绘、走原生 caret（颜色已是 --accent）。 */
@@ -2308,5 +2316,100 @@ describe('动效 B · Composer caret 开关', () => {
     } finally {
       useSettingsStore.setState({ settings: original })
     }
+  })
+})
+
+/**
+ * task-62 · 状态海獭落位：从 ChatHeader 挪到**输入卡右上角**（本次收口）。
+ *   对话页：`composer-anchor` 内 32 档 otter，idle/think/type 状态由 useChatMascotState 驱动；
+ *   hero（初始页）与实例未就绪时不渲染 —— 一屏一只：初始页只有报头 lockup 那只；
+ *   reduced（用户减弱 / 系统减弱 / 总是）→ `paused` 静态帧（useEffectiveMotion 折算）；
+ *   窄窗 <900 隐藏（CSS 契约；不做 24 降级）。
+ */
+describe('task-62 · 输入卡右上角状态海獭', () => {
+  afterEach(() => {
+    resetThreadRunStore()
+    document.querySelectorAll('[data-testid="tool-card"]').forEach((node) => node.remove())
+  })
+
+  it('对话页：锚点内 32 档 otter（aria-hidden + title + idle），与输入卡同列宽', () => {
+    installKyclawBridge()
+    setup({ threadId: 't-otter' })
+
+    const anchor = screen.getByTestId('composer-anchor')
+    expect(anchor).toHaveClass('relative', 'mx-auto', 'w-full', 'max-w-(--chat-input-max-width)')
+    const otter = within(anchor).getByTestId('composer-otter')
+    expect(otter).toHaveAttribute('aria-hidden', 'true')
+    expect(otter).toHaveAttribute('title', 'kyclaw')
+    const sprite = within(otter).getByTestId('pixel-otter')
+    expect(sprite).toHaveAttribute('data-size', '32')
+    expect(sprite).toHaveAttribute('data-state', 'idle')
+    // 不挡输入区/发送钮/权限 chip：纯装饰由 CSS pointer-events:none 保证（见下一条 CSS 契约）
+  })
+
+  it('初始页（hero）不渲染；实例未就绪也不渲染 —— 一屏一只（hero 只有报头那只）', () => {
+    installKyclawBridge()
+    setup({ threadId: 't-otter', hero: true })
+    expect(screen.queryByTestId('composer-otter')).not.toBeInTheDocument()
+    // 没有 hero 但还没就绪（threadId 缺省）也不渲染
+    cleanup()
+    setup({})
+    expect(screen.queryByTestId('composer-otter')).not.toBeInTheDocument()
+  })
+
+  it('AI 生成中 → think；工具运行 → type；本轮结束后 1.2s 回 idle', async () => {
+    installKyclawBridge()
+    setup({ threadId: 't-otter' })
+    const stateOf = (): string | null =>
+      within(screen.getByTestId('composer-anchor'))
+        .getByTestId('pixel-otter')
+        .getAttribute('data-state')
+
+    expect(stateOf()).toBe('idle')
+    act(() => {
+      useThreadRunStore.getState().setRunning('t-otter', true)
+    })
+    await waitFor(() => expect(stateOf()).toBe('think'))
+
+    const card = document.createElement('div')
+    card.setAttribute('data-testid', 'tool-card')
+    card.setAttribute('data-state', 'input-available')
+    act(() => {
+      document.body.appendChild(card)
+    })
+    await waitFor(() => expect(stateOf()).toBe('type'))
+    card.remove()
+
+    act(() => {
+      useThreadRunStore.getState().setRunning('t-otter', false)
+    })
+    expect(stateOf()).not.toBe('idle')
+    await waitFor(() => expect(stateOf()).toBe('idle'), { timeout: 2200 })
+  })
+
+  it('reduced（用户选「减弱」）→ paused 静态帧（useEffectiveMotion 折算，不靠系统媒体查询）', () => {
+    installKyclawBridge()
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), motion: { ...defaultMotionSettings(), mode: 'reduced' } },
+      loaded: true
+    })
+    setup({ threadId: 't-otter' })
+
+    expect(
+      within(screen.getByTestId('composer-anchor')).getByTestId('pixel-otter')
+    ).toHaveAttribute('data-paused', 'true')
+  })
+
+  it('CSS 契约：贴卡片右缘/上沿、pointer-events:none、<900 隐藏（不做 24 降级）', () => {
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/renderer/src/features/chat/chat-motion.css'),
+      'utf8'
+    )
+    expect(css).toMatch(
+      /\.composer-otter \{[\s\S]*?position: absolute;[\s\S]*?top: -14px;[\s\S]*?right: 10px;[\s\S]*?pointer-events: none;/
+    )
+    expect(css).toMatch(
+      /@media \(max-width: 899px\) \{[\s\S]*?\.composer-otter \{\s*display: none;/
+    )
   })
 })

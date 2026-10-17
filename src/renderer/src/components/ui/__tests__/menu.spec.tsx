@@ -43,15 +43,17 @@ describe('Menu', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('键盘打开：面板底 Bg-Tertiary、内边距 8、圆角 20（§7 菜单值）', () => {
+  it('键盘打开：紧凑 panel（360 上限 / 内边距 6 / 圆角 12 / hairline + shadow）', () => {
     renderMenu()
     openByKeyboard()
 
     const menu = screen.getByRole('menu')
     expect(menu).toHaveClass(
       'bg-menu',
-      'p-(--menu-pad)',
-      'rounded-overlay',
+      'p-1',
+      'rounded-[10px]',
+      'border-hairline',
+      'w-[min(360px,calc(100vw-24px))]',
       'shadow-(--shadow-overlay)'
     )
   })
@@ -64,14 +66,14 @@ describe('Menu', () => {
     expect(document.querySelector('.bg-mask')).toBeNull()
   })
 
-  it('条目：高 36、项圆角 10、hover 底 Fills-F1、B2 字号（§7）', () => {
+  it('条目：单行 40、项圆角 8、hover 底 Fills-F1、B2 字号', () => {
     renderMenu()
     openByKeyboard()
 
     const rename = screen.getByRole('menuitem', { name: '重命名' })
     expect(rename).toHaveClass(
-      'h-(--menu-item-height)',
-      'rounded-(--menu-item-radius)',
+      'min-h-[32px]',
+      'rounded-[8px]',
       'data-[highlighted]:bg-hover',
       'text-b2',
       'text-ink',
@@ -89,7 +91,8 @@ describe('Menu', () => {
     )
 
     const archive = screen.getByRole('menuitem', { name: '归档' })
-    expect(archive.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-md)')
+    // task-73：行图标随字号 scale（--icon-size-sm token），不再写死 size-4
+    expect(archive.querySelector('span[aria-hidden="true"]')).toHaveClass('size-(--icon-size-sm)')
     expect(screen.getByTestId('archive-icon')).toBeInTheDocument()
   })
 
@@ -241,5 +244,95 @@ describe('Menu · 子菜单（round 7）', () => {
     expect(item).toHaveAttribute('data-disabled')
     fireEvent.keyDown(item, { key: 'Enter' })
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('trailing 数值走 code 声部 + tabular；文字类 trailing 保持 sans（task-64 字体一致性）', async () => {
+    render(
+      <Menu
+        trigger={<Button variant="ghost">菜单</Button>}
+        items={[
+          { id: 'model', label: '选择模型', trailing: '128K' },
+          { id: 'effort', label: '思考强度', trailing: '标准' },
+          { id: 'pct', label: '对话长度', trailing: '85%' }
+        ]}
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('button', { name: '菜单' }), { key: 'ArrowDown' })
+    await tick()
+
+    const numeric = screen.getByText('128K')
+    expect(numeric).toHaveClass('font-mono', 'tabular-nums')
+    expect(screen.getByText('85%')).toHaveClass('font-mono', 'tabular-nums')
+    // 文字标签（思考挡位这类）不因为挨着数值就变 mono
+    const label = screen.getByText('标准')
+    expect(label).not.toHaveClass('font-mono')
+    expect(label).toHaveClass('text-c1')
+  })
+})
+
+/**
+ * task-61 · 紧凑菜单原语：分组标题 / 两行（icon+标题+描述）/ 右侧 meta/badge/选中对勾。
+ * 规格来自 `.superpowers/chat-aesthetics/refs/ref-model-dropdown.png`、`ref-slash-menu.png`。
+ */
+describe('Menu · 紧凑行 / 分组 / meta', () => {
+  it('分组标题 11/500 tertiary；组内行可带 description（两行 48）与 icon', () => {
+    render(
+      <Menu
+        trigger={<Button variant="ghost">模型菜单</Button>}
+        items={[
+          {
+            id: 'deepseek',
+            type: 'group',
+            label: 'DeepSeek Account',
+            items: [
+              {
+                id: 'v4',
+                label: 'DeepSeek V4',
+                description: 'deepseek-v4',
+                icon: <svg data-testid="model-icon" />,
+                testId: 'menu-model-v4'
+              }
+            ]
+          }
+        ]}
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('button', { name: '模型菜单' }), { key: 'ArrowDown' })
+
+    const group = screen.getByTestId('menu-group-deepseek')
+    expect(group).toHaveTextContent('DeepSeek Account')
+    expect(group.querySelector('[role="menuitem"]')).toHaveClass('min-h-10', 'items-start')
+    const item = screen.getByTestId('menu-model-v4')
+    expect(item).toHaveTextContent('DeepSeek V4')
+    expect(item).toHaveTextContent('deepseek-v4')
+    expect(item.querySelector('[data-testid="model-icon"]')).not.toBeNull()
+  })
+
+  it('右侧 badge 走 mono 11 tabular 小胶囊；选中项有对勾且 aria-current=page', () => {
+    render(
+      <Menu
+        trigger={<Button variant="ghost">模型菜单</Button>}
+        items={[
+          {
+            id: 'v4',
+            label: 'DeepSeek V4',
+            description: '默认模型',
+            badge: '128K',
+            selected: true,
+            testId: 'menu-model-v4'
+          }
+        ]}
+      />
+    )
+    fireEvent.keyDown(screen.getByRole('button', { name: '模型菜单' }), { key: 'ArrowDown' })
+
+    const item = screen.getByTestId('menu-model-v4')
+    expect(item).toHaveAttribute('aria-current', 'page')
+    expect(item).toHaveClass('bg-selected')
+    const badge = item.querySelector('span.font-mono')
+    expect(badge).not.toBeNull()
+    expect(badge).toHaveTextContent('128K')
+    expect(badge).toHaveClass('text-[10px]', 'tabular-nums')
+    expect(item.querySelector('svg')).not.toBeNull() // Check 对勾
   })
 })

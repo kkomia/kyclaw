@@ -24,6 +24,7 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { COMPACT_CHIP_PCT } from '@renderer/lib/compact'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { PendingImageTile } from './PendingImageTile'
+import { ThinkingEffort } from './ThinkingEffort'
 import {
   contextTokensFor,
   contextWindowOf,
@@ -122,6 +123,7 @@ export function PlusMenu({
     {
       id: 'add-file',
       label: '添加文件',
+      description: '上传图片、PDF 或文本附件',
       icon: <Paperclip />,
       testId: 'composer-add-file',
       onSelect: () => onAddFile()
@@ -131,6 +133,7 @@ export function PlusMenu({
       id: 'skills',
       type: 'submenu',
       label: '引用技能',
+      description: '把已安装技能作为上下文引用',
       icon: <Sparkles />,
       testId: 'composer-ref-skills',
       items:
@@ -147,6 +150,7 @@ export function PlusMenu({
       id: 'plugins',
       type: 'submenu',
       label: '引用插件',
+      description: '把已启用插件的说明带进这一轮',
       icon: <Plug />,
       testId: 'composer-ref-plugins',
       items:
@@ -162,6 +166,7 @@ export function PlusMenu({
     {
       id: 'context',
       label: '引用上下文',
+      description: contextLabel === null ? '当前没有可引用的上下文' : contextLabel,
       icon: <AtSign />,
       testId: 'composer-ref-context',
       disabled: contextLabel === null,
@@ -180,6 +185,7 @@ export function PlusMenu({
         id: 'plan',
         label: PLAN_ENTER_LABEL,
         icon: <Compass />,
+        description: '先出计划、批准后再动手',
         testId: 'composer-mode-plan',
         disabled: mode.plan.disabled,
         onSelect: () => mode.plan?.onSelect()
@@ -190,6 +196,7 @@ export function PlusMenu({
         id: 'tasks',
         label: mode.tasks.expanded ? '收起任务清单' : '任务清单',
         icon: <ListChecks />,
+        description: mode.tasks.expanded ? '把任务清单收进过程块' : '展开本轮任务进度',
         testId: 'composer-mode-tasks',
         onSelect: () => mode.tasks?.onSelect()
       })
@@ -336,6 +343,7 @@ function DecidedPermissionChip({
     {
       id: 'ask',
       label: MODE_LABELS.ask,
+      description: '工作区的写操作每次先问你',
       selected: workspace.mode === 'ask',
       testId: 'composer-permission-ask',
       onSelect: () => {
@@ -345,6 +353,7 @@ function DecidedPermissionChip({
     {
       id: 'full',
       label: MODE_LABELS.full,
+      description: '工作区内读写不再逐次询问（移动/删除仍确认）',
       selected: workspace.mode === 'full',
       testId: 'composer-permission-full',
       onSelect: () => {
@@ -843,37 +852,15 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const effortId = effectiveEffortId(current?.model, pref?.thinkingEffort, probed)
   const pct = Math.min(100, Math.max(10, Math.round(pref?.contextPct ?? 100)))
 
-  /** round 22：菜单打开且实测缓存缺失/过期（>24h）→ 后台重抓一次（不闪、不阻塞菜单） */
+  /**
+   * 模型菜单打开时：实测缓存缺失/过期（>24h）→ 后台重抓一次（不闪、不阻塞菜单）。
+   * task-70：「刷新模型信息」手动项已按用户口径去掉；这条自动刷新保留。
+   */
   const refreshModelMeta = useCallback((): void => {
     if (current === undefined) return
     if (isProbedFresh(probedModels[probedKeyOf(current.id, current.model)])) return
     void useSettingsStore.getState().probeModels(current.id)
   }, [current, probedModels])
-
-  /**
-   * 手动刷新模型信息（菜单里那一条）：**不看 TTL**——自动那条路 24h 才重探一次，这里点一下就重试一次
-   * （端点刚起来、Base URL 刚改对、上次探测失败……都属于"缓存看着新，但我想再问一遍"）。
-   *
-   * 反馈口径：探测本身是"尽力而为"（主进程失败只 warn），所以用 **fetchedAt 有没有变**来说话——
-   * 变了 = 真问回来一趟；没变 = 端点不可达/没给元数据，沿用现有值。不编成功。
-   */
-  const refreshModelMetaNow = (): void => {
-    if (current === undefined) return
-    const key = probedKeyOf(current.id, current.model)
-    const before = useSettingsStore.getState().settings.probedModels[key]?.fetchedAt
-    onNotice(null)
-    void useSettingsStore
-      .getState()
-      .probeModels(current.id)
-      .then(() => {
-        const after = useSettingsStore.getState().settings.probedModels[key]?.fetchedAt
-        onNotice(
-          after !== undefined && after !== before
-            ? { tone: 'success', text: '模型信息已刷新' }
-            : { tone: 'warning', text: '没能刷新模型信息（端点不可达或没给出元数据），沿用现有值' }
-        )
-      })
-  }
 
   const savePrefs = (patch: { thinkingEffort?: string; contextPct?: number }): void => {
     if (current === undefined) return
@@ -908,7 +895,6 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   }
 
   const efforts = thinkingEffortsOf(current?.model, probed)
-  const effortLabel = efforts.find((effort) => effort.id === effortId)?.label ?? '默认'
 
   // 有歧义时（多通道 / 多模型）每条右侧标出渠道名 —— 只有一条通道一个模型时不啰嗦，与旧版一模一样
   const pairs = providers.flatMap((provider) =>
@@ -916,53 +902,63 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   )
   const showChannelName = providers.length > 1 || pairs.length > providers.length
 
-  const modelItems: MenuEntry[] = pairs.map(({ provider, model }) => {
-    const override = modelOverrides[overrideKeyOf(provider.id, model)]
-    const selected = provider.isDefault && model === provider.model
-    const vision = visionOf(model, probedModels[probedKeyOf(provider.id, model)])
-    // 模型名为空（半截配置）时用渠道名当标签，这类条目右侧就不再重复印一遍渠道名
-    const label = model === '' ? providerLabel(provider) : displayNameOf(model, override)
-    return {
-      id: `${provider.id}\u0000${model}`,
-      label,
-      selected,
-      trailing:
-        vision || (showChannelName && model !== '') ? (
-          <span className="flex items-center gap-2">
-            {showChannelName && model !== '' ? <span>{providerLabel(provider)}</span> : null}
-            {vision ? <span>{VISION_MARK}</span> : null}
-          </span>
-        ) : undefined,
-      // 同一条通道的当前模型沿用旧 testid（`composer-model-<id>`），其余按模型名区分
-      testId:
-        model === provider.model
-          ? `composer-model-${provider.id}`
-          : `composer-model-${provider.id}-${model}`,
-      onSelect: () => select(provider.id, model)
-    }
+  const modelItemsByProvider: MenuEntry[] = providers.flatMap((provider) => {
+    const items = pairs
+      .filter((pair) => pair.provider.id === provider.id)
+      .map(({ model }) => {
+        const override = modelOverrides[overrideKeyOf(provider.id, model)]
+        const selected = provider.isDefault && model === provider.model
+        const vision = visionOf(model, probedModels[probedKeyOf(provider.id, model)])
+        // 模型名为空（半截配置）时用渠道名当标签，这类条目右侧就不再重复印一遍渠道名
+        const label = model === '' ? providerLabel(provider) : displayNameOf(model, override)
+        const contextWindow = contextWindowOf(
+          model === '' ? null : model,
+          probedModels[probedKeyOf(provider.id, model)],
+          override
+        )
+        return {
+          id: `${provider.id}\u0000${model}`,
+          label,
+          icon: <Sparkles />,
+          // 只有自定义展示名时把真实 model id 作为副标题（没有自定义就不重复一遍）
+          description: model !== '' && label !== model ? model : undefined,
+          badge: contextWindow > 0 ? formatTokens(contextWindow) : undefined,
+          selected,
+          trailing:
+            vision || (showChannelName && model !== '') ? (
+              <span className="flex items-center gap-2">
+                {showChannelName && model !== '' ? <span>{providerLabel(provider)}</span> : null}
+                {vision ? <span>{VISION_MARK}</span> : null}
+              </span>
+            ) : undefined,
+          // 同一条通道的当前模型沿用旧 testid（`composer-model-<id>`），其余按模型名区分
+          testId:
+            model === provider.model
+              ? `composer-model-${provider.id}`
+              : `composer-model-${provider.id}-${model}`,
+          onSelect: () => select(provider.id, model)
+        }
+      })
+    if (items.length === 0) return []
+    return [
+      {
+        id: `provider-${provider.id}`,
+        type: 'group' as const,
+        label: providerLabel(provider),
+        items
+      }
+    ]
   })
 
   const items: MenuEntry[] = [
-    ...modelItems,
+    ...modelItemsByProvider,
     { id: 'split', type: 'separator' },
-    {
-      id: 'efforts',
-      type: 'submenu',
-      label: '思考强度',
-      testId: 'model-efforts',
-      trailing: effortLabel,
-      items: efforts.map((effort) => ({
-        id: effort.id,
-        label: effort.label,
-        selected: effort.id === effortId,
-        testId: `model-effort-${effort.id}`,
-        onSelect: () => savePrefs({ thinkingEffort: effort.id })
-      }))
-    },
     {
       id: 'context',
       type: 'submenu',
       label: '对话长度',
+      icon: <TextQuote />,
+      description: '上下文占模型窗口的比例',
       testId: 'model-context',
       trailing: `${pct}%`,
       items: [
@@ -980,15 +976,6 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
           )
         }
       ]
-    },
-    { id: 'split-refresh', type: 'separator' },
-    {
-      // 手动重试那一趟 GET /models（不看 TTL）；结果用 fetchedAt 有没有变来说话，见 refreshModelMetaNow
-      id: 'refresh-meta',
-      label: '刷新模型信息',
-      testId: 'model-refresh-meta',
-      disabled: current === undefined,
-      onSelect: () => refreshModelMetaNow()
     }
     // round 42 二轮：这里**不再**拼上下文明细区块——那是隔壁 ContextChip 的弹层内容
     // （用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。menu.tsx 的顶层 custom 保留。
@@ -1003,27 +990,41 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
         : displayNameOf(current.model, currentOverride)
 
   return (
-    <Menu
-      trigger={
-        // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
-        // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
-        <button
-          type="button"
-          data-testid="composer-model"
-          disabled={pending}
-          className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
-        >
-          <span className="truncate">{triggerLabel}</span>
-        </button>
-      }
-      items={items}
-      side="top"
-      align="start"
-      onOpenChange={(open) => {
-        // round 22：打开菜单时看一眼实测元数据是不是缺/过期（后台抓，不挡菜单）
-        if (open) refreshModelMeta()
-      }}
-    />
+    // task-87：模型名与推理强度是一组（用户：「模型名和推理强度那个地方离得有点远」）——
+    // 组内 gap-1（4px，落在要求的 4–6px），组与左侧 ＋/权限、右侧发送保持原父级间距层次。
+    <span
+      data-testid="composer-model-effort-group"
+      className="inline-flex min-w-0 shrink-0 items-center gap-1.5"
+    >
+      <Menu
+        trigger={
+          // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
+          // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
+          // task-84：与旁边的 ThinkingEffort 触发器同版式（h-8 / px-2 / mono 12 / rounded-control），
+          // 两者并排时 top/bottom/height 与文字基线一致；模型名保持「技术读数 = mono」的字体口径。
+          <button
+            type="button"
+            data-testid="composer-model"
+            disabled={pending}
+            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+          >
+            <span className="truncate">{triggerLabel}</span>
+          </button>
+        }
+        items={items}
+        side="top"
+        align="start"
+        onOpenChange={(open) => {
+          // round 22：打开菜单时看一眼实测元数据是不是缺/过期（后台抓，不挡菜单）
+          if (open) refreshModelMeta()
+        }}
+      />
+      <ThinkingEffort
+        efforts={efforts}
+        effortId={effortId}
+        onSelect={(next) => savePrefs({ thinkingEffort: next })}
+      />
+    </span>
   )
 }
 

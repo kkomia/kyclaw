@@ -1,0 +1,329 @@
+/*
+ * 思考强度面板 v2（task-78 · 照抄 dsh-claude-style `lib/client.js` 的 effort 面板 CSS）：
+ *   - 标题：13/16；当前档位 13/16 primary；右上百分比 11/14 tertiary tabular；
+ *   - 两端 Faster/Smarter：11/14 tertiary；
+ *   - 轨道：30 高；26 高圆角 8 的底与填充；4px 刻度点；16×30 白色滑钮（dsh 同尺寸）；
+ *   - apex（Max 档）：5 行紫色元素格（dsh matrix：26px 高、格子带闪烁 keyframes）+ 滑钮紫色辉光；
+ *   - 深浅两套：apex 色在浅色 #8b7ad0 / 深色 #9d8ce0；滑钮阴影按主题换；
+ *   - reduced-motion / [data-motion='reduced']：动画与过渡全停，保留静态填充/元素格。
+ * 出处：dsh-claude-style lib/client.js 271069-278200（`.dsh-claude-effort*` 规则）+
+ *       `dshClaudeEffortFlash` keyframes；视觉尺寸照抄，类名换成本项目的族。
+ */
+
+.thinking-effort-panel {
+  --effort-apex: #8b7ad0;
+  --effort-apex-flash: #d9d2f5;
+  --effort-apex-ink: #5f51b5;
+  --effort-duration-move: 0.2s;
+  --effort-ease-glide: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --effort-duration-feedback: 0.12s;
+  --effort-period-flash: 1.45s;
+}
+
+:root[data-theme='dark'] .thinking-effort-panel {
+  --effort-apex: #9d8ce0;
+  --effort-apex-flash: #e6e0fb;
+  --effort-apex-ink: #b9adf0;
+}
+
+.thinking-effort {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 7px 4px;
+  min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.thinking-effort-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+}
+
+.thinking-effort-label {
+  flex: none;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text-secondary);
+}
+
+.thinking-effort-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text-primary);
+  transition: color var(--effort-duration-feedback) ease;
+}
+
+.thinking-effort-percent {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-effort-ends {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-tertiary);
+}
+
+.thinking-effort-track {
+  position: relative;
+  height: 30px;
+  margin-top: 1px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.thinking-effort-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 26px;
+  margin-top: -13px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+
+.thinking-effort-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 26px;
+  margin-top: -13px;
+  border-radius: 8px 0 0 8px;
+  background-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  transition:
+    width var(--effort-duration-move) var(--effort-ease-glide),
+    opacity var(--effort-duration-move) ease;
+  pointer-events: none;
+}
+
+/* ── 元素格矩阵：**常驻**（task-84 用户：不拖动也要显示，越靠右越亮）────────────
+   dsh 只在 Max 档显示；这里改成面板打开即铺满，列方向亮度梯度由每格 inline opacity 给
+   （effortMatrixOpacity：左侧 ~0.06 → 右侧 1），低频闪烁走 CSS；拖动进度不重建 DOM。 */
+.thinking-effort-matrix {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 26px;
+  margin-top: -13px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: grid;
+  grid-auto-flow: row;
+  pointer-events: none;
+}
+
+.thinking-effort-matrix-cell {
+  /* task-88：入场不淡入（原来用 opacity 0→1 + `both`，会和梯度属性打架/被误读为动画覆盖）。
+     常驻矩阵不需要入场；元素格一出现就是最终亮度。 */
+  display: block;
+}
+
+.thinking-effort-matrix-sq {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 1px;
+  background-color: color-mix(in srgb, var(--text-primary) 55%, transparent);
+  /* 梯度：横向亮度由每格的 `--effort-cell-opacity` 决定（左暗右亮）。
+     它**不是**动画属性——twinkle 只动 filter（见下），所以梯度永不被动画覆盖。 */
+  opacity: var(--effort-cell-opacity, 1);
+  animation: effort-cell-twinkle var(--effort-period-twinkle, 2.6s) ease-in-out infinite;
+}
+
+/* apex（Max 档）：切紫色 + dsh 的 flash 动画（apex 紫已由用户拍板，保持） */
+.thinking-effort[data-apex] .thinking-effort-matrix-sq {
+  background-color: var(--effort-apex);
+  animation-name: effort-apex-flash;
+  animation-timing-function: ease-in-out;
+}
+
+/* twinkle 只动 filter：**不得**出现 opacity（task-88 回归点：动画 opacity 会盖掉 inline/CSS 梯度） */
+@keyframes effort-cell-twinkle {
+  0%,
+  100% {
+    filter: brightness(0.82);
+  }
+
+  50% {
+    filter: brightness(1.5);
+  }
+}
+
+.thinking-effort-matrix-sq[data-tone='0'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 62%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='1'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 54%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='2'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 46%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='3'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 38%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='4'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 30%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='5'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 22%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='6'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 14%, var(--effort-apex-flash));
+}
+
+.thinking-effort-matrix-sq[data-tone='7'] {
+  --effort-flash-light: color-mix(in srgb, var(--effort-apex) 6%, var(--effort-apex-flash));
+}
+
+@keyframes effort-apex-flash {
+  0%,
+  17.24% {
+    background-color: var(--effort-apex);
+  }
+
+  17.25%,
+  50.34% {
+    background-color: var(--effort-flash-light, var(--effort-apex-flash));
+  }
+
+  100% {
+    background-color: var(--effort-apex);
+  }
+}
+
+.thinking-effort[data-apex] .thinking-effort-fill {
+  opacity: 0;
+}
+
+.thinking-effort[data-apex] .thinking-effort-knob {
+  background: color-mix(in srgb, var(--effort-apex) 22%, var(--bg-primary));
+  box-shadow:
+    0 0 10px color-mix(in srgb, var(--effort-apex) 80%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--effort-apex) 35%, transparent);
+}
+
+.thinking-effort[data-apex] .thinking-effort-value {
+  color: var(--effort-apex-ink);
+}
+
+/* ── 滑钮（dsh：16×30 白色圆角 5，拖动放大 1.1）──────────────────────────── */
+.thinking-effort-knob {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 16px;
+  height: 30px;
+  margin-top: -15px;
+  border-radius: 5px;
+  background: var(--bg-primary);
+  box-shadow:
+    0 1px 3px #14141347,
+    0 0 0 1px #1414130f;
+  transition:
+    left var(--effort-duration-move) var(--effort-ease-glide),
+    scale var(--effort-duration-feedback) ease,
+    background-color 0.3s ease,
+    box-shadow 0.3s ease;
+  will-change: left, scale;
+}
+
+:root[data-theme='dark'] .thinking-effort-knob {
+  box-shadow:
+    0 1px 3px #0000008c,
+    0 0 0 1px #0006;
+}
+
+.thinking-effort[data-dragging] .thinking-effort-knob {
+  scale: 1.1;
+}
+
+.thinking-effort[data-dragging] .thinking-effort-fill {
+  transition: none;
+}
+
+/* 原生 range 覆盖在轨道上：透明但保留指针/键盘/aria（视觉全由上面的自定义零件承担） */
+.thinking-effort-range {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.thinking-effort-range:focus-visible {
+  outline: none;
+}
+
+.thinking-effort:has(.thinking-effort-range:focus-visible) .thinking-effort-track {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.thinking-effort-trigger--lit {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* ── reduced：闪烁/过渡全停，保留静态的填充与元素格 ─────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-effort-matrix-cell,
+  .thinking-effort-matrix-sq {
+    animation: none !important;
+  }
+
+  .thinking-effort-fill,
+  .thinking-effort-knob {
+    transition: none !important;
+  }
+
+  .thinking-effort-trigger--lit {
+    text-shadow: none;
+  }
+}
+
+[data-motion='reduced'] .thinking-effort-matrix-cell,
+[data-motion='reduced'] .thinking-effort-matrix-sq {
+  animation: none !important;
+}
+
+[data-motion='reduced'] .thinking-effort-fill,
+[data-motion='reduced'] .thinking-effort-knob {
+  transition: none !important;
+}
+
+[data-motion='reduced'] .thinking-effort-trigger--lit {
+  text-shadow: none;
+}

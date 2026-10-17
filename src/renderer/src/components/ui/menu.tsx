@@ -1,24 +1,39 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronRight } from 'lucide-react'
+import { Check, ChevronRight } from 'lucide-react'
 import type { ReactElement, ReactNode } from 'react'
 import { cn } from './cn'
 import { OVERLAY_SURFACE_CLASS } from './surface'
 import { Tooltip } from './tooltip'
 
+/**
+ * 菜单/下拉共用原语（task-61 · 对齐 claude-style 紧凑样式）。
+ *
+ * 规格（用户截图 ref-model-dropdown / ref-slash-menu）：
+ *   - 面板宽 `min(360px, calc(100vw - 24px))`、内边距 6、圆角 12、hairline 边 + `--shadow-overlay`；
+ *   - 行 = icon(16, tertiary) + 主标题(b2 14) + 可选描述(c1 12 tertiary) + 右侧 meta（mono 11 tabular / badge / chevron）；
+ *   - 单行 40、两行（有 description）48–52；分组标题 11/500 tertiary；选中项 Fills-F2 + 右侧对勾；
+ *   - 键盘高亮只铺填充（data-[highlighted]:bg-hover），不叠全局焦点环；Arrow/Enter/Esc 由 Radix 负责；
+ *   - 溢出滚动 + 最大高度，深浅两套 token（bg-menu / hairline / shadow-overlay 都是语义 token）。
+ */
 export interface MenuActionItem {
   id: string
-  /** 不写就是普通条目；'separator' 的分隔条目见 MenuSeparatorItem，'submenu' 见 MenuSubmenuItem */
+  /** 不写就是普通条目；'separator' / 'submenu' 见各自类型 */
   type?: 'item'
   label: ReactNode
+  /** 行左侧图标（16px；没有就不占位） */
   icon?: ReactNode
+  /** 第二行说明（12px tertiary）；不写 = 单行 40，写了 = 两行 48–52 */
+  description?: ReactNode
   disabled?: boolean
-  /** 危险动作：红字，高亮时铺危险浅底（§2.7 的红色一对） */
+  /** 危险动作：红字 + 危险浅底高亮 */
   danger?: boolean
-  /** 当前项（菜单里也能是导航入口）：选中底 Fills-F2 + aria-current="page" */
+  /** 当前项：Fills-F2 底 + 右侧对勾 + aria-current */
   selected?: boolean
-  /** 条目右侧的小标记（模块 2：视觉模型标一个「看图」；不给解释性小字，只做标记） */
+  /** 右侧小标记：纯数字字符串自动 mono/tabular；文字标签保持 sans */
   trailing?: ReactNode
-  /** 条目的 data-testid（R4：关键交互节点给 E2E 稳定选择器） */
+  /** 右侧 badge（倍率/时间/快捷键等真实信息）：mono 11 tabular 小胶囊 */
+  badge?: ReactNode
+  /** 条目 data-testid */
   testId?: string
   onSelect?: (id: string) => void
 }
@@ -28,68 +43,100 @@ export interface MenuSeparatorItem {
   type: 'separator'
 }
 
-/** 子菜单条目（round 7）：一层就够——子菜单里不再嵌子菜单 */
+/** 子菜单条目（一层就够） */
 export interface MenuSubmenuItem {
   id: string
   type: 'submenu'
   label: ReactNode
+  description?: ReactNode
   icon?: ReactNode
   disabled?: boolean
   testId?: string
-  /** 触发器右侧的当前值（round 18：模型浮窗「思考强度   高 ▸」的"高"） */
   trailing?: ReactNode
   items: Array<MenuActionItem | MenuSeparatorItem | MenuCustomItem>
 }
 
-/**
- * 自定义内容条目（round 18）：不参与键盘导航（滑块 / 明细块自己管自己），
- * 也不装作 menuitem——给「对话长度」滑块与 round 41 的上下文明细块用。
- * 顶层与子菜单里都可以放（顶层就是"菜单里的一段只读区块"）。
- */
+/** 自定义内容条目（不参与键盘导航：滑块 / 明细块） */
 export interface MenuCustomItem {
   id: string
   type: 'custom'
   content: ReactNode
 }
 
-export type MenuEntry = MenuActionItem | MenuSeparatorItem | MenuSubmenuItem | MenuCustomItem
+/** 分组（圆角菜单里的 11/500 小标题 + 一组条目） */
+export interface MenuGroupItem {
+  id: string
+  type: 'group'
+  label: ReactNode
+  items: MenuActionItem[]
+}
+
+export type MenuEntry =
+  MenuActionItem | MenuSeparatorItem | MenuSubmenuItem | MenuCustomItem | MenuGroupItem
 
 export interface MenuProps {
-  /** 触发元素：单元素，套 Radix 的 asChild（用我们的 Button / IconButton 即可） */
+  /** 触发元素：单元素，套 Radix asChild（Button / IconButton 即可） */
   trigger: ReactElement
   items: MenuEntry[]
   align?: 'start' | 'center' | 'end'
   side?: 'top' | 'right' | 'bottom' | 'left'
-  /** 与触发元素的距离，默认 4（= --space-1） */
   sideOffset?: number
   className?: string
-  /** 面板开合回调（round 13：引用技能菜单借它做"打开时刷新"；缺省不关心） */
   onOpenChange?: (open: boolean) => void
-  /**
-   * 触发元素的 hover 提示（round 15，用户实拍：＋ / 权限按钮要有 tooltip）。
-   * 两层 asChild 嵌套：Tooltip.Trigger > DropdownMenu.Trigger > 你的按钮，互相不打架。
-   */
   tooltip?: string
 }
 
-/** 条目行（普通条目与子菜单触发器共用；键盘高亮只铺填充，不叠全局焦点环） */
-const MENU_ITEM_CLASS =
-  'flex h-(--menu-item-height) cursor-default items-center gap-2 rounded-(--menu-item-radius) px-2 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled) focus-visible:shadow-none'
+/** 面板：360 上限 / 4px 内边距 / 10px 圆角 / hairline 边 / 最高 min(360px,60vh) 内滚 */
+const MENU_PANEL_CLASS = cn(
+  OVERLAY_SURFACE_CLASS,
+  'w-[min(360px,calc(100vw-24px))] max-h-[min(360px,60vh)] overflow-y-auto rounded-[10px] border-(length:--hairline-width) border-hairline p-1'
+)
 
-function itemContent(icon: ReactNode | undefined, label: ReactNode): React.JSX.Element {
+/** 条目行：单行 32；两行时 min-h-10（40） */
+const MENU_ITEM_CLASS =
+  'flex min-h-[32px] cursor-default items-center gap-2 rounded-[8px] px-2 py-0.5 text-b2 text-ink outline-none select-none transition-colors duration-(--motion-fast) ease-main data-[disabled]:text-(--text-disabled) focus-visible:shadow-none'
+
+/** 行图标：跟字号一起走 --icon-size-sm（task-69 机制；task-73 收口，不再写死 size-4） */
+const MENU_ICON_CLASS =
+  'inline-flex size-(--icon-size-sm) shrink-0 items-center justify-center text-ink-tertiary [&>svg]:size-full'
+
+const GROUP_LABEL_CLASS =
+  'px-2 pt-1.5 pb-0.5 text-[11px] leading-4 font-medium text-ink-tertiary select-none'
+
+/** 纯数值 trailing 走 code 声部 + tabular；文字标签保持 sans（task-64 字体口径） */
+const NUMERIC_TRAILING = /^[\d.,%+\-\s]+[KMB]?$/
+
+function trailingClassOf(trailing: ReactNode): string {
+  const numeric = typeof trailing === 'string' && NUMERIC_TRAILING.test(trailing.trim())
+  return cn('ml-auto shrink-0 text-c1 text-ink-tertiary', numeric && 'font-mono tabular-nums')
+}
+
+function itemContent(entry: {
+  icon?: ReactNode
+  label: ReactNode
+  description?: ReactNode
+}): React.JSX.Element {
   return (
     <>
-      {icon === undefined ? null : (
-        <span aria-hidden="true" className="size-(--icon-size-md) shrink-0 [&>svg]:size-full">
-          {icon}
+      {entry.icon === undefined ? null : (
+        <span aria-hidden="true" className={MENU_ICON_CLASS}>
+          {entry.icon}
         </span>
       )}
-      <span className="truncate">{label}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate">{entry.label}</span>
+        {entry.description === undefined ? null : (
+          <span className="truncate text-[11px] leading-4 font-normal text-ink-tertiary">
+            {entry.description}
+          </span>
+        )}
+      </span>
     </>
   )
 }
 
 function actionItem(entry: MenuActionItem): React.JSX.Element {
+  const twoLine = entry.description !== undefined
   return (
     <DropdownMenu.Item
       key={entry.id}
@@ -99,15 +146,30 @@ function actionItem(entry: MenuActionItem): React.JSX.Element {
       onSelect={() => entry.onSelect?.(entry.id)}
       className={cn(
         MENU_ITEM_CLASS,
+        twoLine && 'min-h-10 items-start py-1',
         entry.danger
           ? 'text-danger data-[highlighted]:bg-danger-bg'
           : 'data-[highlighted]:bg-hover',
         entry.selected === true && 'bg-selected'
       )}
     >
-      {itemContent(entry.icon, entry.label)}
+      {itemContent(entry)}
+      {entry.selected === true ? (
+        <Check
+          aria-hidden="true"
+          className={cn(
+            'size-3.5 shrink-0 text-ink',
+            entry.trailing === undefined && entry.badge === undefined && 'ml-auto'
+          )}
+        />
+      ) : null}
+      {entry.badge === undefined ? null : (
+        <span className="shrink-0 rounded-badge border-(length:--hairline-width) border-hairline px-1 py-0.5 font-mono text-[10px] leading-none text-ink-tertiary tabular-nums">
+          {entry.badge}
+        </span>
+      )}
       {entry.trailing === undefined ? null : (
-        <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{entry.trailing}</span>
+        <span className={trailingClassOf(entry.trailing)}>{entry.trailing}</span>
       )}
     </DropdownMenu.Item>
   )
@@ -119,49 +181,73 @@ function submenuItem(entry: MenuSubmenuItem): React.JSX.Element {
       <DropdownMenu.SubTrigger
         data-testid={entry.testId}
         disabled={entry.disabled}
-        className={cn(MENU_ITEM_CLASS, 'data-[highlighted]:bg-hover data-[state=open]:bg-hover')}
+        className={cn(
+          MENU_ITEM_CLASS,
+          entry.description === undefined
+            ? 'data-[highlighted]:bg-hover data-[state=open]:bg-hover'
+            : 'min-h-10 items-start py-1 data-[highlighted]:bg-hover data-[state=open]:bg-hover'
+        )}
       >
-        {itemContent(entry.icon, entry.label)}
+        {itemContent(entry)}
         {entry.trailing === undefined ? null : (
-          <span className="ml-auto shrink-0 text-c1 text-ink-tertiary">{entry.trailing}</span>
+          <span className={trailingClassOf(entry.trailing)}>{entry.trailing}</span>
         )}
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'size-4 shrink-0 text-ink-tertiary',
+            'size-(--icon-size-sm) shrink-0 text-ink-tertiary',
             entry.trailing === undefined && 'ml-auto'
           )}
         />
       </DropdownMenu.SubTrigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.SubContent
-          sideOffset={4}
-          className={cn(OVERLAY_SURFACE_CLASS, 'p-(--menu-pad)')}
-        >
-          {entry.items.map((item) =>
-            item.type === 'separator' ? (
-              <DropdownMenu.Separator key={item.id} className="my-1 -mx-2 h-px bg-hairline" />
-            ) : item.type === 'custom' ? (
-              <div key={item.id} data-testid={`menu-custom-${item.id}`} className="px-2 py-1">
-                {item.content}
-              </div>
-            ) : (
-              actionItem(item)
-            )
-          )}
+        <DropdownMenu.SubContent sideOffset={4} className={MENU_PANEL_CLASS}>
+          {entry.items.map((item) => {
+            if (item.type === 'separator') {
+              return <DropdownMenu.Separator key={item.id} className="my-1 h-px bg-hairline" />
+            }
+            if (item.type === 'custom') {
+              return (
+                <div key={item.id} data-testid={`menu-custom-${item.id}`} className="px-2 py-1">
+                  {item.content}
+                </div>
+              )
+            }
+            return actionItem(item)
+          })}
         </DropdownMenu.SubContent>
       </DropdownMenu.Portal>
     </DropdownMenu.Sub>
   )
 }
 
+/** 顶层条目渲染（普通 / 分组 / 分隔 / 自定义 / 子菜单） */
+function renderEntry(entry: MenuEntry): React.JSX.Element | null {
+  if (entry.type === 'separator') {
+    return <DropdownMenu.Separator key={entry.id} className="my-1 h-px bg-hairline" />
+  }
+  if (entry.type === 'submenu') return submenuItem(entry)
+  if (entry.type === 'custom') {
+    return (
+      <div key={entry.id} data-testid={`menu-custom-${entry.id}`} className="px-2 py-1">
+        {entry.content}
+      </div>
+    )
+  }
+  if (entry.type === 'group') {
+    return (
+      <DropdownMenu.Group key={entry.id} data-testid={`menu-group-${entry.id}`}>
+        <DropdownMenu.Label className={GROUP_LABEL_CLASS}>{entry.label}</DropdownMenu.Label>
+        {entry.items.map((item) => renderEntry(item))}
+      </DropdownMenu.Group>
+    )
+  }
+  return actionItem(entry)
+}
+
 /**
- * 下拉菜单（UI 参考 §7 的菜单配方）：底 Bg-Tertiary、**无遮罩**、条目高 36、面板内边距 8、
- * 面板圆角 ≈20、条目 hover 用 Fills-F1、条目圆角 10。
- * 键盘：ArrowUp/Down 走条目、Enter 选中、Esc 关闭并还焦点——都由 Radix 提供；
- * 子菜单（round 7）走 Radix 的 Sub：ArrowRight 展开、ArrowLeft 收回。
- * 焦点指示（R2 round 5，用户实拍 #7）：键盘走到哪条**只铺填充**（data-[highlighted]:bg-hover），
- * 不再叠全局焦点环（focus-visible:shadow-none）——填充已经是可见指示，墨色内环正是用户点名的"黑色框线"。
+ * 下拉菜单（共用原语）：radix DropdownMenu + 上面的紧凑面板/行规格。
+ * 键盘：ArrowUp/Down 走条目、Enter 选中、Esc 关闭还焦点；子菜单 ArrowRight/Left；全部由 Radix 提供。
  */
 export function Menu({
   trigger,
@@ -177,8 +263,6 @@ export function Menu({
     tooltip === undefined ? (
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
     ) : (
-      // Tooltip.Trigger 与 DropdownMenu.Trigger 两层 asChild 叠在同一个按钮上：
-      // 键盘聚焦弹提示、点击/ArrowDown 开菜单，互不干扰
       <Tooltip label={tooltip}>
         <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       </Tooltip>
@@ -191,24 +275,9 @@ export function Menu({
           align={align}
           side={side}
           sideOffset={sideOffset}
-          className={cn(OVERLAY_SURFACE_CLASS, 'p-(--menu-pad)', className)}
+          className={cn(MENU_PANEL_CLASS, className)}
         >
-          {items.map((entry) => {
-            if (entry.type === 'separator') {
-              return (
-                <DropdownMenu.Separator key={entry.id} className="my-1 -mx-2 h-px bg-hairline" />
-              )
-            }
-            if (entry.type === 'submenu') return submenuItem(entry)
-            if (entry.type === 'custom') {
-              return (
-                <div key={entry.id} data-testid={`menu-custom-${entry.id}`} className="px-2 py-1">
-                  {entry.content}
-                </div>
-              )
-            }
-            return actionItem(entry)
-          })}
+          {items.map((entry) => renderEntry(entry))}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

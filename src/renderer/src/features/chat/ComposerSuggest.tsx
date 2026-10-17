@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react'
+import { FileText, Plug, Sparkles, Terminal } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import type { SuggestionGroup, SuggestionRow } from './suggestion-model'
 
 /**
- * 输入框建议浮窗（round 15：`@` 文件 / `/` 插件·技能）：非模态、浮在输入卡上方，照 Kimi 形态。
- * 键盘（↑/↓/Enter/Esc）由 Composer 的 textarea 处理并驱动 activeIndex；这里只负责画 + 点击：
- *   - 收起时不卸载（opacity/translate 过渡，reduced-motion 直显），避免硬切；
- *   - 鼠标按下先 preventDefault（别让 textarea 失焦丢选区），点击才选中；
- *   - 分组标题为空串时不出标题（@ 文件列表没有分区头）。
+ * 输入框建议浮窗（`@` 文件 / `/` 命令）——task-61 按 claude-style 紧凑菜单重做：
+ *   - 宽 min(360px, 100vw-24px)、内边距 6、圆角 12、hairline + `--shadow-overlay`、滚动上限；
+ *   - 分组标题 11/500 tertiary；行高 44：icon + 中文名 + 英文/命令名(mono, 次级) + 右对齐描述；
+ *   - 键盘（↑/↓/Enter/Esc）仍由 Composer textarea 驱动 activeIndex，这里只负责渲染/点击/悬停。
  */
 export interface ComposerSuggestProps {
   open: boolean
@@ -15,12 +15,25 @@ export interface ComposerSuggestProps {
   /** 平铺后的行数（键盘上下走的轴；与 groups 的渲染顺序一致） */
   rowCount: number
   activeIndex: number
-  /** 无匹配/无数据时的一行说明 */
+  /** 无匹配 / 无数据时的一行说明 */
   emptyText: string
   /** 数据取不到时的一行说明（优先于 emptyText） */
   notice?: string
   onPick: (row: SuggestionRow) => void
   onHover: (index: number) => void
+}
+
+/** 分组 → 行图标（用现有数据的分组标题；文件分组没有标题，用文件图标） */
+function iconOfGroup(title: string): React.JSX.Element {
+  if (title === '命令') return <Terminal aria-hidden="true" />
+  if (title === '插件') return <Plug aria-hidden="true" />
+  if (title === '技能') return <Sparkles aria-hidden="true" />
+  return <FileText aria-hidden="true" />
+}
+
+/** 命令行的英文/斜杠名：真实命令标识（`/compact` / `/plan`），不编造 */
+function secondaryOf(row: SuggestionRow): string | null {
+  return row.command === undefined ? null : `/${row.command}`
 }
 
 export function ComposerSuggest({
@@ -35,7 +48,7 @@ export function ComposerSuggest({
 }: ComposerSuggestProps): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
 
-  // 键盘走动时把选中项滚进视野（nearest：不打扰已可见的列表；jsdom 没实现 scrollIntoView）
+  // 键盘走动时把选中项滚进视野（nearest；jsdom 没实现 scrollIntoView）
   useEffect(() => {
     const active = listRef.current?.querySelector('[data-active="true"]')
     if (active !== null && active !== undefined && typeof active.scrollIntoView === 'function') {
@@ -51,7 +64,7 @@ export function ComposerSuggest({
       data-open={open ? 'true' : undefined}
       aria-hidden={open ? undefined : true}
       className={cn(
-        'absolute right-0 bottom-full left-0 z-20 mb-2 max-h-64 overflow-y-auto rounded-overlay bg-menu p-1 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        'absolute bottom-full left-0 z-20 mb-2 w-[min(360px,calc(100vw-24px))] max-h-[min(360px,60vh)] overflow-y-auto rounded-[10px] border-(length:--hairline-width) border-hairline bg-menu p-1 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
         open ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0'
       )}
     >
@@ -69,14 +82,17 @@ export function ComposerSuggest({
 
       {notice === undefined
         ? groups.map((group) => (
-            <div key={group.title === '' ? '（.）' : group.title}>
+            <div key={group.title === '' ? 'files' : group.title}>
               {group.title === '' ? null : (
-                <p className="px-2 pt-1.5 pb-0.5 text-c2 text-ink-tertiary">{group.title}</p>
+                <p className="px-2 pt-1.5 pb-0.5 text-[11px] leading-4 font-medium text-ink-tertiary select-none">
+                  {group.title}
+                </p>
               )}
               {group.rows.map((row) => {
                 flatIndex += 1
                 const active = flatIndex === activeIndex
                 const disabled = row.disabled === true
+                const secondary = secondaryOf(row)
                 return (
                   <button
                     key={row.id}
@@ -91,14 +107,25 @@ export function ComposerSuggest({
                     onClick={() => onPick(row)}
                     onMouseEnter={() => onHover(flatIndex)}
                     className={cn(
-                      'flex w-full cursor-pointer items-center gap-2 rounded-(--menu-item-radius) px-2 py-1.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                      'flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 py-0.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
                       active ? 'bg-hover' : 'hover:bg-hover',
                       disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
                   >
+                    <span
+                      aria-hidden="true"
+                      className="inline-flex size-4 shrink-0 items-center justify-center text-ink-tertiary [&>svg]:size-4"
+                    >
+                      {iconOfGroup(group.title)}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-b2 text-ink">{row.label}</span>
+                    {secondary === null ? null : (
+                      <span className="max-w-[40%] shrink-0 truncate font-mono text-c1 text-ink-tertiary">
+                        {secondary}
+                      </span>
+                    )}
                     {row.hint === undefined ? null : (
-                      <span className="max-w-[60%] min-w-0 truncate text-c1 text-ink-tertiary">
+                      <span className="max-w-[45%] min-w-0 shrink-0 truncate text-c1 text-ink-tertiary">
                         {row.hint}
                       </span>
                     )}

@@ -157,8 +157,12 @@ describe('SessionActionsMenu · 结构与顺序（图3）', () => {
     expect(screen.queryByTestId('session-leave-project-t1')).not.toBeInTheDocument()
     const texts = screen
       .getAllByRole('menuitem')
-      .map((item) => item.textContent?.replace('▸', '').trim())
-    expect(texts.slice(-3)).toEqual(['重命名', '归档', '删除'])
+      .map((item) => item.textContent?.replace('▸', '').trim() ?? '')
+    // task-61：行多了描述（第二行），按每个条目的可见文本前缀判顺序
+    const lastThree = texts
+      .slice(-3)
+      .map((text) => text.split(/只改|从当前列表|连同/)[0]?.trim() ?? text)
+    expect(lastThree).toEqual(['重命名', '归档', '删除'])
     expect(screen.queryByText('反馈')).not.toBeInTheDocument()
   })
 
