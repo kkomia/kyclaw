@@ -31,6 +31,24 @@ export default defineConfig({
        */
       createPdfjsInlineAssetsPlugin({ root: resolve('node_modules/pdfjs-dist') })
     ],
+    /**
+     * M3-S3（dev 修复）：`@betteroffice/*` 内核**不能被 Vite dev 预打包**。
+     *
+     * 它们按 wasm-bindgen / 资产清单的惯例用 `new URL('../assets/*.wasm|ttf', import.meta.url)`
+     * 定位二进制；esbuild 预打包不会改写这种 URL，dev 下会落到 Vite 的 SPA 兜底页（HTML），
+     * 表现为 `WebAssembly.compile(): expected magic word ... found 3c 21 64 6f` / 字体字节数不对。
+     * 让它们走 dev 的源码转换管线（Vite 会重写成 `/@fs/...` 真文件 URL）即可；构建态由 Rollup
+     * 处理同一语法，本来就没问题（preview/打包不受这条影响）。
+     */
+    optimizeDeps: {
+      exclude: [
+        '@betteroffice/docx',
+        '@betteroffice/docx-react',
+        '@betteroffice/docx/layout',
+        '@betteroffice/fonts',
+        '@betteroffice/fonts-cjk'
+      ]
+    },
     // 0.2.0 Office 面（M3-S0）：渲染端多入口 —— 主界面 index.html + 隔离的 office.html。
     // 两个入口各自成页；office 面以后由 kyclaw-office:// 协议加载（见 S1）。
     build: {

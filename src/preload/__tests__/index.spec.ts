@@ -1120,7 +1120,9 @@ describe('preload：window.kyclaw.office（M3-S2 文档面）', () => {
       'openDialog',
       'openFromSession',
       'read',
-      'release'
+      'release',
+      'save',
+      'saveAs'
     ])
     expect(kyclawApi.office).toBe(kyclawApi.office)
   })
@@ -1209,5 +1211,89 @@ describe('preload：window.kyclaw.office（M3-S2 文档面）', () => {
     const { kyclawApi } = await loadPreload()
     await kyclawApi.office.release('doc-1')
     expect(mocks.invoke).toHaveBeenLastCalledWith('office:release', 'doc-1')
+  })
+})
+
+describe('preload：window.kyclaw.office save / saveAs（M3-S3 写链路）', () => {
+  const DOCUMENT = {
+    documentId: 'doc-1',
+    displayName: '方案.docx',
+    displayPath: 'D:\\工作\\方案.docx',
+    absolutePath: 'D:\\工作\\方案.docx',
+    size: 12,
+    mtimeMs: 1_700_000_000_000,
+    sha256: 'a'.repeat(64),
+    readOnly: false
+  }
+
+  it('save：入参原样发出（documentId/expectedSha256/bytes），回包过 schema 才交给上层', async () => {
+    const { kyclawApi } = await loadPreload()
+    const bytes = new Uint8Array([9, 8, 7])
+    const ok = {
+      ok: true,
+      documentId: 'doc-1',
+      mtimeMs: 1_700_000_000_100,
+      sha256: 'b'.repeat(64),
+      size: 3,
+      savedAt: 1_700_000_000_200
+    }
+    mocks.invoke.mockResolvedValueOnce(ok)
+    await expect(
+      kyclawApi.office.save({ documentId: 'doc-1', expectedSha256: 'a'.repeat(64), bytes })
+    ).resolves.toEqual(ok)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:save', {
+      documentId: 'doc-1',
+      expectedSha256: 'a'.repeat(64),
+      bytes
+    })
+
+    // 分类失败（冲突/占用/磁盘满）是合法回包，不抛
+    const conflict = {
+      ok: false,
+      code: 'conflict',
+      message: '文件在打开后被其他程序改过',
+      disk: { mtimeMs: 1, sha256: 'c'.repeat(64), size: 9 }
+    }
+    mocks.invoke.mockResolvedValueOnce(conflict)
+    await expect(kyclawApi.office.save({ documentId: 'doc-1', bytes })).resolves.toEqual(conflict)
+
+    mocks.invoke.mockResolvedValueOnce({ ok: true })
+    await expect(kyclawApi.office.save({ documentId: 'doc-1', bytes })).rejects.toThrow(
+      /结构不合法/
+    )
+  })
+
+  it('saveAs：入参原样发出，成功回包带重定向后的 document', async () => {
+    const { kyclawApi } = await loadPreload()
+    const bytes = new Uint8Array([1])
+    const saved = {
+      ok: true,
+      document: DOCUMENT,
+      mtimeMs: 1_700_000_000_100,
+      sha256: 'b'.repeat(64),
+      size: 1,
+      savedAt: 1_700_000_000_200
+    }
+    mocks.invoke.mockResolvedValueOnce(saved)
+    await expect(
+      kyclawApi.office.saveAs({ documentId: 'doc-1', bytes, suggestedName: '另存.docx' })
+    ).resolves.toEqual(saved)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('office:save-as', {
+      documentId: 'doc-1',
+      bytes,
+      suggestedName: '另存.docx'
+    })
+
+    // 取消是一等结果
+    const cancelled = { ok: false, code: 'cancelled', message: '已取消' }
+    mocks.invoke.mockResolvedValueOnce(cancelled)
+    await expect(kyclawApi.office.saveAs({ documentId: 'doc-1', bytes })).resolves.toEqual(
+      cancelled
+    )
+
+    mocks.invoke.mockResolvedValueOnce({ ok: true, document: { ...DOCUMENT, sha256: '' } })
+    await expect(kyclawApi.office.saveAs({ documentId: 'doc-1', bytes })).rejects.toThrow(
+      /结构不合法/
+    )
   })
 })

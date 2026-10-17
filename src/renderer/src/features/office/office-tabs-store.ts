@@ -65,6 +65,11 @@ export interface OfficeTabsState {
    * path=displayPath、kind='docx'、readOnly 跟主进程回包。已存在时只激活，不重置 dirty/readOnly。
    */
   openDocument: (info: OfficeDocumentInfo) => string
+  /**
+   * M3-S3：另存为成功后按 documentId 更新既有标签的标题/路径/只读（documentId 不变）。
+   * 不触碰 dirty/active（脏由保存状态机单独 commit）。
+   */
+  replaceDocument: (info: OfficeDocumentInfo) => void
   /** 关标签；返回是否真的关掉（未知 id = false） */
   close: (id: string) => boolean
   activate: (id: string) => void
@@ -153,6 +158,19 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
     }
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }))
     return tab.id
+  },
+  replaceDocument: (info) => {
+    set((state) => {
+      const existing = state.tabs.find((tab) => tab.documentId === info.documentId)
+      if (existing === undefined) return {}
+      return {
+        tabs: state.tabs.map((tab) =>
+          tab.documentId === info.documentId
+            ? { ...tab, title: info.displayName, path: info.displayPath, readOnly: info.readOnly }
+            : tab
+        )
+      }
+    })
   },
   close: (id) => {
     const state = get()

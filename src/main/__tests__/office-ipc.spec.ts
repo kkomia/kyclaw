@@ -1,19 +1,21 @@
 // @vitest-environment node
 /**
- * `src/main/ipc/office.ts`（M3-S2 Office 通道）聚焦单测。
+ * `src/main/ipc/office.ts`（M3-S2 打开/读 + M3-S3 保存）聚焦单测。
  *
  * 覆盖方案 §6.3/§10.1-G2 的接线面：
- *   1. 五条通道都注册了；`office:save` / `office:save-as` 只冻结形状、S3 才注册；
+ *   1. 七条通道都注册了（S3 起含 `office:save` / `office:save-as`）；
  *   2. 入参先过 `parseIpcArgs`（坏形状直接抛 IpcInputError，不碰注册表）；
  *   3. `office:config` 的 dev / preview 两种 surfaceUrl；
- *   4. 原生选择器取消是一等结果；`KYCLAW_OFFICE_OPEN`（测试专用，仅未打包构建）绕过对话框；
+ *   4. 原生选择器取消是一等结果；`KYCLAW_OFFICE_OPEN` / `KYCLAW_OFFICE_SAVE_AS`（测试专用，
+ *      仅未打包构建）绕过原生对话框；
  *   5. 会话入口的授权：`resolveInsideWorkspace` 拦越权，渲染端递不了绝对路径；
- *   6. `office:read` 回字节 + sha256，按 sender 做 owner 校验；webContents destroyed 时清算。
+ *   6. `office:read` 回字节 + sha256，按 sender 做 owner 校验；webContents destroyed 时清算；
+ *   7. 保存链路：owner/只读/字节闸 → 写盘/冲突分类透传 → save-as 对话框取消/重定向。
  *
- * Electron 全部 mock（`ipcMain.handle` 收进 Map、`dialog` 可注入），一个真进程都不起。
+ * Electron 全部 mock（`ipcMain.handle` 收进 Map、dialog 可注入），一个真进程都不起。
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -53,9 +55,14 @@ import {
   officeOpenFromSessionArgsSchema,
   officeOpenResultSchema,
   officeReadResultSchema,
+  officeSaveArgsSchema,
+  officeSaveAsArgsSchema,
+  officeSaveAsResultSchema,
+  officeSaveResultSchema,
   officeSurfaceUrls
 } from '../../shared/office-editor'
-import { registerOfficeIpc, scriptedOfficeOpenPath } from '../ipc/office'
+import { registerOfficeIpc, scriptedOfficeOpenPath, scriptedOfficeSaveAsPath } from '../ipc/office'
+import { defaultOfficeDocumentIo, type OfficeDocumentIo } from '../office-documents'
 
 const directories: string[] = []
 
@@ -123,17 +130,24 @@ function register(options: {
   env?: NodeJS.ProcessEnv
   isPackaged?: boolean
   rendererUrl?: string
+  io?: OfficeDocumentIo
+  showSaveDialog?: (
+    parent: unknown,
+    options: unknown
+  ) => Promise<{ canceled: boolean; filePath?: string }>
 }): ReturnType<typeof registerOfficeIpc> {
   return registerOfficeIpc(tempDir(), {
     isPackaged: options.isPackaged ?? false,
     rendererUrl: options.rendererUrl ?? '',
     env: options.env ?? {},
-    rootForThread: () => options.root ?? tempDir()
+    rootForThread: () => options.root ?? tempDir(),
+    ...(options.io === undefined ? {} : { io: options.io }),
+    ...(options.showSaveDialog === undefined ? {} : { showSaveDialog: options.showSaveDialog })
   })
 }
 
 describe('注册面：通道清单', () => {
-  it('注册五条打开/读/释放通道；S2 不注册 save / save-as（S3）', () => {
+  it('注册七条打开/读/写/释放通道（S3 起含 save / save-as）', () => {
     register({})
     expect([...mocks.handlers.keys()].sort()).toEqual(
       [
@@ -141,17 +155,19 @@ describe('注册面：通道清单', () => {
         IPC_CHANNELS.office.openDialog,
         IPC_CHANNELS.office.openFromSession,
         IPC_CHANNELS.office.read,
-        IPC_CHANNELS.office.release
+        IPC_CHANNELS.office.release,
+        IPC_CHANNELS.office.save,
+        IPC_CHANNELS.office.saveAs
       ].sort()
     )
-    expect(mocks.handlers.has(IPC_CHANNELS.office.save)).toBe(false)
-    expect(mocks.handlers.has(IPC_CHANNELS.office.saveAs)).toBe(false)
     // 通道名口径（shared/ipc.ts 直接挂 office-editor 的常量）
     expect(IPC_CHANNELS.office.config).toBe('office:config')
     expect(IPC_CHANNELS.office.openDialog).toBe('office:open-dialog')
     expect(IPC_CHANNELS.office.openFromSession).toBe('office:open-from-session')
     expect(IPC_CHANNELS.office.read).toBe('office:read')
     expect(IPC_CHANNELS.office.release).toBe('office:release')
+    expect(IPC_CHANNELS.office.save).toBe('office:save')
+    expect(IPC_CHANNELS.office.saveAs).toBe('office:save-as')
   })
 })
 
@@ -416,5 +432,233 @@ describe('owner 校验与 destroyed 清算', () => {
         )
       ).toMatchObject({ ok: false, code: 'forbidden' })
     }
+  })
+})
+
+describe('office:save（S3 写链路接线）', () => {
+  it('save / saveAs 入参闸门：坏形状直接抛 IpcInputError，不碰注册表', async () => {
+    const handle = register({})
+    const event = eventOf(1)
+    const badSaveArgs: unknown[][] = [
+      [],
+      [{}],
+      [{ documentId: 'd', bytes: 'not-bytes' }],
+      [{ documentId: '', bytes: new Uint8Array([1]) }],
+      [{ documentId: 'd', bytes: new Uint8Array([1]), extra: true }]
+    ]
+    for (const args of badSaveArgs) {
+      await expect(invoke(IPC_CHANNELS.office.save, event, ...args)).rejects.toBeInstanceOf(
+        IpcInputError
+      )
+    }
+    const badSaveAsArgs: unknown[][] = [[], [{}], [{ documentId: 'd', bytes: 'x' }]]
+    for (const args of badSaveAsArgs) {
+      await expect(invoke(IPC_CHANNELS.office.saveAs, event, ...args)).rejects.toBeInstanceOf(
+        IpcInputError
+      )
+    }
+    // schema 与 handler 用同一份（直接打闸门）
+    expect(() =>
+      parseIpcArgs(officeSaveArgsSchema, [{ documentId: 'd', bytes: new Uint8Array([1]) }], 'x')
+    ).not.toThrow()
+    expect(() =>
+      parseIpcArgs(officeSaveAsArgsSchema, [{ documentId: 'd', bytes: new Uint8Array([1]) }], 'x')
+    ).not.toThrow()
+    expect(handle.documents.size()).toBe(0)
+  })
+
+  it('保存成功：磁盘变、read 回新 sha、结果过 officeSaveResultSchema；owner 不符 forbidden', async () => {
+    const path = writeFile(tempDir(), '写入.docx', 'v1-bytes')
+    register({ env: { KYCLAW_OFFICE_OPEN: path } })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    const next = new TextEncoder().encode('v2-saved-bytes')
+
+    const saved = officeSaveResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.save, eventOf(1), {
+        documentId: opened.document.documentId,
+        expectedSha256: opened.document.sha256,
+        bytes: next
+      })
+    )
+    expect(saved.ok).toBe(true)
+    if (!saved.ok) return
+    expect(saved.sha256).toBe(createHash('sha256').update(Buffer.from(next)).digest('hex'))
+    expect(readFileSync(path, 'utf8')).toBe('v2-saved-bytes')
+
+    const read = officeReadResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.read, eventOf(1), opened.document.documentId)
+    )
+    expect(read.ok && read.document.sha256).toBe(saved.sha256)
+
+    // 另一个 sender 写同一个 id：forbidden（分类回包，不抛）
+    expect(
+      officeSaveResultSchema.parse(
+        await invoke(IPC_CHANNELS.office.save, eventOf(2), {
+          documentId: opened.document.documentId,
+          bytes: next
+        })
+      )
+    ).toMatchObject({ ok: false, code: 'forbidden' })
+  })
+
+  it('写前冲突：外部改文件后保存回 conflict + disk 版本，磁盘不被覆盖', async () => {
+    const path = writeFile(tempDir(), '冲突.docx', 'v1')
+    register({ env: { KYCLAW_OFFICE_OPEN: path } })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    writeFileSync(path, '外部改过的内容')
+
+    const result = officeSaveResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.save, eventOf(1), {
+        documentId: opened.document.documentId,
+        expectedSha256: opened.document.sha256,
+        bytes: new TextEncoder().encode('覆盖')
+      })
+    )
+    expect(result).toMatchObject({ ok: false, code: 'conflict' })
+    if (result.ok) return
+    expect(result.disk?.sha256).toBe(
+      createHash('sha256').update(Buffer.from('外部改过的内容')).digest('hex')
+    )
+    expect(readFileSync(path, 'utf8')).toBe('外部改过的内容')
+  })
+
+  it('写失败分类透传：EPERM → write-locked（注入写 IO）', async () => {
+    const path = writeFile(tempDir(), '占用.docx', 'v1')
+    const io: OfficeDocumentIo = {
+      ...defaultOfficeDocumentIo,
+      writeFileExclusive: async () => {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      },
+      unlink: async () => undefined
+    }
+    register({ env: { KYCLAW_OFFICE_OPEN: path }, io })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    const result = officeSaveResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.save, eventOf(1), {
+        documentId: opened.document.documentId,
+        bytes: new TextEncoder().encode('x')
+      })
+    )
+    expect(result).toMatchObject({ ok: false, code: 'write-locked' })
+  })
+})
+
+describe('office:save-as（S3 另存为接线）', () => {
+  it('对话框取消是一等结果 cancelled；选中路径成功 → 注册表重定向', async () => {
+    const directory = tempDir()
+    const path = writeFile(directory, '原件.docx', 'origin')
+    const dialogs: number[] = []
+    const handle = register({
+      env: { KYCLAW_OFFICE_OPEN: path },
+      showSaveDialog: async () => {
+        dialogs.push(1)
+        return { canceled: true }
+      }
+    })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    const cancelled = officeSaveAsResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.saveAs, eventOf(1), {
+        documentId: opened.document.documentId,
+        bytes: new TextEncoder().encode('x')
+      })
+    )
+    expect(cancelled).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(dialogs).toHaveLength(1)
+    expect(handle.documents.info(opened.document.documentId, 1)?.absolutePath).toBe(
+      realpathSync.native(path)
+    )
+
+    // 成功路径：对话框给一个目标文件 → 写盘 + document 重定向（documentId 不变）
+    const target = join(directory, '另存为.docx')
+    register({
+      env: { KYCLAW_OFFICE_OPEN: path },
+      showSaveDialog: async () => ({ canceled: false, filePath: target })
+    })
+    const opened2 = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened2.ok) throw new Error('打开失败')
+    const saved = officeSaveAsResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.saveAs, eventOf(1), {
+        documentId: opened2.document.documentId,
+        bytes: new TextEncoder().encode('另存内容')
+      })
+    )
+    expect(saved.ok).toBe(true)
+    if (!saved.ok) return
+    expect(saved.document.documentId).toBe(opened2.document.documentId)
+    expect(saved.document.displayName).toBe('另存为.docx')
+    expect(saved.document.absolutePath).toBe(realpathSync.native(target))
+    expect(readFileSync(target, 'utf8')).toBe('另存内容')
+  })
+
+  it('KYCLAW_OFFICE_SAVE_AS 绕过保存对话框；打包态忽略 env（走对话框）', async () => {
+    const directory = tempDir()
+    const path = writeFile(directory, '原件2.docx', 'origin')
+    const scriptedTarget = join(directory, 'env另存.docx')
+    register({
+      env: { KYCLAW_OFFICE_OPEN: path, KYCLAW_OFFICE_SAVE_AS: scriptedTarget }
+    })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    const saved = officeSaveAsResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.saveAs, eventOf(1), {
+        documentId: opened.document.documentId,
+        bytes: new TextEncoder().encode('env-bytes')
+      })
+    )
+    expect(saved.ok).toBe(true)
+    expect(readFileSync(scriptedTarget, 'utf8')).toBe('env-bytes')
+
+    // 打包态：env 不生效 → 对话框被调用（这里注入取消）。用会话入口打开，避免再碰打开侧 dialog
+    mocks.handlers.clear()
+    let dialogCalls = 0
+    register({
+      root: directory,
+      env: { KYCLAW_OFFICE_OPEN: path, KYCLAW_OFFICE_SAVE_AS: scriptedTarget },
+      isPackaged: true,
+      showSaveDialog: async () => {
+        dialogCalls += 1
+        return { canceled: true }
+      }
+    })
+    const opened2 = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openFromSession, eventOf(1), 'thread-1', '原件2.docx')
+    )
+    if (!opened2.ok) throw new Error('打开失败')
+    expect(
+      officeSaveAsResultSchema.parse(
+        await invoke(IPC_CHANNELS.office.saveAs, eventOf(1), {
+          documentId: opened2.document.documentId,
+          bytes: new TextEncoder().encode('x')
+        })
+      )
+    ).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(dialogCalls).toBe(1)
+  })
+
+  it('scriptedOfficeSaveAsPath：仅未打包 + 非空值才生效', () => {
+    expect(scriptedOfficeSaveAsPath({ KYCLAW_OFFICE_SAVE_AS: 'D:\\a.docx' }, false)).toBe(
+      'D:\\a.docx'
+    )
+    expect(scriptedOfficeSaveAsPath({ KYCLAW_OFFICE_SAVE_AS: '  ' }, false)).toBeUndefined()
+    expect(scriptedOfficeSaveAsPath({}, false)).toBeUndefined()
+    expect(scriptedOfficeSaveAsPath({ KYCLAW_OFFICE_SAVE_AS: 'D:\\a.docx' }, true)).toBeUndefined()
+    // 打开侧的 env 不受影响（两条独立）
+    expect(scriptedOfficeOpenPath({ KYCLAW_OFFICE_OPEN: 'D:\\b.docx' }, false)).toBe('D:\\b.docx')
   })
 })

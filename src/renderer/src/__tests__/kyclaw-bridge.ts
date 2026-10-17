@@ -48,7 +48,11 @@ import {
   type OfficeConfig,
   type OfficeDocumentInfo,
   type OfficeOpenResult,
-  type OfficeReadResult
+  type OfficeReadResult,
+  type OfficeSaveAsRequest,
+  type OfficeSaveAsResult,
+  type OfficeSaveRequest,
+  type OfficeSaveResult
 } from '@shared/office-editor'
 import type { TextPageCursor, TextPageResult, TextVersionResult } from '@shared/workbench-text'
 
@@ -625,9 +629,9 @@ export function pluginsApiStub(
 }
 
 /**
- * Office 文档面（M3-S2）：默认"取消打开 + 读不到"——**不假装打开成功**，
- * 没关心过 Office 的用例不会被一条假文档带偏。用例自己 `mockResolvedValue` 喂
- * `officeDocumentFixture()` 与字节。
+ * Office 文档面（M3-S2 打开/读 + M3-S3 保存）：默认"取消打开 + 读不到 + 保存失败"——
+ * **不假装成功**，没关心过 Office 的用例不会被假文档带偏。用例自己 `mockResolvedValue` 喂
+ * `officeDocumentFixture()`、字节与保存结果。
  */
 export interface OfficeApiStub {
   config: Mock<() => Promise<OfficeConfig>>
@@ -636,6 +640,8 @@ export interface OfficeApiStub {
     (threadId: string, relative: string, readOnly?: boolean) => Promise<OfficeOpenResult>
   >
   read: Mock<(documentId: string) => Promise<OfficeReadResult>>
+  save: Mock<(input: OfficeSaveRequest) => Promise<OfficeSaveResult>>
+  saveAs: Mock<(input: OfficeSaveAsRequest) => Promise<OfficeSaveAsResult>>
   release: Mock<(documentId: string) => Promise<void>>
 }
 
@@ -676,6 +682,16 @@ export function officeApiStub(): OfficeApiStub {
       ok: false,
       code: 'forbidden',
       message: '这个文档没有打开或已关闭'
+    })),
+    save: vi.fn(async (): Promise<OfficeSaveResult> => ({
+      ok: false,
+      code: 'write-failed',
+      message: '测试桩：不写盘'
+    })),
+    saveAs: vi.fn(async (): Promise<OfficeSaveAsResult> => ({
+      ok: false,
+      code: 'cancelled',
+      message: '已取消'
     })),
     release: vi.fn(async () => undefined)
   }

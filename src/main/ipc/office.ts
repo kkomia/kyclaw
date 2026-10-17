@@ -22,6 +22,7 @@ import {
   dialog,
   ipcMain,
   type OpenDialogOptions,
+  type SaveDialogOptions,
   type WebContents
 } from 'electron'
 import { IPC_CHANNELS, parseIpcArgs } from '../../shared/ipc'
@@ -31,6 +32,8 @@ import {
   officeDocumentIdArgsSchema,
   officeNoArgsSchema,
   officeOpenFromSessionArgsSchema,
+  officeSaveArgsSchema,
+  officeSaveAsArgsSchema,
   officeSurfaceUrls,
   type OfficeConfig
 } from '../../shared/office-editor'
@@ -63,6 +66,21 @@ export interface OfficeOpenDialogResult {
   filePaths: readonly string[]
 }
 
+/** 另存为对话框选项（每次按当前文件名现拼默认路径） */
+function saveDialogOptions(defaultPath: string | undefined): SaveDialogOptions {
+  return {
+    title: '另存为 Word 文档',
+    ...(defaultPath === undefined ? {} : { defaultPath }),
+    filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+  }
+}
+
+/** 一次原生保存对话框的结果（只留用得到的两个字段，便于测试注入） */
+export interface OfficeSaveDialogResult {
+  canceled: boolean
+  filePath?: string
+}
+
 export interface OfficeIpcDeps {
   /** 会话 → 项目 id（agent 服务的映射；与工作台同一条） */
   projectIdOf?: ProjectIdOf
@@ -70,18 +88,23 @@ export interface OfficeIpcDeps {
   rootForThread?: (threadId: string) => string
   /** 覆盖注册表（单测注入；缺省 = 真 IO） */
   documents?: OfficeDocuments
-  /** 覆盖注册表的文件 IO（单测伪造 stat/读失败用） */
+  /** 覆盖注册表的文件 IO（单测伪造 stat/读/写失败用） */
   io?: OfficeDocumentIo
   /** 覆盖原生选择器（单测注入；缺省 = 真 `dialog.showOpenDialog`） */
   showOpenDialog?: (
     parent: BrowserWindow | null,
     options: OpenDialogOptions
   ) => Promise<OfficeOpenDialogResult>
+  /** 覆盖原生保存对话框（单测注入；缺省 = 真 `dialog.showSaveDialog`） */
+  showSaveDialog?: (
+    parent: BrowserWindow | null,
+    options: SaveDialogOptions
+  ) => Promise<OfficeSaveDialogResult>
   /** 覆盖 `process.env`（单测注入） */
   env?: NodeJS.ProcessEnv
   /** 覆盖 dev 主窗口 URL（缺省 = `ELECTRON_RENDERER_URL`） */
   rendererUrl?: string
-  /** 覆盖 `app.isPackaged`（缺省 = 真值；打包后忽略 KYCLAW_OFFICE_OPEN） */
+  /** 覆盖 `app.isPackaged`（缺省 = 真值；打包后忽略 KYCLAW_OFFICE_OPEN / KYCLAW_OFFICE_SAVE_AS） */
   isPackaged?: boolean
 }
 
@@ -100,6 +123,18 @@ export function scriptedOfficeOpenPath(
 ): string | undefined {
   if (isPackaged) return undefined
   const raw = env.KYCLAW_OFFICE_OPEN
+  if (raw === undefined) return undefined
+  const trimmed = raw.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/** 测试专用另存为落点（同上：仅未打包构建；生产不设即不存在这条分支） */
+export function scriptedOfficeSaveAsPath(
+  env: NodeJS.ProcessEnv,
+  isPackaged: boolean
+): string | undefined {
+  if (isPackaged) return undefined
+  const raw = env.KYCLAW_OFFICE_SAVE_AS
   if (raw === undefined) return undefined
   const trimmed = raw.trim()
   return trimmed === '' ? undefined : trimmed
@@ -128,6 +163,22 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
           ? await dialog.showOpenDialog(options)
           : await dialog.showOpenDialog(parent, options)
       return { canceled: result.canceled, filePaths: result.filePaths }
+    })
+
+  const showSaveDialog =
+    deps.showSaveDialog ??
+    (async (
+      parent: BrowserWindow | null,
+      options: SaveDialogOptions
+    ): Promise<OfficeSaveDialogResult> => {
+      const result =
+        parent === null
+          ? await dialog.showSaveDialog(options)
+          : await dialog.showSaveDialog(parent, options)
+      return {
+        canceled: result.canceled,
+        filePath: result.filePath === '' ? undefined : result.filePath
+      }
     })
 
   /**
@@ -214,6 +265,39 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
     documents.release(documentId, event.sender.id)
     // 幂等、无回包：未知 id / 非本窗口 id 都是空操作
     return undefined
+  })
+
+  ipcMain.handle(IPC_CHANNELS.office.save, async (event, ...args) => {
+    const [request] = parseIpcArgs(officeSaveArgsSchema, args, IPC_CHANNELS.office.save)
+    watchSender(event.sender)
+    return documents.save(request.documentId, event.sender.id, {
+      bytes: request.bytes,
+      expectedSha256: request.expectedSha256
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.office.saveAs, async (event, ...args) => {
+    const [request] = parseIpcArgs(officeSaveAsArgsSchema, args, IPC_CHANNELS.office.saveAs)
+    watchSender(event.sender)
+    const info = documents.info(request.documentId, event.sender.id)
+    if (info === null) return officeFailure('forbidden', '文档没有打开或已关闭')
+
+    // 落点只由主进程给：测试 env（仅未打包）或原生保存对话框；渲染端从未递过路径
+    const scripted = scriptedOfficeSaveAsPath(env, isPackaged)
+    let target: string
+    if (scripted !== undefined) {
+      target = scripted
+    } else {
+      const parent = BrowserWindow.fromWebContents(event.sender)
+      const result = await showSaveDialog(parent, saveDialogOptions(info.absolutePath))
+      if (result.canceled || result.filePath === undefined || result.filePath === '') {
+        return officeFailure('cancelled')
+      }
+      target = result.filePath
+    }
+    return documents.saveAs(request.documentId, event.sender.id, target, {
+      bytes: request.bytes
+    })
   })
 
   return { documents }

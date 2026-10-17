@@ -108,7 +108,9 @@ import {
 import {
   officeConfigSchema,
   officeOpenResultSchema,
-  officeReadResultSchema
+  officeReadResultSchema,
+  officeSaveAsResultSchema,
+  officeSaveResultSchema
 } from '../shared/office-editor'
 
 const windowApi: KyclawWindowApi = {
@@ -768,6 +770,20 @@ const officeApi: KyclawOfficeApi = {
       await ipcRenderer.invoke(IPC_CHANNELS.office.read, documentId)
     )
     if (!parsed.success) throw new Error('[kyclaw] Office 读取响应结构不合法')
+    return parsed.data
+  },
+  save: async (input) => {
+    const parsed = officeSaveResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.save, input)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 保存响应结构不合法')
+    return parsed.data
+  },
+  saveAs: async (input) => {
+    const parsed = officeSaveAsResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.saveAs, input)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 另存为响应结构不合法')
     return parsed.data
   },
   release: async (documentId) => {

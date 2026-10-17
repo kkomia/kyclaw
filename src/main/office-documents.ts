@@ -15,9 +15,15 @@
  * 文件在变）时才替换 `OfficeDocumentIo` —— 一个 Electron 对象都不碰。
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile as readFileBytes, stat as statPath } from 'node:fs/promises'
+import {
+  open as openFile,
+  readFile as readFileBytes,
+  rename as renamePath,
+  stat as statPath,
+  unlink as unlinkPath
+} from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
-import { basename, extname } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import {
   OFFICE_EDITOR_MAX_BYTES,
   OFFICE_EDITOR_ERROR_MESSAGES,
@@ -26,7 +32,9 @@ import {
   type OfficeErrorCode,
   type OfficeFailure,
   type OfficeOpenResult,
-  type OfficeReadResult
+  type OfficeReadResult,
+  type OfficeSaveAsResult,
+  type OfficeSaveResult
 } from '../shared/office-editor'
 
 /** 第一步只接 DOCX：扩展名大小写不敏感 */
@@ -57,11 +65,41 @@ export interface OfficeFileStat {
   isFile: boolean
 }
 
+/**
+ * 写链路 IO（原子写三步各自可注入，S3 单测靠它伪造 EPERM/ENOSPC/rename 失败）：
+ *   - `writeFileExclusive`：同目录临时文件、`wx` 独占创建、0o600、写满 + `sync` 后关闭；
+ *   - `rename`：临时文件 → 目标（Windows 上可覆盖已有文件）；
+ *   - `unlink`：失败清理临时文件（尽力，失败不影响错误分类）。
+ * 读链路的默认实现同时供写链路用；缺省时 createOfficeDocuments 用真 fs 实现。
+ */
 export interface OfficeDocumentIo {
   /** realpath 归一（Windows 上必须用 native：大小写与短名归一） */
   realpath(filePath: string): Promise<string>
   stat(filePath: string): Promise<OfficeFileStat>
   readFile(filePath: string): Promise<Uint8Array>
+  writeFileExclusive?(filePath: string, bytes: Uint8Array): Promise<void>
+  rename?(from: string, to: string): Promise<void>
+  unlink?(filePath: string): Promise<void>
+}
+
+/** 原子写第一步：同目录临时文件、`wx` 独占创建、0o600、write + sync + close */
+async function writeFileExclusiveAtomic(filePath: string, bytes: Uint8Array): Promise<void> {
+  const handle = await openFile(filePath, 'wx', 0o600)
+  try {
+    await handle.writeFile(bytes)
+    // 先落稳再 rename：崩溃时目标文件要么是旧内容、要么是新内容，不会半截
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+async function renameFileAtomic(from: string, to: string): Promise<void> {
+  await renamePath(from, to)
+}
+
+async function unlinkQuiet(filePath: string): Promise<void> {
+  await unlinkPath(filePath)
 }
 
 /**
@@ -74,7 +112,10 @@ export const defaultOfficeDocumentIo: OfficeDocumentIo = {
     const info = await statPath(filePath)
     return { size: info.size, mtimeMs: info.mtimeMs, isFile: info.isFile() }
   },
-  readFile: async (filePath) => new Uint8Array(await readFileBytes(filePath))
+  readFile: async (filePath) => new Uint8Array(await readFileBytes(filePath)),
+  writeFileExclusive: writeFileExclusiveAtomic,
+  rename: renameFileAtomic,
+  unlink: unlinkQuiet
 }
 
 /** 注册表内部条目（比回包的 `OfficeDocumentInfo` 多 realPath / owner / 入口） */
@@ -91,6 +132,13 @@ export interface OfficeDocumentOptions {
   maxOpenDocuments?: number
 }
 
+/** `save` / `saveAs` 的入参（documentId 由调用方给）：新字节 + 壳上次已知的磁盘 hash */
+export interface OfficeSaveInput {
+  bytes: Uint8Array
+  /** 壳上次已知的磁盘内容 hash（冲突判据的权威）；缺省 = 用注册表记的 sha256 */
+  expectedSha256?: string
+}
+
 export interface OfficeDocuments {
   /**
    * 打开一份已授权的绝对路径：realpath 归一去重 → stat → 读字节（≤上限）→ sha256 → 入表。
@@ -99,10 +147,28 @@ export interface OfficeDocuments {
   open(filePath: string, context: OfficeOpenContext): Promise<OfficeOpenResult>
   /** 按 id 重读字节：复核 stat/size，刷新注册表版本；owner 不符/文件没了回分类失败 */
   read(documentId: string, owner: number): Promise<OfficeReadResult>
+  /**
+   * 保存到原文件（S3）：owner/只读/字节闸 → 冲突检测（mtime 快路径 + sha256 权威，写前比对
+   * `expectedSha256`）→ 同目录临时文件原子写（wx/0o600/write+sync+close/rename/失败清理）→
+   * 写后 stat 并更新注册表 size/mtime/sha。失败一律回分类结果，不抛。
+   */
+  save(documentId: string, owner: number, input: OfficeSaveInput): Promise<OfficeSaveResult>
+  /**
+   * 另存为（S3）：写目标路径（同样原子写）→ 注册表**重定向**到新真实路径（documentId 不变）。
+   * 目标已被另一已打开文档占用 → `already-open-elsewhere`；目标后缀必须仍是 `.docx`。
+   */
+  saveAs(
+    documentId: string,
+    owner: number,
+    targetPath: string,
+    input: OfficeSaveInput
+  ): Promise<OfficeSaveAsResult>
   /** 释放一个 id（幂等；未知 id / 非本窗口 id 不动表） */
   release(documentId: string, owner: number): boolean
   /** 释放某个 webContents 打开的全部文档（webContents destroyed 清算用）；返回释放条数 */
   releaseAll(owner: number): number
+  /** 按 id 查只读信息（不重读文件；save-as 给对话框默认路径用），owner 不符回 null */
+  info(documentId: string, owner: number): OfficeDocumentInfo | null
   /** 表内条数（诊断/单测用） */
   size(): number
 }
@@ -121,6 +187,25 @@ export function officeFailure(code: OfficeErrorCode, detail?: string): OfficeFai
 function fsDetail(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   return code === undefined || code === '' ? '未知错误' : code
+}
+
+/**
+ * 写失败 → 分类（errno 只进 detail，界面看人话）。照方案 §6.4：
+ * EPERM/EBUSY（被 Word/WPS/杀软占用）→ write-locked；EACCES 同样按"写不了"归 write-locked；
+ * ENOSPC → no-space；其余 → write-failed。
+ */
+function writeFailureOf(error: unknown): { code: OfficeErrorCode; detail: string } {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  switch (code) {
+    case 'ENOSPC':
+      return { code: 'no-space', detail: '' }
+    case 'EPERM':
+    case 'EBUSY':
+    case 'EACCES':
+      return { code: 'write-locked', detail: code }
+    default:
+      return { code: 'write-failed', detail: code ?? '未知错误' }
+  }
 }
 
 /** sha256（小写 hex）：冲突判据的权威 */
@@ -159,6 +244,126 @@ export function createOfficeDocuments(
     byId.delete(record.documentId)
     // realPath 可能被 S3 的另存为改掉，但 S2 不会；删除前复核一下避免误删新条目
     if (byRealPath.get(record.realPath) === record) byRealPath.delete(record.realPath)
+  }
+
+  // 写链路三个可注入点（单测伪造 EPERM/ENOSPC/rename 失败）
+  const writeExclusive = io.writeFileExclusive ?? writeFileExclusiveAtomic
+  const renameAtomic = io.rename ?? renameFileAtomic
+  const unlinkTemp = io.unlink ?? unlinkQuiet
+
+  /**
+   * 同目录临时文件原子写（方案 §6.4 第 4 步）：
+   * 建 `.kyclaw-office-<uuid>.tmp`（wx / 0o600）→ write + sync + close → rename 覆盖目标；
+   * 任一步失败都清理临时文件并按分类回错，**绝不留下半截目标**。
+   */
+  async function atomicWrite(
+    target: string,
+    bytes: Uint8Array
+  ): Promise<{ ok: true } | { ok: false; code: OfficeErrorCode; detail: string }> {
+    const temp = join(dirname(target), `.kyclaw-office-${randomUUID()}.tmp`)
+    try {
+      await writeExclusive(temp, bytes)
+    } catch (error) {
+      await unlinkTemp(temp).catch(() => undefined)
+      return { ok: false, ...writeFailureOf(error) }
+    }
+    try {
+      await renameAtomic(temp, target)
+    } catch (error) {
+      await unlinkTemp(temp).catch(() => undefined)
+      return { ok: false, ...writeFailureOf(error) }
+    }
+    return { ok: true }
+  }
+
+  /** 写后 stat：失败不回滚已成功的写（sha 仍是权威，mtime 只是缓存） */
+  async function statAfterWrite(target: string): Promise<OfficeFileStat | null> {
+    try {
+      return await io.stat(target)
+    } catch {
+      return null
+    }
+  }
+
+  /** 保存前置闸门（save / saveAs 共用）：owner、只读、字节形状/上限 */
+  function saveTargetOf(
+    documentId: string,
+    owner: number,
+    bytes: Uint8Array
+  ): { record: OfficeDocumentRecord } | { failure: OfficeFailure } {
+    const record = byId.get(documentId)
+    if (record === undefined) return { failure: officeFailure('forbidden', '文档没有打开或已关闭') }
+    if (record.owner !== owner) return { failure: officeFailure('forbidden') }
+    if (record.readOnly) return { failure: officeFailure('forbidden', '这份文档以只读方式打开') }
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      return { failure: officeFailure('write-failed', '保存内容为空') }
+    }
+    if (bytes.length > maxBytes) return { failure: officeFailure('too-large') }
+    return { record }
+  }
+
+  /**
+   * 写前冲突检测（方案 §6.4 第 3 步）：mtime+size 快路径视为未变；失配时读盘算 sha ——
+   * **hash 是权威**。磁盘内容与壳已知版本（expectedSha256，缺省 = 注册表记录的 sha）不一致 →
+   * `conflict` + 磁盘版本；一致但 mtime/size 失配（时钟粒度/外部工具保留 mtime）→ 刷新基线继续写。
+   */
+  async function checkConflict(
+    record: OfficeDocumentRecord,
+    expectedSha256: string | undefined
+  ): Promise<{ ok: true } | { ok: false; result: OfficeSaveResult | OfficeSaveAsResult }> {
+    let before: OfficeFileStat
+    try {
+      before = await io.stat(record.realPath)
+    } catch (error) {
+      return {
+        ok: false,
+        result: officeFailure('unreadable', `文件已不在磁盘上（${fsDetail(error)}）`)
+      }
+    }
+    if (!before.isFile) return { ok: false, result: officeFailure('unreadable', 'not-a-file') }
+
+    const fastUnchanged = before.mtimeMs === record.mtimeMs && before.size === record.size
+    const expected = expectedSha256 ?? record.sha256
+
+    if (!fastUnchanged) {
+      let diskBytes: Uint8Array
+      try {
+        diskBytes = await io.readFile(record.realPath)
+      } catch (error) {
+        return { ok: false, result: officeFailure('unreadable', fsDetail(error)) }
+      }
+      const diskSha = officeSha256(diskBytes)
+      if (diskSha !== expected) {
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            code: 'conflict',
+            message: OFFICE_EDITOR_ERROR_MESSAGES.conflict,
+            disk: { mtimeMs: before.mtimeMs, sha256: diskSha, size: diskBytes.length }
+          }
+        }
+      }
+      // 内容没变、只是快路径失配：用磁盘真实值刷新基线后再写
+      record.size = diskBytes.length
+      record.mtimeMs = before.mtimeMs
+      record.sha256 = diskSha
+      return { ok: true }
+    }
+
+    // 快路径说没变，但壳手里的基线不是注册表记的那份 → 壳看到过别的版本，按冲突处理
+    if (expectedSha256 !== undefined && expectedSha256 !== record.sha256) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: 'conflict',
+          message: OFFICE_EDITOR_ERROR_MESSAGES.conflict,
+          disk: { mtimeMs: record.mtimeMs, sha256: record.sha256, size: record.size }
+        }
+      }
+    }
+    return { ok: true }
   }
 
   return {
@@ -278,6 +483,81 @@ export function createOfficeDocuments(
       return { ok: true, document: infoOf(record), bytes }
     },
 
+    async save(documentId, owner, input) {
+      const target = saveTargetOf(documentId, owner, input.bytes)
+      if ('failure' in target) return target.failure
+      const { record } = target
+
+      const checked = await checkConflict(record, input.expectedSha256)
+      if (!checked.ok) return checked.result as OfficeSaveResult
+
+      const written = await atomicWrite(record.realPath, input.bytes)
+      if (!written.ok) return officeFailure(written.code, written.detail)
+
+      const after = await statAfterWrite(record.realPath)
+      const sha256 = officeSha256(input.bytes)
+      record.size = input.bytes.length
+      record.sha256 = sha256
+      if (after !== null) record.mtimeMs = after.mtimeMs
+      return {
+        ok: true,
+        documentId: record.documentId,
+        mtimeMs: record.mtimeMs,
+        sha256,
+        size: input.bytes.length,
+        savedAt: Date.now()
+      }
+    },
+
+    async saveAs(documentId, owner, targetPath, input) {
+      const target = saveTargetOf(documentId, owner, input.bytes)
+      if ('failure' in target) return target.failure
+      const { record } = target
+      if (extname(targetPath).toLowerCase() !== OFFICE_DOCX_EXTENSION) {
+        return officeFailure('unsupported-format', '另存为只支持 .docx')
+      }
+
+      // 目标真实路径：已存在文件走 realpath；新文件取"真实目录 + 文件名"（目录必须存在）
+      let targetReal: string
+      try {
+        targetReal = await io.realpath(targetPath)
+      } catch {
+        try {
+          targetReal = join(await io.realpath(dirname(targetPath)), basename(targetPath))
+        } catch (error) {
+          return officeFailure('unreadable', fsDetail(error))
+        }
+      }
+      const occupied = byRealPath.get(targetReal)
+      if (occupied !== undefined && occupied !== record) {
+        return officeFailure('already-open-elsewhere')
+      }
+
+      const written = await atomicWrite(targetReal, input.bytes)
+      if (!written.ok) return officeFailure(written.code, written.detail)
+
+      const after = await statAfterWrite(targetReal)
+      const sha256 = officeSha256(input.bytes)
+      // 注册表重定向：documentId / owner / readOnly 不变，路径与版本信息换到新文件
+      if (byRealPath.get(record.realPath) === record) byRealPath.delete(record.realPath)
+      record.realPath = targetReal
+      record.absolutePath = targetReal
+      record.displayName = basename(targetReal)
+      record.displayPath = targetPath
+      record.size = input.bytes.length
+      record.sha256 = sha256
+      if (after !== null) record.mtimeMs = after.mtimeMs
+      byRealPath.set(targetReal, record)
+      return {
+        ok: true,
+        document: infoOf(record),
+        mtimeMs: record.mtimeMs,
+        sha256,
+        size: input.bytes.length,
+        savedAt: Date.now()
+      }
+    },
+
     release(documentId, owner) {
       const record = byId.get(documentId)
       if (record === undefined || record.owner !== owner) return false
@@ -293,6 +573,12 @@ export function createOfficeDocuments(
         released += 1
       }
       return released
+    },
+
+    info(documentId, owner) {
+      const record = byId.get(documentId)
+      if (record === undefined || record.owner !== owner) return null
+      return infoOf(record)
     },
 
     size() {

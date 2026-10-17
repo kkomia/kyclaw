@@ -24,6 +24,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
+import { Document, Packer, Paragraph, TextRun } from 'docx'
 import { closeApp, launchApp, waitForChat } from './harness'
 
 const SURFACE_ORIGIN = 'kyclaw-office://surface'
@@ -88,11 +89,16 @@ test.describe('M3-S1 · kyclaw-office:// 隔离面（真机 preview）', () => {
     mkdirSync(EVIDENCE_DIR, { recursive: true })
 
     // M3-S2：mock 打开入口已删，真实「打开文件」走测试 env 绕过原生选择器。
-    // S1 只关心"面能加载并完成握手"，字节内容不重要 → 一个只有 .docx 后缀的占位文件即可
-    // （注册表 S2 只按扩展名/大小/读字节，不解析 OOXML；内核在 S3）。
+    // M3-S3：面内真的挂 DocxEditor，探针夹具必须是**合法 docx**（否则编辑器解析失败会污染
+    // 本探针的 console 断言）；用产品 devDep docx 现场生成，二进制不入 git。
     const probeDir = mkdtempSync(join(tmpdir(), 'kyclaw-s1-probe-'))
     const probeDocx = join(probeDir, 'office-surface-probe.docx')
-    writeFileSync(probeDocx, Buffer.from('kyclaw M3-S1 surface probe placeholder'))
+    const probeDocument = new Document({
+      sections: [
+        { children: [new Paragraph({ children: [new TextRun('kyclaw M3-S1 surface probe')] })] }
+      ]
+    })
+    writeFileSync(probeDocx, await Packer.toBuffer(probeDocument))
 
     const launched = await launchApp({ env: { KYCLAW_OFFICE_OPEN: probeDocx } })
     const { app, page } = launched

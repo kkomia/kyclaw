@@ -40,7 +40,11 @@ import {
   OFFICE_IPC_CHANNELS,
   type OfficeConfig,
   type OfficeOpenResult,
-  type OfficeReadResult
+  type OfficeReadResult,
+  type OfficeSaveAsRequest,
+  type OfficeSaveAsResult,
+  type OfficeSaveRequest,
+  type OfficeSaveResult
 } from './office-editor'
 import {
   appSettingsPatchSchema,
@@ -1171,6 +1175,17 @@ export interface KyclawOfficeApi {
   openFromSession(threadId: string, relative: string, readOnly?: boolean): Promise<OfficeOpenResult>
   /** 按 documentId 重读字节，并复核/刷新注册表里的 stat/hash（重载/冲突复查用） */
   read(documentId: string): Promise<OfficeReadResult>
+  /**
+   * 保存到原文件（S3）：主进程做冲突检测（`expectedSha256` 是权威判据）+ 同目录临时文件
+   * 原子写 + 写后更新 stat/sha。**失败不抛**：回 `ok:false` 分类（`conflict`/`write-locked`/
+   * `no-space`/`write-failed`/`forbidden`…），壳据此保持 dirty；只有越权/坏形状才抛。
+   */
+  save(input: OfficeSaveRequest): Promise<OfficeSaveResult>
+  /**
+   * 另存为（S3）：原生保存对话框 → 原子写 → 注册表重定向（documentId 不变，路径/名字/page 换成新文件）。
+   * 目标已被另一个已打开文档占用 → `already-open-elsewhere`；取消是一等结果 `cancelled`。
+   */
+  saveAs(input: OfficeSaveAsRequest): Promise<OfficeSaveAsResult>
   /** 关标签时释放注册表条目（幂等：未知 id / 非本窗口的 id 都是空操作） */
   release(documentId: string): Promise<void>
 }

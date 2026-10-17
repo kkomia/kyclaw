@@ -256,9 +256,9 @@ export function isAllowedOfficeFrameNavigation(url: string, rendererUrl?: string
 }
 
 /**
- * S3 保存合同（**S2 只定义、不接通道**）。
- * 为什么先定义：`office:save` 的入参（`expectedSha256`）与回包形状是壳/面/主进程三方的接口，
- * S3 开工时不该再动共享合同。S2 的注册表本身不写盘。
+ * S3 保存合同（S3 落地：`office:save` / `office:save-as` 已注册）。
+ * `expectedSha256` = 壳上次已知的磁盘内容 hash；主进程写前比对它（冲突检测的权威），
+ * 只有磁盘内容仍是这个版本才允许覆盖 —— 发现外部改动回 `conflict` + 磁盘版本三选一。
  */
 export const officeSaveArgsSchema = z.tuple([
   z.strictObject({
@@ -268,7 +268,6 @@ export const officeSaveArgsSchema = z.tuple([
     bytes: z.instanceof(Uint8Array)
   })
 ])
-export type OfficeSaveRequest = z.infer<typeof officeSaveArgsSchema>[0]
 
 export const officeSaveAsArgsSchema = z.tuple([
   z.strictObject({
@@ -277,7 +276,24 @@ export const officeSaveAsArgsSchema = z.tuple([
     suggestedName: z.string().min(1).optional()
   })
 ])
-export type OfficeSaveAsRequest = z.infer<typeof officeSaveAsArgsSchema>[0]
+
+/**
+ * 类型手写而不是从 schema 推导：TS 6 的 typed array 带 ArrayBufferLike 泛型，
+ * zod 的 `instanceof(Uint8Array)` 推成 `Uint8Array<ArrayBuffer>`；壳/面里流过的字节
+ * （fs 读、IPC 结构化克隆、ArrayBuffer 视图）都是同一件事，别让类型细节逼着到处断言。
+ * schema 仍负责运行时形状校验（主进程入参闸门）。
+ */
+export interface OfficeSaveRequest {
+  documentId: string
+  expectedSha256?: string
+  bytes: Uint8Array
+}
+
+export interface OfficeSaveAsRequest {
+  documentId: string
+  bytes: Uint8Array
+  suggestedName?: string
+}
 
 /** 磁盘上当前那份内容的版本（冲突三选一时回给壳） */
 export const officeDiskVersionSchema = z.strictObject({
@@ -286,7 +302,7 @@ export const officeDiskVersionSchema = z.strictObject({
   size: z.number().int().nonnegative()
 })
 
-/** `office:save` 的回包（S3 用）：成功给新的 stat/hash；失败给分类 + 可选磁盘版本 */
+/** `office:save` 的回包（S3）：成功给新的 stat/hash；失败给分类 + 可选磁盘版本 */
 export const officeSaveResultSchema = z.discriminatedUnion('ok', [
   z.strictObject({
     ok: z.literal(true),
@@ -304,3 +320,26 @@ export const officeSaveResultSchema = z.discriminatedUnion('ok', [
   })
 ])
 export type OfficeSaveResult = z.infer<typeof officeSaveResultSchema>
+
+/**
+ * `office:save-as` 的回包（S3）：成功 = 新落点 + **重定向后的文档信息**
+ * （`documentId` 不变，`displayName/displayPath/absolutePath/size/mtime/sha` 换成新文件），
+ * 壳据此更新标签标题/路径与后续保存的基线；失败形状与 `office:save` 相同。
+ */
+export const officeSaveAsResultSchema = z.discriminatedUnion('ok', [
+  z.strictObject({
+    ok: z.literal(true),
+    document: officeDocumentInfoSchema,
+    mtimeMs: z.number().nonnegative(),
+    sha256: z.string().min(1),
+    size: z.number().int().nonnegative(),
+    savedAt: z.number().nonnegative()
+  }),
+  z.strictObject({
+    ok: z.literal(false),
+    code: officeErrorCodeSchema,
+    message: z.string().min(1),
+    disk: officeDiskVersionSchema.optional()
+  })
+])
+export type OfficeSaveAsResult = z.infer<typeof officeSaveAsResultSchema>

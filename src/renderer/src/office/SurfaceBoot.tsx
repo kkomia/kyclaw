@@ -1,28 +1,40 @@
 /**
- * Office 隔离面的启动组件（M3-S1 握手 → M3-S2 收文档字节）。
+ * Office 隔离面的启动组件（M3-S1 握手 → S2 收字节 → S3 挂 DocxEditor）。
  *
- * 流程：生成 nonce → 向父页 postMessage `surface:hello` → 收 `surface:init`（nonce 匹配）→
- * 应用 locale/theme（写到 <html>/<body> 上）→ 回 `surface:ready` → 等 `doc:open`。
+ * 流程：生成 nonce → 向父页 `surface:hello` → 收 `surface:init`（nonce 匹配）→ 应用主题 →
+ * 回 `surface:ready` → 等 `doc:open`。收到文档后：
+ *   1. 首次先注册本地字体（`ensureSurfaceFonts()`，两条链见 ./fonts.ts）；
+ *   2. 字体就绪后挂 `DocxEditorPane`（`key=documentId`，换文档=卸载重建）；
+ *   3. 编辑 → `doc:changed`（revision 单调）；编辑器内部保存 → `doc:save-request`；
+ *      壳要字节 → `doc:save` → flush+save → `doc:save-bytes`；
+ *      冲突重载 → `doc:reload` → `loadDocumentBuffer`；关标签 → `doc:close` → 卸载。
  *
- * S2 的边界：
- *   - 字节由壳 `postMessage` 结构化克隆过来（还不是 MessagePort，S3 再换）；
- *   - **先只展示字节数**（+ 文档名/sha256/只读标记），不 import @betteroffice/**、不解析 OOXML；
- *   - 主题运行中切换：壳会用同一个 nonce **再发一次** `surface:init`，这里每次都要重新应用
- *     theme（不能只认第一次），这样深色主题下隔离面不会还是白底（P2 真机问题）。
+ * 主题：壳在运行中切换时**用同一个 nonce 再发一次 `surface:init`**（不重载 iframe）；这里每次
+ * 都重新应用（P2 修复的延续），编辑器自身主题走 `colorMode`。
  *
- * 为什么有重发 hello：父页（React）的 message 监听是在 effect 里挂的，而 iframe 的文档加载可能先完成；
- * 这里每 250ms 重发一次 hello、最多 5s，直到收到 init —— 一次竞态也不用父页配合重试。
+ * 为什么有重发 hello：父页（React）的 message 监听是在 effect 里挂的，而 iframe 的文档加载可能
+ * 先完成；这里每 250ms 重发一次 hello、最多 5s，直到收到 init —— 一次竞态也不用父页配合重试。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createSurfaceNonce,
+  isDocClose,
   isDocOpen,
+  isDocReload,
+  isDocSave,
   isSurfaceInit,
   SURFACE_PROTOCOL_VERSION,
+  type DocChangedMessage,
+  type DocErrorMessage,
+  type DocLoadedMessage,
+  type DocSaveBytesMessage,
+  type DocSaveRequestMessage,
   type SurfaceHelloMessage,
   type SurfaceReadyMessage,
   type SurfaceTheme
 } from './bridge-protocol'
+import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
+import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
 
 /** hello 重发间隔与总窗口：父页监听挂晚了也能对上 */
 const HELLO_RETRY_MS = 250
@@ -30,8 +42,8 @@ const HELLO_RETRY_WINDOW_MS = 5000
 
 /** 面的底色：与壳的窗口底色同值（main/window.ts 的 WINDOW_BACKGROUND） */
 const SURFACE_COLORS = {
-  light: { background: '#fbfaf9', text: '#1f1f1f' },
-  dark: { background: '#181817', text: '#e8e6e3' }
+  light: { background: '#fbfaf9', text: '#1f1f1f', border: '#e0e0e0' },
+  dark: { background: '#181817', text: '#e8e6e3', border: '#3c3c3c' }
 } as const
 
 /**
@@ -45,30 +57,127 @@ function applySurfaceTheme(theme: SurfaceTheme): void {
   root.style.colorScheme = theme
   root.style.background = colors.background
   if (document.body !== null) {
-    document.body.style.margin = '0'
     document.body.style.background = colors.background
     document.body.style.color = colors.text
   }
 }
 
-/** 面已经收到的文档（S2 只做证据展示，不保存/不解析字节） */
+/** 面当前打开的文档（S3：字节留在内存里给编辑器；壳不持久化内容） */
 interface SurfaceDocument {
   documentId: string
   name: string
   sha256: string
   readOnly: boolean
-  bytes: number
+  bytes: Uint8Array
 }
 
 export type SurfaceBootState = 'booting' | 'ready'
+type FontsState = 'idle' | 'loading' | 'ready' | 'error'
+type EditorState = 'idle' | 'loading' | 'ready' | 'error'
 
 export function SurfaceBoot(): React.JSX.Element {
-  const [state, setState] = useState<SurfaceBootState>('booting')
+  const [bootState, setBootState] = useState<SurfaceBootState>('booting')
   const [theme, setTheme] = useState<SurfaceTheme>('light')
   const [doc, setDoc] = useState<SurfaceDocument | null>(null)
+  const [fontsState, setFontsState] = useState<FontsState>('idle')
+  const [fontStats, setFontStats] = useState<SurfaceFontStats | null>(null)
+  const [fontsError, setFontsError] = useState('')
+  const [editorState, setEditorState] = useState<EditorState>('idle')
+  const [editorReadyMs, setEditorReadyMs] = useState<number | null>(null)
+  const [revision, setRevision] = useState(0)
+  const [error, setError] = useState('')
+  const [saveStats, setSaveStats] = useState<{ count: number; bytes: number }>({
+    count: 0,
+    bytes: 0
+  })
 
+  const nonceRef = useRef<string | null>(null)
+  const docRef = useRef<SurfaceDocument | null>(null)
+  const revisionRef = useRef(0)
+  const editorPaneRef = useRef<DocxEditorPaneHandle | null>(null)
+  /** 字体注册只启动一次（面内单实例；注册本身在 fonts.ts 里还做了一层幂等） */
+  const fontsStartedRef = useRef(false)
+
+  /** 安全地把消息发给父页（父页没了就忽略） */
+  const post = useCallback((message: Omit<DocErrorMessage, 'nonce'> | object): void => {
+    const nonce = nonceRef.current
+    if (nonce === null) return
+    try {
+      window.parent.postMessage({ ...message, nonce }, '*')
+    } catch {
+      // 父页已不存在（面被单独打开等）：消息丢弃，页面继续渲染
+    }
+  }, [])
+
+  const postError = useCallback(
+    (phase: DocxErrorPhase, message: string): void => {
+      setError(message)
+      const documentId = docRef.current?.documentId
+      const payload: Omit<DocErrorMessage, 'nonce'> = {
+        type: 'doc:error',
+        phase,
+        message,
+        ...(documentId === undefined ? {} : { documentId })
+      }
+      post(payload)
+    },
+    [post]
+  )
+
+  /** 首次布局完成：编辑器可交互 */
+  const handleLoaded = useCallback(
+    (pages: number): void => {
+      setEditorState('ready')
+      setEditorReadyMs(Math.round(performance.now()))
+      setError('')
+      const current = docRef.current
+      if (current === null) return
+      const message: Omit<DocLoadedMessage, 'nonce'> = {
+        type: 'doc:loaded',
+        documentId: current.documentId,
+        pages
+      }
+      post(message)
+    },
+    [post]
+  )
+
+  const handleChanged = useCallback((): void => {
+    const current = docRef.current
+    if (current === null) return
+    revisionRef.current += 1
+    setRevision(revisionRef.current)
+    const message: Omit<DocChangedMessage, 'nonce'> = {
+      type: 'doc:changed',
+      documentId: current.documentId,
+      revision: revisionRef.current
+    }
+    post(message)
+  }, [post])
+
+  /** 编辑器内部保存（Ctrl+S / File > Save）：交给壳的保存状态机（不自己做内置保存） */
+  const handleSaveRequest = useCallback((): void => {
+    const current = docRef.current
+    if (current === null) return
+    const message: Omit<DocSaveRequestMessage, 'nonce'> = {
+      type: 'doc:save-request',
+      documentId: current.documentId
+    }
+    post(message)
+  }, [post])
+
+  const handleEditorError = useCallback(
+    (phase: DocxErrorPhase, message: string): void => {
+      setEditorState('error')
+      postError(phase, message)
+    },
+    [postError]
+  )
+
+  // 握手 + 数据面消息
   useEffect(() => {
     const nonce = createSurfaceNonce()
+    nonceRef.current = nonce
     let initialized = false
 
     const announce = (): void => {
@@ -80,8 +189,44 @@ export function SurfaceBoot(): React.JSX.Element {
       try {
         window.parent.postMessage(hello, '*')
       } catch {
-        // 父页已不存在（面被单独打开等）：握手失败不影响页面继续渲染
+        // 父页已不存在：握手失败不影响页面继续渲染
       }
+    }
+
+    const postReady = (): void => {
+      const ready: SurfaceReadyMessage = { type: 'surface:ready', nonce }
+      try {
+        window.parent.postMessage(ready, '*')
+      } catch {
+        // 同上
+      }
+    }
+
+    /** 保存三阶段的 generate：壳要字节 → flush + save() → 回 doc:save-bytes */
+    const generateSaveBytes = async (requestId: string): Promise<void> => {
+      const current = docRef.current
+      const pane = editorPaneRef.current
+      if (current === null || pane === null) {
+        postError('save', '编辑器还没准备好，无法生成保存内容')
+        return
+      }
+      const bytes = await pane.save()
+      if (bytes === null) {
+        // save() 内部已经把具体错误经 onError 回过一次；这里只补一条"没生成出来"
+        postError('save', '没能生成保存内容')
+        return
+      }
+      setSaveStats((previous) => ({
+        count: previous.count + 1,
+        bytes: bytes.byteLength
+      }))
+      const message: Omit<DocSaveBytesMessage, 'nonce'> = {
+        type: 'doc:save-bytes',
+        requestId,
+        documentId: current.documentId,
+        bytes
+      }
+      post(message)
     }
 
     const onMessage = (event: MessageEvent): void => {
@@ -90,7 +235,6 @@ export function SurfaceBoot(): React.JSX.Element {
       const data: unknown = event.data
 
       if (isSurfaceInit(data) && data.nonce === nonce) {
-        // 每次 init 都重新应用（S2：主题运行中切换会再发一次 init）
         applySurfaceTheme(data.theme)
         document.documentElement.lang = data.locale
         setTheme(data.theme)
@@ -98,27 +242,59 @@ export function SurfaceBoot(): React.JSX.Element {
           initialized = true
           window.clearInterval(retryTimer)
           window.clearTimeout(stopTimer)
-          setState('ready')
+          setBootState('ready')
         }
         // 父页可能因重发 hello / 主题切换而重复回 init：每次都给 ready（幂等）
-        const ready: SurfaceReadyMessage = { type: 'surface:ready', nonce }
-        try {
-          window.parent.postMessage(ready, '*')
-        } catch {
-          // 同上：父页没了就没人收，忽略
-        }
+        postReady()
         return
       }
 
-      // 文档消息只在握手完成后接受；nonce 不匹配的伪造消息直接丢
-      if (initialized && isDocOpen(data) && data.nonce === nonce) {
-        setDoc({
+      // 数据面消息只在握手完成后接受；nonce 不匹配的伪造消息直接丢
+      if (!initialized) return
+
+      if (isDocOpen(data) && data.nonce === nonce) {
+        const next: SurfaceDocument = {
           documentId: data.documentId,
           name: data.name,
           sha256: data.sha256,
           readOnly: data.readOnly,
-          bytes: data.bytes.byteLength
+          bytes: data.bytes
+        }
+        docRef.current = next
+        setDoc(next)
+        setEditorState('loading')
+        setEditorReadyMs(null)
+        setError('')
+        revisionRef.current = 0
+        setRevision(0)
+        return
+      }
+
+      if (isDocSave(data) && data.nonce === nonce) {
+        void generateSaveBytes(data.requestId)
+        return
+      }
+
+      if (isDocReload(data) && data.nonce === nonce) {
+        const pane = editorPaneRef.current
+        const current = docRef.current
+        if (pane === null || current === null) return
+        void pane.reload(data.bytes).then(() => {
+          const next: SurfaceDocument = { ...current, bytes: data.bytes }
+          docRef.current = next
+          setDoc(next)
         })
+        return
+      }
+
+      if (isDocClose(data) && data.nonce === nonce) {
+        docRef.current = null
+        setDoc(null)
+        setEditorState('idle')
+        setEditorReadyMs(null)
+        setError('')
+        setRevision(0)
+        revisionRef.current = 0
       }
     }
 
@@ -137,61 +313,120 @@ export function SurfaceBoot(): React.JSX.Element {
       window.clearTimeout(stopTimer)
       window.removeEventListener('message', onMessage)
     }
-  }, [])
+  }, [post, postError])
 
-  const ready = state === 'ready'
+  // 文档到达后先注册本地字体（只启动一次；失败不阻塞页面，但编辑器不挂）
+  useEffect(() => {
+    if (doc === null || fontsStartedRef.current) return
+    fontsStartedRef.current = true
+    ensureSurfaceFonts()
+      .then((stats) => {
+        setFontStats(stats)
+        setFontsState('ready')
+        setError('')
+      })
+      .catch((cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause)
+        setFontsState('error')
+        setFontsError(message)
+        postError('open', `本地字体注册失败：${message}`)
+      })
+  }, [doc, postError])
+
   const colors = SURFACE_COLORS[theme]
+  const ready = bootState === 'ready'
+  const showEditor = doc !== null && fontsState === 'ready'
 
   return (
     <main
+      className="office-surface-root"
       data-testid="office-surface"
-      data-state={state}
+      data-state={bootState}
       data-theme={theme}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        minHeight: '100vh',
-        padding: 24,
-        boxSizing: 'border-box',
-        background: colors.background,
-        color: colors.text,
-        fontFamily: 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif'
-      }}
+      style={{ background: colors.background, color: colors.text }}
     >
-      <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>kyclaw office</h1>
-      <p
-        data-testid="surface-boot-state"
-        data-state={state}
-        style={{
-          fontSize: 13,
-          margin: 0,
-          color: ready ? (theme === 'dark' ? '#7ee2a8' : '#137333') : 'inherit',
-          opacity: ready ? 1 : 0.6
-        }}
+      <div
+        className="office-surface-status"
+        style={{ borderBottomColor: colors.border }}
+        data-testid="surface-status-bar"
       >
-        {ready ? 'surface ready' : '等待壳握手…'}
-      </p>
-      <p
-        data-testid="surface-theme"
-        data-theme={theme}
-        style={{ fontSize: 12, margin: 0, opacity: 0.6 }}
-      >
-        M3-S2 隔离面（未接编辑器）· theme: {theme}
-      </p>
-      <p
-        data-testid="surface-doc-open"
-        data-state={doc === null ? 'empty' : 'loaded'}
-        data-document-id={doc?.documentId ?? ''}
-        data-bytes={doc?.bytes ?? 0}
-        data-sha256={doc?.sha256 ?? ''}
-        data-read-only={doc?.readOnly === true ? 'true' : 'false'}
-        style={{ fontSize: 13, margin: 0, opacity: doc === null ? 0.6 : 1 }}
-      >
-        {doc === null
-          ? '还没有收到文档'
-          : `已收到「${doc.name}」：${doc.bytes} 字节${doc.readOnly ? '（只读）' : ''}`}
-      </p>
+        <span
+          data-testid="surface-boot-state"
+          data-state={bootState}
+          style={{ color: ready ? (theme === 'dark' ? '#7ee2a8' : '#137333') : 'inherit' }}
+        >
+          {ready ? 'surface ready' : '等待壳握手…'}
+        </span>
+        <span data-testid="surface-theme" data-theme={theme}>
+          theme: {theme}
+        </span>
+        <span
+          data-testid="surface-doc-open"
+          data-state={doc === null ? 'empty' : 'loaded'}
+          data-document-id={doc?.documentId ?? ''}
+          data-bytes={doc?.bytes.byteLength ?? 0}
+          data-sha256={doc?.sha256 ?? ''}
+          data-read-only={doc?.readOnly === true ? 'true' : 'false'}
+        >
+          {doc === null
+            ? '还没有收到文档'
+            : `已收到「${doc.name}」：${doc.bytes.byteLength} 字节${doc.readOnly ? '（只读）' : ''}`}
+        </span>
+        <span
+          data-testid="surface-editor-state"
+          data-state={editorState}
+          data-ready-ms={editorReadyMs ?? ''}
+          data-revision={revision}
+        >
+          编辑器 {editorState}
+        </span>
+        <span
+          data-testid="surface-save-stats"
+          data-save-count={saveStats.count}
+          data-last-bytes={saveStats.bytes}
+          data-fonts-ms={fontStats?.ms ?? ''}
+          data-fonts-bytes={fontStats?.fetchedBytes ?? 0}
+        >
+          保存 {saveStats.count} 次
+        </span>
+        {error === '' ? null : (
+          <span
+            data-testid="surface-error"
+            style={{ color: theme === 'dark' ? '#f28b82' : '#c5221f' }}
+          >
+            {error}
+          </span>
+        )}
+      </div>
+      <div className="office-surface-body">
+        {doc === null ? (
+          <div className="office-surface-loading" data-testid="surface-editor-empty">
+            等待文档…
+          </div>
+        ) : fontsState === 'error' ? (
+          <div className="office-surface-loading" data-testid="surface-fonts-error">
+            本地字体注册失败：{fontsError}
+          </div>
+        ) : showEditor ? (
+          <DocxEditorPane
+            key={doc.documentId}
+            ref={editorPaneRef}
+            documentId={doc.documentId}
+            name={doc.name}
+            bytes={doc.bytes}
+            readOnly={doc.readOnly}
+            theme={theme}
+            onChanged={handleChanged}
+            onSaveRequest={handleSaveRequest}
+            onLoaded={handleLoaded}
+            onError={handleEditorError}
+          />
+        ) : (
+          <div className="office-surface-loading" data-testid="surface-fonts-loading">
+            正在注册本地字体…
+          </div>
+        )}
+      </div>
     </main>
   )
 }

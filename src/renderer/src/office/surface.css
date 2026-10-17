@@ -1,0 +1,69 @@
+/*
+ * Office 隔离面的基础布局（M3-S3）。
+ *
+ * 为什么还要自己写一份：`office.html` 只负责 CSP/标题，编辑器 CSS
+ * （`@betteroffice/docx-react/styles.css`）是组件级样式，不铺满视口；面需要
+ * “状态条 + 编辑器填满剩余高度”的整页骨架。不引 Tailwind（隔离面不继承主界面样式）。
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Microsoft YaHei',
+    sans-serif;
+}
+
+/* 面根节点：纵向 flex，状态条固定高，编辑器区吃满剩余空间 */
+.office-surface-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.office-surface-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+  padding: 2px 10px;
+  box-sizing: border-box;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  border-bottom: 1px solid var(--doc-border, #e0e0e0);
+}
+
+.office-surface-status > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.office-surface-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.office-surface-loading {
+  padding: 16px;
+  font-size: 13px;
+  opacity: 0.75;
+}

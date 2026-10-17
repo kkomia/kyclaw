@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearKyclawBridge,
   installKyclawBridge,
@@ -153,7 +153,7 @@ describe('OfficePage：有标签态（dirty / 主题 / 读失败）', () => {
     // 当前是后开的 pptx（未修改）
     expect(screen.getByTestId('office-workspace')).toHaveTextContent('D:\\汇报.pptx')
     expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'false')
-    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未接编辑器')
+    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('已保存')
     expect(screen.getByTestId('office-dirty-status').querySelector('.rounded-full')).toBeNull()
 
     act(() => useOfficeTabsStore.getState().activate(docx))
@@ -226,5 +226,200 @@ describe('OfficePage：有标签态（dirty / 主题 / 读失败）', () => {
 
     await waitFor(() => expect(screen.getByTestId('office-empty')).toBeInTheDocument())
     expect(screen.queryByTestId('office-workspace')).not.toBeInTheDocument()
+  })
+})
+
+/** 派发一条"来自面"的消息（jsdom 里 iframe 的 contentWindow 就是 about:blank 窗口） */
+function dispatchFromSurface(frameWindow: Window, data: unknown): void {
+  window.dispatchEvent(new MessageEvent('message', { data, source: frameWindow }))
+}
+
+/** 完成与面的握手 + 文档加载（驱动 OfficeSurface 的消息面，让壳拿到 editorReady） */
+async function bootEditorSurface(documentId: string): Promise<Window> {
+  const iframe = screen.getByTestId('office-surface-iframe') as HTMLIFrameElement
+  const frameWindow = iframe.contentWindow
+  if (frameWindow === null) throw new Error('iframe 没有 contentWindow')
+  vi.spyOn(frameWindow, 'postMessage')
+  act(() => dispatchFromSurface(frameWindow, { type: 'surface:hello', nonce: 'n-1', version: 1 }))
+  act(() => dispatchFromSurface(frameWindow, { type: 'surface:ready', nonce: 'n-1' }))
+  await waitFor(() =>
+    expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+  )
+  act(() =>
+    dispatchFromSurface(frameWindow, {
+      type: 'doc:loaded',
+      nonce: 'n-1',
+      documentId,
+      pages: 2
+    })
+  )
+  await waitFor(() =>
+    expect(screen.getByTestId('office-workspace')).toHaveAttribute('data-editor-state', 'ready')
+  )
+  return frameWindow
+}
+
+/** 取面收到的某类消息 */
+function sentToSurface(
+  frameWindow: Window,
+  type: string
+): Array<{ type: string; requestId?: string; documentId?: string }> {
+  const spy = vi.mocked(frameWindow.postMessage)
+  return spy.mock.calls
+    .map((call) => call[0] as { type: string; requestId?: string; documentId?: string })
+    .filter((message) => message.type === type)
+}
+
+describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误条）', () => {
+  it('编辑 → 脏；保存按钮 → doc:save → doc:save-bytes → office:save 成功 → 已保存', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-save', displayName: '保存.docx' }),
+      new Uint8Array([1, 2, 3])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-save', displayName: '保存.docx' }),
+      alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: true,
+      documentId: 'doc-save',
+      mtimeMs: 2,
+      sha256: 'b'.repeat(64),
+      size: 4,
+      savedAt: 1
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-save')
+
+    // 面报用户编辑 → 壳推进 editSeq → store 投影变脏
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:changed',
+        nonce: 'n-1',
+        documentId: 'doc-save',
+        revision: 1
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    )
+    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未保存修改')
+    expect(screen.getByTestId('office-save')).toBeEnabled()
+
+    fireEvent.click(screen.getByTestId('office-save'))
+    // 壳先向面要字节（generate）
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    expect(bridge.office.save).not.toHaveBeenCalled()
+    const saveMessage = sentToSurface(frameWindow, 'doc:save')[0]
+    if (saveMessage?.requestId === undefined) throw new Error('doc:save 没有 requestId')
+
+    // 面回字节 → 壳写盘 → 成功后清脏
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId: saveMessage.requestId,
+        documentId: 'doc-save',
+        bytes: new Uint8Array([1, 2, 3, 4])
+      })
+    )
+    await waitFor(() => expect(bridge.office.save).toHaveBeenCalledTimes(1))
+    expect(bridge.office.save).toHaveBeenCalledWith({
+      documentId: 'doc-save',
+      expectedSha256: 'a'.repeat(64),
+      bytes: new Uint8Array([1, 2, 3, 4])
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'false')
+    )
+    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('已保存')
+    expect(screen.getByTestId('office-save')).toBeDisabled()
+    expect(screen.queryByTestId('office-save-error')).not.toBeInTheDocument()
+  })
+
+  it('保存失败（write-locked）：dirty 保持 + 错误条 + 重试入口', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-lock', displayName: '占用.docx' }),
+      new Uint8Array([1])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-lock', displayName: '占用.docx' }),
+      alreadyOpen: false
+    })
+    bridge.office.save.mockResolvedValue({
+      ok: false,
+      code: 'write-locked',
+      message: '文件被其他程序占用，可以先另存为再替换'
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-lock')
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:changed',
+        nonce: 'n-1',
+        documentId: 'doc-lock',
+        revision: 1
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    )
+    fireEvent.click(screen.getByTestId('office-save'))
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
+    const requestId = sentToSurface(frameWindow, 'doc:save')[0]?.requestId
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:save-bytes',
+        nonce: 'n-1',
+        requestId,
+        documentId: 'doc-lock',
+        bytes: new Uint8Array([2])
+      })
+    )
+
+    const error = await screen.findByTestId('office-save-error')
+    expect(error).toHaveTextContent('文件被其他程序占用')
+    expect(screen.getByTestId('office-save-retry')).toBeInTheDocument()
+    expect(screen.getByTestId('office-save-as')).toBeInTheDocument()
+    // 失败绝不清脏
+    expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未保存修改')
+  })
+
+  it('壳侧 Ctrl+S（焦点不在 iframe 里）经 office-actions 触发保存', async () => {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId: 'doc-key', displayName: '快捷键.docx' }),
+      new Uint8Array([1])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-key', displayName: '快捷键.docx' }),
+      alreadyOpen: false
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    const frameWindow = await bootEditorSurface('doc-key')
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:changed',
+        nonce: 'n-1',
+        documentId: 'doc-key',
+        revision: 1
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'true')
+    )
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => expect(sentToSurface(frameWindow, 'doc:save')).toHaveLength(1))
   })
 })

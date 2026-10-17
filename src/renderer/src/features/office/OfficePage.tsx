@@ -4,7 +4,9 @@ import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, OFFICE_PANEL_ID } from './office-kinds'
-import { OfficeSurface, type OfficeSurfaceStatus } from './OfficeSurface'
+import { handleOfficeShortcut, registerOfficeRuntime, saveOfficeTab } from './office-actions'
+import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
+import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
 import { useOfficeUiStore } from './office-ui-store'
 import { useDocumentTheme } from './use-document-theme'
@@ -12,9 +14,15 @@ import { useDocumentTheme } from './use-document-theme'
 /**
  * Office 模块：独立于会话的多标签工作区。
  *
- * 2026-10-17（M3-S2）：mook「打开文件（示例）」列表已删；入口换成主进程的真实选择器
+ * 2026-10-17（M3-S2）：mock「打开文件（示例）」列表已删；入口换成主进程的真实选择器
  * （`window.kyclaw.office.openDialog()`，取消是一等结果）。成功打开后由注册表回
  * `OfficeDocumentInfo`，`openDocument` 按 **documentId** 去重/激活标签。
+ *
+ * 2026-10-17（M3-S3）：DOCX 标签挂**真编辑器**（隔离面内的 `DocxEditor`，字体本地注册）：
+ *   - 保存链路：壳 `office-save-machine`（generate→write→commit）+ 面 `doc:save`/`doc:save-bytes`；
+ *   - 运行时注册表 `office-actions`：保存按钮/壳侧 Ctrl+S 都经它找 `documentId` 的运行时
+ *     （常驻 `AppTabBar` 与 OfficePage 是兄弟子树，S4 再扩到标签条）；
+ *   - 脏徽标接真实状态：`data-dirty` 语义不变，文案升级为「已保存 / 未保存修改 / 保存中」。
  *
  * 顶栏「＋」仍走 office-ui-store 的 `pickerOpen` 标志（AppTabBar 与空态按钮共用一个动作）：
  * 页面看到标志置位就发起一次真实选择器请求，然后立刻把标志清掉。用 ref 去重是为了
@@ -78,6 +86,18 @@ export function OfficePage(): React.JSX.Element {
     })
   }, [pickerOpen, setPickerOpen, openViaDialog])
 
+  // 壳侧 Ctrl+S（焦点在壳里时）：经 office-actions 统一动作；焦点在 iframe 内由 S4 的面内转发补
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      if (event.key !== 's' && event.key !== 'S') return
+      // 有 active 文档才拦（没有文档时保留浏览器默认行为，不抢键）
+      if (handleOfficeShortcut('save')) event.preventDefault()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   return (
     <section data-testid="office-page" className="animate-page-in flex min-h-0 flex-1 flex-col">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-hairline px-4">
@@ -131,7 +151,7 @@ export function OfficePage(): React.JSX.Element {
   )
 }
 
-/** 有标签时的内容区：当前标签的标题/来源 + dirty 状态 + 编辑器占位 */
+/** 有标签时的内容区：当前标签的标题/来源 + 真实保存状态 + 隔离面（内含编辑器） */
 function OfficeWorkspace({
   tab,
   surfaceUrl
@@ -141,10 +161,12 @@ function OfficeWorkspace({
 }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
-  // M3-S2（临时）：DOCX 标签挂隔离面；字节由 office:read 取回，ready 后经 postMessage 投递。
-  // 编辑器内核在 S3；其它格式仍是占位。
+  // M3-S3：DOCX 标签挂真编辑器（面内 DocxEditor）；其它格式仍占位（后续步骤再接）
   const isDocx = tab.kind === 'docx'
   const theme = useDocumentTheme()
+  const surfaceRef = useRef<OfficeSurfaceHandle | null>(null)
+  const machineRef = useRef<OfficeSaveMachine | null>(null)
+
   // 状态带 tabId：同一个 OfficeWorkspace 实例跨标签复用，切走再切回来时旧状态自动失效
   // （不用 effect 复位——render 期按 tab.id 过滤，天然回到 loading）
   const [surfaceState, setSurfaceState] = useState<{ tabId: string; status: OfficeSurfaceStatus }>({
@@ -156,12 +178,16 @@ function OfficeWorkspace({
     setSurfaceState({ tabId: tab.id, status })
   }
 
-  /** 主进程回包里的文档信息 + 字节（S2 只在内存里中转给面，壳不持久化） */
+  /** 主进程回包里的文档信息 + 字节（壳只在内存里中转给面，不持久化内容） */
   const [loaded, setLoaded] = useState<{
     info: OfficeDocumentInfo
     bytes: Uint8Array
   } | null>(null)
   const [docError, setDocError] = useState('')
+  const [saveError, setSaveError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [editorReady, setEditorReady] = useState(false)
+  const [pageCount, setPageCount] = useState(0)
 
   useEffect(() => {
     // 每个标签一份 OfficeWorkspace（父组件用 key=tab.id），切标签会重建 → 这里不需要复位状态
@@ -194,6 +220,86 @@ function OfficeWorkspace({
     }
   }, [isDocx, tab.documentId])
 
+  // 保存状态机：文档字节到手后创建，并把运行时注册进模块级 registry（S4 的标签条也走它）
+  const loadedDocumentId = loaded?.info.documentId
+  const loadedSha256 = loaded?.info.sha256
+  useEffect(() => {
+    if (loadedDocumentId === undefined) return
+    const markDirty = (dirty: boolean): void => {
+      useOfficeTabsStore.getState().markDirty(tab.id, dirty)
+    }
+    const machine = createOfficeSaveMachine({
+      documentId: loadedDocumentId,
+      ...(loadedSha256 === undefined ? {} : { initialSha256: loadedSha256 }),
+      suggestedName: loaded?.info.displayName,
+      requestSaveBytes: async () => {
+        const surface = surfaceRef.current
+        if (surface === null) return null
+        return surface.requestSaveBytes()
+      },
+      saveIpc: (input) => window.kyclaw.office.save(input),
+      saveAsIpc: (input) => window.kyclaw.office.saveAs(input),
+      onDirtyChange: markDirty,
+      onSavingChange: setSaving,
+      onError: setSaveError,
+      onSavedAs: (document) => {
+        // 另存为成功：标签标题/路径跟新文件（documentId 不变），错误条清掉
+        useOfficeTabsStore.getState().replaceDocument(document)
+        setDocError('')
+      }
+    })
+    machineRef.current = machine
+    const unregister = registerOfficeRuntime(loadedDocumentId, {
+      save: () => machine.save(),
+      saveAs: () => machine.saveAs(),
+      close: async () => {
+        surfaceRef.current?.closeDocument()
+      }
+    })
+    return () => {
+      unregister()
+      if (machineRef.current === machine) machineRef.current = null
+    }
+    // loadedSha256 只作为初始基线：之后由 machine 自己维护，不随 loaded 更新而重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedDocumentId, tab.id])
+
+  // 注意：render 期不读 ref（react-hooks/refs）。editorReady 只会在保存状态机建好之后变真，
+  // 因此这个门足够；运行时缺失时 saveOfficeTab 自己会返回 false（不伪造成功）。
+  const canSave = isDocx && editorReady && tab.dirty && !saving
+
+  const requestSave = (): void => {
+    // 新一次尝试开始前清掉上一次的错误条（失败会由状态机再写回）
+    setSaveError('')
+    void saveOfficeTab(tab)
+  }
+  const requestSaveAs = (): void => {
+    setSaveError('')
+    void machineRef.current?.saveAs()
+  }
+
+  /** 面报告用户编辑：推进壳的 editSeq（dirty 真相在 machine，store 只是投影） */
+  const handleDocChanged = (): void => {
+    const machine = machineRef.current
+    if (machine !== null) {
+      machine.onChanged()
+      return
+    }
+    // 极端时序（编辑器先报变、状态机还没建）：至少让 UI 立刻变脏
+    useOfficeTabsStore.getState().markDirty(tab.id, true)
+  }
+
+  /** 面内保存请求（编辑器自己的 Ctrl+S / File > Save）→ 壳的保存状态机 */
+  const handleDocSaveRequest = (): void => {
+    requestSave()
+  }
+
+  /** 面内错误：保存阶段进保存错误条，其余进文档错误条 */
+  const handleDocError = (phase: 'open' | 'layout' | 'save' | 'runtime', message: string): void => {
+    if (phase === 'save') setSaveError(message)
+    else setDocError(message)
+  }
+
   return (
     <div
       id={OFFICE_PANEL_ID}
@@ -203,6 +309,7 @@ function OfficeWorkspace({
       data-kind={tab.kind}
       data-document-id={tab.documentId ?? ''}
       data-document-state={loaded === null ? (docError === '' ? 'loading' : 'error') : 'loaded'}
+      data-editor-state={isDocx ? (editorReady ? 'ready' : 'loading') : 'n/a'}
       className="flex min-h-0 flex-1 flex-col p-4"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-panel border-(length:--hairline-width) border-hairline bg-secondary">
@@ -215,16 +322,31 @@ function OfficeWorkspace({
               </p>
               <p className="truncate text-c1 text-ink-tertiary" title={source}>
                 {source}
+                {pageCount > 0 ? ` · ${pageCount} 页` : ''}
               </p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {isDocx ? (
-              // M3-S1 临时调试展示：隔离面握手状态（S2 接编辑器后由真实文档状态取代）
+              // 保存按钮：走 office-actions 的同一动作（S4 的标签条/iframe 内快捷键也走它）
+              <Button
+                data-testid="office-save"
+                variant="ghost"
+                size="sm"
+                loading={saving}
+                disabled={!canSave}
+                title="保存（Ctrl+S）"
+                onClick={requestSave}
+              >
+                保存
+              </Button>
+            ) : null}
+            {isDocx ? (
+              // 临时调试展示：隔离面握手状态（S1/S2 探针依赖，保留）
               <span
                 data-testid="office-surface-status"
                 data-state={surfaceStatus}
-                title="Office 隔离面握手状态（S1 调试展示）"
+                title="Office 隔离面握手状态"
                 className="inline-flex items-center rounded-badge bg-selected px-1.5 py-0.5 text-c2 text-ink-tertiary"
               >
                 隔离面 {surfaceStatus}
@@ -238,26 +360,40 @@ function OfficeWorkspace({
             <span
               data-testid="office-dirty-status"
               data-dirty={tab.dirty ? 'true' : 'false'}
-              title={tab.dirty ? '有未保存的修改' : '编辑器还没接上，这里不是"已保存"'}
+              data-saving={saving ? 'true' : 'false'}
+              title={
+                saving
+                  ? '正在写盘…'
+                  : tab.dirty
+                    ? '有未保存的修改（Ctrl+S 保存）'
+                    : '磁盘上的内容与编辑器里的一致'
+              }
               className={cn(
                 'inline-flex items-center rounded-badge px-1.5 py-0.5 text-c2',
                 tab.dirty ? 'bg-(--fill-selected) text-warning' : 'bg-selected text-ink-tertiary'
               )}
             >
-              {/* 用户 2026-10-17：编辑器没接之前「● 已保存」是在撒谎 —— 改成中性占位，
-                  去掉绿点/「已保存」字样；data-dirty 语义留着，接上编辑器后按真实保存态切换。 */}
-              {tab.dirty ? '未保存修改' : '未接编辑器'}
+              {saving ? '保存中…' : tab.dirty ? '未保存修改' : '已保存'}
             </span>
           </div>
         </div>
         {isDocx ? (
           <div className="relative flex min-h-0 flex-1 flex-col">
             <OfficeSurface
+              ref={surfaceRef}
               onStatusChange={handleSurfaceStatus}
               theme={theme}
               documentInfo={loaded?.info}
               documentBytes={loaded?.bytes}
               surfaceUrl={surfaceUrl}
+              onDocLoaded={(pages) => {
+                setEditorReady(true)
+                setPageCount(pages)
+                setDocError('')
+              }}
+              onDocChanged={handleDocChanged}
+              onDocSaveRequest={handleDocSaveRequest}
+              onDocError={handleDocError}
             />
             {docError === '' ? null : (
               <p
@@ -282,6 +418,23 @@ function OfficeWorkspace({
           </div>
         )}
       </div>
+      {saveError === '' ? null : (
+        <div
+          data-testid="office-save-error"
+          role="alert"
+          className="mt-2 flex shrink-0 items-center gap-3 rounded-control border-(length:--hairline-width) border-hairline bg-secondary px-3 py-2 text-c1 text-warning"
+        >
+          <span className="min-w-0 flex-1 truncate" title={saveError}>
+            {saveError}
+          </span>
+          <Button data-testid="office-save-retry" variant="ghost" size="sm" onClick={requestSave}>
+            重试
+          </Button>
+          <Button data-testid="office-save-as" variant="ghost" size="sm" onClick={requestSaveAs}>
+            另存为
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

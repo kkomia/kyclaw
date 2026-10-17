@@ -1,3 +1,4 @@
+import { createRef } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { officeDocumentFixture } from '@renderer/__tests__/kyclaw-bridge'
@@ -246,5 +247,126 @@ describe('OfficeSurface：M3-S2 文档投递与主题热切换', () => {
     // 主题切换不是重载：src 不变、状态仍是 ready
     expect(iframe.getAttribute('src')).toBe(srcBefore)
     expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+  })
+})
+
+describe('OfficeSurface：S3 数据面（保存/重载/关闭/事件回调）', () => {
+  const SURFACE = 'kyclaw-office://surface/'
+
+  /** 建一个带 ref 的壳，完成 hello→init→ready，返回面当前的非窗对象 */
+  function readySurface(
+    ref: React.RefObject<import('../OfficeSurface').OfficeSurfaceHandle | null>,
+    props: Partial<React.ComponentProps<typeof OfficeSurface>> = {}
+  ): Window {
+    render(<OfficeSurface ref={ref} surfaceUrl={SURFACE} {...props} />)
+    const frameWindow = getIframe().contentWindow as Window
+    dispatchFromSurface({ type: 'surface:hello', nonce: 'n-1', version: 1 })
+    dispatchFromSurface({ type: 'surface:ready', nonce: 'n-1' })
+    return frameWindow
+  }
+
+  it('requestSaveBytes：发 doc:save（带 requestId）→ 收到 doc:save-bytes 后兑现字节', async () => {
+    const ref = createRef<import('../OfficeSurface').OfficeSurfaceHandle>()
+    const frameWindow = readySurface(ref)
+    const postMessage = vi.spyOn(frameWindow, 'postMessage')
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+
+    const pending = ref.current?.requestSaveBytes()
+    expect(pending).toBeDefined()
+    await waitFor(() => {
+      const call = postMessage.mock.calls.find(
+        (entry) => (entry[0] as { type: string }).type === 'doc:save'
+      )
+      expect(call).toBeDefined()
+    })
+    const saveMessage = postMessage.mock.calls
+      .map((entry) => entry[0] as { type: string; requestId: string })
+      .find((message) => message.type === 'doc:save')
+    if (saveMessage === undefined) throw new Error('没有 doc:save')
+    dispatchFromSurface({
+      type: 'doc:save-bytes',
+      nonce: 'n-1',
+      requestId: saveMessage.requestId,
+      documentId: 'doc-1',
+      bytes: new Uint8Array([4, 5, 6])
+    })
+    await expect(pending).resolves.toEqual(new Uint8Array([4, 5, 6]))
+  })
+
+  it('doc:loaded / doc:changed / doc:save-request / doc:error 按 nonce 回调给壳', async () => {
+    const onDocLoaded = vi.fn()
+    const onDocChanged = vi.fn()
+    const onDocSaveRequest = vi.fn()
+    const onDocError = vi.fn()
+    const ref = createRef<import('../OfficeSurface').OfficeSurfaceHandle>()
+    readySurface(ref, { onDocLoaded, onDocChanged, onDocSaveRequest, onDocError })
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+
+    dispatchFromSurface({ type: 'doc:loaded', nonce: 'n-1', documentId: 'doc-1', pages: 3 })
+    dispatchFromSurface({ type: 'doc:changed', nonce: 'n-1', documentId: 'doc-1', revision: 7 })
+    dispatchFromSurface({ type: 'doc:save-request', nonce: 'n-1', documentId: 'doc-1' })
+    dispatchFromSurface({
+      type: 'doc:error',
+      nonce: 'n-1',
+      documentId: 'doc-1',
+      phase: 'save',
+      message: '没能生成保存内容'
+    })
+    // 伪造 nonce / 来源的消息一律丢弃
+    dispatchFromSurface({ type: 'doc:changed', nonce: 'forged', documentId: 'doc-1', revision: 9 })
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'doc:loaded', nonce: 'n-1', documentId: 'doc-1', pages: 99 },
+        source: null
+      })
+    )
+
+    expect(onDocLoaded).toHaveBeenCalledTimes(1)
+    expect(onDocLoaded).toHaveBeenCalledWith(3)
+    expect(onDocChanged).toHaveBeenCalledTimes(1)
+    expect(onDocChanged).toHaveBeenCalledWith(7)
+    expect(onDocSaveRequest).toHaveBeenCalledTimes(1)
+    expect(onDocError).toHaveBeenCalledWith('save', '没能生成保存内容')
+  })
+
+  it('closeDocument → doc:close；reloadDocument → doc:reload（字节随消息过结构化克隆）', async () => {
+    const ref = createRef<import('../OfficeSurface').OfficeSurfaceHandle>()
+    const frameWindow = readySurface(ref, {
+      documentInfo: officeDocumentFixture({ documentId: 'doc-close' }),
+      documentBytes: new Uint8Array([1])
+    })
+    const postMessage = vi.spyOn(frameWindow, 'postMessage')
+    await waitFor(() =>
+      expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'ready')
+    )
+    await waitFor(() =>
+      expect(
+        postMessage.mock.calls.some((entry) => (entry[0] as { type: string }).type === 'doc:open')
+      ).toBe(true)
+    )
+
+    ref.current?.reloadDocument(new Uint8Array([9, 9]))
+    expect(
+      postMessage.mock.calls
+        .map((entry) => entry[0] as { type: string; bytes?: Uint8Array })
+        .some((message) => message.type === 'doc:reload' && message.bytes?.byteLength === 2)
+    ).toBe(true)
+
+    ref.current?.closeDocument()
+    expect(
+      postMessage.mock.calls
+        .map((entry) => entry[0] as { type: string; documentId?: string })
+        .some((message) => message.type === 'doc:close' && message.documentId === 'doc-close')
+    ).toBe(true)
+  })
+
+  it('面未 ready 时 requestSaveBytes 直接回 null（不悬着等）', async () => {
+    const ref = createRef<import('../OfficeSurface').OfficeSurfaceHandle>()
+    render(<OfficeSurface ref={ref} surfaceUrl={SURFACE} />)
+    await expect(ref.current?.requestSaveBytes()).resolves.toBeNull()
   })
 })
