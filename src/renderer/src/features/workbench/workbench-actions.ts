@@ -19,7 +19,8 @@ export interface WorkbenchAction {
 
 /** 空态四行：顺序即显示顺序 */
 export const WORKBENCH_ACTIONS: readonly WorkbenchAction[] = [
-  { kind: 'browser', label: '浏览器', icon: Globe, keys: ['Ctrl', 'T'] },
+  // T1：Ctrl+T 统一归顶栏「新标签页」，右栏浏览器不再占这个键（用右栏自己的＋/菜单）
+  { kind: 'browser', label: '浏览器', icon: Globe, keys: [] },
   { kind: 'files', label: '文件', icon: FolderTree, keys: ['Ctrl', 'Shift', 'E'] },
   { kind: 'git', label: '改动', icon: GitBranch, keys: ['Ctrl', 'Shift', 'G'] },
   { kind: 'terminal', label: '终端', icon: SquareTerminal, keys: ['Ctrl', '`'] }
@@ -28,13 +29,13 @@ export const WORKBENCH_ACTIONS: readonly WorkbenchAction[] = [
 /**
  * 键盘事件 → 要开的标签（没命中给 null）。
  * 宽容口径：左右 Ctrl 不分、字母大小写不分（Ctrl+Shift+E 在多数布局下 event.key 是 'E'）、
- * 反引号同时认 '`' 与 'Backquote'（不同布局/实现给的键名不一）。多按了 Alt/Meta 不算 ——
+ * 反引号同时认 '`' 与 'Backquote'（不同布局/实现给的键名不一）。Ctrl+T 不在这里（T1 起归顶栏
+ * 新标签页，见 lib/use-tab-shortcuts）。多按了 Alt/Meta 不算 ——
  * 那是别的快捷键的地盘。只认键帽上写着的那四个组合，Ctrl+E 之类不顺手多开。
  */
 export function matchWorkbenchShortcut(event: KeyboardEvent): WorkbenchTabKind | null {
   if (!event.ctrlKey || event.altKey || event.metaKey) return null
   const key = event.key.toLowerCase()
-  if (!event.shiftKey && key === 't') return 'browser'
   if (event.shiftKey && key === 'e') return 'files'
   if (event.shiftKey && key === 'g') return 'git'
   if (!event.shiftKey && (key === '`' || key === 'backquote')) return 'terminal'

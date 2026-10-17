@@ -53,6 +53,11 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@renderer/components/ui/cn'
+import {
+  handleTabListKeyDown,
+  tabCloseClass,
+  tabTriggerClass
+} from '@renderer/components/ui/tab-strip'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { Spinner } from '@renderer/components/ui/spinner'
@@ -147,10 +152,13 @@ export function Workbench(): React.JSX.Element {
   }, [rootPath, switchRoot, setWorkPanelOpen])
 
   // 空态那列键帽对应的快捷键（表在 workbench-actions：显示的组合就是这里接的组合）。
-  // 挂在 window 上而不是面板容器上：面板收起也生效（Workbench 常驻，收起只是宽 0）。
-  // 命中就吞掉事件，别再冒到别处（Electron 里也避免触发默认动作）。
+  // T1（2026-10-18）：**面板收起/离开 /chat 后快捷键不生效** —— 以前挂 window 上全局生效，
+  // 会在 /office 按 Ctrl+Shift+E 往看不见的面板里塞标签（审计 P1）。现在事件发生时先看
+  // shell-store 的 workPanelOpen；收起 = 不响应（恢复面板后标签状态仍在，store 没动）。
+  // 命中才吞事件（Electron 里也避免触发默认动作）。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (!useShellStore.getState().workPanelOpen) return
       const kind = matchWorkbenchShortcut(event)
       if (kind === null) return
       event.preventDefault()
@@ -165,6 +173,7 @@ export function Workbench(): React.JSX.Element {
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-(--seam-line) pr-2 pl-1">
         <div
           role="tablist"
+          onKeyDown={handleTabListKeyDown}
           aria-label="工作台标签页"
           className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
         >
@@ -183,14 +192,12 @@ export function Workbench(): React.JSX.Element {
                   id={`workbench-tab-${tab.id}`}
                   role="tab"
                   aria-selected={active}
+                  tabIndex={active ? 0 : -1}
                   aria-controls={`workbench-panel-${tab.id}`}
                   data-testid="workbench-tab"
                   title={label}
                   onClick={() => selectTab(tab.id)}
-                  className={cn(
-                    'flex h-7 max-w-44 min-w-0 cursor-default items-center gap-1.5 rounded-control pr-6 pl-2 text-b2 transition-colors duration-(--motion-fast) ease-main',
-                    active ? 'bg-selected text-ink' : 'text-ink-secondary hover:bg-hover'
-                  )}
+                  className={tabTriggerClass('workbench', active)}
                 >
                   <Icon aria-hidden="true" className="size-(--icon-size-sm) shrink-0" />
                   <span className="min-w-0 truncate">{label}</span>
@@ -201,10 +208,7 @@ export function Workbench(): React.JSX.Element {
                   data-testid="workbench-tab-close"
                   aria-label={`关闭 ${label}`}
                   onClick={() => closeTab(tab.id)}
-                  className={cn(
-                    'absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded-control text-ink-tertiary transition-[opacity,background-color,color] duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink focus-visible:opacity-100',
-                    active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                  )}
+                  className={tabCloseClass('workbench', active)}
                 >
                   <X aria-hidden="true" className="size-3.5" />
                 </button>
@@ -218,14 +222,14 @@ export function Workbench(): React.JSX.Element {
             trigger={
               <IconButton
                 data-testid="workbench-new-tab"
-                label="新建标签页"
+                label="新建工具标签页"
                 icon={<Plus />}
                 className="border-transparent hover:bg-hover"
               />
             }
             items={newTabItems(openTab)}
             align="end"
-            tooltip="新建标签页"
+            tooltip="新建工具标签页"
           />
           {/* 中间那个槽（round 77/78）：宽窗就是 ⤢ 全屏开关；auto 形态下全屏切换没有意义，
               换成能真正走出来的动作 —— 能并排就"恢复并排布局"（把宽度收进可用宽），
@@ -376,7 +380,7 @@ function renderTool(
     case 'terminal':
       return <TerminalTool root={root} active={active} />
     case 'preview':
-      return <PreviewTool root={root} relative={tab.path ?? ''} />
+      return <PreviewTool root={root} relative={tab.path ?? ''} tabId={tab.id} />
   }
 }
 

@@ -16,7 +16,9 @@
  */
 import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { useOfficeTabsStore, type OfficeTab } from '@renderer/features/office/office-tabs-store'
+import { isSamePreviewPath } from '@renderer/lib/tab-model'
 import { absoluteOf } from './use-workbench-root'
+import { useWorkbenchStore } from './workbench-store'
 
 /** 第一步只接 .docx（主进程也只认这个后缀）；入口只对 docx 显示，非 docx 不给假入口 */
 export function isOfficeEditablePath(path: string): boolean {
@@ -62,7 +64,20 @@ export async function openOfficeFromSession(
   // 调用方拿到 Error 原样展示（聊天卡/文件树既有错误行），不静默、不假装打开。
   const opened = useOfficeTabsStore.getState().openDocumentChecked(result.document)
   if (!opened.ok) throw new Error(opened.block.message)
+  // T1（2026-10-18）：同一个文档不允许"顶栏文档标签 + 右栏预览标签"各开一份 ——
+  // 顶栏是文档级唯一载体，打开/激活文档后把右栏里同路径的预览标签收掉（涉及多个入口的
+  // 唯一收口点：交付卡「编辑」、文件树「在 Office 标签页中打开/双击」都会走这里）。
+  closePreviewTabsFor(relative)
   return { document: result.document, tabId: opened.tabId, alreadyOpen: result.alreadyOpen }
+}
+
+/** T1：关掉右栏里与这份相对路径同一文件的预览标签（右栏不可见时也清理，保持"不双开"不变式） */
+function closePreviewTabsFor(relative: string): void {
+  const workbench = useWorkbenchStore.getState()
+  for (const tab of workbench.tabs) {
+    if (tab.kind !== 'preview' || !isSamePreviewPath(tab.path, relative)) continue
+    workbench.closeTab(tab.id)
+  }
 }
 
 /**

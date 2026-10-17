@@ -258,7 +258,7 @@ describe('FilesTool：单击预览', () => {
   })
 })
 
-describe('round 50 · 在新标签页中查看（双击 / 右键）', () => {
+describe('round 50 · 在右侧预览中打开（双击 / 右键；T1 起文档走顶栏 Office 标签）', () => {
   it('双击文件：开预览标签并开面板；单击那一档原样不动（内联预览照旧）', async () => {
     bed.bridge.workbench.listDir.mockResolvedValue({
       entries: [{ name: 'notes.txt', kind: 'file', size: 12 }],
@@ -292,13 +292,13 @@ describe('round 50 · 在新标签页中查看（双击 / 右键）', () => {
     expect(screen.getByTestId('file-preview')).toBeInTheDocument()
   })
 
-  it('右键文件的菜单里有「在新标签页中查看」，点了就开；目录的那份没有这一项', async () => {
+  it('右键文件的菜单里有「在右侧预览中打开」，点了就开；目录的那份没有这一项', async () => {
     render(<FilesTool root={rootOf()} />)
     await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
 
     fireEvent.contextMenu(screen.getByText('README.md'))
     const item = screen.getByTestId('workbench-context-menu-preview')
-    expect(item).toHaveTextContent('在新标签页中查看')
+    expect(item).toHaveTextContent('在右侧预览中打开')
     fireEvent.click(item)
 
     expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['preview'])
@@ -820,8 +820,8 @@ describe('round 42 · 右键「添加到上下文」', () => {
     expect(items[0]).toHaveTextContent('添加到上下文')
     expect(items.map((item) => item.textContent)).toEqual([
       '添加到上下文',
-      // round 50：文件的菜单里多一项「在新标签页中查看」（目录没有，见下）
-      '在新标签页中查看',
+      // T1：普通文件的菜单里是「在右侧预览中打开」（docx 换成顶栏 Office 标签，见后面 Office 一节）
+      '在右侧预览中打开',
       // round 77：用本机装的 Word / WPS / Excel 打开（目录没有这一项）
       '用本地应用打开',
       '在文件资源管理器中定位',
@@ -830,7 +830,7 @@ describe('round 42 · 右键「添加到上下文」', () => {
 
     const dirMenu = menuOf('src')
     expect(within(dirMenu).queryByText('添加到上下文')).not.toBeInTheDocument()
-    expect(within(dirMenu).queryByText('在新标签页中查看')).not.toBeInTheDocument()
+    expect(within(dirMenu).queryByText('在右侧预览中打开')).not.toBeInTheDocument()
     expect(within(dirMenu).queryByText('用本地应用打开')).not.toBeInTheDocument()
     expect(within(dirMenu).getAllByRole('menuitem')).toHaveLength(2)
   })
@@ -1133,8 +1133,8 @@ describe('round 42 · 预览区选中文字的自绘右键菜单', () => {
   })
 })
 
-/* M3-S4：右键「在 Office 中编辑」（仅 .docx；与聊天交付卡共用 office-open 的同一份逻辑） */
-describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
+/* M3-S4：右键「在 Office 标签页中打开」（仅 .docx；与聊天交付卡共用 office-open 的同一份逻辑） */
+describe('FilesTool：右键「在 Office 标签页中打开」（M3-S4）', () => {
   // 树上的根级 docx（相对路径就是文件名；主进程按会话根解析，渲染端只递这个相对路径）
   const DOCX = '方案.docx'
 
@@ -1160,7 +1160,7 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
     })
   }
 
-  it('菜单：docx 才有「在 Office 中编辑」（在「用本地应用打开」之前）；md 与目录都没有', async () => {
+  it('菜单：docx 才有「在 Office 标签页中打开」（在「用本地应用打开」之前）；md 与目录都没有', async () => {
     stubDocxTree()
     render(<FilesTool root={rootOf()} />)
     await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
@@ -1172,8 +1172,7 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
         .map((item) => item.textContent)
     ).toEqual([
       '添加到上下文',
-      '在新标签页中查看',
-      '在 Office 中编辑',
+      '在 Office 标签页中打开',
       '用本地应用打开',
       '在文件资源管理器中定位',
       '复制路径'
@@ -1182,13 +1181,13 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
 
     fireEvent.contextMenu(screen.getByText('README.md'))
     expect(
-      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 中编辑')
+      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 标签页中打开')
     ).not.toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Escape' })
 
     fireEvent.contextMenu(screen.getByText('src'))
     expect(
-      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 中编辑')
+      within(screen.getByTestId('workbench-context-menu')).queryByText('在 Office 标签页中打开')
     ).not.toBeInTheDocument()
   })
 
@@ -1199,7 +1198,7 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
     await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
 
     fireEvent.contextMenu(screen.getByText('方案.docx'))
-    fireEvent.click(screen.getByText('在 Office 中编辑'))
+    fireEvent.click(screen.getByText('在 Office 标签页中打开'))
 
     await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
     expect(bed.bridge.office.openFromSession).toHaveBeenCalledWith('thread-1', DOCX)
@@ -1227,12 +1226,12 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
     await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
 
     fireEvent.contextMenu(screen.getByText('方案.docx'))
-    fireEvent.click(screen.getByText('在 Office 中编辑'))
+    fireEvent.click(screen.getByText('在 Office 标签页中打开'))
     await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
     const firstId = useOfficeTabsStore.getState().tabs[0]?.id
 
     fireEvent.contextMenu(screen.getByText('方案.docx'))
-    fireEvent.click(screen.getByText('在 Office 中编辑'))
+    fireEvent.click(screen.getByText('在 Office 标签页中打开'))
 
     await waitFor(() => expect(bed.bridge.office.openFromSession).toHaveBeenCalledTimes(2))
     expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
@@ -1250,10 +1249,27 @@ describe('FilesTool：右键「在 Office 中编辑」（M3-S4）', () => {
     await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
 
     fireEvent.contextMenu(screen.getByText('方案.docx'))
-    fireEvent.click(screen.getByText('在 Office 中编辑'))
+    fireEvent.click(screen.getByText('在 Office 标签页中打开'))
 
     expect(await screen.findByTestId('file-preview-error')).toHaveTextContent('读不了这个文件')
     expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
     expect(window.location.hash).not.toBe('#/office')
+  })
+
+  it('T1 双开去重：右栏已有同文件预览标签时，打开 Office 标签会把它收掉（文档级唯一载体）', async () => {
+    stubDocxTree()
+    stubOpenSuccess()
+    // 先让右栏里开着同一份 docx 的预览标签（模拟旧入口/右键预览留下的状态）
+    useWorkbenchStore.getState().openPreviewTab(DOCX)
+    expect(useWorkbenchStore.getState().tabs.map((tab) => tab.kind)).toEqual(['preview'])
+
+    render(<FilesTool root={rootOf()} />)
+    await waitFor(() => expect(screen.getByText('方案.docx')).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByText('方案.docx'))
+    fireEvent.click(screen.getByText('在 Office 标签页中打开'))
+
+    await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(1))
+    expect(useWorkbenchStore.getState().tabs).toHaveLength(0)
   })
 })

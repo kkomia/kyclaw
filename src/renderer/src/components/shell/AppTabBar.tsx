@@ -3,6 +3,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
+import { handleTabListKeyDown, tabTriggerClass } from '@renderer/components/ui/tab-strip'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { useNewTabStore } from '@renderer/features/newtab/new-tab-store'
 import {
@@ -26,6 +27,7 @@ import {
   type OfficeTab
 } from '@renderer/features/office/office-tabs-store'
 import { useOfficeUiStore } from '@renderer/features/office/office-ui-store'
+import { useTabShortcuts } from '@renderer/lib/use-tab-shortcuts'
 
 export interface AppTabBarProps {
   /**
@@ -50,14 +52,14 @@ export interface AppTabBarProps {
  * 活动标签变化 / 窗口 resize 后 scrollIntoView；标签间 1px 分隔线、active 两侧隐藏），末尾「＋」
  * = 去 /office 并打开「打开文件」弹窗（标志放 office-ui-store）。
  *
- * v2 路由口径（用户看完布局后拍板）：
- *   - 文档标签的激活态**只在 /office 生效**（其他路由不高亮，activeTabId 保留，切回 Office 继续亮）；
- *   - Ctrl+Tab / Ctrl+Shift+Tab **只在 /office 且文档标签 >0** 时响应，其他路由不抢键；
- *   - Ctrl+W（D14，M3-S4 口径变更）：**只在 /office** 关当前文档标签；其他路由若开着文档标签
- *     仍然 `preventDefault()` 压住 Electron 的默认关窗，但 **no-op**（不误关 Office 标签）；
- *   - Ctrl+S（M3-S4）：只在 /office 且文档标签 >0 时把 active 标签交给 `saveOfficeTab`
- *     （与 OfficePage 保存按钮、面内 `surface:shortcut` 同一实现）；
- *   - 确认弹窗 / 打开文件弹窗开着时快捷键只吞键、no-op。
+ * T1 生态口径（2026-10-18 Lead 拍板；快捷键矩阵见 `lib/use-tab-shortcuts.ts`）：
+ *   - 顶栏 = **文档级唯一载体**：主对话（固定、永不关）+ 新标签页（空名单例）+ 文档；
+ *     文档标签激活态**只在 /office 生效**（其他路由不高亮，activeTabId 保留，切回继续亮）；
+ *   - **Ctrl+W 按上下文归属**：右栏可见且焦点在右栏时由 use-tab-shortcuts 判给右栏；否则关
+ *     可关的顶栏空白/文档标签；主对话永不关；都没有 → 吞键不做事（绝不漏给 Electron 关窗）；
+ *   - **Ctrl+Tab / Ctrl+Shift+Tab 全局**只在顶栏文档标签内循环；**Ctrl+T 全局=顶栏新标签页**
+ *     （右栏浏览器已让出这个键）；Ctrl+S 仍只在 /office 保存当前文档；
+ *   - 确认弹窗 / 打开文件弹窗 / 退出确认开着时快捷键只吞键、no-op。
  *
  * M3-S4：关闭先走 `closeOfficeTab`（面 `doc:close` → `office:release` → store close）；脏标签
  * 三态（保存/放弃/取消）在本文的 Dialog 里，**保存失败或没有运行时都会停在弹窗**，不吞标签。
@@ -164,7 +166,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
       }
 
       if (action === 'next-tab' || action === 'prev-tab') {
-        if (!inOffice || state.tabs.length === 0) return false
+        // T1：循环只在顶栏文档标签内（全局；面内转发与壳侧同一套）
+        if (state.tabs.length === 0) return false
         if (dialogsOpen) return true
         // task-80：文档循环（v1）不含空白伪标签；进入文档循环 = 空白退出前台（标签仍保留）
         useNewTabStore.getState().deactivate()
@@ -188,10 +191,10 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
         return true
       }
       if (state.tabs.length === 0) return false
-      // D14：非 /office 仍然拦住默认关窗，但不关任何标签
-      if (!inOffice) return true
+      // T1：顶栏文档是文档级唯一载体 —— 不管当前在哪个路由，Ctrl+W 都关当前文档（脏态走三态）。
+      // 主对话是固定标签、不在 state.tabs 里，所以永远关不到它。
       if (dialogsOpen) return true
-      requestClose(state.activeTabId)
+      requestClose(state.activeTabId === '' ? (state.tabs[0]?.id ?? '') : state.activeTabId)
       return true
     },
     [closeBlankTab, confirming, inOffice, requestClose, saveService]
@@ -235,21 +238,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
     return () => container.removeEventListener('wheel', onWheel)
   }, [])
 
-  // 键盘快捷键（壳侧焦点）：只做"按键 → 动作"的映射，动作语义全在 runShortcut。
-  // Ctrl+S/W/Tab 都走这里；面内转发的同一套动作也落到 runShortcut（见上）。
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      let action: OfficeShortcutAction | null = null
-      if (event.key === 'Tab') action = event.shiftKey ? 'prev-tab' : 'next-tab'
-      else if ((event.key === 'w' || event.key === 'W') && !event.shiftKey) action = 'close'
-      else if (event.key === 's' || event.key === 'S') action = 'save'
-      if (action === null) return
-      if (runShortcut(action)) event.preventDefault()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [runShortcut])
+  // 键盘快捷键（壳侧焦点）：见下方 useTabShortcuts（T1 起与右栏共用一套上下文判定）；
+  // 面内转发的同一套动作仍落到 runShortcut（见上）。
 
   const selectTab = (id: string): void => {
     // task-80：任何文档激活路径都先让空白退出前台（标签留在条上，不自动关）
@@ -269,6 +259,45 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
     useNewTabStore.getState().open()
     navigate('/office')
   }
+
+  /** T1：顶栏文档标签循环（Ctrl+Tab / Ctrl+Shift+Tab；全局；空白退出前台） */
+  const cycleTopTabs = useCallback((step: 1 | -1): void => {
+    const state = useOfficeTabsStore.getState()
+    if (state.tabs.length === 0) return
+    useNewTabStore.getState().deactivate()
+    const current = state.tabs.findIndex((tab) => tab.id === state.activeTabId)
+    const nextIndex =
+      current === -1
+        ? step === -1
+          ? state.tabs.length - 1
+          : 0
+        : (current + step + state.tabs.length) % state.tabs.length
+    const next = state.tabs[nextIndex]
+    if (next !== undefined) state.activate(next.id)
+  }, [])
+
+  /** T1：保存当前文档标签（Ctrl+S 只在 /office 且有文档时由快捷键层放行到这里） */
+  const saveTopTab = useCallback((): void => {
+    const state = useOfficeTabsStore.getState()
+    const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0]
+    if (activeTab !== undefined) void saveService(activeTab)
+  }, [saveService])
+
+  /** 快捷键层判断"有没有模态框开着"：开着只吞键、no-op */
+  const isDialogOpen = useCallback(
+    (): boolean => confirming || useOfficeUiStore.getState().pickerOpen || isOfficeQuitInFlight(),
+    [confirming]
+  )
+
+  // T1：壳侧快捷键统一入口（上下文判定 + Ctrl+W 归属在 lib/use-tab-shortcuts）
+  useTabShortcuts({
+    closeTopTab: requestClose,
+    closeBlankTab,
+    cycleTopTabs,
+    openTopNewTab: openNewTab,
+    saveTopTab,
+    isDialogOpen
+  })
 
   const resolveDirtyClose = (action: DirtyCloseAction): void => {
     if (pendingTab === undefined) return
@@ -297,12 +326,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
     })()
   }
 
-  /** 白底 pill（激活）/ 纯文字（未激活）——「主对话」与文档标签共用同一档外观 */
-  const tabClass = (active: boolean): string =>
-    cn(
-      'flex h-full w-full min-w-0 items-center gap-1.5 rounded-control text-left text-b2 font-medium transition-colors duration-(--motion-fast) ease-main',
-      active ? 'bg-surface text-ink' : 'text-ink-secondary hover:bg-hover hover:text-ink'
-    )
+  /** 共用 TabStrip 家族规格（task-103）：顶栏 pill 形态，底部条状共享同一套 token */
+  const tabClass = (active: boolean): string => tabTriggerClass('app', active)
 
   return (
     <>
@@ -312,6 +337,7 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
           ref={scrollRef}
           data-testid="app-tabbar-scroll"
           role="tablist"
+          onKeyDown={handleTabListKeyDown}
           aria-label="应用标签页"
           className="no-drag flex h-full min-w-0 items-center overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
@@ -323,6 +349,7 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
               id="app-tab-chat"
               data-testid="app-tab-chat"
               aria-selected={inChat}
+              tabIndex={inChat ? 0 : -1}
               title="主对话"
               onClick={() => navigate('/chat')}
               onAuxClick={(event) => {
@@ -367,6 +394,7 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
                     id={`office-tab-${tab.id}`}
                     aria-controls={officePanelIdOf(tab.id)}
                     aria-selected={active}
+                    tabIndex={active ? 0 : -1}
                     data-testid="app-tab"
                     data-office-tab-id={tab.id}
                     data-kind={tab.kind}
@@ -440,6 +468,7 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
                   data-testid="app-tab-newtab"
                   data-newtab-tab="true"
                   aria-selected={inOffice && newTabActive}
+                  tabIndex={inOffice && newTabActive ? 0 : -1}
                   title="新标签页"
                   aria-label="新标签页"
                   onClick={selectNewTab}
@@ -478,8 +507,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
         <button
           type="button"
           data-testid="app-tab-add"
-          aria-label="新建标签页"
-          title="新建标签页"
+          aria-label="打开新标签页"
+          title="打开新标签页"
           onClick={openNewTab}
           className="no-drag flex size-7 shrink-0 items-center justify-center rounded-control text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink"
         >

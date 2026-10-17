@@ -16,6 +16,11 @@ import {
 } from '@renderer/features/office/office-tabs-store'
 import { resetOfficeUiStore, useOfficeUiStore } from '@renderer/features/office/office-ui-store'
 import { resetNewTabStore, useNewTabStore } from '@renderer/features/newtab/new-tab-store'
+import {
+  resetWorkbenchStore,
+  useWorkbenchStore
+} from '@renderer/features/workbench/workbench-store'
+import { useShellStore } from '@renderer/lib/shell-store'
 import { AppTabBar, type AppTabBarProps } from '../AppTabBar'
 
 beforeEach(() => {
@@ -24,12 +29,16 @@ beforeEach(() => {
   resetOfficeUiStore()
   resetOfficeActionsForTest()
   resetNewTabStore()
+  resetWorkbenchStore()
+  useShellStore.setState({ workPanelOpen: false })
 })
 
 afterEach(() => {
   clearKyclawBridge()
   resetOfficeActionsForTest()
   resetNewTabStore()
+  resetWorkbenchStore()
+  useShellStore.setState({ workPanelOpen: false })
 })
 
 /** 路由落点探针：点标签 / 按「＋」之后要能断言真的去了目标路由 */
@@ -157,8 +166,8 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/chat')
     expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
 
-    // 没有文档标签：Ctrl+W 不归我们管（不 preventDefault），固定标签也永远关不到
-    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(true)
+    // T1：没有可关的标签时 Ctrl+W 仍要吞键（防 Electron 关窗），固定标签永远关不到
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
     expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
@@ -306,42 +315,27 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(useOfficeTabsStore.getState().activeTabId).toBe(xlsx)
   })
 
-  it('Ctrl+Tab 在其他路由完全不抢键（/chat、/notes 都返回未拦）', () => {
-    const xlsx = useOfficeTabsStore.getState().open({ kind: 'xlsx', path: 'c.xlsx' })
+  it('Ctrl+Tab / Ctrl+Shift+Tab 全局：/chat、/notes 也循环顶栏文档标签', () => {
+    const first = useOfficeTabsStore.getState().open({ kind: 'xlsx', path: 'c.xlsx' })
+    const second = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
     const unmount = renderTabBar({}, '/chat')
 
-    expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true })).toBe(true)
-    expect(useOfficeTabsStore.getState().activeTabId).toBe(xlsx)
+    expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true })).toBe(false)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(first)
     unmount()
 
-    // 换一个非 chat 路由再验一次
     renderTabBar({}, '/notes')
-    expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true, shiftKey: true })).toBe(true)
-    expect(useOfficeTabsStore.getState().activeTabId).toBe(xlsx)
+    expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true, shiftKey: true })).toBe(false)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(second)
   })
 
-  it('Ctrl+W（D14）：/office 关当前文档标签；非 /office 只拦默认、绝不误关标签', async () => {
+  it('Ctrl+W（T1 全局）：在任何路由都关顶栏当前文档；主对话永不关、没有可关的只吞键', async () => {
     useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
     useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
     useOfficeTabsStore.getState().open({ kind: 'xlsx', path: 'c.xlsx' })
-    const before = useOfficeTabsStore.getState().activeTabId
-    const unmountChat = renderTabBar({}, '/chat')
+    renderTabBar({}, '/chat')
 
-    // 非 Office：仍然拦住 Electron 默认关窗（preventDefault），但标签一个不关
-    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
-    expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.path)).toEqual([
-      'a.docx',
-      'b.pptx',
-      'c.xlsx'
-    ])
-    expect(useOfficeTabsStore.getState().activeTabId).toBe(before)
-    // 没按 Ctrl：不是我们的快捷键，不拦；Ctrl+Shift+W 也不归我们管
-    expect(fireEvent.keyDown(window, { key: 'w' })).toBe(true)
-    expect(fireEvent.keyDown(window, { key: 'W', ctrlKey: true, shiftKey: true })).toBe(true)
-    unmountChat()
-
-    // /office：关掉当前（第三个）标签
-    renderTabBar({}, '/office')
+    // T1：非 /office 也关当前文档（顶栏是文档级唯一载体，不再只在 /office 生效）
     expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
     await waitFor(() =>
       expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.path)).toEqual([
@@ -349,10 +343,15 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
         'b.pptx'
       ])
     )
-    expect(useOfficeTabsStore.getState().activeTabId).toBe(
-      useOfficeTabsStore.getState().tabs[1]?.id
-    )
     expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
+
+    // 主对话固定标签：没有文档后 Ctrl+W 仍然吞键（防关窗）但不关任何东西
+    useOfficeTabsStore.getState().closeAll()
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+    expect(screen.getByTestId('app-tab-chat')).toBeInTheDocument()
+    // 没按 Ctrl：不是我们的快捷键，不拦；Ctrl+Shift+W 也不归我们管
+    expect(fireEvent.keyDown(window, { key: 'w' })).toBe(true)
+    expect(fireEvent.keyDown(window, { key: 'W', ctrlKey: true, shiftKey: true })).toBe(true)
   })
 
   it('Ctrl+S：只在 /office 且有标签时把 active 标签交给保存服务；非 /office 不抢键', async () => {
@@ -403,10 +402,10 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
   })
 
-  it('没有文档标签时不拦截 Ctrl+W / Ctrl+Tab（不抢窗口的默认动作）', () => {
+  it('没有文档标签时：Ctrl+W 吞键不做事（防关窗），Ctrl+Tab 不抢键', () => {
     renderTabBar()
 
-    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
     expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true })).toBe(true)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
@@ -429,7 +428,7 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/office')
     expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: true })
     expect(useOfficeUiStore.getState().pickerOpen).toBe(false)
-    expect(screen.getByTestId('app-tab-add')).toHaveAttribute('aria-label', '新建标签页')
+    expect(screen.getByTestId('app-tab-add')).toHaveAttribute('aria-label', '打开新标签页')
 
     // 再点一次「＋」：只激活，不叠第二个空白标签
     fireEvent.click(screen.getByTestId('app-tab-add'))
@@ -577,5 +576,94 @@ describe('AppTabBar · task-80 空白伪标签', () => {
     expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
     expect(useNewTabStore.getState().isOpen).toBe(true)
     expect(useOfficeTabsStore.getState().activeTabId).not.toBe(docx)
+  })
+})
+
+/**
+ * T1（2026-10-18）：快捷键上下文归属 —— 顶栏=文档级载体、右栏=工具面板。
+ */
+describe('AppTabBar · T1 上下文快捷键', () => {
+  /** 右栏容器 + 可聚焦按钮（isFocusInWorkPanel 只认 [data-testid="work-panel"] 内） */
+  function mountWorkPanel(): { panel: HTMLElement; focusTarget: HTMLElement; cleanup: () => void } {
+    const panel = document.createElement('div')
+    panel.setAttribute('data-testid', 'work-panel')
+    const button = document.createElement('button')
+    button.textContent = '右栏焦点'
+    panel.appendChild(button)
+    document.body.appendChild(panel)
+    return { panel, focusTarget: button, cleanup: () => panel.remove() }
+  }
+
+  it('Ctrl+T 全局 = 顶栏新标签页（/chat 与 /notes 都生效；不碰右栏浏览器）', () => {
+    const unmount = renderTabBar({}, '/chat')
+    expect(fireEvent.keyDown(window, { key: 't', ctrlKey: true })).toBe(false)
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: true })
+    expect(screen.getByTestId('location')).toHaveTextContent('/office')
+    expect(useWorkbenchStore.getState().tabs).toHaveLength(0)
+    unmount()
+
+    renderTabBar({}, '/notes')
+    expect(fireEvent.keyDown(window, { key: 't', ctrlKey: true })).toBe(false)
+    // 单例：再按一次只激活，不叠第二个空白标签
+    expect(screen.getAllByTestId('app-tab-newtab')).toHaveLength(1)
+  })
+
+  it('Ctrl+W 右栏上下文：右栏可见且焦点在右栏 → 关右栏标签，不关顶栏文档', () => {
+    const panel = mountWorkPanel()
+    try {
+      useShellStore.setState({ workPanelOpen: true })
+      const files = useWorkbenchStore.getState()
+      files.openTab('files')
+      const doc = useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
+      renderTabBar({}, '/chat')
+      panel.focusTarget.focus()
+      expect(document.activeElement).toBe(panel.focusTarget)
+
+      expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+      expect(useWorkbenchStore.getState().tabs).toHaveLength(0)
+      expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([doc])
+    } finally {
+      panel.cleanup()
+    }
+  })
+
+  it('Ctrl+W 焦点不在右栏 / 右栏不可见：一律回到顶栏文档载体', async () => {
+    const mounted = mountWorkPanel()
+    try {
+      useShellStore.setState({ workPanelOpen: true })
+      useWorkbenchStore.getState().openTab('files')
+      useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
+      renderTabBar({}, '/chat')
+
+      // 焦点不在右栏（body）：关顶栏文档，右栏标签不动
+      expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+      await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
+      expect(useWorkbenchStore.getState().tabs).toHaveLength(1)
+
+      // 右栏不可见（面板收起）时即使焦点残留在右栏 DOM 内，也不归右栏
+      useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+      useShellStore.setState({ workPanelOpen: false })
+      mounted.focusTarget.focus()
+      expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+      await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
+      expect(useWorkbenchStore.getState().tabs).toHaveLength(1)
+    } finally {
+      mounted.cleanup()
+    }
+  })
+
+  it('Ctrl+W 右栏可见但右栏没有标签 → 回落到顶栏文档（不误吞）', async () => {
+    const panel = mountWorkPanel()
+    try {
+      useShellStore.setState({ workPanelOpen: true })
+      useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+      renderTabBar({}, '/chat')
+      panel.focusTarget.focus()
+
+      expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+      await waitFor(() => expect(useOfficeTabsStore.getState().tabs).toHaveLength(0))
+    } finally {
+      panel.cleanup()
+    }
   })
 })

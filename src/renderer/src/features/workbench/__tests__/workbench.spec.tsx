@@ -5,7 +5,6 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useShellStore } from '@renderer/lib/shell-store'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
-import { WorkPanel } from '@renderer/components/shell/WorkPanel'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 import { useWorkbenchStore } from '../workbench-store'
 import { Workbench } from '../Workbench'
@@ -523,7 +522,8 @@ describe('Workbench 空态：动作列表 + 真实快捷键（round 46）', () =
       '改动',
       '终端'
     ])
-    expect(keyCapsOf('browser')).toEqual(['Ctrl', 'T'])
+    // T1：Ctrl+T 统一归顶栏新标签页，右栏浏览器不再显示/占用这个键
+    expect(keyCapsOf('browser')).toEqual([])
     expect(keyCapsOf('files')).toEqual(['Ctrl', 'Shift', 'E'])
     expect(keyCapsOf('git')).toEqual(['Ctrl', 'Shift', 'G'])
     expect(keyCapsOf('terminal')).toEqual(['Ctrl', '`'])
@@ -533,7 +533,8 @@ describe('Workbench 空态：动作列表 + 真实快捷键（round 46）', () =
       'focus-visible:bg-hover',
       'duration-(--motion-fast)'
     )
-    expect(rows[0]!.querySelector('kbd')).toHaveClass(
+    expect(rows[0]!.querySelector('kbd')).toBeNull()
+    expect(rows[1]!.querySelector('kbd')).toHaveClass(
       'border-hairline',
       'rounded-badge',
       'font-mono'
@@ -571,54 +572,60 @@ describe('Workbench 空态：动作列表 + 真实快捷键（round 46）', () =
     expect(kinds()).toEqual(['git'])
   })
 
-  it('快捷键：Ctrl+T / Ctrl+Shift+E / Ctrl+Shift+G / Ctrl+` 各开一种（大小写与左右修饰键宽容）', () => {
+  it('快捷键：Ctrl+Shift+E / Ctrl+Shift+G / Ctrl+` 各开一种（大小写宽容）；Ctrl+T 不再开右栏浏览器', () => {
     render(<Workbench />)
     toEmpty()
 
+    // T1：Ctrl+T 归顶栏新标签页（lib/use-tab-shortcuts），右栏不再响应
     fireEvent.keyDown(window, { key: 't', ctrlKey: true })
+    expect(kinds()).toEqual([])
+
     // Ctrl+Shift+E 在多数布局下 event.key 是 'E'（大写）
     fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
     fireEvent.keyDown(window, { key: 'G', ctrlKey: true, shiftKey: true })
     fireEvent.keyDown(window, { key: '`', ctrlKey: true })
-    expect(kinds()).toEqual(['browser', 'files', 'git', 'terminal'])
+    expect(kinds()).toEqual(['files', 'git', 'terminal'])
 
     // 反引号的另一套键名（有的实现给 'Backquote'）同样命中终端：关掉再按，重新开一个
     fireEvent.click(screen.getByRole('button', { name: '关闭 终端' }))
-    expect(kinds()).toEqual(['browser', 'files', 'git'])
+    expect(kinds()).toEqual(['files', 'git'])
     fireEvent.keyDown(window, { key: 'Backquote', ctrlKey: true })
-    expect(kinds()).toEqual(['browser', 'files', 'git', 'terminal'])
+    expect(kinds()).toEqual(['files', 'git', 'terminal'])
   })
 
   it('快捷键不命中：无 Ctrl 的单键 / 少 Shift / 多按 Alt·Meta 都不开；命中时吞掉事件', () => {
     render(<Workbench />)
     toEmpty()
 
-    // 没命中就不动事件（fireEvent 返回 false 表示 defaultPrevented）
-    expect(fireEvent.keyDown(window, { key: 't' })).toBe(true)
-    expect(fireEvent.keyDown(window, { key: 'T', shiftKey: true })).toBe(true)
+    // 没命中就不动事件（fireEvent 返回 true 表示未 preventDefault）
+    expect(fireEvent.keyDown(window, { key: 'E', shiftKey: true })).toBe(true)
     expect(fireEvent.keyDown(window, { key: 'e', ctrlKey: true })).toBe(true)
     expect(fireEvent.keyDown(window, { key: 'g', ctrlKey: true })).toBe(true)
-    expect(fireEvent.keyDown(window, { key: 't', ctrlKey: true, altKey: true })).toBe(true)
-    expect(fireEvent.keyDown(window, { key: 't', ctrlKey: true, metaKey: true })).toBe(true)
+    expect(
+      fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true, altKey: true })
+    ).toBe(true)
+    expect(
+      fireEvent.keyDown(window, { key: 'e', ctrlKey: true, shiftKey: true, metaKey: true })
+    ).toBe(true)
     expect(fireEvent.keyDown(window, { key: 'x', ctrlKey: true })).toBe(true)
     expect(useWorkbenchStore.getState().tabs).toEqual([])
 
     // 命中：吞掉事件
-    expect(fireEvent.keyDown(window, { key: 't', ctrlKey: true })).toBe(false)
-    expect(kinds()).toEqual(['browser'])
+    expect(fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })).toBe(false)
+    expect(kinds()).toEqual(['files'])
   })
 
-  it('面板收起也生效（监听在 window 上；WorkPanel 收起只是宽 0，不卸载）', () => {
-    render(
-      <WorkPanel open={false}>
-        <Workbench />
-      </WorkPanel>
-    )
+  it('面板收起/离开 /chat 后快捷键不生效（T1：不再产生"看不见的标签"）；打开后恢复可用', () => {
+    useShellStore.setState({ workPanelOpen: false })
+    render(<Workbench />)
     toEmpty()
-    expect(screen.getByTestId('workbench-empty-actions')).toBeInTheDocument()
 
-    fireEvent.keyDown(window, { key: 't', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    expect(kinds()).toEqual([])
 
-    expect(kinds()).toEqual(['browser'])
+    // 打开面板（= 用户在 /chat 里展开右栏）后同一按键生效；标签状态没被清
+    act(() => useShellStore.setState({ workPanelOpen: true }))
+    fireEvent.keyDown(window, { key: 'E', ctrlKey: true, shiftKey: true })
+    expect(kinds()).toEqual(['files'])
   })
 })

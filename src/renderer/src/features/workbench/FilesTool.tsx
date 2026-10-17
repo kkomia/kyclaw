@@ -161,15 +161,8 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     [threadId, workbench]
   )
 
-  /**
-   * round 50：**双击文件**在新标签页里打开（单击的内联预览原样不动）。
-   * 开面板是调用方的事（store 只管标签）——这里顺带把右栏打开，否则新标签在收起的面板里看不见。
-   */
-  const openInTab = useCallback((relative: string): void => {
-    useWorkbenchStore.getState().openPreviewTab(relative)
-    useShellStore.getState().setWorkPanelOpen(true)
-  }, [])
-
+  // T1（2026-10-18）：openInTab 依赖 openInOffice（文档→顶栏 / 其它→右栏预览），
+  // 定义挪到 openInOffice 之后（见下方），这里只留占位说明。
   const toggleDir = useCallback(
     (relative: string): void => {
       const open = expanded.includes(relative)
@@ -305,6 +298,25 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
     [threadId]
   )
 
+  /**
+   * T1（2026-10-18）：右键/双击「在新标签页打开」按上下文决定载体 ——
+   *   - `.docx`（文档级）→ **顶栏 Office 文档标签**（唯一载体；openOfficeFromSession 会顺手收掉
+   *     右栏里同文件的预览标签，杜绝双开）；
+   *   - 其余文件（工具级只读预览）→ **右栏预览标签**（顺带打开右栏，否则新标签在收起的面板里看不见）。
+   * 单击的内联预览原样不动。
+   */
+  const openInTab = useCallback(
+    (relative: string): void => {
+      if (isOfficeEditablePath(relative) && threadId !== null) {
+        openInOffice(relative)
+        return
+      }
+      useWorkbenchStore.getState().openPreviewTab(relative)
+      useShellStore.getState().setWorkPanelOpen(true)
+    },
+    [openInOffice, threadId]
+  )
+
   const copyPath = useCallback(
     (relative: string): void => {
       if (rootPath === null) return
@@ -433,23 +445,26 @@ export function FilesTool({ root }: { root: WorkbenchRoot }): React.JSX.Element 
                           onSelect: () => addFileToContext(relative)
                         },
                         // round 50：在新标签页里查看（目录不进——标签看的是文件内容）
-                        {
-                          id: 'preview',
-                          label: '在新标签页中查看',
-                          icon: <FileText />,
-                          onSelect: () => openInTab(relative)
-                        },
-                        // M3-S4：在 Office 标签里编辑（第一步只接 .docx，非 docx 不给假入口）
+                        // T1（2026-10-18）：入口语义统一 —— 文档（docx）→ 顶栏 Office 标签
+                        // （文案不再叫「新标签页」，与顶栏新标签页区分）；网页/工具 →
+                        // 右栏标签（预览）。同一菜单里不再出现两种「新标签页」含义。
                         ...(isOfficeEditablePath(relative)
                           ? [
                               {
                                 id: 'office',
-                                label: '在 Office 中编辑',
+                                label: '在 Office 标签页中打开',
                                 icon: <Briefcase />,
                                 onSelect: () => openInOffice(relative)
                               }
                             ]
-                          : []),
+                          : [
+                              {
+                                id: 'preview',
+                                label: '在右侧预览中打开',
+                                icon: <FileText />,
+                                onSelect: () => openInTab(relative)
+                              }
+                            ]),
                         // 用本机装了的那件应用打开（目录不进——"打开文件夹"是下面 reveal 的事）
                         {
                           id: 'open',

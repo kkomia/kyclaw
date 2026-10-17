@@ -44,6 +44,7 @@ import { fileIconOf } from './preview/file-icon'
 import { previewModeOf } from './preview/modes'
 import { SelectionContextMenu } from './preview/SelectionContextMenu'
 import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
+import { useWorkbenchStore } from './workbench-store'
 
 /**
  * 头部图标块那个图标：按后缀走唯一那张表（`preview/file-icon.ts`，与标签页图标同表）。
@@ -53,11 +54,14 @@ import { absoluteOf, type WorkbenchRoot } from './use-workbench-root'
  */
 export function PreviewTool({
   root,
-  relative
+  relative,
+  tabId
 }: {
   root: WorkbenchRoot
   /** 要看的文件（工作区相对路径；标签上的 `path`） */
   relative: string
+  /** T1：右栏本预览标签的 id —— 「切到 Office 标签」时顺手关掉它（文档级唯一载体规则） */
+  tabId?: string
 }): React.JSX.Element {
   const { threadId, rootPath, ready, notice, workbench } = root
   // 初始就是"加载中"：挂载那次因此不用在 effect 里同步 setState（级联渲染）；
@@ -226,7 +230,9 @@ export function PreviewTool({
               variant="ghost"
               data-testid="preview-office-hint-open"
               onClick={() => {
+                // T1：文档级唯一载体 —— 切到顶栏 Office 标签后，右栏这份预览不再保留
                 useOfficeTabsStore.getState().activate(officeTab.id)
+                if (tabId !== undefined) useWorkbenchStore.getState().closeTab(tabId)
                 goToOffice()
               }}
             >
