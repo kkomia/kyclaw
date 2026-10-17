@@ -2202,3 +2202,91 @@ describe('用户反馈 001/002/004 · 模型菜单 = 通道 × 模型', () => {
     )
   })
 })
+
+/**
+ * P1b 配方 3：Composer 自绘 caret。
+ * 真机 Chromium 有 Range.getBoundingClientRect（jsdom 没有）——这里 mock 出一个非零矩形，
+ * 让"镜像层测量 → 绝对定位 2px 竖条"这条链路在单测里也能走通；几何数值不是本组断言重点。
+ */
+describe('P1b · Composer 自绘 caret', () => {
+  beforeEach(() => {
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        ({
+          x: 16,
+          y: 12,
+          left: 16,
+          top: 12,
+          right: 18,
+          bottom: 34,
+          width: 2,
+          height: 22,
+          toJSON: () => ({})
+        }) as DOMRect
+    })
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
+  })
+
+  it('聚焦 + 有内容 → 自绘 caret，原生 caret 走 custom 档', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '你好' } })
+
+    const caret = await screen.findByTestId('composer-caret')
+    expect(caret).toHaveClass('composer-caret')
+    expect(caret).toHaveStyle({ height: '22px' })
+    expect(input).toHaveAttribute('data-caret', 'custom')
+    expect(input).toHaveClass('composer-caret-input')
+  })
+
+  it('IME composition 期间回原生 caret、自绘隐藏；结束后恢复（不吞字/不跳位）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'ni' } })
+    await screen.findByTestId('composer-caret')
+
+    fireEvent.compositionStart(input)
+    expect(input).toHaveAttribute('data-caret', 'native')
+    expect(input).toHaveAttribute('data-composing', 'true')
+    expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument()
+
+    fireEvent.compositionEnd(input)
+    expect(input).toHaveAttribute('data-caret', 'custom')
+    expect(input).not.toHaveAttribute('data-composing')
+    expect(await screen.findByTestId('composer-caret')).toBeInTheDocument()
+  })
+
+  it('输入中 data-typing=true 常亮；400ms 无输入后恢复闪烁', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'a' } })
+    const caret = await screen.findByTestId('composer-caret')
+    expect(caret).toHaveAttribute('data-typing', 'true')
+
+    await waitFor(
+      () => expect(screen.getByTestId('composer-caret')).not.toHaveAttribute('data-typing'),
+      {
+        timeout: 2000
+      }
+    )
+  })
+
+  it('失焦隐藏自绘 caret、清 data-composing', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'x' } })
+    await screen.findByTestId('composer-caret')
+
+    fireEvent.blur(input)
+    expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument()
+    expect(input).toHaveAttribute('data-caret', 'native')
+  })
+})

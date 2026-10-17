@@ -380,3 +380,55 @@ describe('round 85 · 工具行的路径显示（根内相对、根外原样）'
     }
   })
 })
+
+/**
+ * P1b 配方 6 · 工具行动效：入场类 + stagger 序号（最多 5 行由 CSS/组件共同封顶）。
+ * 这些只是结构契约；时长/曲线全在 chat-motion.css 读 motion.css 角色令牌。
+ */
+describe('P1b · 工具行动效', () => {
+  it('工具行挂入场类 + stagger 序号（行内 CSS 变量，最多封顶 4）', () => {
+    const { unmount } = render(
+      <ToolCard
+        part={{
+          toolName: 'read',
+          state: 'output-available',
+          input: { path: 'a.txt' },
+          output: 'ok'
+        }}
+        staggerIndex={3}
+      />
+    )
+    const card = screen.getByTestId('tool-card')
+    expect(card).toHaveClass('chat-tool-enter')
+    expect(card.style.getPropertyValue('--chat-tool-stagger-index')).toBe('3')
+    unmount()
+
+    render(<ToolCard part={{ toolName: 'read', state: 'input-available' }} staggerIndex={9} />)
+    expect(
+      screen.getByTestId('tool-card').style.getPropertyValue('--chat-tool-stagger-index')
+    ).toBe('4')
+  })
+
+  it('状态换词：非 live 状态包在 .chat-swap 里（150ms + 晚 50ms + 4px + blur2）', () => {
+    const first = render(
+      <ToolCard
+        part={{
+          toolName: 'read',
+          state: 'output-available',
+          input: { path: 'a.txt' },
+          output: 'ok'
+        }}
+      />
+    )
+    const state = screen.getByTestId('tool-state')
+    expect(state.querySelector('.chat-swap')).not.toBeNull()
+    expect(state).toHaveTextContent('已完成')
+    first.unmount()
+
+    // 运行中不套 swap（扫光在 trace-live 上，避免两层动画打架）
+    render(<ToolCard part={{ toolName: 'write', state: 'input-available' }} running />)
+    const live = screen.getByTestId('tool-state')
+    expect(live).toHaveClass('trace-live')
+    expect(live.querySelector('.chat-swap')).toBeNull()
+  })
+})

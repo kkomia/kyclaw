@@ -208,7 +208,7 @@ export function AskUserCard({
       aria-busy={busy || undefined}
       onSubmit={submit}
       noValidate
-      className="relative flex min-w-0 flex-col gap-3 rounded-panel border-(length:--hairline-width) border-surface-border bg-secondary px-3 py-2.5 [overflow-wrap:anywhere]"
+      className="chat-dock-enter relative flex min-w-0 flex-col gap-3 rounded-panel border-(length:--hairline-width) border-surface-border bg-secondary px-3 py-2.5 [overflow-wrap:anywhere]"
     >
       {/* 取消在右上角（round 82 用户口径）：同一枚 onStop、同一份禁用口径 —— 只是从底部搬上来 */}
       <IconButton

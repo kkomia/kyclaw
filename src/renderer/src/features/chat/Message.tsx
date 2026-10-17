@@ -98,6 +98,11 @@ export interface MessageProps {
   message: UIMessage
   /** 这一条正在流式（最后一条助手消息且会话处于 streaming） */
   streaming?: boolean
+  /**
+   * P1b：这条用户消息是**刚刚发送**的（本轮非 ready 的最后一条用户消息）。
+   * true 时给用户气泡挂 320ms 右下 origin 的入场动画；历史回灌不播（不逐条烟花）。
+   */
+  animateSend?: boolean
   onEdit?: (messageId: string, text: string) => void
   /** 撤回到这条用户消息（确认后截断并移除这条及其后的消息，原文放回输入框） */
   onUndo?: (messageId: string, text: string) => void
@@ -347,6 +352,7 @@ function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[
 export function Message({
   message,
   streaming = false,
+  animateSend = false,
   onEdit,
   onUndo,
   onRegenerate,
@@ -628,6 +634,7 @@ export function Message({
       <article
         data-testid={`message-${message.id}`}
         data-role="user"
+        data-send-animate={animateSend ? 'true' : undefined}
         className="animate-message-in group flex flex-col items-end gap-1.5"
       >
         {draft === null ? (

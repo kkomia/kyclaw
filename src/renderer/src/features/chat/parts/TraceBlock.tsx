@@ -72,6 +72,14 @@ export function TraceBlock({
   const ordinalOf = (partIndex: number): number => reasoningOrdinals?.get(partIndex) ?? -1
 
   const toolCount = entries.filter((entry) => isToolPart(entry.part)).length
+  /** P1b 配方 6：工具行在同一条消息里的序号（stagger 70ms，最多 5 行；非工具行不占号） */
+  const toolStagger = new Map<number, number>()
+  let toolOrdinal = 0
+  for (const entry of entries) {
+    if (!isToolPart(entry.part)) continue
+    toolStagger.set(entry.index, Math.min(toolOrdinal, 4))
+    toolOrdinal += 1
+  }
   /** 这一步里还挂着等审批的调用：默认展开，让用户看得见"卡在哪一步"（点一下照样能收） */
   const pending = entries.some((entry) => approvalRequestOf(entry.part) !== null)
   const open = override ?? (running || pending)
@@ -133,6 +141,7 @@ export function TraceBlock({
                 key={`tool-${entry.index}`}
                 part={tool}
                 running={running && toolStateRunning(tool.state)}
+                staggerIndex={toolStagger.get(entry.index) ?? 0}
               />
             )
           })}

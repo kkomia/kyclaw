@@ -1,0 +1,327 @@
+/*
+ * P1b · 对话区 Claude 签名动效（章程 §5 配方；全部读 styles/tokens/motion.css 角色令牌）。
+ *
+ * 只挂在 chat 域（ChatPage 引入），不污染其他页面；所有时长/曲线/距离/模糊/缩放要么直接读
+ * `--motion-*` 角色令牌，要么由令牌用 calc 组合（缺省角色见下面 --chat-* 的注释）。
+ * `prefers-reduced-motion` 三层兜底：motion.css 把角色时长压到 0.01ms；本文件再把
+ * **无限循环**（光标/等待三点/扫光）显式停成静态终态（只靠 0.01ms 循环会闪）。
+ *
+ * 配方 → 类名：
+ *   1 流式 chunk 淡入        .markdown-body[data-streaming] > :last-child（120ms，--motion-feedback）
+ *   2 尾部自绘光标           .streaming-cursor / [data-streaming] > :last-child::after（1s 闪）
+ *   3 输入框自绘 caret       .composer-caret（80ms 移动 + 1s 闪；IME composition 回原生）
+ *   4 等待三点 + 扫光        .chat-waiting-dot / .trace-live（500ms / 1500ms steps(48) + 300ms 延迟）
+ *   5 状态换词               .chat-swap（150ms + 晚 50ms + 4px + blur 2px）
+ *   6 工具行出现 + stagger   .chat-tool-enter（150ms；每行 +70ms，最多 5 行）
+ *   7 TraceFold 开合         .trace-fold / .trace-fold-in 覆盖（展开 200ms / 收起 120ms）
+ *   8 Dock 首次入场          .chat-dock-enter（250ms settle）
+ *   9 发送气泡               [data-send-animate]（320ms，origin 右下，scale .96 + 6px rise）
+ */
+
+:root {
+  /* 由角色令牌组合出来的本域值（不新增全局 token，避免和 P0 motion.css 抢口径） */
+  --chat-caret-blink: calc(var(--motion-spring) * 2); /* 1s = 2 × 500ms 小元素档 */
+  --chat-caret-move: calc(var(--motion-feedback) * 2 / 3); /* 80ms = 120ms 的 2/3 */
+  --chat-fold-enter: calc(var(--motion-enter) - var(--motion-feedback)); /* 200ms */
+  --chat-sweep-delay: calc(var(--motion-open) + var(--motion-swap-gap)); /* 250 + 50 = 300ms */
+  --chat-send-rise: calc(var(--motion-distance-travel) - var(--motion-blur-soft)); /* 8 - 2 = 6px */
+  --chat-tool-stagger-index: 0; /* 由 ToolCard 的行内 style 覆盖，最多 4 */
+  /* 配方常量（motion.css 没有对应角色档的 scale 值；只出现在等待三点压扁里） */
+  --chat-dot-squash-x: 1.7;
+  --chat-dot-squash-y: 0.25;
+}
+
+/* ── 1) 流式 chunk 淡入 ─────────────────────────────────────────────── */
+/* 只动「最后一块」：流式每来一个新块就挂一次 animation；整篇重新渲染时 :last-child 也会是
+   同一个块，动画不会在旧的块上反复播。纯 opacity，不动行高/不触发重排。 */
+.markdown-body[data-streaming='true'] > :last-child {
+  animation: chat-chunk-in var(--motion-feedback) var(--motion-ease-glide) both;
+}
+
+@keyframes chat-chunk-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── 2) 尾部自绘光标（2px 墨色竖条，1s 闪；流式结束由 data-streaming/节点消失） ── */
+.markdown-body .streaming-cursor,
+.markdown-body[data-streaming='true'] > :last-child:not(.streaming-cursor)::after {
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background-color: var(--text-primary);
+  animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite;
+}
+
+@keyframes chat-caret-blink-block {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ── 3) Composer 自绘 caret ─────────────────────────────────────────── */
+/* 原生 caret 只有「自绘档」才隐藏；composition 或含引用 chip 时 data-caret=native，
+   原生 caret 照常显示（IME 候选框/选区不被抢）。 */
+.composer-caret-input[data-caret='custom'] {
+  caret-color: transparent;
+}
+
+.composer-caret-input[data-caret='custom'][data-composing='true'] {
+  caret-color: auto;
+}
+
+.composer-caret {
+  position: absolute;
+  z-index: 30;
+  width: 2px;
+  border-radius: 1px;
+  background-color: var(--text-primary);
+  pointer-events: none;
+  animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite;
+  transition:
+    left var(--chat-caret-move) var(--motion-ease-glide),
+    top var(--chat-caret-move) var(--motion-ease-glide);
+}
+
+.composer-caret[data-typing='true'] {
+  animation: none;
+  opacity: 1;
+}
+
+/* ── 4) 等待三点（500ms 一次，点间错开 2/5、3/5 周期）+ 扫光 ─────────── */
+.chat-waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  color: var(--text-tertiary);
+}
+
+.chat-waiting-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 24px;
+  justify-content: center;
+}
+
+.chat-waiting-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background-color: var(--text-secondary);
+  animation: chat-waiting-bounce var(--motion-dot) var(--motion-ease-spring) infinite;
+}
+
+.chat-waiting-dot:nth-child(2) {
+  animation-delay: calc(var(--motion-dot) * -0.4);
+}
+
+.chat-waiting-dot:nth-child(3) {
+  animation-delay: calc(var(--motion-dot) * -0.6);
+}
+
+@keyframes chat-waiting-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  30% {
+    transform: translateY(calc(-1 * var(--motion-distance-travel))) scale(1);
+  }
+
+  /* 落地压扁：宽 1.7、高 .25（配方常量；motion.css 无对应 scale 角色） */
+  55% {
+    transform: translateY(0) scale(var(--chat-dot-squash-x), var(--chat-dot-squash-y));
+  }
+}
+
+/* 「进行中」文字扫光：105° 渐变 + steps(48,end) + 300ms 延迟；只动渐变位置，
+   文字底色始终由 text-secondary 填充（不盖文字本色，不出现彩色高光）。 */
+.trace-live {
+  background-image: linear-gradient(
+    105deg,
+    var(--text-secondary) 0%,
+    var(--text-secondary) 43%,
+    var(--text-primary) 50%,
+    var(--text-secondary) 57%,
+    var(--text-secondary) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: chat-sweep var(--motion-sweep) steps(48, end) var(--chat-sweep-delay) infinite;
+}
+
+@keyframes chat-sweep {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ── 5) 状态换词（与 office-save-swap 同配方：150ms + 新词晚 50ms + 4px + blur2） ── */
+.chat-swap {
+  display: inline-block;
+  animation: chat-swap-in var(--motion-swap) var(--motion-ease-glide) var(--motion-swap-gap) both;
+}
+
+@keyframes chat-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance-nudge));
+    filter: blur(var(--motion-blur-soft));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* ── 6) 工具行出现（150ms 上浮）+ 同轮 stagger（最多 5 行） ──────────── */
+.chat-tool-enter {
+  animation: chat-tool-in var(--motion-reveal) var(--motion-ease-glide) both;
+  animation-delay: calc(var(--motion-stagger) * var(--chat-tool-stagger-index));
+}
+
+@keyframes chat-tool-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance-travel));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 7) TraceFold：展开 200ms settle / 收起 120ms glide ─────────────── */
+/* 仍是单容器 grid-template-rows 过渡（不做条件渲染硬切）；高度只在这一层插值，
+   子元素不各自动高度/边距，避免逐帧多元素重排。 */
+.trace-fold {
+  transition: grid-template-rows var(--motion-exit) var(--motion-ease-glide);
+}
+
+.trace-fold[data-open='true'] {
+  transition: grid-template-rows var(--chat-fold-enter) var(--motion-ease-settle);
+}
+
+.trace-fold-in {
+  transition:
+    opacity var(--motion-reveal) var(--motion-ease-glide),
+    filter var(--motion-reveal) var(--motion-ease-glide),
+    transform var(--chat-fold-enter) var(--motion-ease-settle),
+    visibility 0s linear var(--chat-fold-enter);
+}
+
+.trace-fold[data-open='true'] > .trace-fold-in {
+  transition:
+    opacity var(--motion-reveal) var(--motion-ease-glide),
+    filter var(--motion-reveal) var(--motion-ease-glide),
+    transform var(--chat-fold-enter) var(--motion-ease-settle),
+    visibility 0s;
+}
+
+/* ── 8) Dock 首次入场（250ms settle；只在挂载时播一次，re-render 不重播） ── */
+.chat-dock-enter {
+  animation: chat-dock-in var(--motion-open) var(--motion-ease-settle) both;
+}
+
+/* 停靠区本身的高度开合也统一到 --motion-open settle（原组件读 --motion-main） */
+[data-testid='approval-dock'],
+[data-testid='ask-user-dock'] {
+  transition: grid-template-rows var(--motion-open) var(--motion-ease-settle);
+}
+
+@keyframes chat-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance-travel));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 9) 发送气泡（320ms，origin 右下，scale .96→1 + 6px rise） ───────── */
+[data-testid^='message-'][data-role='user'][data-send-animate='true'] {
+  animation: chat-send-bubble var(--motion-enter) var(--motion-ease-enter) both;
+  transform-origin: 100% 100%;
+}
+
+@keyframes chat-send-bubble {
+  from {
+    opacity: 0;
+    transform: translateY(var(--chat-send-rise)) scale(var(--motion-scale-dialog));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ── reduced-motion 终态 ────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body[data-streaming='true'] > :last-child,
+  .chat-swap,
+  .chat-tool-enter,
+  .chat-dock-enter,
+  [data-testid^='message-'][data-role='user'][data-send-animate='true'] {
+    animation: none !important;
+  }
+
+  .streaming-cursor,
+  .markdown-body[data-streaming='true'] > :last-child:not(.streaming-cursor)::after,
+  .composer-caret {
+    animation: none !important;
+    opacity: 1;
+  }
+
+  .composer-caret {
+    transition: none !important;
+  }
+
+  .chat-waiting-dot {
+    animation: none !important;
+    opacity: 0.6;
+  }
+
+  .trace-live {
+    animation: none !important;
+    background: none;
+    color: var(--text-secondary);
+    -webkit-background-clip: initial;
+    background-clip: initial;
+  }
+
+  /* 覆盖 tailwind 里「本域折叠 transition:none」的旧第二层：P1b 要 0.01ms 而不是 0 */
+  .trace-fold,
+  .trace-fold-in,
+  .trace-fold[data-open='true'] > .trace-fold-in {
+    transition-duration: var(--motion-reduced) !important;
+  }
+}

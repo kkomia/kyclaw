@@ -25,6 +25,12 @@ import {
   takeComposerCarryover
 } from './composer-carryover'
 import { ComposerSuggest } from './ComposerSuggest'
+import {
+  caretPlacementFromRects,
+  caretRectAtOffset,
+  motionDurationMs,
+  shouldShowComposerCaret
+} from './composer-caret'
 import { ReferenceChipInner } from './reference-chip'
 import {
   detectTrigger,
@@ -287,6 +293,75 @@ export function Composer({
    * （渲染后落位一次），但不再每次渲染都去摸 DOM。null = 没有待办。
    */
   const [caretToken, setCaretToken] = useState<number | null>(null)
+
+  /**
+   * P1b 配方 3：Composer 自绘 caret（textarea 原生 caret 隐藏；镜像层测位置）。
+   * IME 安全：composition 期间不画、回原生 caret；含引用 chip 时镜像文字偏移与原始串
+   * 不再一一对应，也回原生 caret（不猜位置）。
+   */
+  const [composerFocused, setComposerFocused] = useState(false)
+  const [composing, setComposing] = useState(false)
+  const [typing, setTyping] = useState(false)
+  const typingTimerRef = useRef<number | null>(null)
+  const [caretPlacement, setCaretPlacement] = useState({
+    left: 0,
+    top: 12,
+    height: 22,
+    visible: false
+  })
+  const hasReferenceMarkers = useMemo(
+    () => parseReferenceMarkers(draft).some((segment) => segment.kind !== 'text'),
+    [draft]
+  )
+  const caretCustom = shouldShowComposerCaret({
+    focused: composerFocused,
+    composing,
+    hasReferenceMarkers
+  })
+
+  const syncComposerCaret = useCallback((): void => {
+    const textarea = textareaRef.current
+    const mirror = mirrorRef.current?.firstElementChild
+    if (
+      !caretCustom ||
+      textarea === null ||
+      mirror === null ||
+      mirror === undefined ||
+      typeof document.createRange !== 'function'
+    ) {
+      setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
+      return
+    }
+    const rect = caretRectAtOffset(mirror, textarea.selectionStart ?? 0)
+    if (rect === null) {
+      setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
+      return
+    }
+    const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight)
+    const placement = caretPlacementFromRects(
+      {
+        left: rect.left,
+        top: rect.top,
+        height: Number.isFinite(lineHeight) ? lineHeight : rect.height
+      },
+      textarea.getBoundingClientRect(),
+      textarea.scrollTop
+    )
+    setCaretPlacement({ ...placement, visible: true })
+  }, [caretCustom])
+
+  useEffect(() => {
+    if (!caretCustom) return
+    const frame = requestAnimationFrame(() => syncComposerCaret())
+    return () => cancelAnimationFrame(frame)
+  }, [caretCustom, draft, syncComposerCaret])
+
+  useEffect(
+    () => () => {
+      if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current)
+    },
+    []
+  )
 
   const settings = useSettingsStore((state) => state.settings)
   // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
@@ -854,17 +929,38 @@ export function Composer({
         <textarea
           ref={attachTextarea}
           data-testid="composer-input"
+          data-caret={caretCustom ? 'custom' : 'native'}
+          data-composing={composing ? 'true' : undefined}
           aria-label="输入消息"
           rows={1}
           spellCheck={false}
           value={draft}
+          onFocus={() => setComposerFocused(true)}
           onChange={(event) => {
             trackDraft(event.target.value)
             refreshTrigger(event.target.value, event.target.selectionStart)
+            // P1b：输入中暂停闪烁（常亮）；--motion-flight（400ms）没输入再恢复 1s 闪
+            setTyping(true)
+            if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current)
+            typingTimerRef.current = window.setTimeout(
+              () => {
+                typingTimerRef.current = null
+                setTyping(false)
+              },
+              motionDurationMs('--motion-flight', 400)
+            )
           }}
           onSelect={(event) => {
             // 光标移动（点击 / 方向键）也可能让触发出现或消失
             refreshTrigger(event.currentTarget.value, event.currentTarget.selectionStart)
+            syncComposerCaret()
+          }}
+          onClick={() => syncComposerCaret()}
+          onKeyUp={() => syncComposerCaret()}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => {
+            setComposing(false)
+            requestAnimationFrame(() => syncComposerCaret())
           }}
           onPaste={(event) => {
             // 粘贴入口（round 50）：截图工具贴的图 / 资源管理器贴的文件 → 与拖拽、＋ 上传
@@ -875,10 +971,14 @@ export function Composer({
             event.preventDefault()
             void pickFiles(files)
           }}
-          onBlur={() => setSuggest(null)}
+          onBlur={() => {
+            setComposerFocused(false)
+            setSuggest(null)
+          }}
           onScroll={(event) => {
             const mirror = mirrorRef.current
             if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop
+            syncComposerCaret()
           }}
           onKeyDown={(event) => {
             // 浮窗打开时有键盘优先级（输入法合成中不抢：方向键在选词）
@@ -914,13 +1014,28 @@ export function Composer({
           }}
           placeholder="输入你的问题"
           className={cn(
-            'relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
+            'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
             // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
             hero
               ? 'min-h-(--composer-input-min-height-hero)'
               : 'min-h-(--composer-input-min-height)'
           )}
         />
+        {/* P1b：自绘 caret（原生 caret 由 .composer-caret-input[data-caret='custom'] 隐藏；
+            composition / 含引用 chip 时 data-caret=native，交回原生，不猜位置） */}
+        {caretCustom && caretPlacement.visible ? (
+          <span
+            data-testid="composer-caret"
+            data-typing={typing ? 'true' : undefined}
+            aria-hidden="true"
+            className="composer-caret"
+            style={{
+              left: caretPlacement.left,
+              top: caretPlacement.top,
+              height: caretPlacement.height
+            }}
+          />
+        ) : null}
       </div>
 
       {shownNotice === null ? null : (

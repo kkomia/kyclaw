@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import {
   Brain,
   ChevronRight,
@@ -126,9 +126,18 @@ export interface ToolCardProps {
   part: ToolCardPart
   /** 这一轮还在流式：input-available 显示"调用中"（否则是"已调用"——没回执的调用不该永远装进行中） */
   running?: boolean
+  /**
+   * P1b 配方 6：同一轮工具行的序号（0-based）。用于 stagger 70ms（最多 5 行）；
+   * 不传 = 0（单独渲染 ToolCard 的旧用法立即出现）。
+   */
+  staggerIndex?: number
 }
 
-export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.Element {
+export function ToolCard({
+  part,
+  running = false,
+  staggerIndex = 0
+}: ToolCardProps): React.JSX.Element {
   const [override, setOverride] = useState<boolean | null>(null)
   // MCP 工具显示用户注册的服务名（round 14）：`mcp__mcp-1__search` → 「知识库 · search」
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
@@ -185,7 +194,14 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
           !live && part.state === 'input-available' && 'text-ink-tertiary'
         )}
       >
-        {stateLabel}
+        {live ? (
+          stateLabel
+        ) : (
+          // P1b 配方 5：完成/等审批等状态换词（150ms + 晚 50ms + 4px + blur2，与 office 同配方）
+          <span key={stateLabel} className="chat-swap">
+            {stateLabel}
+          </span>
+        )}
       </span>
       {hasBody ? (
         <ChevronRight
@@ -202,7 +218,18 @@ export function ToolCard({ part, running = false }: ToolCardProps): React.JSX.El
   )
 
   return (
-    <div data-testid="tool-card" data-tool={part.toolName} data-state={part.state} data-tone={tone}>
+    <div
+      data-testid="tool-card"
+      data-tool={part.toolName}
+      data-state={part.state}
+      data-tone={tone}
+      className="chat-tool-enter"
+      style={
+        {
+          '--chat-tool-stagger-index': String(Math.min(Math.max(staggerIndex, 0), 4))
+        } as CSSProperties
+      }
+    >
       {hasBody ? (
         <button
           type="button"

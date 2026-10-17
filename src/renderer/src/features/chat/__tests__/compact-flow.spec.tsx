@@ -157,10 +157,14 @@ function messageOf(
   }
 }
 
-/** 消息列里的 DOM 顺序（Message 根节点与分界线的 testid；本轮新发消息的 id 是生成的，按位断言） */
+/** 消息列里的 DOM 顺序（Message 根节点与分界线的 testid；本轮新发消息的 id 是生成的，按位断言）。
+ *  P1b 起 `submitted` 且正文未到时会多一行 `waiting-lane`（里面是 waiting-line，不是消息也不是
+ *  分界线）；这些用例只断言"消息/分界线"的相对顺序，等待行单独在 chat-motion.spec 里测。 */
 function columnOrder(): string[] {
   const column = screen.getByTestId('message-list').firstElementChild as HTMLElement
-  return Array.from(column.children).map((child) => child.getAttribute('data-testid') ?? '')
+  return Array.from(column.children)
+    .map((child) => child.getAttribute('data-testid') ?? '')
+    .filter((id) => id !== 'waiting-lane')
 }
 
 /** 直接给一批 UI 消息当历史（makeRuntime 那边只造纯文本 + 不带时间） */

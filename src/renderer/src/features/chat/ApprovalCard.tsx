@@ -125,7 +125,7 @@ export function ApprovalCard({
       data-workspace={workspace ?? ''}
       role="group"
       aria-label={`${title}：等待审批`}
-      className="animate-message-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-surface-border bg-secondary px-3 py-2.5"
+      className="chat-dock-enter animate-message-in flex flex-col gap-2 rounded-panel border-(length:--hairline-width) border-surface-border bg-secondary px-3 py-2.5"
     >
       <div className="flex items-center gap-2">
         <Wrench aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />

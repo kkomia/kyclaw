@@ -109,7 +109,7 @@ function PlanApprovalPanel({
       aria-busy={busy || pending || undefined}
       data-testid="plan-approval-dock"
       className={cn(
-        'mx-auto mb-2 flex w-full min-w-0 max-w-(--chat-input-max-width) shrink-0 flex-col overflow-hidden rounded-panel border border-surface-border bg-secondary text-b2 [overflow-wrap:anywhere]',
+        'chat-dock-enter mx-auto mb-2 flex w-full min-w-0 max-w-(--chat-input-max-width) shrink-0 flex-col overflow-hidden rounded-panel border border-surface-border bg-secondary text-b2 [overflow-wrap:anywhere]',
         // 展开详情时整卡给高一档的上限：正文（可滚）+ 反馈框 + 底部那行动作都要落在这张卡里。
         // 原来不管展开与否都是 36vh：展开时正文把底座挤满，`overflow-hidden` 会把**动作行裁掉**
         // （实测 1280×800 下「批准此计划/修改计划/停止本轮」整行看不见）——用户口径是

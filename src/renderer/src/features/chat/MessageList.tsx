@@ -14,6 +14,10 @@ import { compactionRowIndex } from './compaction-line'
 import { deliverablesByTurnTail } from './deliverable'
 import { Message } from './Message'
 import { MessageRail } from './MessageRail'
+import { WaitingLine } from './parts/WaitingLine'
+import { shouldShowWaitingLine } from './waiting-line'
+// P1b：对话区的签名动效（角色令牌全在 motion.css，本文件只做 chat 域类名/关键帧）
+import './chat-motion.css'
 
 /**
  * 消息列：滚动区（flex-1 + overflow-y-auto），内容列限宽 800 居中（spec §6.2）。
@@ -161,6 +165,13 @@ export function MessageList({
 }: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
+  /** P1b：最后一条用户消息 —— 本轮正在发送时给它挂 320ms 右下 origin 的入场 */
+  let lastUserIndex = -1
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === 'user') lastUserIndex = index
+  }
+  /** P1b 配方 4：submitted 且本轮还没有 assistant 正文 → 补一行等待（原模板这里是空白） */
+  const waiting = shouldShowWaitingLine(status, messages)
   /**
    * 交付卡的整轮汇总（0.1.3 / 014）：连续助手消息算一轮，只有轮末那条拿得到聚合结果
    * （审批 / ask-user / 计划续跑会追加助手消息，不能把卡截在半轮）。用户消息是轮次边界；
@@ -221,6 +232,7 @@ export function MessageList({
               <Message
                 message={message}
                 streaming={status === 'streaming' && message.id === lastAssistantId}
+                animateSend={status !== 'ready' && index === lastUserIndex}
                 onEdit={onEdit}
                 onUndo={onUndo}
                 /* 「重新生成」只挂最后一条助手消息上（`lastAssistantId` 与本条同一判据：
@@ -246,6 +258,15 @@ export function MessageList({
           {/* 落在末尾（含"一条消息都没有"）：列表末尾那一份分界线 */}
           {markerIndex === messages.length ? (
             <CompactionMarker compaction={compaction} compacting={compacting} />
+          ) : null}
+          {waiting ? (
+            <div
+              data-testid="waiting-lane"
+              data-font-role="reading"
+              className="flex max-w-[calc(var(--prose-measure)+18px)] border-l border-(--hairline-soft) pl-[18px]"
+            >
+              <WaitingLine />
+            </div>
           ) : null}
         </div>
       </div>

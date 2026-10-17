@@ -210,7 +210,14 @@ export function ReasoningPart({
           <Lightbulb className="size-[15px] text-ink-tertiary" />
         </span>
         <span className={cn('shrink-0', streaming && 'trace-live')}>
-          {streaming ? '思考中…' : '思考过程'}
+          {streaming ? (
+            '思考中…'
+          ) : (
+            // P1b 配方 5：思考中 → 思考过程 换词（live 时 trace-live 扫光，结束才换词）
+            <span key="reasoning-done" className="chat-swap">
+              思考过程
+            </span>
+          )}
         </span>
         <ChevronRight
           aria-hidden="true"

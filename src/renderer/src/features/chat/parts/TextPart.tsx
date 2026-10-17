@@ -337,9 +337,41 @@ export function TextPart({
   const withTables = tables ?? streaming !== undefined
   const shown = useCadencedText(text, live)
   const sources = knownSources ?? EMPTY_CITATION_HINTS
+  /**
+   * P1b 配方 1：每个流式 chunk 到达时给**最后一块**补一次 120ms 淡入。
+   * 为什么不用 class：分块渲染的稳定前缀块会原地复用（round 73 的 DOM 逐字节约定），
+   * 换 class/重挂都会破坏"流式与整篇同构"；这里用 Web Animations 只挂临时效果，不动 DOM。
+   * 节流 120ms：真实 token 流比 120ms 密，连续重启会闪，按令牌节拍每 120ms 只补一次。
+   */
+  const markdownRef = useRef<HTMLDivElement>(null)
+  const lastChunkFadeRef = useRef(0)
+  useEffect(() => {
+    if (!live) return
+    const last = markdownRef.current?.lastElementChild
+    if (last === null || last === undefined || typeof last.animate !== 'function') return
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return
+    }
+    const now = performance.now()
+    if (now - lastChunkFadeRef.current < 120) return
+    lastChunkFadeRef.current = now
+    // 时长读角色令牌（motion.css）；拿不到时退回配方里的 120ms，保证不退化成 0
+    const token = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--motion-feedback')
+    )
+    last.animate([{ opacity: 0.4 }, { opacity: 1 }], {
+      duration: Number.isFinite(token) && token > 0 ? token : 120,
+      easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+      fill: 'none'
+    })
+  }, [shown, live])
   return (
     <CitationHintsContext.Provider value={sources}>
       <div
+        ref={markdownRef}
         data-testid="message-text"
         data-font-role="reading"
         data-streaming={live ? 'true' : undefined}
