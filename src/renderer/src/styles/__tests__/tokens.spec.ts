@@ -8,6 +8,7 @@ const MAIN_TSX = '../../main.tsx'
 const OFFICE_SURFACE_CSS = '../../office/surface.css'
 const OFFICE_CHROME_CSS = '../../office/office-chrome.css'
 const OFFICE_MAIN_TSX = '../../office/main.tsx'
+const OFFICE_AI_PANEL_TSX = '../../features/office/OfficeAiPanel.tsx'
 
 function readSource(relativePath: string): string {
   try {
@@ -23,6 +24,7 @@ const tailwindCss = readSource(TAILWIND_CSS)
 const officeSurfaceCss = readSource(OFFICE_SURFACE_CSS)
 const officeChromeCss = readSource(OFFICE_CHROME_CSS)
 const officeMainTsx = readSource(OFFICE_MAIN_TSX)
+const officeAiPanelTsx = readSource(OFFICE_AI_PANEL_TSX)
 
 type Decls = Map<string, string>
 
@@ -857,10 +859,19 @@ describe('Office ribbon 布局与动效 token（A2）', () => {
   const ribbonRoot: Decls = semantic.get(':root') ?? new Map<string, string>()
   const ribbonDark: Decls = semantic.get(":root[data-theme='dark']") ?? new Map<string, string>()
 
-  it('布局 token：QAT/tab 行 32 / 工具带 80 / 状态栏 26（A4）', () => {
+  it('布局 token：QAT/tab 行 32 / 工具带 80 / 状态栏 26（A4）/ AI 面板 320（A3）', () => {
     expectDecl(ribbonRoot, '--office-ribbon-tabs-height', '32px', 'semantic :root')
     expectDecl(ribbonRoot, '--office-ribbon-body-height', '80px', 'semantic :root')
     expectDecl(ribbonRoot, '--office-status-height', '26px', 'semantic :root')
+    expectDecl(ribbonRoot, '--office-ai-panel-width', '320px', 'semantic :root')
+  })
+
+  it('A3：AI 面板组件消费 --office-ai-panel-width；开合只动 width/opacity + reduced-motion 0.01ms', () => {
+    expect(officeAiPanelTsx).toContain('var(--office-ai-panel-width)')
+    expect(officeAiPanelTsx).toContain('transition-[width,opacity]')
+    expect(officeAiPanelTsx).toContain('motion-reduce:[transition-duration:0.01ms]')
+    // 面板 320 由 token 给，不在组件里写死 px
+    expect(officeAiPanelTsx).not.toContain("width: '320px'")
   })
 
   it('动效 token：反馈 120ms / 入场取基准档 / 离场 120ms', () => {
@@ -869,14 +880,15 @@ describe('Office ribbon 布局与动效 token（A2）', () => {
     expectDecl(ribbonRoot, '--office-motion-exit', '120ms', 'semantic :root')
   })
 
-  it('这六条深浅同值：深色块不重写', () => {
+  it('这七条深浅同值：深色块不重写', () => {
     for (const name of [
       '--office-ribbon-tabs-height',
       '--office-ribbon-body-height',
       '--office-status-height',
       '--office-motion-feedback',
       '--office-motion-enter',
-      '--office-motion-exit'
+      '--office-motion-exit',
+      '--office-ai-panel-width'
     ] as const) {
       expect(ribbonDark.get(name), `深色块不该重写 ${name}`).toBeUndefined()
     }

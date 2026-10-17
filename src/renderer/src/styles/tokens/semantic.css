@@ -149,6 +149,9 @@
   --office-motion-feedback: 120ms;
   --office-motion-enter: var(--duration-base);
   --office-motion-exit: 120ms;
+  /* A3：右侧 AI 面板宽度（用户拍板 320 够；窄窗自动收起不挤压画布）。
+     也是面板开合动画的宽度终点（只动 width/opacity，--motion-main 300ms settle）。 */
+  --office-ai-panel-width: 320px;
 
   /* 内容层（spec §6.2：消息列 max 800、输入区 max 768）。
      2026-10-17 起会话侧栏在内容卡**内部**、是主列的 flex 兄弟：主列几何天然不含侧栏那 240，

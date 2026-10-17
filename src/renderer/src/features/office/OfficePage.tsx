@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Briefcase, Plus } from 'lucide-react'
+import { Briefcase, Plus, Sparkles } from 'lucide-react'
 import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
@@ -10,10 +10,16 @@ import {
   saveOfficeTab,
   type OfficeShortcutAction
 } from './office-actions'
+import { OfficeAiPanel } from './OfficeAiPanel'
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
-import { officeDebugEnabled, useOfficeUiStore } from './office-ui-store'
+import {
+  isAiPanelAutoCollapsed,
+  officeDebugEnabled,
+  resolveAiPanelOpen,
+  useOfficeUiStore
+} from './office-ui-store'
 import { useDocumentTheme } from './use-document-theme'
 
 /**
@@ -47,6 +53,12 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   const openDocument = useOfficeTabsStore((state) => state.openDocument)
   const pickerOpen = useOfficeUiStore((state) => state.pickerOpen)
   const setPickerOpen = useOfficeUiStore((state) => state.setPickerOpen)
+  // A3：AI 面板 = 用户手动偏好 && 未被自动收起（纯函数派生；自动收起由 ResizeObserver 写）
+  const aiPanelManualOpen = useOfficeUiStore((state) => state.aiPanelOpen)
+  const aiPanelAutoCollapsed = useOfficeUiStore((state) => state.aiPanelAutoCollapsed)
+  const toggleAiPanel = useOfficeUiStore((state) => state.toggleAiPanel)
+  const setAiPanelAutoCollapsed = useOfficeUiStore((state) => state.setAiPanelAutoCollapsed)
+  const aiPanelOpen = resolveAiPanelOpen(aiPanelManualOpen, aiPanelAutoCollapsed)
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
   const [opening, setOpening] = useState(false)
@@ -70,6 +82,33 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
       alive = false
     }
   }, [])
+
+  /**
+   * A3：量 Office 页可用宽，低于 1100 自动收起 AI 面板（写环境态，不碰用户手动偏好）。
+   * - 宽 0（隐藏/首帧/jsdom）不算窄：避免测试环境与切模块时误收；
+   * - 有 ResizeObserver 就用它（内容卡随窗口/侧栏开合变化都会触发）；没有则退 window resize；
+   * - 变宽后 autoCollapsed 置回 false，effective 自动回到用户偏好（手动关优先于自动）。
+   */
+  const pageRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    const element = pageRef.current
+    if (element === null) return
+    const apply = (width: number): void => {
+      setAiPanelAutoCollapsed(isAiPanelAutoCollapsed(width))
+    }
+    apply(element.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0]
+        if (entry !== undefined) apply(entry.contentRect.width)
+      })
+      observer.observe(element)
+      return () => observer.disconnect()
+    }
+    const onWindowResize = (): void => apply(element.getBoundingClientRect().width)
+    window.addEventListener('resize', onWindowResize)
+    return () => window.removeEventListener('resize', onWindowResize)
+  }, [setAiPanelAutoCollapsed])
 
   const openViaDialog = useCallback(async (): Promise<void> => {
     setOpening(true)
@@ -101,6 +140,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
 
   return (
     <section
+      ref={pageRef}
       data-testid="office-page"
       data-active={active ? 'true' : 'false'}
       className="animate-page-in flex min-h-0 flex-1 flex-col bg-(--doc-canvas-bg)"
@@ -173,7 +213,14 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
                 inert={!isActive}
                 className={isActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
               >
-                <OfficeWorkspace tab={tab} active={isActive} surfaceUrl={surfaceUrl} />
+                <OfficeWorkspace
+                  tab={tab}
+                  active={isActive}
+                  surfaceUrl={surfaceUrl}
+                  aiPanelOpen={aiPanelOpen}
+                  aiPanelAutoCollapsed={aiPanelAutoCollapsed}
+                  onToggleAiPanel={toggleAiPanel}
+                />
               </div>
             )
           })}
@@ -192,12 +239,21 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
 function OfficeWorkspace({
   tab,
   active,
-  surfaceUrl
+  surfaceUrl,
+  aiPanelOpen,
+  aiPanelAutoCollapsed,
+  onToggleAiPanel
 }: {
   tab: OfficeTab
   /** 是否当前可见标签（面内快捷键只在该 workspace 上转发，双保险） */
   active: boolean
   surfaceUrl?: string
+  /** A3：右侧 AI 面板生效展开（docx 才有面板；非 docx 不渲染） */
+  aiPanelOpen: boolean
+  /** A3：是否因内容区过窄被自动收起（只影响把手 tooltip/可用性） */
+  aiPanelAutoCollapsed: boolean
+  /** A3：用户点收起/展开（翻 store 的手动偏好） */
+  onToggleAiPanel: () => void
 }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
@@ -433,34 +489,89 @@ function OfficeWorkspace({
       </div>
 
       {isDocx ? (
-        // 画布全出血：iframe 直接填满 workspace（外壳圆角由 content-region 裁）
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <OfficeSurface
-            ref={surfaceRef}
-            onStatusChange={handleSurfaceStatus}
-            theme={theme}
-            documentInfo={loaded?.info}
-            documentBytes={loaded?.bytes}
-            surfaceUrl={surfaceUrl}
-            onDocLoaded={(pages) => {
-              setEditorReady(true)
-              setPageCount(pages)
-              setDocError('')
-            }}
-            onDocChanged={handleDocChanged}
-            onDocSaveRequest={handleDocSaveRequest}
-            onDocError={handleDocError}
-            onShortcut={handleSurfaceShortcut}
+        // A3：画布（iframe，flex-1）+ 右侧 AI 面板（shell 侧，320 可折叠）同排。
+        // A1 的全出血不变：左侧画布区自己铺满，圆角仍由 content-region 裁。
+        <div className="relative flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            <OfficeSurface
+              ref={surfaceRef}
+              onStatusChange={handleSurfaceStatus}
+              theme={theme}
+              documentInfo={loaded?.info}
+              documentBytes={loaded?.bytes}
+              surfaceUrl={surfaceUrl}
+              onDocLoaded={(pages) => {
+                setEditorReady(true)
+                setPageCount(pages)
+                setDocError('')
+              }}
+              onDocChanged={handleDocChanged}
+              onDocSaveRequest={handleDocSaveRequest}
+              onDocError={handleDocError}
+              onShortcut={handleSurfaceShortcut}
+            />
+            {/*
+              A3：面板收起时，画布右缘给一个窄「AI」把手（aria-expanded=false + tooltip）。
+              自动收起（窗口过窄）时禁用并说明原因——不挤压画布，也不假装能开。
+            */}
+            {aiPanelOpen ? null : (
+              <button
+                type="button"
+                data-testid="office-ai-handle"
+                aria-label={aiPanelAutoCollapsed ? 'AI 助手（窗口过窄已自动收起）' : '展开 AI 助手'}
+                aria-expanded={false}
+                aria-controls="office-ai-panel"
+                title={aiPanelAutoCollapsed ? '窗口变宽后可展开 AI 助手（占位）' : '展开 AI 助手'}
+                disabled={aiPanelAutoCollapsed}
+                onClick={onToggleAiPanel}
+                className="absolute top-[124px] right-4 z-10 flex items-center gap-1 rounded-badge border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-2 py-1 text-c1 text-ink-secondary shadow-(--doc-page-shadow) transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Sparkles aria-hidden="true" className="size-3.5" />
+                AI
+              </button>
+            )}
+            {docError === '' ? null : (
+              <p
+                data-testid="office-doc-error"
+                role="alert"
+                className="absolute inset-x-0 bottom-0 border-t border-hairline bg-(--doc-page-bg) px-4 py-2 text-c1 text-warning"
+              >
+                {docError}
+              </p>
+            )}
+            {saveError === '' ? null : (
+              <div
+                data-testid="office-save-error"
+                role="alert"
+                className="absolute inset-x-0 bottom-0 flex shrink-0 items-center gap-3 border-t border-hairline bg-(--doc-page-bg) px-3 py-2 text-c1 text-warning"
+              >
+                <span className="min-w-0 flex-1 truncate" title={saveError}>
+                  {saveError}
+                </span>
+                <Button
+                  data-testid="office-save-retry"
+                  variant="ghost"
+                  size="sm"
+                  onClick={requestSave}
+                >
+                  重试
+                </Button>
+                <Button
+                  data-testid="office-save-as"
+                  variant="ghost"
+                  size="sm"
+                  onClick={requestSaveAs}
+                >
+                  另存为
+                </Button>
+              </div>
+            )}
+          </div>
+          <OfficeAiPanel
+            open={aiPanelOpen}
+            autoCollapsed={aiPanelAutoCollapsed}
+            onCollapse={onToggleAiPanel}
           />
-          {docError === '' ? null : (
-            <p
-              data-testid="office-doc-error"
-              role="alert"
-              className="absolute inset-x-0 bottom-0 border-t border-hairline bg-(--doc-page-bg) px-4 py-2 text-c1 text-warning"
-            >
-              {docError}
-            </p>
-          )}
         </div>
       ) : (
         <div
@@ -472,23 +583,6 @@ function OfficeWorkspace({
           <p className="max-w-md text-c1 text-ink-tertiary">
             {OFFICE_KIND_LABEL[tab.kind]}编辑器会在这里打开；切换标签不会关闭或重置其他文档。
           </p>
-        </div>
-      )}
-      {saveError === '' ? null : (
-        <div
-          data-testid="office-save-error"
-          role="alert"
-          className="absolute inset-x-0 bottom-0 flex shrink-0 items-center gap-3 border-t border-hairline bg-(--doc-page-bg) px-3 py-2 text-c1 text-warning"
-        >
-          <span className="min-w-0 flex-1 truncate" title={saveError}>
-            {saveError}
-          </span>
-          <Button data-testid="office-save-retry" variant="ghost" size="sm" onClick={requestSave}>
-            重试
-          </Button>
-          <Button data-testid="office-save-as" variant="ghost" size="sm" onClick={requestSaveAs}>
-            另存为
-          </Button>
         </div>
       )}
     </div>
