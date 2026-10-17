@@ -10,11 +10,27 @@ import { closeApp, launchApp, sendMessage, waitForChat, type LaunchedApp } from 
  * 每颗用例起一个隔离实例（userData 是临时目录），把状态摆到位 → 截图 + 量数值 → 落盘：
  *   - 截图：`.superpowers/.../smoke-t16/walkthrough/*.png`
  *   - 数值：同目录 `metrics-*.json`（读的是 computed style 与 getBoundingClientRect 的 CSS px）
- * 本文件是取证件：几何硬值（圆角/缝/限宽/居中不变量）由样式契约 spec 钉住，这里不重复；
- * 只保留少量人工目视替代不了的断言（如 D 例的错误卡文案必须是人话）。
- * 观感结论写进 `docs/reviews/ui-walkthrough.md`（人工看截图 + 这些数值）。
+ *
+ * 2026-10-17 0.2.0 壳基线重写：旧的"覆盖层侧栏 / --content-safe-left / shell-notch"几何口径全部作废，
+ * 现在是——一级导航固定 56 flow 栏；内容卡 = 壳行宽 − 右缘 --shell-edge-gap(6)；卡内 Sidebar(240/0)
+ * + 主列 + 工作台；TitleBar 左=侧栏钮、中=（固定「主对话」标签 + 文档标签 + ＋）、右=窗控。
+ * W7：窗口 < 782 时会话侧栏自动收起（布局事实，不改偏好）；设置/插件/记忆/用量在 ModuleHost 内，
+ * 主对话切过去不卸载（草稿保留）。几何硬值由本文件的少量断言钉住，其余是取证数字。
  */
 const OUT = resolve(__dirname, '..', '.superpowers/sdd/2026-10-10-kyclaw-mvp/smoke-t16/walkthrough')
+
+/** 0.2.0 壳的固定几何（token 口径；断言用 ±1 容差吸收取整/设备像素比） */
+const NAV_RAIL_WIDTH = 56
+const SIDEBAR_WIDTH = 240
+const SHELL_EDGE_GAP = 6
+const WORK_PANEL_DEFAULT = 400
+const CHAT_MIN_READABLE = 480
+const TITLEBAR_HEIGHT = 42
+/**
+ * W7/D4=A 的自动收起阈值（窗口宽）：内容卡宽 − 侧栏标称宽 < 480 ⇒ 收起。
+ * 卡宽 = 窗口 − 56 − 6；临界窗口 = 56 + 6 + 240 + 480 = 782。
+ */
+const SIDEBAR_AUTO_COLLAPSE_MAX_WINDOW = 782
 
 type Metrics = Record<string, unknown>
 
@@ -27,15 +43,20 @@ interface Box {
 
 interface ShellRead {
   viewport: { width: number; height: number }
+  dataSidebar: string | null
+  titlebar: Box
+  primaryNav: Box
+  appTabBar: Box
+  shellRow: Box
   contentRegion: Box & { radius: string }
-  contentColumn: Box
   sidebar: Box
+  mainColumn: Box
+  workPanel: Box & { open: boolean }
+  contentColumn: Box
   composer: Box
   messageList: Box
   railOffsetInList: number
-  /** 可见左缘（--content-safe-left）：侧栏收起 0 / 展开 240 */
-  safeLeft: number
-  gaps: { right: number; bottom: number; columnLeftInRegion: number }
+  gaps: { rightFromWindow: number; bottomFromWindow: number; rightFromRow: number }
 }
 
 /** 一次读完壳层几何（CSS px；都在渲染端算，避免设备像素比掺进来） */
@@ -49,35 +70,84 @@ async function readShell(page: Page): Promise<ShellRead> {
     }
     const region = document.querySelector('[data-testid="content-region"]')
     const regionRect = region?.getBoundingClientRect() ?? null
+    const rowRect = document.querySelector('[data-testid="shell-row"]')?.getBoundingClientRect()
     const list = boxOf('[data-testid="message-list"]')
     const railRect =
       document.querySelector('[data-testid="message-rail"]')?.getBoundingClientRect() ?? null
 
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      dataSidebar:
+        document.querySelector('[data-testid="app-root"]')?.getAttribute('data-sidebar') ?? null,
+      titlebar: boxOf('[data-testid="titlebar"]'),
+      primaryNav: boxOf('[data-testid="primary-nav"]'),
+      appTabBar: boxOf('[data-testid="app-tabbar"]'),
+      shellRow: boxOf('[data-testid="shell-row"]'),
       contentRegion: {
         ...boxOf('[data-testid="content-region"]'),
         radius: region === null ? '' : getComputedStyle(region).borderTopLeftRadius
       },
-      contentColumn: boxOf('.content-column'),
       sidebar: boxOf('[data-testid="sidebar"]'),
+      mainColumn: boxOf('[data-testid="main-column"]'),
+      workPanel: {
+        ...boxOf('[data-testid="work-panel"]'),
+        open:
+          document.querySelector('[data-testid="work-panel"]')?.classList.contains('is-open') ??
+          false
+      },
+      contentColumn: boxOf('.content-column'),
       composer: boxOf('[data-testid="composer"]'),
       messageList: list,
       railOffsetInList: railRect === null ? 0 : list.x + list.width - railRect.right,
-      // 可见左缘（侧栏收起 = 0；展开 = 240）：内容卡左缘被侧栏盖住，看得到的是这条线。
-      // 变量设在壳根（[data-sidebar]）上，不是 :root —— 必须从 app-root 读，读 html 只会拿到初始值 0
-      safeLeft: Number.parseFloat(
-        getComputedStyle(
-          document.querySelector('[data-testid="app-root"]') as Element
-        ).getPropertyValue('--content-safe-left')
-      ),
       gaps: {
-        right: regionRect === null ? 0 : window.innerWidth - regionRect.right,
-        bottom: regionRect === null ? 0 : window.innerHeight - regionRect.bottom,
-        columnLeftInRegion: regionRect === null ? 0 : boxOf('.content-column').x - regionRect.x
+        rightFromWindow: regionRect === null ? 0 : window.innerWidth - regionRect.right,
+        bottomFromWindow: regionRect === null ? 0 : window.innerHeight - regionRect.bottom,
+        rightFromRow:
+          regionRect === null || rowRect === undefined ? 0 : rowRect.right - regionRect.right
       }
     }
   })
+}
+
+/** 几何断言（±1px，吸收取整/缩放；失败时 label 带上实测值） */
+function expectNear(actual: number, expected: number, label: string, tolerance = 1): void {
+  expect(
+    Math.abs(actual - expected),
+    `${label}: 实测 ${actual}，期望 ${expected}`
+  ).toBeLessThanOrEqual(tolerance)
+}
+
+/** 1280 宽默认态（侧栏展开、工作台关）的壳几何断言 + 返回实测数字 */
+async function expectDefault1280(page: Page): Promise<ShellRead> {
+  const read = await readShell(page)
+  // 窗口宽用实测值参与推导：Windows 缩放下 setBounds(1280) 的 innerWidth 可能差 1px 上下，
+  // 真值锚在"窗口宽 − 导航 − 留缝"，而不是写死 1280。
+  const viewportWidth = read.viewport.width
+  expectNear(viewportWidth, 1280, '窗口宽', 2)
+  const expectedRegionWidth = viewportWidth - NAV_RAIL_WIDTH - SHELL_EDGE_GAP
+  expectNear(read.primaryNav.width, NAV_RAIL_WIDTH, '一级导航宽')
+  expectNear(read.primaryNav.x, 0, '一级导航 x')
+  expectNear(read.titlebar.height, TITLEBAR_HEIGHT, '顶栏高')
+  expectNear(read.contentRegion.x, NAV_RAIL_WIDTH, '内容卡 x')
+  expectNear(read.contentRegion.width, expectedRegionWidth, '内容卡宽')
+  expect(read.contentRegion.radius, '内容卡圆角 20px').toBe('20px')
+  expectNear(read.gaps.rightFromWindow, SHELL_EDGE_GAP, '卡右缘距窗口')
+  expectNear(read.gaps.bottomFromWindow, SHELL_EDGE_GAP, '卡底距窗口')
+  expect(read.dataSidebar, '1280 宽侧栏应展开').toBe('expanded')
+  expectNear(read.sidebar.width, SIDEBAR_WIDTH, '侧栏宽')
+  expectNear(read.sidebar.x, NAV_RAIL_WIDTH, '侧栏 x')
+  expectNear(read.mainColumn.x, NAV_RAIL_WIDTH + SIDEBAR_WIDTH, '主列 x')
+  expectNear(read.mainColumn.width, expectedRegionWidth - SIDEBAR_WIDTH, '主列宽')
+  expect(read.workPanel.open).toBe(false)
+  expectNear(read.workPanel.width, 0, '工作台关着时不占宽')
+  // 一级导航只有图标：按钮文字一个都不能有（可访问名走 aria-label / title）
+  const navLabels = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="primary-nav"] button'))
+      .map((button) => button.textContent?.trim() ?? '')
+      .filter((label) => label !== '')
+  )
+  expect(navLabels).toEqual([])
+  return read
 }
 
 /** hover 反馈：hover 前 / 后各读一次底色，并回填"确实处于 :hover"与 token 真值 */
@@ -131,19 +201,16 @@ async function shotElement(page: Page, selector: string, name: string): Promise<
     .screenshot({ path: join(OUT, `${name}.png`) })
 }
 
-/** 四角特写（40×40 CSS px 一块）：
- *  左右两对分别贴"内容卡右缘"与"可见左缘（--content-safe-left）"——侧栏展开时卡左缘被侧栏盖着，
- *  看得到的是它在可见左缘露出来的那条边（含 shell-notch 补角）；侧栏收起时就是卡自己的左缘。 */
+/** 四角特写（40×40 CSS px 一块）：0.2.0 内容卡左缘不再被覆盖层盖住，四角都直接可见 */
 async function shotCorners(page: Page, prefix: string): Promise<void> {
   const read = await readShell(page)
   const region = read.contentRegion
   await settle(page)
   const size = 40
-  const left = region.x + read.safeLeft
   const corners: Array<[string, number, number]> = [
-    ['左上', left, region.y],
+    ['左上', region.x, region.y],
     ['右上', region.x + region.width - size, region.y],
-    ['左下', left, region.y + region.height - size],
+    ['左下', region.x, region.y + region.height - size],
     ['右下', region.x + region.width - size, region.y + region.height - size]
   ]
   for (const [label, x, y] of corners) {
@@ -158,18 +225,43 @@ async function shotCorners(page: Page, prefix: string): Promise<void> {
 async function resizeTo(app: LaunchedApp['app'], page: Page, width: number): Promise<void> {
   await app.evaluate(
     ({ BrowserWindow }, size) => {
-      BrowserWindow.getAllWindows()[0]?.setBounds({ ...(size as { width: number }), height: 800 })
+      const win = BrowserWindow.getAllWindows()[0]
+      if (!win) throw new Error('没有主窗口')
+      if (win.isMaximized()) win.unmaximize()
+      win.setBounds({ x: 40, y: 40, width: size.width, height: 800 })
     },
     { width }
   )
   await page.waitForFunction((expected) => Math.abs(window.innerWidth - expected) <= 4, width, {
     timeout: 10_000
   })
+  // 宽度过渡（--motion-main 0.3s）+ 自动降级的 layout effect 落地
+  await page.waitForTimeout(500)
+}
+
+/** 侧栏/工作台宽度（等过渡收尾后读，避免读到动画中间帧） */
+async function readWidth(page: Page, testId: string): Promise<number> {
+  return page.getByTestId(testId).evaluate((element) => element.getBoundingClientRect().width)
+}
+
+/** 等某元素宽度收敛到期望值（±1） */
+async function expectWidth(
+  page: Page,
+  testId: string,
+  expected: number,
+  label: string
+): Promise<void> {
+  await expect
+    .poll(() => readWidth(page, testId), { timeout: 5_000, message: label })
+    .toBeLessThanOrEqual(expected + 1)
+  await expect
+    .poll(() => readWidth(page, testId), { timeout: 5_000, message: label })
+    .toBeGreaterThanOrEqual(Math.max(0, expected - 1))
 }
 
 test.describe.configure({ mode: 'serial' })
 
-test('走查A · 深色壳与聊天页（四角/缝/导览轨/composer/chips/工具流/Tooltip）', async () => {
+test('走查A · 深色壳与聊天页（0.2.0 几何 / 四角 / 缝 / 导览轨 / composer / 工具流 / Tooltip）', async () => {
   const rootDir = mkdtempSync(join(tmpdir(), 'kyclaw-walk-a-'))
   const workspace = join(rootDir, '走查工作区')
   mkdirSync(workspace, { recursive: true })
@@ -191,32 +283,50 @@ test('走查A · 深色壳与聊天页（四角/缝/导览轨/composer/chips/工
       ]
     }
   })
-  const { page } = launched
+  const { app, page } = launched
   const metrics: Metrics = {}
 
   try {
     await waitForChat(page)
-    metrics.shell1280 = await readShell(page)
-    await shot(page, 'A1-深色-聊天页-侧栏开')
+    await resizeTo(app, page, 1280)
+    metrics.shell1280 = await expectDefault1280(page)
+    await shot(page, 'A1-深色-聊天页-1280-壳几何基线')
     await shotCorners(page, 'A2-深色-1280-侧栏开')
 
-    // 侧栏收起 → 内容列回到可见区居中
+    // 侧栏折叠钮（0.2.0：卡内宽度动画收 0；主列是它的 flex 兄弟，会左移并用满卡宽）
     await page.getByTestId('sidebar-toggle').click()
-    await expect(page.getByTestId('sidebar')).toHaveClass(/is-collapsed/)
-    await page.waitForTimeout(400)
-    metrics.shell1280侧栏收起 = await readShell(page)
-    await shot(page, 'A3-深色-侧栏收起')
+    await expectWidth(page, 'sidebar', 0, '侧栏收起后宽度')
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+    const collapsed = await readShell(page)
+    const collapsedCard = collapsed.viewport.width - NAV_RAIL_WIDTH - SHELL_EDGE_GAP
+    expectNear(collapsed.mainColumn.x, NAV_RAIL_WIDTH, '收起后主列 x')
+    expectNear(collapsed.mainColumn.width, collapsedCard, '收起后主列宽')
+    expect(collapsed.sidebar).toHaveProperty('width', 0)
+    metrics.shell1280侧栏收起 = collapsed
+    await shot(page, 'A3-深色-侧栏收起-主列铺满卡')
     await shotCorners(page, 'A3b-深色-1280-侧栏收起')
 
-    // 工作台展开（右栏并入内容卡，不是第三根柱子）
+    // 工作台展开（右栏并入内容卡，不是第三根柱子；侧栏收起时剩余宽 1218−400 ≥ 480 ⇒ 并排）
     await page.getByTestId('work-panel-toggle').click()
     await expect(page.getByTestId('work-panel')).toHaveClass(/is-open/)
-    await page.waitForTimeout(400)
-    metrics.shell1280工作台开 = await readShell(page)
+    await expectWidth(page, 'work-panel', WORK_PANEL_DEFAULT, '工作台宽度')
+    expect(await page.getByTestId('work-panel').getAttribute('data-fullscreen-source')).toBe('none')
+    const panelOpen = await readShell(page)
+    const cardRight = panelOpen.viewport.width - SHELL_EDGE_GAP
+    expectNear(panelOpen.workPanel.x, cardRight - WORK_PANEL_DEFAULT, '工作台 x')
+    expectNear(
+      panelOpen.mainColumn.width,
+      cardRight - NAV_RAIL_WIDTH - WORK_PANEL_DEFAULT,
+      '工作台开时主列宽'
+    )
+    metrics.shell1280工作台开 = panelOpen
     await shot(page, 'A4-深色-工作台展开')
+
+    // 收起面板 + 展开侧栏，回到默认三列
     await page.getByTestId('work-panel-toggle').click()
     await page.getByTestId('sidebar-toggle').click()
-    await page.waitForTimeout(400)
+    await expectWidth(page, 'sidebar', SIDEBAR_WIDTH, '侧栏恢复宽度')
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
 
     // 三轮：第一条纯文本、第二条触发 write（审批 → 允许）、第三条纯文本 → 导览轨三节点
     await sendMessage(page, '第一条：先打个招呼')
@@ -386,7 +496,13 @@ test('走查B · 浅色菜单玻璃与主按钮 hover（R9 / R11）', async () =
   }
 })
 
-test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7）', async () => {
+/**
+ * 走查C · 0.2.0 壳窄窗三档 + W7/D4=A 真机验收
+ *   1280 / 900：侧栏展开（900：838 − 240 = 598 ≥ 480）
+ *   720（最小窗）：658 − 240 = 418 < 480 ⇒ 自动收起；放宽后按用户偏好恢复
+ * 另含工作台窄窗铺满（round 77 口径不变）与设置/插件页。
+ */
+test('走查C · 窄窗三档（720/900/1280）+ W7 自动收起 + 工作台铺满 + 设置/插件页', async () => {
   const launched = await launchApp({
     settings: {
       theme: 'dark',
@@ -416,17 +532,61 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
 
   try {
     await waitForChat(page)
+    await resizeTo(app, page, 1280)
+    await expectDefault1280(page)
     metrics.shell1280 = await readShell(page)
 
-    // 工作台窄窗兜底（round 77 改口径）：1280 下主动开 → 收窄窗口 → **不再自动收起**，
-    // 而是临时铺满内容区（中列 hidden 但不卸载）；判据是实测宽，见 --chat-min-readable-width = 480
+    // 900：838 − 240 = 598 ≥ 480 ⇒ 侧栏仍展开
+    await resizeTo(app, page, 900)
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
+    await expectWidth(page, 'sidebar', SIDEBAR_WIDTH, '900 宽侧栏宽')
+    const at900 = await readShell(page)
+    const at900Card = at900.viewport.width - NAV_RAIL_WIDTH - SHELL_EDGE_GAP
+    expectNear(at900.contentRegion.width, at900Card, '900 内容卡宽')
+    metrics.shell900 = at900
+    await shot(page, 'C1-窄窗900-侧栏展开')
+
+    // 720（窗口最小宽）：658 − 240 = 418 < 480 ⇒ 自动收起（布局事实，不动偏好）
+    await resizeTo(app, page, 720)
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+    await expectWidth(page, 'sidebar', 0, '720 宽侧栏自动收起')
+    const at720 = await readShell(page)
+    const at720Card = at720.viewport.width - NAV_RAIL_WIDTH - SHELL_EDGE_GAP
+    expectNear(at720.mainColumn.x, NAV_RAIL_WIDTH, '720 自动收起后主列 x')
+    expectNear(at720.mainColumn.width, at720Card, '720 主列宽')
+    expectNear(at720.contentRegion.width, at720Card, '720 内容卡宽')
+    expect(at720.contentColumn.width).toBeGreaterThanOrEqual(CHAT_MIN_READABLE)
+    // 开合钮显示真实布局态（自动收起 → "展开侧栏"）
+    await expect(page.getByTestId('sidebar-toggle')).toHaveAccessibleName('展开侧栏')
+    metrics.shell720自动收起 = at720
+    metrics.windowThreshold = { autoCollapseBelow: SIDEBAR_AUTO_COLLAPSE_MAX_WINDOW }
+    await shot(page, 'C2-窄窗720-侧栏自动收起')
+
+    // W7 真机：720 下点开合钮 —— 只改用户偏好，布局仍保持自动收起（auto 只压"手动展开"）
+    await page.getByTestId('sidebar-toggle').click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+    await expectWidth(page, 'sidebar', 0, '720 点开合钮后仍收起')
+    metrics.clickAt720 = { stillCollapsed: true }
+
+    // 放宽到 1280：用户此刻的偏好是"收起"（刚才那一下），所以侧栏保持收起 —— 偏好被尊重
+    await resizeTo(app, page, 1280)
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+    await expectWidth(page, 'sidebar', 0, '1280 保持用户手动收起')
+    metrics.afterWiden = { stillCollapsed: true }
+
+    // 再点一次回到展开；继续后面的工作台窄窗检查
+    await page.getByTestId('sidebar-toggle').click()
+    await expectWidth(page, 'sidebar', SIDEBAR_WIDTH, '1280 恢复展开')
+    await expect(page.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
+
+    // 工作台窄窗兜底（round 77 口径不变）：1280 下主动开 → 收窄窗口 → 不关面板，改成临时铺满
     await page.getByTestId('work-panel-toggle').click()
     await expect(page.getByTestId('work-panel')).toHaveClass(/is-open/)
-    await shot(page, 'C1-工作台展开-1280')
+    await shot(page, 'C3-工作台展开-1280')
 
     for (const width of [1100, 1000]) {
       await resizeTo(app, page, width)
-      await page.waitForTimeout(450)
       metrics[`shell${width}`] = await readShell(page)
       metrics[`workPanelOpenAt${width}`] = await page
         .getByTestId('work-panel')
@@ -437,21 +597,22 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
       // 面板没关（is-open 仍真），但改成铺满：聊天让位、不挤压
       await expect(page.getByTestId('work-panel')).toHaveAttribute('data-fullscreen-source', 'auto')
       await expect(page.getByTestId('main-column')).toHaveClass(/hidden/)
-      await shot(page, `C2-窄窗${width}-工作台铺满内容区`)
+      await shot(page, `C4-窄窗${width}-工作台铺满内容区`)
     }
-    metrics.workPanelWidthAt1000 = await page
-      .getByTestId('work-panel')
-      .evaluate((element) => element.getBoundingClientRect().width)
+    metrics.workPanelWidthAt1000 = await readWidth(page, 'work-panel')
     await resizeTo(app, page, 1280)
     // 拉回宽窗：自动恢复分栏（中列回来）
     await expect(page.getByTestId('main-column')).not.toHaveClass(/hidden/)
 
-    // 设置页（T5 走查项：内容列居中基准 + 左列设置菜单）
+    // 设置页（T5 走查项：内容列居中基准 + 左列设置菜单；W7：主对话不卸载）
     await page.getByTestId('sidebar-menu-trigger').click()
     await page.getByTestId('nav-settings').click()
     await expect(page.getByTestId('settings-page')).toBeVisible()
     metrics.settingsColumn = await readShell(page)
-    await shot(page, 'C3-设置页-外观-1280-左列设置菜单')
+    // W7 新口径：进设置不再卸载常驻 ChatPage（草稿/滚动保活）
+    await expect(page.getByTestId('chat-page')).toHaveCount(1)
+    await expect(page.getByTestId('module-chat')).toHaveClass(/hidden/)
+    await shot(page, 'C5-设置页-外观-1280-左列设置菜单')
     metrics.navItem = await page.evaluate(() => {
       const nav = document.querySelector('[data-testid="settings-nav-appearance"]')
       if (nav === null) return null
@@ -480,7 +641,7 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
       accessibleName: await page.getByTestId('mcp-server-0-enable').getAttribute('aria-label')
     }
     metrics.半截地址problems = await page.getByTestId('mcp-server-1-problems').innerText()
-    await shot(page, 'C4-插件页-MCP-列表与开关')
+    await shot(page, 'C6-插件页-MCP-列表与开关')
 
     // 开关真的落盘（读隔离 userData 里的 settings.json：启用了就得写进去）
     await page.getByTestId('mcp-server-0-enable').click()
@@ -505,9 +666,121 @@ test('走查C · 窄窗退化 + 设置页/插件页（T5 走查项 / round 5+7�
         iconSize: element.querySelector('svg')?.getBoundingClientRect().width ?? null
       }
     })
-    await shot(page, 'C5-侧栏-新建会话与导航项')
+    await shot(page, 'C7-侧栏-新建会话与导航项')
 
     console.log('[走查C] metrics →', dump('C-窄窗与页面', metrics))
+  } finally {
+    await closeApp(launched)
+  }
+})
+
+/**
+ * 走查E · 0.2.0 顶栏标签栏 + W7 设置往返草稿（2026-10-17 新增）
+ *   - 固定「主对话」标签：常驻、不可关（没有关闭钮、Ctrl+W 也关不到）
+ *   - 打开示例文档后：文档标签渲染在 TitleBar 内；Office 页内不再有旧标签条（office-tabs）
+ *   - 切模块（笔记/知识库/Office）与设置往返：同一个 ChatPage 节点、草稿保留
+ */
+test('走查E · 顶栏标签栏 + 设置往返草稿保留（W7 真机验收）', async () => {
+  const launched = await launchApp({ settings: { theme: 'light' } })
+  const { app, page } = launched
+  const metrics: Metrics = {}
+
+  try {
+    await waitForChat(page)
+    await resizeTo(app, page, 1280)
+    const titlebar = page.getByTestId('titlebar')
+    const tabbar = page.getByTestId('app-tabbar')
+    await expect(tabbar).toBeVisible()
+    expect(await titlebar.getByTestId('app-tabbar').count()).toBe(1)
+    // 固定「主对话」标签在、且不可关：标签栏里**没有**关闭钮（文档标签数为 0 时）
+    await expect(page.getByTestId('app-tab-chat')).toBeVisible()
+    await expect(page.getByTestId('app-tab-chat')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('app-tab-close')).toHaveCount(0)
+    // Ctrl+W 关不到「主对话」（没有文档标签时 Ctrl+W 不拦、也不动聊天）——只记录，不制造关窗风险
+    metrics.fixedChatTab = { present: true, closable: false }
+
+    // 切模块往返：同一个 ChatPage 节点 + 草稿保留（0.2.0 既有口径）
+    const draft = '走查E草稿｜切到笔记、设置再回来，这段字应该还在'
+    await page.getByTestId('composer-input').fill(draft)
+    await page.evaluate(() => {
+      const chat = document.querySelector<HTMLElement>('[data-testid="chat-page"]')
+      if (chat !== null) chat.dataset.probe = 'chat-alive'
+    })
+    await page.getByTestId('primary-nav-notes').click()
+    await expect(page.getByTestId('notes-page')).toBeVisible()
+    await expect(page.getByTestId('module-chat')).toHaveClass(/hidden/)
+    await page.getByTestId('primary-nav-knowledge').click()
+    await expect(page.getByTestId('knowledge-page')).toBeVisible()
+    await page.getByTestId('primary-nav-chat').click()
+    await expect(page.getByTestId('module-chat')).not.toHaveClass(/hidden/)
+    expect(await page.getByTestId('composer-input').inputValue()).toBe(draft)
+    metrics.moduleSwitch = {
+      sameChatPage: await page.evaluate(
+        () =>
+          document.querySelector<HTMLElement>('[data-testid="chat-page"]')?.dataset.probe ??
+          'missing'
+      ),
+      draftPreserved: true
+    }
+
+    // W7 设置往返：进设置时 ChatPage 只 hidden+inert、不卸载；回来草稿仍在
+    await page.getByTestId('primary-nav-settings').click()
+    await expect(page.getByTestId('settings-page')).toBeVisible()
+    await expect(page.getByTestId('module-chat')).toHaveClass(/hidden/)
+    await expect(page.getByTestId('module-chat')).toHaveAttribute('inert')
+    expect(await page.getByTestId('composer-input').inputValue()).toBe(draft)
+    await shot(page, 'E1-设置页-1280-主对话常驻')
+    await page.getByTestId('primary-nav-chat').click()
+    await expect(page.getByTestId('module-chat')).not.toHaveClass(/hidden/)
+    const draftAfterSettings = await page.getByTestId('composer-input').inputValue()
+    expect(draftAfterSettings).toBe(draft)
+    expect(
+      await page.evaluate(
+        () =>
+          document.querySelector<HTMLElement>('[data-testid="chat-page"]')?.dataset.probe ??
+          'missing'
+      )
+    ).toBe('chat-alive')
+    metrics.settingsRoundtrip = {
+      chatPageNodePreserved: true,
+      draftPreserved: draftAfterSettings === draft
+    }
+    await shot(page, 'E2-设置往返后-主对话草稿仍在')
+
+    // 顶栏标签栏：打开 Office 示例文档 → 文档标签渲染在 TitleBar 内
+    await page.getByTestId('primary-nav-office').click()
+    await expect(page.getByTestId('office-page')).toBeVisible()
+    await expect(page.getByTestId('office-empty')).toBeVisible()
+    // Office 页内不再有旧标签条
+    await expect(page.getByTestId('office-tabs')).toHaveCount(0)
+    await shot(page, 'E3-Office空态-1280')
+
+    await page.getByTestId('office-open').click()
+    await page.getByTestId('office-mock-open-docx').click()
+    await expect(page.getByTestId('office-workspace')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('app-tab-add').click()
+    await page.getByTestId('office-mock-open-pptx').click()
+    await expect(page.getByTestId('app-tab')).toHaveCount(2, { timeout: 15_000 })
+    expect(await titlebar.getByTestId('app-tab').count()).toBe(2)
+    // 固定聊天标签仍在、文档标签各有关闭钮（>0 说明关闭只属于文档标签）
+    await expect(page.getByTestId('app-tab-chat')).toBeVisible()
+    expect(await page.getByTestId('app-tab-close').count()).toBe(2)
+    metrics.officeTabs = {
+      count: await page.getByTestId('app-tab').count(),
+      inTitlebar: (await titlebar.getByTestId('app-tab').count()) === 2,
+      oldOfficeTabBar: await page.getByTestId('office-tabs').count(),
+      chatTabStillFixed: true
+    }
+    await shot(page, 'E4-Office二标签-顶栏标签栏')
+
+    // 回主对话：草稿仍在、文档标签保留（标签不绑会话/模块）
+    await page.getByTestId('app-tab-chat').click()
+    await expect(page.getByTestId('module-chat')).not.toHaveClass(/hidden/)
+    expect(await page.getByTestId('composer-input').inputValue()).toBe(draft)
+    await expect(page.getByTestId('app-tab')).toHaveCount(2)
+    await expect(page.getByTestId('app-tab-chat')).toHaveAttribute('aria-selected', 'true')
+
+    console.log('[走查E] metrics →', dump('E-标签栏与W7', metrics))
   } finally {
     await closeApp(launched)
   }
