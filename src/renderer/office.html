@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>kyclaw office</title>
+    <!--
+      Office 隔离面（M3-S0 空壳；S1 起由 kyclaw-office:// 协议加载）的 CSP 之一：
+      这份 meta 版随 HTML 走（dev / preview 直接加载时生效），打包态另由协议响应头再下一次，
+      两处内容保持一致（冻结决策见 .superpowers/handover/office-docx-plan.md §3.4）。
+
+      与主 renderer（src/renderer/index.html）的差别只有两处，请不要把这两处搬到主 CSP：
+      · script-src 多了 'wasm-unsafe-eval'：WASM 编译必需，只在这个隔离面里放开；
+      · connect-src 只留 'self'：wasm/字体都同源，外请在这里被 CSP 封死。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+
+    <script type="module" src="/src/office/main.tsx"></script>
+  </body>
+</html>

@@ -435,12 +435,25 @@ function main() {
     }
     // 随包的第三方许可声明（`resources/skills/THIRD_PARTY_NOTICES.md`）：技能目录走 extraResources，
     // 那份声明是**内联进产物那些包的许可文本唯一承载**（见该文件第 5 节）——漏拷就是合规缺口。
-    if (
-      !existsSync(join(DIST_DIR, 'win-unpacked', 'resources', 'skills', 'THIRD_PARTY_NOTICES.md'))
-    ) {
+    const noticesPath = join(
+      DIST_DIR,
+      'win-unpacked',
+      'resources',
+      'skills',
+      'THIRD_PARTY_NOTICES.md'
+    )
+    if (!existsSync(noticesPath)) {
       fail(
         'resources/skills/THIRD_PARTY_NOTICES.md 没有进包（extraResources 的 skills 那条被改坏了？）'
       )
+    }
+    // 0.2.0：office 渲染入口内联的 BetterOffice（Apache-2.0）与随编辑器分发的字体（OFL-1.1）
+    // 也只能靠这份声明承载 —— 标记断言，防止将来删段后静默通过（不改动上面那条"必须进包"的语义）。
+    const noticesText = readFileSync(noticesPath, 'utf8')
+    for (const marker of ['BetterOffice', 'SIL OPEN FONT LICENSE']) {
+      if (!noticesText.includes(marker)) {
+        fail(`随包 THIRD_PARTY_NOTICES.md 缺「${marker}」（BetterOffice / 字体许可那一段被删了？）`)
+      }
     }
     // round 62：更新通道的随包产物——generic 源（局域网 MinIO）靠它工作，缺了测试机就不会检查更新。
     // 通道文件名跟着版本走：预发布（0.1.0-beta.N）是 beta.yml，正式版才是 latest.yml

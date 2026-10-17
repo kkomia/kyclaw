@@ -30,6 +30,16 @@ export default defineConfig({
        * 资源表本身由 `dsh-document/pdf-assets.ts` 交给 pdf.js 的 `BinaryDataFactory`。
        */
       createPdfjsInlineAssetsPlugin({ root: resolve('node_modules/pdfjs-dist') })
-    ]
+    ],
+    // 0.2.0 Office 面（M3-S0）：渲染端多入口 —— 主界面 index.html + 隔离的 office.html。
+    // 两个入口各自成页；office 面以后由 kyclaw-office:// 协议加载（见 S1）。
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          office: resolve('src/renderer/office.html')
+        }
+      }
+    }
   }
 })
