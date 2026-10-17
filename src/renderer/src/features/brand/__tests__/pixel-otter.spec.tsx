@@ -1,13 +1,14 @@
 import { act, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PixelOtter } from '../PixelOtter'
+import { pickSheetVariant } from '../pixel-otter-sheets'
 import { OTTER_STATES, type PixelOtterSize, type PixelOtterState } from '../otter-states'
 import { MASCOT_IDLE_FALLBACK_MS, useChatMascotState } from '../chat-mascot-state'
 import { resetThreadRunStore, useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 
 /**
- * 像素海獭组件（task-41 / 设计稿 rev2）：
- *   - props：6 个状态 × 7 档尺寸；浅/深两层 sheet（主题跟 `data-theme`）；
+ * 像素海獭组件（v4 / 设计稿 32×32）：
+ *   - props：6 个状态 × 7 档尺寸（32/64/96/128/192/256/512）；浅/深两层 sheet（主题跟 `data-theme`）；
  *   - 装饰性：aria-hidden + pointer-events:none；title 只做 hover 提示；
  *   - 不可见就停：IntersectionObserver / document.hidden → data-paused；
  *   - reduced-motion：读 matchMedia，静态帧（CSS 契约在 splash-asset.spec 里对文件断言）；
@@ -76,7 +77,7 @@ describe('PixelOtter · 渲染契约', () => {
     const states: PixelOtterState[] = ['idle', 'loading', 'float', 'wave', 'think', 'type']
 
     for (const state of states) {
-      const view = render(<PixelOtter state={state} size={24} />)
+      const view = render(<PixelOtter state={state} size={32} />)
       const otter = screen.getByTestId('pixel-otter')
       expect(otter).toHaveAttribute('data-state', state)
       const spec = screen.getByTestId('pixel-otter-spec')
@@ -89,14 +90,16 @@ describe('PixelOtter · 渲染契约', () => {
     }
   })
 
-  it('尺寸写进 --otter-size（显式宽高，不产生 CLS）；24 是 header master 档', () => {
-    const first = render(<PixelOtter state="idle" size={24} />)
+  it('尺寸写进 --otter-size（显式宽高，不产生 CLS）；v4 是 32 的整数倍、最小 32', () => {
+    const first = render(<PixelOtter state="idle" size={32} />)
     const otter = within(first.container).getByTestId('pixel-otter')
-    expect(otter).toHaveAttribute('data-size', '24')
-    expect(otter.style.getPropertyValue('--otter-size')).toBe('24px')
+    expect(otter).toHaveAttribute('data-size', '32')
+    expect(otter.style.getPropertyValue('--otter-size')).toBe('32px')
+    // 32 = 1x 的 1:1（输入卡状态灯）
+    expect(otter).toHaveAttribute('data-sheet-cell', '32')
     first.unmount()
 
-    const sizes: PixelOtterSize[] = [16, 32, 48, 64, 96, 128]
+    const sizes: PixelOtterSize[] = [32, 64, 96, 128, 192, 256, 512]
     for (const size of sizes) {
       const view = render(<PixelOtter state="float" size={size} />)
       expect(
@@ -106,8 +109,20 @@ describe('PixelOtter · 渲染契约', () => {
     }
   })
 
+  it('sheet 倍率：输入卡 32→1x；欢迎页 96→@3x、128→@4x；更大尺寸就近放大（不重画）', () => {
+    expect(pickSheetVariant('idle', 32).cell).toBe(32)
+    expect(pickSheetVariant('think', 32).cell).toBe(32)
+    expect(pickSheetVariant('float', 96).cell).toBe(96)
+    expect(pickSheetVariant('float', 128).cell).toBe(128)
+    expect(pickSheetVariant('wave', 128).cell).toBe(128)
+    expect(pickSheetVariant('float', 256).cell).toBe(128)
+    expect(pickSheetVariant('loading', 128).cell).toBe(128)
+    // 小于最小档（32）时退回最小档缩放（v4 起不再支持 16/24 显示档）
+    expect(pickSheetVariant('idle', 16).cell).toBe(32)
+  })
+
   it('装饰性：aria-hidden；title 只做 hover 提示；浅/深两层 sheet 都在 DOM（CSS 按 data-theme 切）', () => {
-    render(<PixelOtter state="idle" size={24} title="kyclaw" />)
+    render(<PixelOtter state="idle" size={32} title="kyclaw" />)
     const otter = screen.getByTestId('pixel-otter')
     expect(otter).toHaveAttribute('aria-hidden', 'true')
     expect(otter).toHaveAttribute('title', 'kyclaw')

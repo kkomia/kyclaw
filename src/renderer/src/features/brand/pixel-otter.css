@@ -1,12 +1,16 @@
 /**
- * 像素海獭动画（brand mark · v1 三处）。
+ * 像素海獭动画（brand mark · v4 / 32×32 栅格）。
  *
  * 帧机制：sprite sheet 横向平铺，`steps(N)` 只在整帧之间跳（不做补间 —— 像素图不插值）；
- * 一种状态只有一档帧数/时长（数值来源 `otter-states.ts` ↔ task-40 manifest）。
- * 缩放：`image-rendering: pixelated` 最近邻；尺寸由 `--otter-size` 给（组件内联，窄窗由下方 media 覆盖）。
+ * 一种状态只有一档帧数/时长（数值来源 `otter-states.ts` ↔ launch-v2 manifest）。
+ * 缩放：`image-rendering: pixelated` 最近邻；尺寸由 `--otter-size` 给（组件内联）。
  * 主题：浅/深两层 sheet，`:root[data-theme='dark']` 切显隐（与全站主题机制唯一来源一致）。
  * reduced-motion：停动画、停在状态的 `reducedFrame` 静态帧；`data-paused`（滚出视口/页面隐藏/父层不活动）
  * 时暂定 `animation-play-state`，不重置帧。
+ *
+ * 尺寸：v4 起全部为 32 的整数倍（32/64/96/128/192/256/512，最小 32，弃 24）；
+ * 组件按请求尺寸挑 sheet 倍率（1x/3x/4x），CSS 只按 `--otter-size` 等比缩放，不再有按落点写死的
+ * 尺寸覆写（旧 `.chat-otter`/`.welcome-otter` 的响应式规则已随 v4 删除）。
  */
 
 .pixel-otter {
@@ -107,22 +111,5 @@
   .pixel-otter-sheet {
     animation: none !important;
     background-position-x: calc(-1 * var(--otter-reduced-frame, 0) * var(--otter-size));
-  }
-}
-
-/* ── 两处尺寸的响应式（设计稿：chat header 32→24 / <720 隐藏；欢迎页 128→96） ── */
-@media (max-width: 1279px) {
-  .chat-otter {
-    --otter-size: 24px !important;
-  }
-
-  .welcome-otter {
-    --otter-size: 96px !important;
-  }
-}
-
-@media (max-width: 719px) {
-  .chat-otter {
-    display: none;
   }
 }

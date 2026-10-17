@@ -1,14 +1,16 @@
 /**
- * 像素海獭 · 装饰性动画组件（品牌 mark，不是助手人格；设计稿 rev2 / D-32）。
+ * 像素海獭 · 装饰性动画组件（品牌 mark，不是助手人格；设计稿 v4 / D-32）。
  *
- * 资产：`src/renderer/src/assets/pixel-otter/`（task-40 子集 launch-v1，43 文件 34,785 B）。
- * 三处使用方（splash 在 index.html 内联 base64，不走本组件）：
- *   - chat header 右上角：size 32（<1280 由 CSS 降到 24），state idle/think/type；
- *   - chat 初始页欢迎 logo：size 128（<1280 由 CSS 降到 96），state wave→float。
+ * 资产：`src/renderer/src/assets/pixel-otter/`（task-65 子集 launch-v2，35 文件 47,493 B；
+ * **32×32 栅格**、8 色、每侧 3 根胡须；显示尺寸全是 32 的整数倍）。
+ * sheet 档位/挑档在 `pixel-otter-sheets.ts`（本文件只导出组件，react-refresh 口径）。splash 不走本组件
+ * （index.html 内联 base64）。落点：
+ *   - 输入卡右上角状态灯（task-62 落位）：size 32，state idle/think/type；
+ *   - chat 初始页欢迎 logo：size 96（A 信笺报头；API 支持 96/128），state wave→float。
  *
  * 实现要点：
  *   - **sprite sheet + CSS steps()**：一种状态一张横向 sheet，`background-position-x` 逐帧跳；
- *     `image-rendering: pixelated` 保证最近邻放大，不做 4x 以上「高清像素」。
+ *     `image-rendering: pixelated` 保证最近邻放大（整数倍优先，不插值）。
  *   - **主题跟随全局**：渲染浅/深两层，用 `:root[data-theme='dark']` 切显隐；不新增设置项。
  *   - **reduced-motion**：`@media (prefers-reduced-motion: reduce)` 停动画并停在 manifest 的
  *     `reducedFrame`（静态帧，不是隐藏）。
@@ -20,30 +22,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 import { OTTER_STATES, type PixelOtterSize, type PixelOtterState } from './otter-states'
+import { pickSheetVariant } from './pixel-otter-sheets'
 import './pixel-otter.css'
-
-import idleLight from '@renderer/assets/pixel-otter/sheets/light/otter-idle.sheet.png'
-import idleDark from '@renderer/assets/pixel-otter/sheets/dark/otter-idle.sheet.png'
-import loadingLight from '@renderer/assets/pixel-otter/sheets/light/otter-loading.sheet@4x.png'
-import loadingDark from '@renderer/assets/pixel-otter/sheets/dark/otter-loading.sheet@4x.png'
-import floatLight from '@renderer/assets/pixel-otter/sheets/light/otter-float.sheet@4x.png'
-import floatDark from '@renderer/assets/pixel-otter/sheets/dark/otter-float.sheet@4x.png'
-import waveLight from '@renderer/assets/pixel-otter/sheets/light/otter-wave.sheet@4x.png'
-import waveDark from '@renderer/assets/pixel-otter/sheets/dark/otter-wave.sheet@4x.png'
-import thinkLight from '@renderer/assets/pixel-otter/sheets/light/otter-think.sheet.png'
-import thinkDark from '@renderer/assets/pixel-otter/sheets/dark/otter-think.sheet.png'
-import typeLight from '@renderer/assets/pixel-otter/sheets/light/otter-type.sheet.png'
-import typeDark from '@renderer/assets/pixel-otter/sheets/dark/otter-type.sheet.png'
-
-/** 每状态两套 sprite（浅/深同规格，只有像素色板不同）；splash 不走这里（index.html 内联） */
-const SHEETS: Record<PixelOtterState, { light: string; dark: string }> = {
-  idle: { light: idleLight, dark: idleDark },
-  loading: { light: loadingLight, dark: loadingDark },
-  float: { light: floatLight, dark: floatDark },
-  wave: { light: waveLight, dark: waveDark },
-  think: { light: thinkLight, dark: thinkDark },
-  type: { light: typeLight, dark: typeDark }
-}
 
 export interface PixelOtterProps {
   state: PixelOtterState
@@ -110,7 +90,7 @@ export function PixelOtter({
   const spec = OTTER_STATES[state]
   const reduced = useReducedMotion()
   const { ref, paused: invisible } = useInViewPause()
-  const sheets = SHEETS[state]
+  const sheet = pickSheetVariant(state, size)
 
   return (
     <span
@@ -118,6 +98,7 @@ export function PixelOtter({
       data-testid="pixel-otter"
       data-state={state}
       data-size={size}
+      data-sheet-cell={sheet.cell}
       data-reduced={reduced ? 'true' : 'false'}
       data-paused={paused || invisible ? 'true' : 'false'}
       aria-hidden="true"
@@ -127,11 +108,11 @@ export function PixelOtter({
     >
       <span
         className="pixel-otter-sheet pixel-otter-sheet--light"
-        style={{ backgroundImage: `url("${sheets.light}")` }}
+        style={{ backgroundImage: `url("${sheet.light}")` }}
       />
       <span
         className="pixel-otter-sheet pixel-otter-sheet--dark"
-        style={{ backgroundImage: `url("${sheets.dark}")` }}
+        style={{ backgroundImage: `url("${sheet.dark}")` }}
       />
       {/* 数据属性让 CSS 知道帧数/帧时/是否循环（一种状态只有一档，见 otter-states.ts） */}
       <span
