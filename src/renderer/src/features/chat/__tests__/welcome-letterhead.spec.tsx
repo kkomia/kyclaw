@@ -131,11 +131,12 @@ describe('A · 信笺 · welcome.css 关键手法', () => {
     )
   })
 
-  it('一屏一只（task-53）：hero 活跃时用 :has 把 ChatHeader 状态灯隐起，无 JS presence', () => {
-    expect(WELCOME_CSS).toMatch(
-      /\[data-testid='chat-page'\]:has\(\[data-testid='welcome-hero'\]\[data-active='true'\]\)[\s\S]*?\[data-testid='chat-header'\][\s\S]*?\.chat-otter \{\s*display: none;/
-    )
-    // 角落氛围位整套已删除
+  it('task-62：状态海獭挪到输入卡右上角 —— welcome.css 不再留 header 的 :has 让位规则', () => {
+    // 一屏一只改由渲染条件保证（hero 时 Composer 不渲染状态獭、ChatHeader 已无海獭），
+    // 原先针对 `.chat-otter` 的 :has 规则是死代码，已删除（对应 CSS/DOM 契约在 composer.spec）。
+    expect(WELCOME_CSS).not.toContain(':has(')
+    expect(WELCOME_CSS).not.toContain('chat-otter')
+    // 角落氛围位整套已删除（task-53）
     expect(WELCOME_CSS).not.toContain('welcome-corner-slot')
     expect(WELCOME_CSS).not.toContain('welcome-ambient-otter')
   })

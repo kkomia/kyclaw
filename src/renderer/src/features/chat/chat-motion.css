@@ -92,9 +92,12 @@
 .composer-caret {
   position: absolute;
   z-index: 30;
-  width: 2px;
+  width: calc(2px * var(--ui-scale, 1));
+  min-width: 2px;
+  box-sizing: border-box;
   border-radius: 1px;
   background-color: var(--accent);
+  transform: translateZ(0);
   pointer-events: none;
   animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite;
   transition:
@@ -479,5 +482,25 @@
 
   [data-motion='full'] [data-send-animate='grow'] {
     animation: chat-send-grow var(--motion-enter) var(--motion-ease-enter) both !important;
+  }
+}
+
+/* ── 输入卡右上角的状态海獭（task-62：用户口径「移动到对话输入框右上角而不是最右上角」）──────
+   从 ChatHeader 挪来；锚点是 Composer 的 `.composer-anchor`（与卡片同列宽）。
+   贴卡片右缘、上沿压过卡片顶边（top:-14 / right:10 —— 像从卡片右上角探出来），不占布局。
+   纯装饰：pointer-events:none（不挡输入区文字、发送钮、权限 chip）。
+   窄窗 <900 整个隐藏：32 是状态灯设计最小档（24 只做降级且辨识度低），窄窗更该让位给输入区；
+   reduced 由组件 `paused`（useEffectiveMotion 折算）停帧。 */
+.composer-otter {
+  position: absolute;
+  top: -14px;
+  right: 10px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@media (max-width: 899px) {
+  .composer-otter {
+    display: none;
   }
 }

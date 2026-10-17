@@ -170,14 +170,10 @@
   background: var(--border-field);
 }
 
-/* ── 5. 一屏一只（task-53）：初始页 hero 活跃时，ChatHeader 的状态灯隐起 ────────
-   初始页只有报头 lockup 那只海獭；进对话（hero data-active=false）后状态灯自然露出。
-   纯 CSS 判定（`:has`），不再有 JS presence 让位逻辑；hero 是 chat-page 的后代，选择器稳定。 */
-[data-testid='chat-page']:has([data-testid='welcome-hero'][data-active='true'])
-  [data-testid='chat-header']
-  .chat-otter {
-  display: none;
-}
+/* ── 5. 一屏一只（task-53 起；task-62 简化）────────────────────────────────────
+   状态海獭已从 ChatHeader 挪到输入卡右上角（Composer 的 `.composer-otter`，且 hero 时不渲染）；
+   初始页只有报头 lockup 那只 —— 互斥由组件渲染条件保证，原先这里针对 header 状态灯的
+   `:has` 让位规则已不再需要，删除（不再有第二只可隐）。 */
 
 /* ── 6. reduced-motion：细线/纸感全部静态（不新增 animate-none） ───────────────── */
 @media (prefers-reduced-motion: reduce) {

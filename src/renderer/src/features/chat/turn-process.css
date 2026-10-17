@@ -1,28 +1,34 @@
 /**
- * 「本轮过程」统一容器（task-52）——固定长度的内部滚动区。
- *
- * 口径（对照 DSH claude-style 插件的 `--dsh-claude-message-fold-cap:320px` 与
- * `.dsh-claude-file-io-section{max-height:150px;overflow-y:auto}`）：
- *   - 高度是**上限**不是固定值：内容少时容器自然高度，超过 `--turn-process-max-height`
- *     就内部滚动 —— 聊天流的总高度因此**不随工具输出增长**；
- *   - `overscroll-behavior: contain`：滚到容器底部后不把滚动传给聊天流（避免"滚过程
- *     顺带把整页滚走"）；
- *   - `scrollbar-gutter: stable`：有/无滚动条切换时行不横向跳；
- *   - 动效：滚动行为遵守 reduced-motion（跟随新行用瞬时定位，不逐帧平滑滚动）。
+ * 「本轮过程」统一容器（task-52）+ task-77 AI 轮展示：
+ *   - 固定长度内部滚动区（DSH ChatGroupSeat `.WW4l1q_body`：max-height min(400px,50vh)，源码口径），
+ *     `overscroll-behavior: contain` + `scrollbar-gutter: stable` + 细滚动条；
+ *   - **不做信封头**：DSH「收到任务消息」是 Agent Team 收到其他 agent 消息的 TurnTrigger，不是普通消息；
+ *   - 底部最新步骤状态行（DSH RunningStatus：仅 running 时挂载；脉冲点 + 中文计时 tabular）。
+ * reduced：脉冲/过渡全静态（media query + [data-motion='reduced'] 双保险）。
  */
 :root {
-  /* 可在 320–420 之间调；360 是 6–8 行工具行的观感上限（一屏对话里不压过正文） */
-  --turn-process-max-height: 360px;
+  /* 过程区高度上限：DSH 原生 ChatGroupSeat .WW4l1q_body 的 min(400px,50vh)（源码口径） */
+  --turn-process-max-height: min(400px, 50vh);
 }
 
 .turn-process-body {
-  max-height: var(--turn-process-max-height, 360px);
+  max-height: var(--turn-process-max-height, min(400px, 50vh));
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
-/* 行距：单行紧凑（工具行 24px 行高由 ToolCard 自己给），段间 8px 而不是原来的 12px */
+.turn-process-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.turn-process-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: var(--border-surface);
+}
+
+/* 行距：单行紧凑（工具行 24px 行高由 ToolCard 自己给），段间 8px */
 .turn-process-rows {
   display: flex;
   flex-direction: column;
@@ -37,8 +43,153 @@
   z-index: 1;
 }
 
+.turn-latest-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 8px 2px;
+  border-top: var(--hairline-width) solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.turn-latest-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: turn-latest-pulse 1.6s ease-in-out infinite;
+}
+
+.turn-latest-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-latest-duration {
+  color: var(--text-tertiary-readable);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes turn-latest-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.45;
+    transform: scale(0.86);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .turn-process-body {
     scroll-behavior: auto;
   }
+
+  .turn-latest-dot {
+    animation: none;
+  }
+}
+
+[data-motion='reduced'] .turn-latest-dot {
+  animation: none;
+}
+/* task-82：汇总行固定过程区顶部 + 1px hairline 与下方条目分隔（无条目不出线） */
+.turn-process-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* task-83 返工：不再铺 canvas（比聊天页 bg-primary 更暗，形成黑条）；header 在滚动区外，无需底色 */
+  background-color: transparent;
+}
+
+.turn-process-header--divider {
+  padding-bottom: 6px;
+  border-bottom: var(--hairline-width) solid var(--border-hairline);
+}
+/* task-83 · 三体主题动态 SVG（自绘，无外链） */
+.three-body-glyph {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  overflow: visible;
+  color: var(--accent);
+}
+.three-body-ring {
+  fill: none;
+  stroke: var(--border-hairline);
+  stroke-width: 0.75;
+  opacity: 0.55;
+}
+.three-body-orbit {
+  transform-origin: 8px 8px;
+  animation: three-body-orbit-spin 4s linear infinite;
+}
+.three-body-dot {
+  fill: currentColor;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.three-body-dot--a {
+  animation: three-body-breathe 2.8s ease-in-out infinite;
+}
+.three-body-dot--b {
+  animation: three-body-breathe 3.4s ease-in-out infinite 0.4s;
+}
+.three-body-dot--c {
+  animation: three-body-breathe 4s ease-in-out infinite 0.8s;
+}
+.three-body-core {
+  fill: var(--text-ink-tertiary, currentColor);
+  opacity: 0.55;
+}
+@keyframes three-body-orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes three-body-breathe {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .three-body-orbit,
+  .three-body-dot {
+    animation: none;
+  }
+}
+[data-motion='reduced'] .three-body-orbit,
+[data-motion='reduced'] .three-body-dot {
+  animation: none;
+}
+
+/* task-83 返工：chat turn-answer 取消 markdown 44em 行宽上限，正文右缘与用户消息右缘同列 */
+[data-testid='turn-answer'] .markdown-body > p,
+[data-testid='turn-answer'] .markdown-body > h1,
+[data-testid='turn-answer'] .markdown-body > h2,
+[data-testid='turn-answer'] .markdown-body > h3,
+[data-testid='turn-answer'] .markdown-body > h4,
+[data-testid='turn-answer'] .markdown-body > h5,
+[data-testid='turn-answer'] .markdown-body > h6,
+[data-testid='turn-answer'] .markdown-body > ul,
+[data-testid='turn-answer'] .markdown-body > ol,
+[data-testid='turn-answer'] .markdown-body > blockquote {
+  max-width: none;
 }

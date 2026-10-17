@@ -149,10 +149,10 @@ describe('结构与分组：思考 + 工具收进一个容器', () => {
 })
 
 describe('固定长度：高度常量与内部滚动（CSS 契约）', () => {
-  it('--turn-process-max-height 默认 360px，正文 max-height + overflow-y:auto + 不传染外层滚动', () => {
-    expect(TURN_PROCESS_CSS).toContain('--turn-process-max-height: 360px')
+  it('--turn-process-max-height = min(400px,50vh)（DSH 源码口径），正文 max-height + overflow-y:auto + 不传染外层滚动', () => {
+    expect(TURN_PROCESS_CSS).toContain('--turn-process-max-height: min(400px, 50vh)')
     const bodyBlock = /\.turn-process-body \{([\s\S]*?)\}/.exec(TURN_PROCESS_CSS)?.[1] ?? ''
-    expect(bodyBlock).toContain('max-height: var(--turn-process-max-height, 360px)')
+    expect(bodyBlock).toContain('max-height: var(--turn-process-max-height, min(400px, 50vh))')
     expect(bodyBlock).toContain('overflow-y: auto')
     expect(bodyBlock).toContain('overscroll-behavior: contain')
     // 常量不写死在组件里：组件里不出现裸 360 的 max-height
@@ -274,5 +274,33 @@ describe('性能上限：超过 200 行只渲染最近 200 行', () => {
     expect(screen.getByTestId('turn-process-more')).toHaveTextContent(
       `只保留最近 ${String(TURN_PROCESS_MAX_ROWS)} 行`
     )
+  })
+})
+
+describe('task-82 · 汇总行固定顶部 + hairline 分隔', () => {
+  it('顺序：汇总行 header 在可滚动 body 之前，摘要行不被 body 包住（滚动不会被卷走）', () => {
+    render(<TurnProcess entries={[toolEntry(0)]} running />)
+    const header = screen.getByTestId('turn-process-header')
+    const body = screen.getByTestId('turn-process-body')
+    expect(header.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(body.contains(header)).toBe(false)
+    expect(within(header).getByTestId('turn-process-summary')).toBeInTheDocument()
+  })
+
+  it('展开且有条目：出现 1px hairline 分隔（data-has-divider + CSS token）', () => {
+    render(<TurnProcess entries={[toolEntry(0)]} running />)
+    const header = screen.getByTestId('turn-process-header')
+    expect(header).toHaveAttribute('data-has-divider', 'true')
+    expect(header).toHaveClass('turn-process-header--divider')
+    expect(TURN_PROCESS_CSS).toMatch(/\.turn-process-header--divider\s*\{[^}]*border-bottom:\s*var\(--hairline-width\)\s*solid\s*var\(--border-hairline\)/)
+    // reduced 不引入动画
+    expect(TURN_PROCESS_CSS).not.toMatch(/\.turn-process-header[^}]*animation:/)
+  })
+
+  it('无过程条目：不渲染分隔线（不占空线）', () => {
+    render(<TurnProcess entries={[]} running={false} />)
+    const header = screen.getByTestId('turn-process-header')
+    expect(header).not.toHaveClass('turn-process-header--divider')
+    expect(header).not.toHaveAttribute('data-has-divider')
   })
 })

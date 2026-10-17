@@ -244,3 +244,19 @@ describe('动效 B：reduced 三档门控', () => {
     }
   })
 })
+
+describe('task-83 · caret 宽度恒定', () => {
+  it('宽度 2px×ui-scale、min-width 2px；过渡不含 width/scale（打字/暂停都不变细）', () => {
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/renderer/src/features/chat/chat-motion.css'),
+      'utf8'
+    )
+    const block = /\.composer-caret \{([\s\S]*?)\}/.exec(css)?.[1] ?? ''
+    expect(block).toContain('width: calc(2px * var(--ui-scale, 1))')
+    expect(block).toContain('min-width: 2px')
+    const transitions = /transition:([\s\S]*?);/.exec(block)?.[1] ?? ''
+    expect(transitions).toContain('left')
+    expect(transitions).not.toContain('width')
+    expect(transitions).not.toContain('scale')
+  })
+})

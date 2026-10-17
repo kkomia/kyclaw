@@ -55,6 +55,7 @@ import {
 } from './reasoning-overrides'
 import { TextPart } from './parts/TextPart'
 import { TurnProcess, type TurnProcessEntry } from './parts/TurnProcess'
+import { TurnLatestStatus } from './parts/TurnLatestStatus'
 import { isToolPart, toToolCardPart } from './parts/tool-part'
 import { parseReferenceMarkers } from './reference-markers'
 import { ReferenceChip } from './reference-chip'
@@ -837,6 +838,20 @@ export function Message({
     setSelectionMenu({ x: event.clientX, y: event.clientY, items })
   }
 
+  // task-77：过程 entries 合并成一个过程区（思考/工具），正文独立成流式区；轮头只收过程区。
+  const processEntries = chunks.flatMap((chunk) => (chunk.kind === 'process' ? chunk.entries : []))
+  const textChunks = chunks.filter(
+    (chunk): chunk is Extract<RenderChunk, { kind: 'text' }> => chunk.kind === 'text'
+  )
+  const turnToolCount = processEntries.filter((entry) => isToolPart(entry.part)).length
+  const hasTurnProcess = processEntries.length > 0
+  // task-83：最终正文开始流式（过程之后已有非空文本）→ 过程完成，自动折叠；底部最新步骤收起
+  const lastProcessIndex = processEntries.reduce((max, entry) => Math.max(max, entry.index), -1)
+  const answerStarted = textChunks.some(
+    (chunk) => chunk.index > lastProcessIndex && chunk.part.text.trim() !== ''
+  )
+  const processRunning = streaming && !answerStarted
+
   return (
     <>
       <article
@@ -857,55 +872,52 @@ export function Message({
         <div
           data-testid="message-reading-lane"
           data-font-role="reading"
-          className="flex max-w-[calc(var(--prose-measure)+18px)] flex-col gap-2 border-l border-(--hairline-soft) pl-[18px]"
+          className="flex w-full flex-col gap-2 pl-[18px]"
         >
-          {chunks.map((chunk, chunkIndex) => {
-            if (chunk.kind === 'text') {
-              return (
-                <TextPart
-                  key={`text-${chunk.index}`}
-                  text={chunk.part.text}
-                  streaming={streaming && chunk.index === lastIndex}
-                  knownSources={knownSources}
-                />
-              )
-            }
-            const toolCount = chunk.entries.filter((entry) => isToolPart(entry.part)).length
-            if (toolCount === 0) {
-              // 纯思考的 run：不套「使用 0 个工具」的头，直接给思考块。
-              // `live` 传的是"这一轮还在跑"而不是这一条自己的 `streaming`：正文刚开个头（SSE 先落一枚
-              // 空 text part）时最后可渲染的已经不是这段思考了，`streaming` 早就翻假 —— 光看它会在
-              // 正文还没写出一个字的时候就把思考收掉。真收的时机由 `settled`（后面有**看得见的内容**）管。
-              // 手动开合走受控（overrides/onToggle）：工具到达把这一块换成过程块时整棵重挂，
-              // 本地 state 会丢，选择得存在这一层才不会被自动折叠再压回去。
-              return chunk.entries.map((entry) => {
-                const text = reasoningTextOf(entry.part)
+          {hasTurnProcess ? (
+            turnToolCount === 0 ? (
+              processEntries.map((entry) => {
+                const reasoning = reasoningTextOf(entry.part)
                 const ordinal = reasoningOrdinals.get(entry.index)
-                if (text === null || ordinal === undefined) return null
+                if (reasoning === null || ordinal === undefined) return null
                 return (
                   <ReasoningPart
                     key={`reasoning-${entry.index}`}
-                    text={text}
+                    text={reasoning}
                     streaming={entry.streaming}
                     live={streaming}
                     settled={entry.settled}
-                    override={reasoningOverrideAt(ordinal, text)}
-                    onToggle={(nextOpen) => rememberReasoningChoice(ordinal, text, nextOpen)}
+                    override={reasoningOverrideAt(ordinal, reasoning)}
+                    onToggle={(nextOpen) => rememberReasoningChoice(ordinal, reasoning, nextOpen)}
                   />
                 )
               })
-            }
-            return (
+            ) : (
               <TurnProcess
-                key={`process-${chunkIndex}`}
-                entries={chunk.entries}
-                running={streaming}
+                key="turn-process"
+                entries={processEntries}
+                running={processRunning}
                 overrides={reasoningOverrides}
                 reasoningOrdinals={reasoningOrdinals}
                 onReasoningToggle={rememberReasoningChoice}
               />
             )
-          })}
+          ) : null}
+          {/* 正文独立流式区（DSH：中间区域输出该轮正文，不塞进过程块） */}
+          <div data-testid="turn-answer" className="flex flex-col gap-2">
+            {textChunks.map((chunk) => (
+              <TextPart
+                key={`text-${chunk.index}`}
+                text={chunk.part.text}
+                streaming={streaming && chunk.index === lastIndex}
+                knownSources={knownSources}
+              />
+            ))}
+          </div>
+          {/* 最新步骤固定底部（仅 running 时挂载；过程区内滚不影响这条） */}
+          {hasTurnProcess ? (
+            <TurnLatestStatus entries={processEntries} running={processRunning} />
+          ) : null}
           {/* 整轮最终交付区（0.1.3 / 014）：所有交付卡统一收在这里，不随 deliver 在 part 流里的位置走。
             流式中已经出结果的卡也当场落在这里，后续工具 / 正文不会把它挤回中间。 */}
           {cards.length === 0 ? null : (

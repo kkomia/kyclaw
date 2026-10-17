@@ -43,9 +43,10 @@ export function caretPlacementFromRects(
   textareaRect: { left: number; top: number },
   scrollTop: number
 ): ComposerCaretPlacement {
+  // 取整：subpixel left 会让 2px 光标被抗锯齿成 1px（用户反馈「打字时光标变细」）
   return {
-    left: Math.max(0, selectionRect.left - textareaRect.left),
-    top: Math.max(0, selectionRect.top - textareaRect.top - scrollTop),
+    left: Math.round(Math.max(0, selectionRect.left - textareaRect.left)),
+    top: Math.round(Math.max(0, selectionRect.top - textareaRect.top - scrollTop)),
     height: Math.max(1, selectionRect.height)
   }
 }
@@ -58,6 +59,39 @@ export function caretPlacementFromRects(
  * 找不到（空串/节点结构变了）返回 null，由调用方回原生 caret。
  */
 export function caretRectAtOffset(container: Node, offset: number): DOMRect | null {
+  // 空输入/空文本节点：TreeWalker 找不到 text node，Range 也量不出高度 → 用镜像容器自身的
+  // 内容盒左上角兜底（点击聚焦、空值时也必须显示 caret）。
+  const fallbackRect = (): DOMRect | null => {
+    const element = container as Element
+    if (typeof element.getBoundingClientRect !== 'function') return null
+    const rect = element.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return null
+    // 空值时要落在**内容盒**左上角（镜像层有 px-4 py-3），不能取 border-box 左上角，
+    // 否则 caret 会画到输入卡左边缘外（dev 实拍：卡片左侧一条红线）。
+    const style = getComputedStyle(element)
+    const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0
+    return new DOMRect(rect.left + paddingLeft, rect.top + paddingTop, 0, rect.height)
+  }
+  if ((container.textContent ?? '') === '') {
+    // 空容器：真机优先用**内容盒 + padding** 兜底（Range 在空元素起点常贴 border-box 左缘，
+    // dev 实拍会画到输入卡左边缘外）；量不到尺寸（jsdom）再用被 mock 的空 Range 兜底。
+    const padded = fallbackRect()
+    if (padded !== null) return padded
+    try {
+      const empty = document.createRange()
+      empty.setStart(container, 0)
+      empty.setEnd(container, 0)
+      if (typeof empty.getBoundingClientRect === 'function') {
+        const rect = empty.getBoundingClientRect()
+        empty.detach()
+        if (rect.height > 0 || rect.width > 0) return rect as DOMRect
+      }
+    } catch {
+      // ignore
+    }
+    return null
+  }
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
   let remaining = Math.max(0, offset)
   let node = walker.nextNode()

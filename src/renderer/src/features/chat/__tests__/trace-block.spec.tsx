@@ -220,7 +220,7 @@ describe('分块与总名', () => {
     expect(screen.getByTestId('trace-toggle')).toHaveTextContent('执行 1 次思考 · 调用 2 次工具')
   })
 
-  it('正文把过程 run 切开：两条文本之间是两个过程块', () => {
+  it('过程 entries 合并成一个过程块；正文独立在 turn-answer（task-77）', () => {
     render(
       <Message
         message={assistantMessage([
@@ -237,12 +237,13 @@ describe('分块与总名', () => {
       />
     )
 
-    expect(screen.getAllByTestId('trace-block')).toHaveLength(2)
-    // task-52：头部摘要换成「执行 N 次思考 · 调用 M 次工具」+ 状态（旧「使用 N 个工具」退休）
-    expect(screen.getAllByTestId('turn-process-summary').map((node) => node.textContent)).toEqual([
-      '调用 1 次工具',
-      '调用 1 次工具'
-    ])
+    // task-77：不再按正文位置切两个过程块，过程统一一块、正文在独立流式区
+    expect(screen.getAllByTestId('trace-block')).toHaveLength(1)
+    expect(screen.getByTestId('turn-answer')).toHaveTextContent('读完了。')
+    // 不做信封头（Agent Team 专用），这一轮只有过程区 + 正文 + 底部最新步骤
+    expect(screen.queryByText('收到任务消息')).not.toBeInTheDocument()
+    // task-52：头部摘要仍是「执行 N 次思考 · 调用 M 次工具」
+    expect(screen.getByTestId('turn-process-summary')).toHaveTextContent('调用 2 次工具')
   })
 
   it('只有思考、没有工具：不出现过程块，思考块直接出', () => {

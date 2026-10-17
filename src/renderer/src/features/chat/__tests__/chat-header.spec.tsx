@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -9,7 +9,6 @@ import {
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { resetProjectsStore } from '@renderer/features/projects/projects-store'
 import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
-import { resetThreadRunStore, useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 import { defaultSettings } from '@shared/settings'
 import { ChatHeader } from '../ChatHeader'
 
@@ -78,7 +77,6 @@ beforeEach(() => {
 
 afterEach(() => {
   clearKyclawBridge()
-  resetThreadRunStore()
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
 })
 
@@ -194,62 +192,19 @@ describe('ChatHeader · 名称菜单（与侧栏同款实现）', () => {
 })
 
 /**
- * 像素海獭 · 状态灯（2026-10-18 v1 / 设计稿 §5.2 / D-32）。
- * 位置：header 右侧、segmented 左侧 8px（header 的 gap-2），垂直居中；
- * 只有 idle/think/type 三态；纯装饰（aria-hidden / pointer-events:none），不抢文字不挡按钮。
+ * task-62（用户：「把海獭 logo 移动到对话输入框右上角而不是最右上角」）：
+ * 顶栏**不再渲染任何海獭** —— 状态灯已挪到 Composer 的输入卡右上角（见 composer.spec）；
+ * 这里只钉"header 里没有 pixel-otter / 没有旧 .chat-otter 类"，右端回到标题 + 页签 + 工作台走廊。
  */
-describe('ChatHeader · 像素海獭状态灯（v1）', () => {
-  it('在 header 里、标题之后渲染：32 档 + aria-hidden + title（装饰性，不占新行）', () => {
+describe('ChatHeader · 不再渲染状态海獭（task-62）', () => {
+  it('header 内没有 pixel-otter；标题与页签照旧（不放松结构断言）', () => {
     mount()
 
     const header = screen.getByTestId('chat-header')
-    const otter = screen.getByTestId('pixel-otter')
-    expect(header).toContainElement(otter)
-    expect(otter).toHaveAttribute('aria-hidden', 'true')
-    expect(otter).toHaveAttribute('title', 'kyclaw')
-    expect(otter).toHaveAttribute('data-size', '32')
-    expect(otter).toHaveClass('chat-otter')
-    expect(otter).toHaveAttribute('data-state', 'idle')
-    // 在标题之后（header 仍是单行 flex，没有新增行/改变标题对齐）
-    expect(otter.compareDocumentPosition(screen.getByTestId('chat-title'))).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING
-    )
+    expect(header.querySelector('[data-testid="pixel-otter"]')).toBeNull()
+    expect(header.querySelector('.chat-otter')).toBeNull()
+    expect(screen.queryByTestId('pixel-otter')).not.toBeInTheDocument()
+    // 标题按钮仍在 header 左侧（既有结构不变）
+    expect(header).toContainElement(screen.getByTestId('chat-title'))
   })
-
-  it('AI 生成中 → think；工具运行 → type；本轮结束后保持 1.2s 再回 idle', async () => {
-    mount()
-
-    act(() => {
-      useThreadRunStore.getState().setRunning(THREAD_ID, true)
-    })
-    await waitFor(() =>
-      expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'think')
-    )
-
-    // 工具卡在跑（ToolCard 的稳定 DOM 契约）：think → type
-    const card = document.createElement('div')
-    card.setAttribute('data-testid', 'tool-card')
-    card.setAttribute('data-state', 'input-available')
-    act(() => {
-      document.body.appendChild(card)
-    })
-    await waitFor(() =>
-      expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'type')
-    )
-    card.remove()
-
-    // 本轮结束：先保持 think/type，1.2s 后才回 idle（不让状态灯"啪"一下灭）
-    act(() => {
-      useThreadRunStore.getState().setRunning(THREAD_ID, false)
-    })
-    expect(screen.getByTestId('pixel-otter')).not.toHaveAttribute('data-state', 'idle')
-    await waitFor(
-      () => expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'idle'),
-      { timeout: 2200 }
-    )
-  })
-
-  // task-53：初始页一屏一只改由 **CSS** 判定（welcome.css 的 :has 规则把 hero 期间的状态灯隐起），
-  // 不再有 JS presence 让位逻辑 —— 对应的 DOM 行为契约在 welcome-letterhead.spec 里对 CSS 文件断言；
-  // 本组件永远渲染状态灯（hero 离场后自然露出）。
 })

@@ -8,6 +8,9 @@ import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { STARTUP_FINAL_MARK, startupMark } from '@renderer/lib/startup-timing'
 import { probedKeyOf, visionOf } from '@shared/models'
+import { PixelOtter } from '@renderer/features/brand/PixelOtter'
+import { CHAT_MASCOT_STATE } from '@renderer/features/brand/otter-states'
+import { useChatMascotState } from '@renderer/features/brand/chat-mascot-state'
 import { PlusMenu, PermissionChip, ContextChip, ModelChip, PendingChips } from './ComposerControls'
 import type { ComposerModeMenu, ComposerNotice } from './ComposerControls'
 import { composeOutgoing, prepareAttachment } from './composer-attachments'
@@ -369,6 +372,15 @@ export function Composer({
   )
 
   const settings = useSettingsStore((state) => state.settings)
+  /**
+   * 状态海獭（task-62，用户：「把海獭 logo 移动到对话输入框右上角而不是最右上角」）：
+   * 从 ChatHeader 移到输入卡右上角（见 return 的 `composer-otter`）；状态来源仍 `useChatMascotState`
+   * （idle/think/type，结束 1.2s 回 idle）。实例未就绪（threadId=null）时传空串给 hook（恒 idle）
+   * 且不渲染 —— 初始页（hero）也不渲染：一屏一只，hero 只有报头 lockup 那只。
+   * reduced（用户「减弱」/系统减弱/「总是」）由 useEffectiveMotion 折算 → `paused` 静态帧。
+   */
+  const mascotState = useChatMascotState(threadId ?? '')
+  const showOtter = threadId !== null && !hero
   // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
   // （「移至项目」/ 映射快照迟到）组件不重渲染 → 会话根停在旧值。口径与工作台
   // use-workbench-root.ts 同一套（那边是用户实报的同一类缺陷）。
@@ -824,65 +836,80 @@ export function Composer({
   )
 
   return (
+    // task-62：相对定位锚点（与输入卡同列宽）—— 状态海獭贴卡片**右缘/上沿**放，不占布局
     <div
-      data-testid="composer"
-      className={cn(
-        'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) font-sans shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
-        // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
-        dragging && 'border-(--accent)'
-      )}
-      // 拖拽入卡 = 与 ＋ 上传同一套口径（同一个 pickFiles）：hover 反白只是提示，判定都在 pickFiles
-      onDragOver={(event) => {
-        event.preventDefault()
-        setDragging(true)
-      }}
-      onDragLeave={(event) => {
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-        setDragging(false)
-      }}
-      onDrop={(event) => {
-        event.preventDefault()
-        setDragging(false)
-        void pickFiles(Array.from(event.dataTransfer.files))
-      }}
-      data-dragging={dragging ? 'true' : undefined}
+      data-testid="composer-anchor"
+      className="relative mx-auto w-full max-w-(--chat-input-max-width)"
     >
-      {/* 建议浮窗（@ 文件 / 插件·技能）：浮在输入卡上方，非模态 */}
-      <ComposerSuggest
-        open={suggestOpen}
-        groups={suggestionGroups}
-        rowCount={suggestionRows.length}
-        activeIndex={activeIndex}
-        emptyText={
-          suggest?.kind === 'file'
-            ? '没有匹配的文件'
-            : suggestionRows.length === 0 && (suggest?.query ?? '') === ''
-              ? '还没有可引用的插件或技能'
-              : '没有匹配的项'
-        }
-        notice={suggest?.kind === 'file' ? fileNotice : undefined}
-        onPick={pickSuggestion}
-        onHover={setActiveSuggestion}
-      />
-      <PendingChips
-        attachments={attachments}
-        onRemoveAttachment={(id) =>
-          setAttachments((previous) => previous.filter((item) => item.id !== id))
-        }
-        onEditAttachment={(id, text) =>
-          setAttachments((previous) =>
-            previous.map((item) =>
-              item.id === id ? { ...item, text, size: utf8ByteLength(text) } : item
+      {showOtter ? (
+        <div
+          data-testid="composer-otter"
+          aria-hidden="true"
+          className="composer-otter"
+          title="kyclaw"
+        >
+          <PixelOtter state={CHAT_MASCOT_STATE[mascotState]} size={32} paused={motion.reduced} />
+        </div>
+      ) : null}
+      <div
+        data-testid="composer"
+        className={cn(
+          'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) font-sans shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+          // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
+          dragging && 'border-(--accent)'
+        )}
+        // 拖拽入卡 = 与 ＋ 上传同一套口径（同一个 pickFiles）：hover 反白只是提示，判定都在 pickFiles
+        onDragOver={(event) => {
+          event.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+          setDragging(false)
+        }}
+        onDrop={(event) => {
+          event.preventDefault()
+          setDragging(false)
+          void pickFiles(Array.from(event.dataTransfer.files))
+        }}
+        data-dragging={dragging ? 'true' : undefined}
+      >
+        {/* 建议浮窗（@ 文件 / 插件·技能）：浮在输入卡上方，非模态 */}
+        <ComposerSuggest
+          open={suggestOpen}
+          groups={suggestionGroups}
+          rowCount={suggestionRows.length}
+          activeIndex={activeIndex}
+          emptyText={
+            suggest?.kind === 'file'
+              ? '没有匹配的文件'
+              : suggestionRows.length === 0 && (suggest?.query ?? '') === ''
+                ? '还没有可引用的插件或技能'
+                : '没有匹配的项'
+          }
+          notice={suggest?.kind === 'file' ? fileNotice : undefined}
+          onPick={pickSuggestion}
+          onHover={setActiveSuggestion}
+        />
+        <PendingChips
+          attachments={attachments}
+          onRemoveAttachment={(id) =>
+            setAttachments((previous) => previous.filter((item) => item.id !== id))
+          }
+          onEditAttachment={(id, text) =>
+            setAttachments((previous) =>
+              previous.map((item) =>
+                item.id === id ? { ...item, text, size: utf8ByteLength(text) } : item
+              )
             )
-          )
-        }
-        onMentionAttachment={(_attachment, index) =>
-          // 提及只是文字指路：插一段可 chip 化的引用（图片本体仍在附件里随消息真发）
-          addReference({ kind: '图片', label: `图${index}` })
-        }
-      />
+          }
+          onMentionAttachment={(_attachment, index) =>
+            // 提及只是文字指路：插一段可 chip 化的引用（图片本体仍在附件里随消息真发）
+            addReference({ kind: '图片', label: `图${index}` })
+          }
+        />
 
-      {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
+        {/* 输入区：随内容长高（field-sizing），到 --composer-input-max-height 封顶后内部滚动。
           焦点指示由卡片给（focus-ring-container）：输入框自己没有圆角，自己画环就是直角方框。
           round 21（图3 回归）：引用标记由**不透明覆盖层**画成 chip（细描边圆角 + 图标 +
           `kind：label`，`【引用】` 前缀不进可见层）。覆盖层在 textarea **之上**（z-20），
@@ -893,268 +920,273 @@ export function Composer({
           的折行点可能差半行（隐形占位整段不内折）。chip 底用 **bg-secondary（不透明）**——
           Fills 系是半透明填充（5% 黑），当"盖字形"的底会透出原文。textarea 关掉拼写检查
           （spellCheck={false}，图1 的红波浪）。 */}
-      <div className="relative">
-        <div
-          ref={mirrorRef}
-          aria-hidden="true"
-          data-testid="composer-mirror"
-          className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-transparent"
-        >
-          <div className="w-full px-4 py-3 font-sans text-b1 break-words whitespace-pre-wrap">
-            {parseReferenceMarkers(draft).map((segment, index) =>
-              segment.kind === 'text' ? (
-                <span key={index}>{segment.text}</span>
-              ) : (
-                <span key={index} className="relative inline-block align-baseline">
-                  {/* 隐形原文占位：chip 的盒宽 = 原文宽度（含前缀），chip 不出圆角、后面的字不挪位 */}
-                  <span className="invisible whitespace-pre">{segment.raw}</span>
-                  <span
-                    data-testid="composer-ref-chip"
-                    className="absolute inset-0 flex items-center gap-1 overflow-hidden rounded-pill border-(length:--hairline-width) border-hairline bg-secondary px-1.5 text-ink"
-                  >
-                    <ReferenceChipInner
-                      refs={segment.refs}
-                      trailing={
-                        <button
-                          type="button"
-                          tabIndex={-1}
-                          aria-hidden="true"
-                          data-testid="composer-ref-remove"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => removeReferenceSegment(segment)}
-                          className="pointer-events-auto ml-auto inline-flex size-4 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
-                        >
-                          <X aria-hidden="true" className="size-3" />
-                        </button>
-                      }
-                    />
-                  </span>
-                </span>
-              )
-            )}
-          </div>
-        </div>
-        <textarea
-          ref={attachTextarea}
-          data-testid="composer-input"
-          data-caret={caretCustom ? 'custom' : 'native'}
-          data-composing={composing ? 'true' : undefined}
-          aria-label="输入消息"
-          rows={1}
-          spellCheck={false}
-          value={draft}
-          onFocus={() => setComposerFocused(true)}
-          onChange={(event) => {
-            trackDraft(event.target.value)
-            refreshTrigger(event.target.value, event.target.selectionStart)
-            // P1b：输入中暂停闪烁（常亮）；--motion-flight（400ms）没输入再恢复 1s 闪
-            setTyping(true)
-            if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current)
-            typingTimerRef.current = window.setTimeout(
-              () => {
-                typingTimerRef.current = null
-                setTyping(false)
-              },
-              motionDurationMs('--motion-flight', 400)
-            )
-          }}
-          onSelect={(event) => {
-            // 光标移动（点击 / 方向键）也可能让触发出现或消失
-            refreshTrigger(event.currentTarget.value, event.currentTarget.selectionStart)
-            syncComposerCaret()
-          }}
-          onClick={() => syncComposerCaret()}
-          onKeyUp={() => syncComposerCaret()}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => {
-            setComposing(false)
-            requestAnimationFrame(() => syncComposerCaret())
-          }}
-          onPaste={(event) => {
-            // 粘贴入口（round 50）：截图工具贴的图 / 资源管理器贴的文件 → 与拖拽、＋ 上传
-            // **同一条 pickFiles 管线**（同样的限额、vision=false 人话拒收、PDF 抽取）。
-            // 没有文件就是纯文本粘贴：不拦截，保持默认行为。
-            const files = clipboardFilesOf(event.clipboardData)
-            if (files.length === 0) return
-            event.preventDefault()
-            void pickFiles(files)
-          }}
-          onBlur={() => {
-            setComposerFocused(false)
-            setSuggest(null)
-          }}
-          onScroll={(event) => {
-            const mirror = mirrorRef.current
-            if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop
-            syncComposerCaret()
-          }}
-          onKeyDown={(event) => {
-            // 浮窗打开时有键盘优先级（输入法合成中不抢：方向键在选词）
-            if (suggestOpen && !event.nativeEvent.isComposing) {
-              if (event.key === 'ArrowDown' && suggestionRows.length > 0) {
-                event.preventDefault()
-                setActiveSuggestion((activeIndex + 1) % suggestionRows.length)
-                return
-              }
-              if (event.key === 'ArrowUp' && suggestionRows.length > 0) {
-                event.preventDefault()
-                setActiveSuggestion(
-                  (activeIndex - 1 + suggestionRows.length) % suggestionRows.length
-                )
-                return
-              }
-              if (event.key === 'Enter' && activeRow !== null) {
-                event.preventDefault()
-                pickSuggestion(activeRow)
-                return
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                setSuggest(null)
-                return
-              }
-            }
-            if (event.key !== 'Enter' || event.shiftKey) return
-            // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
-            if (event.nativeEvent.isComposing) return
-            event.preventDefault()
-            submit()
-          }}
-          placeholder="输入你的问题"
-          className={cn(
-            'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
-            // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
-            hero
-              ? 'min-h-(--composer-input-min-height-hero)'
-              : 'min-h-(--composer-input-min-height)'
-          )}
-        />
-        {/* P1b：自绘 caret（原生 caret 由 .composer-caret-input[data-caret='custom'] 隐藏；
-            composition / 含引用 chip 时 data-caret=native，交回原生，不猜位置） */}
-        {caretCustom && caretPlacement.visible ? (
-          <span
-            data-testid="composer-caret"
-            data-typing={typing ? 'true' : undefined}
+        <div className="relative">
+          <div
+            ref={mirrorRef}
             aria-hidden="true"
-            className="composer-caret"
-            style={{
-              left: caretPlacement.left,
-              top: caretPlacement.top,
-              height: caretPlacement.height
+            data-testid="composer-mirror"
+            className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-transparent"
+          >
+            <div className="w-full px-4 py-3 font-sans text-b1 break-words whitespace-pre-wrap">
+              {parseReferenceMarkers(draft).map((segment, index) =>
+                segment.kind === 'text' ? (
+                  <span key={index}>{segment.text}</span>
+                ) : (
+                  <span key={index} className="relative inline-block align-baseline">
+                    {/* 隐形原文占位：chip 的盒宽 = 原文宽度（含前缀），chip 不出圆角、后面的字不挪位 */}
+                    <span className="invisible whitespace-pre">{segment.raw}</span>
+                    <span
+                      data-testid="composer-ref-chip"
+                      className="absolute inset-0 flex items-center gap-1 overflow-hidden rounded-pill border-(length:--hairline-width) border-hairline bg-secondary px-1.5 text-ink"
+                    >
+                      <ReferenceChipInner
+                        refs={segment.refs}
+                        trailing={
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                            data-testid="composer-ref-remove"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => removeReferenceSegment(segment)}
+                            className="pointer-events-auto ml-auto inline-flex size-4 shrink-0 items-center justify-center rounded-pill text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+                          >
+                            <X aria-hidden="true" className="size-3" />
+                          </button>
+                        }
+                      />
+                    </span>
+                  </span>
+                )
+              )}
+            </div>
+          </div>
+          <textarea
+            ref={attachTextarea}
+            data-testid="composer-input"
+            data-caret={caretCustom ? 'custom' : 'native'}
+            data-composing={composing ? 'true' : undefined}
+            aria-label="输入消息"
+            rows={1}
+            spellCheck={false}
+            value={draft}
+            onFocus={() => setComposerFocused(true)}
+            onChange={(event) => {
+              trackDraft(event.target.value)
+              refreshTrigger(event.target.value, event.target.selectionStart)
+              // P1b：输入中暂停闪烁（常亮）；--motion-flight（400ms）没输入再恢复 1s 闪
+              setTyping(true)
+              if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current)
+              typingTimerRef.current = window.setTimeout(
+                () => {
+                  typingTimerRef.current = null
+                  setTyping(false)
+                },
+                motionDurationMs('--motion-flight', 400)
+              )
             }}
+            onSelect={(event) => {
+              // 光标移动（点击 / 方向键）也可能让触发出现或消失
+              refreshTrigger(event.currentTarget.value, event.currentTarget.selectionStart)
+              syncComposerCaret()
+            }}
+            onClick={() => syncComposerCaret()}
+            onKeyUp={() => syncComposerCaret()}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => {
+              setComposing(false)
+              requestAnimationFrame(() => syncComposerCaret())
+            }}
+            onPaste={(event) => {
+              // 粘贴入口（round 50）：截图工具贴的图 / 资源管理器贴的文件 → 与拖拽、＋ 上传
+              // **同一条 pickFiles 管线**（同样的限额、vision=false 人话拒收、PDF 抽取）。
+              // 没有文件就是纯文本粘贴：不拦截，保持默认行为。
+              const files = clipboardFilesOf(event.clipboardData)
+              if (files.length === 0) return
+              event.preventDefault()
+              void pickFiles(files)
+            }}
+            onBlur={() => {
+              setComposerFocused(false)
+              setSuggest(null)
+            }}
+            onScroll={(event) => {
+              const mirror = mirrorRef.current
+              if (mirror !== null) mirror.scrollTop = event.currentTarget.scrollTop
+              syncComposerCaret()
+            }}
+            onKeyDown={(event) => {
+              // 浮窗打开时有键盘优先级（输入法合成中不抢：方向键在选词）
+              if (suggestOpen && !event.nativeEvent.isComposing) {
+                if (event.key === 'ArrowDown' && suggestionRows.length > 0) {
+                  event.preventDefault()
+                  setActiveSuggestion((activeIndex + 1) % suggestionRows.length)
+                  return
+                }
+                if (event.key === 'ArrowUp' && suggestionRows.length > 0) {
+                  event.preventDefault()
+                  setActiveSuggestion(
+                    (activeIndex - 1 + suggestionRows.length) % suggestionRows.length
+                  )
+                  return
+                }
+                if (event.key === 'Enter' && activeRow !== null) {
+                  event.preventDefault()
+                  pickSuggestion(activeRow)
+                  return
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setSuggest(null)
+                  return
+                }
+              }
+              if (event.key !== 'Enter' || event.shiftKey) return
+              // 输入法合成中（中文/日文候选）的回车是在选词，不算发送
+              if (event.nativeEvent.isComposing) return
+              event.preventDefault()
+              submit()
+            }}
+            placeholder="输入你的问题"
+            className={cn(
+              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
+              // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
+              hero
+                ? 'min-h-(--composer-input-min-height-hero)'
+                : 'min-h-(--composer-input-min-height)'
+            )}
           />
-        ) : null}
-      </div>
+          {/* P1b：自绘 caret（原生 caret 由 .composer-caret-input[data-caret='custom'] 隐藏；
+            composition / 含引用 chip 时 data-caret=native，交回原生，不猜位置） */}
+          {caretCustom && caretPlacement.visible ? (
+            <span
+              data-testid="composer-caret"
+              data-typing={typing ? 'true' : undefined}
+              aria-hidden="true"
+              className="composer-caret"
+              style={{
+                left: caretPlacement.left,
+                top: caretPlacement.top,
+                height: caretPlacement.height
+              }}
+            />
+          ) : null}
+        </div>
 
-      {shownNotice === null ? null : (
-        <p
-          data-testid="composer-notice"
-          className={cn(
-            'px-3 pb-1 text-c1',
-            shownNotice.tone === 'danger'
-              ? 'text-danger'
-              : shownNotice.tone === 'success'
-                ? 'text-ink-secondary'
-                : 'text-warning'
-          )}
-        >
-          {shownNotice.text}
-        </p>
-      )}
+        {shownNotice === null ? null : (
+          <p
+            data-testid="composer-notice"
+            className={cn(
+              'px-3 pb-1 text-c1',
+              shownNotice.tone === 'danger'
+                ? 'text-danger'
+                : shownNotice.tone === 'success'
+                  ? 'text-ink-secondary'
+                  : 'text-warning'
+            )}
+          >
+            {shownNotice.text}
+          </p>
+        )}
 
-      <input
-        ref={fileInputRef}
-        data-testid="composer-file-input"
-        type="file"
-        multiple
-        hidden
-        onChange={(event) => {
-          void pickFiles(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
-      />
-
-      {/* 工具条：左起 ＋菜单 / 权限 chip；中间留给状态（排队条数）；右端模型 chip + 发送 / 停止
-          （round 8：模型 chip 按用户实拍移到右侧组，且在发送钮之前） */}
-      <div
-        data-testid="composer-footer"
-        className="flex h-(--composer-toolbar-height) items-center gap-2 px-3"
-      >
-        <PlusMenu
-          onAddFile={() => fileInputRef.current?.click()}
-          onReference={addReference}
-          contextLabel={contextLabel}
-          plugins={enabledPlugins}
-          skills={installedSkills}
-          onOpenMenu={refreshSkills}
-          mode={mode}
+        <input
+          ref={fileInputRef}
+          data-testid="composer-file-input"
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            void pickFiles(Array.from(event.target.files ?? []))
+            event.target.value = ''
+          }}
         />
-        {/* 权限入口**永远在**（用户实报"聊天页面里 composer 的权限模式选择按钮不见了"）：
+
+        {/* 工具条：左起 ＋菜单 / 权限 chip；中间留给状态（排队条数）；右端模型 chip + 发送 / 停止
+          （round 8：模型 chip 按用户实拍移到右侧组，且在发送钮之前） */}
+        <div
+          data-testid="composer-footer"
+          className="flex h-(--composer-toolbar-height) items-center gap-2 px-3"
+        >
+          <PlusMenu
+            onAddFile={() => fileInputRef.current?.click()}
+            onReference={addReference}
+            contextLabel={contextLabel}
+            plugins={enabledPlugins}
+            skills={installedSkills}
+            onOpenMenu={refreshSkills}
+            mode={mode}
+          />
+          {/* 权限入口**永远在**（用户实报"聊天页面里 composer 的权限模式选择按钮不见了"）：
             判得出工作区 = 两档 chip（每次询问 / 完全访问）；判不出（没授权 / 多个并列且没指认
             默认 / 项目的文件夹不在列表里）也保留**同一枚下拉** —— 菜单里说明为什么切不了 +
             一条去设置的实动作。原来那一档把入口整块换成另一个链接，观感就是"下拉没了"。 */}
-        <PermissionChip workspace={rootWorkspace} reason={permissionReason} onNotice={setNotice} />
+          <PermissionChip
+            workspace={rootWorkspace}
+            reason={permissionReason}
+            onNotice={setNotice}
+          />
 
-        <span className="min-w-0 flex-1 truncate">
-          {/* round 76：实例没就绪时这一格先说"为什么按不动"（就在发送钮左边）；就绪后照旧显示排队条数 */}
-          {blocked && pending.label !== null ? (
-            <span
-              data-testid="composer-pending"
-              role="status"
-              className="text-c1 text-ink-tertiary"
-            >
-              {pending.label}
-            </span>
-          ) : queuedCount > 0 ? (
-            <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
-              已排队 {queuedCount} 条，当前回复结束后自动发出
-            </span>
-          ) : null}
-        </span>
+          <span className="min-w-0 flex-1 truncate">
+            {/* round 76：实例没就绪时这一格先说"为什么按不动"（就在发送钮左边）；就绪后照旧显示排队条数 */}
+            {blocked && pending.label !== null ? (
+              <span
+                data-testid="composer-pending"
+                role="status"
+                className="text-c1 text-ink-tertiary"
+              >
+                {pending.label}
+              </span>
+            ) : queuedCount > 0 ? (
+              <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
+                已排队 {queuedCount} 条，当前回复结束后自动发出
+              </span>
+            ) : null}
+          </span>
 
-        {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放；
+          {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放；
             round 57：环左边那枚「压缩上下文」胶囊由 ContextChip 自己按用量决定出不出（同层兄弟） */}
-        {settings.providers.length === 0 ? null : (
-          <>
-            <ContextChip
-              threadId={threadId}
-              onCompact={onCompact}
-              compactBusy={compactBusy}
-              compactDisabled={compactDisabled}
-              usageVersion={usageVersion}
-            />
-            <ModelChip onNotice={setNotice} />
-          </>
-        )}
+          {settings.providers.length === 0 ? null : (
+            <>
+              <ContextChip
+                threadId={threadId}
+                onCompact={onCompact}
+                compactBusy={compactBusy}
+                compactDisabled={compactDisabled}
+                usageVersion={usageVersion}
+              />
+              <ModelChip onNotice={setNotice} />
+            </>
+          )}
 
-        {busy ? (
-          <button
-            type="button"
-            data-testid="composer-stop"
-            aria-label="停止生成"
-            onClick={onStop}
-            className="flex size-8 items-center justify-center rounded-pill bg-(--button-primary-bg) text-(--button-primary-fg) transition-colors duration-(--motion-fast) ease-main hover:bg-(--button-primary-bg-hover) motion-reduce:transition-none"
-          >
-            <Square aria-hidden="true" className="size-4 fill-current" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-testid="composer-send"
-            aria-label="发送"
-            disabled={!sendable}
-            onClick={submit}
-            className={cn(
-              'flex size-8 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
-              sendable
-                ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
-                : // 章程 §9.2#6 / P1a：禁用态用 quaternary/opacity（不用旧的三级墨），可辨但明确不可点
-                  'bg-(--fill-disabled) text-(--text-quaternary) opacity-60'
-            )}
-          >
-            <ArrowUp aria-hidden="true" className="size-5" strokeWidth={2.4} />
-          </button>
-        )}
+          {busy ? (
+            <button
+              type="button"
+              data-testid="composer-stop"
+              aria-label="停止生成"
+              onClick={onStop}
+              className="flex size-8 items-center justify-center rounded-pill bg-(--button-primary-bg) text-(--button-primary-fg) transition-colors duration-(--motion-fast) ease-main hover:bg-(--button-primary-bg-hover) motion-reduce:transition-none"
+            >
+              <Square aria-hidden="true" className="size-4 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="composer-send"
+              aria-label="发送"
+              disabled={!sendable}
+              onClick={submit}
+              className={cn(
+                'flex size-8 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                sendable
+                  ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
+                  : // 章程 §9.2#6 / P1a：禁用态用 quaternary/opacity（不用旧的三级墨），可辨但明确不可点
+                    'bg-(--fill-disabled) text-(--text-quaternary) opacity-60'
+              )}
+            >
+              <ArrowUp aria-hidden="true" className="size-5" strokeWidth={2.4} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -171,31 +171,43 @@ export function TurnProcess({
         data-pending={pending ? 'true' : undefined}
         data-running={running ? 'true' : undefined}
       >
-        <button
-          type="button"
-          data-testid="trace-toggle"
-          data-running={running ? 'true' : undefined}
-          aria-expanded={open}
-          onClick={() => setOverride(!open)}
-          className="group/row flex min-h-6 w-full cursor-pointer items-center gap-2 text-left text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
+        <div
+          data-testid="turn-process-header"
+          data-has-divider={open && entries.length > 0 ? 'true' : undefined}
+          className={cn(
+            'turn-process-header',
+            open && entries.length > 0 && 'turn-process-header--divider'
+          )}
         >
-          <span data-testid="turn-process-summary" className={cn('shrink-0', running && livePaint)}>
-            {summary}
-          </span>
-          <span
-            data-testid="turn-process-status"
-            className="shrink-0 text-ink-tertiary tabular-nums"
+          <button
+            type="button"
+            data-testid="trace-toggle"
+            data-running={running ? 'true' : undefined}
+            aria-expanded={open}
+            onClick={() => setOverride(!open)}
+            className="group/row flex min-h-6 w-full cursor-pointer items-center gap-2 text-left text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
           >
-            {statusText}
-          </span>
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              'size-3.5 shrink-0 text-ink-tertiary transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
-              open && 'rotate-90'
-            )}
-          />
-        </button>
+            <span
+              data-testid="turn-process-summary"
+              className={cn('shrink-0', running && livePaint)}
+            >
+              {summary}
+            </span>
+            <span
+              data-testid="turn-process-status"
+              className="shrink-0 text-ink-tertiary tabular-nums"
+            >
+              {statusText}
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                'size-3.5 shrink-0 text-ink-tertiary transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                open && 'rotate-90'
+              )}
+            />
+          </button>
+        </div>
 
         <TraceFold open={open}>
           <div className="relative pt-3">

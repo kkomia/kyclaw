@@ -136,7 +136,10 @@ describe('思考块自动折叠（整条消息：正文到达）', () => {
     ]
     render(<Message message={reasoningMessage(parts)} streaming />)
 
-    // 思考 + 工具 → 过程块；块内的思考行（后面已有内容）自动收起
+    // task-83：最终正文一开始，整个过程块自动折叠（汇总行仍在）
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'false')
+    // 展开后：块内思考行因后面已有内容仍是收起的
+    fireEvent.click(screen.getByTestId('trace-toggle'))
     expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByTestId('message-text')).toHaveTextContent('答案在这里')
@@ -316,8 +319,9 @@ describe('自动折叠之后重新展开 → 后续工具到达不许再压回�
         streaming
       />
     )
-    expect(screen.getByTestId('trace-block')).toBeInTheDocument()
-    // 用户的展开选择活过重挂，没有被自动折叠再压回去
+    // task-83：正文已开始 → 整个过程块自动折叠；用户展开过程块后，思考行的手动展开选择仍在
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'false')
+    fireEvent.click(screen.getByTestId('trace-toggle'))
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('reasoning-text')).toHaveTextContent('先想一段')
   })
@@ -341,6 +345,9 @@ describe('自动折叠之后重新展开 → 后续工具到达不许再压回�
         streaming
       />
     )
+    // task-83：正文开始 → 过程块自动折叠；展开过程块后思考行保持用户手动收起
+    expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'false')
+    fireEvent.click(screen.getByTestId('trace-toggle'))
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
   })
 

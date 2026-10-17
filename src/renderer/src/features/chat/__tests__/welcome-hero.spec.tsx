@@ -123,13 +123,15 @@ describe('空会话的初始页', () => {
     expect(paper).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByTestId('welcome-project-rule')).toBeInTheDocument()
 
-    // task-53「一屏一只」：初始页**没有**第二只海獭（角落氛围位整块删除）；
-    // hero 里只有报头 lockup 那只（header 状态灯 DOM 仍在，但由 welcome.css 的 :has 规则隐起 ——
-    // jsdom 不应用样式，这里不把它算作可见的第二只；CSS 契约在 welcome-letterhead.spec）。
+    // task-62「一屏一只」：初始页只有报头 lockup 那只 ——
+    // 状态海獭已挪到输入卡右上角（hero 时不渲染），ChatHeader 也不再渲染海獭：全页 pixel-otter 计数 = 1。
     expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
     expect(document.querySelector('.welcome-corner-slot')).toBeNull()
-    expect(document.querySelector('.welcome-ambient-otter')).toBeNull()
-    expect(hero.querySelectorAll('[data-testid="pixel-otter"]')).toHaveLength(1)
+    expect(screen.queryByTestId('composer-otter')).not.toBeInTheDocument()
+    expect(
+      screen.getByTestId('chat-header').querySelector('[data-testid="pixel-otter"]')
+    ).toBeNull()
+    expect(document.querySelectorAll('[data-testid="pixel-otter"]')).toHaveLength(1)
     expect(hero.querySelector('.welcome-lockup [data-testid="pixel-otter"]')).not.toBeNull()
 
     // round 66：初始页「选择项目」行在卡片上方、输入卡在流内、能力行在卡片下方。
@@ -311,11 +313,14 @@ describe('首条消息发出：标题离场、布局落到常规', () => {
     expect(screen.getByTestId('message-list')).toHaveTextContent('第二个问题')
     expect(screen.getByTestId('welcome-hero')).toHaveAttribute('data-active', 'false')
 
-    // task-53「一屏一只」：初始页那只角落海獭已不存在（没有第二只可离场）；
-    // 进对话后唯一的海獭是 ChatHeader 状态灯（hero 离场后由 :has 规则自然露出，DOM 一直都在）。
+    // task-62「一屏一只」：进对话后唯一的海獭 = 输入卡右上角那只（hero 期间不渲染）；
+    // ChatHeader 已不再渲染海獭（header 右端只剩页签 + 工作台走廊）。
     expect(screen.queryByTestId('welcome-ambient-otter')).not.toBeInTheDocument()
     expect(screen.queryByTestId('welcome-local-note')).not.toBeInTheDocument()
-    expect(screen.getByTestId('chat-header').querySelector('.chat-otter')).not.toBeNull()
+    expect(screen.getByTestId('composer-otter')).toBeInTheDocument()
+    expect(
+      screen.getByTestId('chat-header').querySelector('[data-testid="pixel-otter"]')
+    ).toBeNull()
   })
 })
 

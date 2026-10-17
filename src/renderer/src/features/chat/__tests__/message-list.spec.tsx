@@ -243,7 +243,10 @@ describe('消息声部（P1a）', () => {
 
     const lane = screen.getByTestId('message-reading-lane')
     expect(lane).toHaveAttribute('data-font-role', 'reading')
-    expect(lane).toHaveClass('border-l', 'pl-[18px]', 'max-w-[calc(var(--prose-measure)+18px)]')
+    // task-83：去左竖线；assistant 与用户消息同内容列（右缘对齐），保留左缩进
+    expect(lane).not.toHaveClass('border-l')
+    expect(lane).not.toHaveClass('max-w-[calc(var(--prose-measure)+18px)]')
+    expect(lane).toHaveClass('w-full', 'pl-[18px]')
 
     const text = screen.getByTestId('message-text')
     expect(text).toHaveAttribute('data-font-role', 'reading')
