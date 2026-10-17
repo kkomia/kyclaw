@@ -41,6 +41,7 @@ import {
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
 import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
+import type { SurfaceFontsReadyMessage } from './font-prewarm-protocol'
 
 /** hello 重发间隔与总窗口：父页监听挂晚了也能对上 */
 const HELLO_RETRY_MS = 250
@@ -100,6 +101,12 @@ export function SurfaceBoot(): React.JSX.Element {
    * 才显示。DOM 始终在（testid/data-* 供探针查）。
    */
   const [debug] = useState(() => new URLSearchParams(window.location.search).has('officeDebug'))
+  /**
+   * task-76：启动期 hidden 预热面（`?officePrewarm=1`）。它不等文档、挂载即注册字体，
+   * 把 22 面/46 注册/27MB 的首次成本挪到产品启动后的 idle 时段；注册完向父页发
+   * `surface:fonts-ready { prewarm:true }`（壳据此释放 iframe，HTTP cache 留给首个真实文档面）。
+   */
+  const [prewarm] = useState(() => new URLSearchParams(window.location.search).has('officePrewarm'))
 
   const nonceRef = useRef<string | null>(null)
   const docRef = useRef<SurfaceDocument | null>(null)
@@ -447,15 +454,44 @@ export function SurfaceBoot(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [bootState, doc, post, requestSave])
 
-  // 文档到达后先注册本地字体（只启动一次；失败不阻塞页面，但编辑器不挂）
+  /**
+   * task-76：字体注册在**面挂载时立刻开始**（不再等 `doc:open`）：
+   *   - 启动期 hidden 预热面：挂载即注册，把首次成本挪到产品启动 idle 时段；
+   *   - 真实文档面：shell 建面/开标签时就开始注册，与壳读字节/建 iframe 并行；
+   *     首个文档到达时通常已 ready（或只差最后一点），编辑器不再串行等字体。
+   * 注册完成向父页发 `surface:fonts-ready`（含 prewarm 标记与耗时），壳用于释放预热面 + 打点。
+   * 失败不阻塞页面（错误照旧经 postError 回壳），不缓存失败（ensureSurfaceFonts 自己会清 pending）。
+   */
   useEffect(() => {
-    if (doc === null || fontsStartedRef.current) return
+    if (fontsStartedRef.current) return
     fontsStartedRef.current = true
+    // 计时从 effect 开始（不在 render 期调用 performance.now，满足 react-hooks/purity）
+    const fontsStartedAt = performance.now()
     ensureSurfaceFonts()
       .then((stats) => {
         setFontStats(stats)
         setFontsState('ready')
         setError('')
+        const message: SurfaceFontsReadyMessage = {
+          type: 'surface:fonts-ready',
+          prewarm,
+          elapsedMs: Math.round(performance.now() - fontsStartedAt),
+          stats: {
+            faces: stats.faces,
+            registrations: stats.registrations,
+            fetchedBytes: stats.fetchedBytes,
+            fontSetSize: stats.fontSetSize,
+            ms: stats.ms,
+            cjk: stats.cjk
+          }
+        }
+        const nonce = nonceRef.current
+        try {
+          // 预热面还没握手（没有 nonce）；真实面带上 nonce，壳侧按既有来源校验
+          window.parent.postMessage(nonce === null ? message : { ...message, nonce }, '*')
+        } catch {
+          // 父页已不存在：消息丢弃，不影响面内渲染
+        }
       })
       .catch((cause: unknown) => {
         const message = cause instanceof Error ? cause.message : String(cause)
@@ -463,7 +499,7 @@ export function SurfaceBoot(): React.JSX.Element {
         setFontsError(message)
         postError('open', `本地字体注册失败：${message}`)
       })
-  }, [doc, postError])
+  }, [postError, prewarm])
 
   const ready = bootState === 'ready'
   const showEditor = doc !== null && fontsState === 'ready'

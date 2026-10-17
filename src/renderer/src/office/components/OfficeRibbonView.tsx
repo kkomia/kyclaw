@@ -15,7 +15,8 @@
  * 状态订阅口径（spec R9）：**每个命令项自己订阅**，ribbon 外层不订阅；
  * 外层只订阅 tab/折叠这类纯 UI 状态，避免整条 ribbon 随选区重渲染。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ALargeSmall,
   ArrowLeftToLine,
@@ -85,6 +86,7 @@ import {
 } from './office-ribbon-model'
 import type { OfficeCommandAdapter, OfficeCommandState } from './office-command-adapter'
 import { OfficeBuiltinCommand } from './OfficeBuiltinCommand'
+import { useAnchoredPanel } from './office-popover'
 
 /** 保存态（面内 best-effort；壳写盘结果是真相，见 a2-report.md "保存态" 一节） */
 export type OfficeSaveState = 'saved' | 'dirty' | 'saving'
@@ -234,7 +236,10 @@ const TEXT_COLOR_PRESETS = [
 
 const HIGHLIGHT_PRESETS = ['yellow', 'green', 'cyan', 'magenta', 'blue', 'red', 'none'] as const
 
-/** split 颜色按钮：主按钮 + 下拉色板（自绘，不引主界面 Radix） */
+/**
+ * split 颜色按钮：主按钮 + 自绘色板（task-76：改 portal + fixed 定位，逃出 `.ofr-band` 的
+ * `overflow-y:hidden` 裁切；浮层用面内 token，深浅主题随 `html[data-theme]` 立即重绘）。
+ */
 function RibbonColorSplit({
   adapter,
   item,
@@ -246,31 +251,66 @@ function RibbonColorSplit({
 }): ReactNode {
   const state = useOfficeCommandState(adapter, item.id, item.args)
   const [open, setOpen] = useState(false)
-  const containerRef = useRef<HTMLSpanElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const paletteRef = useRef<HTMLDivElement | null>(null)
+  const close = useCallback(() => setOpen(false), [])
+  const panel = useAnchoredPanel(open, triggerRef, paletteRef, close, {
+    minWidth: 168,
+    maxHeight: 220
+  })
   const disabled = readOnly || !state.enabled
-
-  useEffect(() => {
-    if (!open) return
-    const close = (event: PointerEvent): void => {
-      const container = containerRef.current
-      if (container === null) return
-      if (event.target instanceof Node && container.contains(event.target)) return
-      setOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    return () => document.removeEventListener('pointerdown', close)
-  }, [open])
 
   const presets = item.id === 'highlightColor' ? HIGHLIGHT_PRESETS : TEXT_COLOR_PRESETS
   const isHighlight = item.id === 'highlightColor'
+  const palette =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            ref={paletteRef}
+            className="ofr-palette"
+            role="menu"
+            aria-label={item.label}
+            data-testid="office-ribbon-color-palette"
+            data-placement={panel.placement}
+            style={panel.style}
+          >
+            {presets.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                role="menuitem"
+                className="ofr-swatch"
+                aria-label={preset}
+                title={preset === 'none' ? '无' : preset}
+                style={
+                  preset === 'none'
+                    ? undefined
+                    : { background: preset.startsWith('#') ? preset : `#${preset}` }
+                }
+                onClick={() => {
+                  close()
+                  void adapter.execute(item.id, {
+                    color: preset === 'none' ? null : preset
+                  } as never)
+                }}
+              >
+                {preset === 'none' ? <X size={12} strokeWidth={2} aria-hidden="true" /> : null}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )
+      : null
+
   return (
-    <span className="ofr-split" ref={containerRef}>
+    <span className="ofr-split">
       <button
+        ref={triggerRef}
         type="button"
         className="ofr-btn"
         data-testid={item.testId}
         aria-label={item.label}
-        aria-haspopup="true"
+        aria-haspopup="menu"
         aria-expanded={open}
         title={item.label}
         disabled={disabled}
@@ -291,38 +331,20 @@ function RibbonColorSplit({
         )}
         <ChevronDown size={11} strokeWidth={2} aria-hidden="true" />
       </button>
-      {open ? (
-        <span className="ofr-palette" role="menu" data-testid="office-ribbon-color-palette">
-          {presets.map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              role="menuitem"
-              className="ofr-swatch"
-              aria-label={preset}
-              title={preset === 'none' ? '无' : preset}
-              style={
-                preset === 'none'
-                  ? undefined
-                  : { background: preset.startsWith('#') ? preset : `#${preset}` }
-              }
-              onClick={() => {
-                setOpen(false)
-                void adapter.execute(item.id, {
-                  color: preset === 'none' ? null : preset
-                } as never)
-              }}
-            >
-              {preset === 'none' ? <X size={12} strokeWidth={2} aria-hidden="true" /> : null}
-            </button>
-          ))}
-        </span>
-      ) : null}
+      {palette}
     </span>
   )
 }
 
-/** select 类命令：自绘原生 select（选项来自命令 state.options，不写死字体/字号） */
+/**
+ * select 类命令（task-76 返工）：原生 `<select>` 的 popup 由 OS 绘制，CSS/token/主题都接管不了
+ * （暗色下白底白字、只有选中项蓝底可见）→ 改成**自绘 listbox 下拉**：
+ *   - trigger 复用 `.ofr-select` 外观（高度压到 24）；浮层 portal 到 body + fixed 定位；
+ *   - 键盘 ↑↓ Home/End Enter Esc，aria combobox/listbox/option/aria-expanded/aria-activedescendant；
+ *   - 点外/滚动/resize 由 useAnchoredPanel 处理；选项列表内部滚动（max-height 240）；
+ *   - 浮层颜色全部走 semantic token（--bg-menu/--border-hairline/--shadow-overlay），
+ *     切主题时 html[data-theme] 一变即重绘，不残留旧色。
+ */
 function RibbonSelect({
   adapter,
   item,
@@ -338,27 +360,147 @@ function RibbonSelect({
     (option) => optionScalar(item.id, option.args) === String(state.value ?? '')
   )
   const disabled = readOnly || !state.enabled || options.length === 0
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuId = useId()
+  const close = useCallback(() => setOpen(false), [])
+  const panel = useAnchoredPanel(open, triggerRef, menuRef, close, {
+    minWidth: 56,
+    maxHeight: 240,
+    flipThreshold: 120
+  })
+
+  const openMenu = (): void => {
+    if (disabled) return
+    setActiveIndex(currentIndex >= 0 ? currentIndex : 0)
+    setOpen(true)
+  }
+
+  const choose = (index: number): void => {
+    const option = options[index]
+    if (option === undefined) return
+    close()
+    void adapter.execute(item.id, option.args as never)
+  }
+
+  // 键盘移动时把高亮项滚进可视区（列表可滚动）
+  useEffect(() => {
+    if (!open) return
+    const menu = menuRef.current
+    if (menu === null) return
+    const active = menu.querySelector<HTMLElement>('[data-active="true"]')
+    if (typeof active?.scrollIntoView === 'function') active.scrollIntoView({ block: 'nearest' })
+  }, [open, activeIndex])
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (disabled) return
+    const key = event.key
+    if (!open) {
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === ' ') {
+        event.preventDefault()
+        openMenu()
+      }
+      return
+    }
+    if (key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+      return
+    }
+    if (key === 'Tab') {
+      close()
+      return
+    }
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      event.preventDefault()
+      const delta = key === 'ArrowDown' ? 1 : -1
+      setActiveIndex((index) => (index + delta + options.length) % options.length)
+      return
+    }
+    if (key === 'Home') {
+      event.preventDefault()
+      setActiveIndex(0)
+      return
+    }
+    if (key === 'End') {
+      event.preventDefault()
+      setActiveIndex(options.length - 1)
+      return
+    }
+    if (key === 'Enter') {
+      event.preventDefault()
+      choose(activeIndex)
+    }
+  }
+
+  const currentLabel = currentIndex >= 0 ? (options[currentIndex]?.label ?? item.label) : item.label
+  const menu =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            ref={menuRef}
+            id={menuId}
+            className="ofr-select-menu"
+            role="listbox"
+            aria-label={item.label}
+            data-testid={`${item.testId}-menu`}
+            data-placement={panel.placement}
+            style={panel.style}
+          >
+            {options.map((option, index) => (
+              <button
+                key={`${option.label}-${index}`}
+                type="button"
+                role="option"
+                id={`${menuId}-${index}`}
+                className="ofr-select-option"
+                aria-selected={index === currentIndex}
+                data-active={index === activeIndex}
+                data-selected={index === currentIndex}
+                onPointerEnter={() => setActiveIndex(index)}
+                onClick={() => choose(index)}
+              >
+                <span className="ofr-select-option-label">{option.label}</span>
+                {index === currentIndex ? (
+                  <CheckCheck size={12} strokeWidth={2} aria-hidden="true" />
+                ) : null}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )
+      : null
+
   return (
-    <select
-      className="ofr-select"
-      data-testid={item.testId}
-      aria-label={item.label}
-      title={item.label}
-      disabled={disabled}
-      value={currentIndex < 0 ? '' : String(currentIndex)}
-      onChange={(event) => {
-        const option = options[Number(event.target.value)]
-        if (option === undefined) return
-        void adapter.execute(item.id, option.args as never)
-      }}
-    >
-      {currentIndex < 0 ? <option value="">{item.label}</option> : null}
-      {options.map((option, index) => (
-        <option key={`${option.label}-${index}`} value={String(index)}>
-          {option.label}
-        </option>
-      ))}
-    </select>
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="ofr-select"
+        data-testid={item.testId}
+        role="combobox"
+        aria-label={item.label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-activedescendant={open ? `${menuId}-${activeIndex}` : undefined}
+        title={item.label}
+        disabled={disabled}
+        data-value={currentLabel}
+        onClick={() => {
+          if (open) close()
+          else openMenu()
+        }}
+        onKeyDown={onKeyDown}
+      >
+        <span className="ofr-select-value">{currentLabel}</span>
+        <ChevronDown size={11} strokeWidth={2} aria-hidden="true" className="ofr-select-chevron" />
+      </button>
+      {menu}
+    </>
   )
 }
 

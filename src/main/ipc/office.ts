@@ -25,10 +25,13 @@ import {
   type SaveDialogOptions,
   type WebContents
 } from 'electron'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { IPC_CHANNELS, parseIpcArgs } from '../../shared/ipc'
 import {
   OFFICE_EDITOR_MAX_BYTES,
   OFFICE_MAX_OPEN_DOCUMENTS,
+  officeCreateBlankArgsSchema,
   officeDocumentIdArgsSchema,
   officeNoArgsSchema,
   officeOpenFromSessionArgsSchema,
@@ -44,6 +47,7 @@ import {
   type OfficeDocuments
 } from '../office-documents'
 import { resolveInsideWorkspace } from '../permission/realpath'
+import { blankDocxBytes } from '../office-blank-template'
 import { settingsPath } from '../settings'
 import { sessionRootForThread, type ProjectIdOf } from './workspace'
 
@@ -52,6 +56,14 @@ const ROOT_MESSAGES = {
   empty: '这个会话还没有工作区：先在设置里添加一个文件夹，再打开里面的文档',
   multiple: '这个会话的工作区不唯一：指认默认工作区（或给会话选一个项目）后再打开文档'
 } as const
+
+/**
+ * Windows 路径大小写/短名差异下的同一性判断（仅用于"临时文件是否还指向原落点"）。
+ * 注册表里的 absolutePath 是 realpath 归一后的（可能与写入时字符串不同大小写）。
+ */
+function samePathIgnoringCase(left: string, right: string): boolean {
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase()
+}
 
 /** 原生选择器的选项（`.docx` 过滤；取消是一等结果） */
 const OPEN_DIALOG_OPTIONS: OpenDialogOptions = {
@@ -106,6 +118,11 @@ export interface OfficeIpcDeps {
   rendererUrl?: string
   /** 覆盖 `app.isPackaged`（缺省 = 真值；打包后忽略 KYCLAW_OFFICE_OPEN / KYCLAW_OFFICE_SAVE_AS） */
   isPackaged?: boolean
+  /**
+   * task-80：空白文档的临时根目录（缺省 `app.getPath('temp')`；单测注入临时目录，
+   * 不往真实 OS temp 里写）。
+   */
+  tempDir?: string
 }
 
 export interface OfficeIpcHandle {
@@ -146,6 +163,20 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
   const rendererUrl = deps.rendererUrl ?? process.env.ELECTRON_RENDERER_URL
   const documents = deps.documents ?? createOfficeDocuments(deps.io)
   const settingsFile = settingsPath(userDataDir)
+  /**
+   * task-80 临时文件清理策略（报告 `newtab-impl-report.md` 同步记录）：
+   *   - 关标签（`office:release`）时，如果文档**仍指向**我们写的临时文件（用户没另存为），尽力删除
+   *     —— 放弃未保存内容的语义下这台空模板文件没有保留价值；
+   *   - 另存为后注册表已指向用户选的新路径，临时原件保留（只是空模板，OS 临时目录会回收）；
+   *   - webContents destroyed（重载/关窗）时清掉属于该窗口的临时文件；
+   *   - **不做 app 级 rm -rf**：避免与用户另存为/外部程序打开临时文件竞态，崩溃残留交给 OS 清理。
+   * 根目录在 handler 内惰性取 `deps.tempDir ?? app.getPath('temp')`：单测的 electron mock
+   * 没有 app.getPath，不该因为注册面就炸。
+   *
+   * `realPath` = 注册表回包的 absolutePath（realpath 归一后的长名）；Windows 上临时目录常是
+   * 8.3 短名（如 `C:\LMSTUD~1`），不能用写入时的字符串直接比较「是否仍指向原落点」。
+   */
+  const blankTempFiles = new Map<string, { owner: number; path: string; realPath: string }>()
 
   const rootOf =
     deps.rootForThread ??
@@ -192,6 +223,12 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
     sender.once('destroyed', () => {
       watched.delete(sender.id)
       documents.releaseAll(sender.id)
+      // task-80：窗口没了，属于它的空白文档临时文件一并清（尽力而为）
+      for (const [documentId, entry] of blankTempFiles) {
+        if (entry.owner !== sender.id) continue
+        blankTempFiles.delete(documentId)
+        void unlink(entry.path).catch(() => undefined)
+      }
     })
   }
 
@@ -232,6 +269,62 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
     })
   })
 
+  /**
+   * task-80（新增标签页 v1）：新建空白 Word 文档。
+   * 唯一允许"主进程自己产生文档"的通道：把随包最小模板写到 `%TEMP%/kyclaw/未命名-<ts>.docx`
+   * （wx/0o600），再走与选择器**同一套** `documents.open`（realpath / 大小 / 容量 / owner 全部复用），
+   * 回与打开同形状的 `OfficeOpenResult`（displayName = 未命名文档）。
+   * 失败时不留下临时文件；v1 只接 docx（xlsx/pptx 编辑器未就绪）。
+   */
+  ipcMain.handle(IPC_CHANNELS.office.createBlank, async (event, ...args) => {
+    const [input] = parseIpcArgs(officeCreateBlankArgsSchema, args, IPC_CHANNELS.office.createBlank)
+    watchSender(event.sender)
+    if (input.kind !== 'docx') return officeFailure('unsupported-format')
+
+    const directory = join(deps.tempDir ?? app.getPath('temp'), 'kyclaw')
+    try {
+      await mkdir(directory, { recursive: true })
+    } catch {
+      return officeFailure('write-failed', '创建临时目录失败')
+    }
+
+    const stamp = Date.now()
+    let target = ''
+    let written = false
+    for (let attempt = 0; attempt < 5 && !written; attempt += 1) {
+      const name =
+        attempt === 0
+          ? `未命名-${String(stamp)}.docx`
+          : `未命名-${String(stamp)}-${String(attempt)}.docx`
+      target = join(directory, name)
+      try {
+        await writeFile(target, blankDocxBytes(), { flag: 'wx', mode: 0o600 })
+        written = true
+      } catch {
+        // 同一毫秒内连点可能撞名（EEXIST）：换后缀重试；其他 IO 失败在循环后统一回错
+      }
+    }
+    if (!written) return officeFailure('write-failed', '写临时模板失败')
+
+    const opened = await documents.open(target, {
+      owner: event.sender.id,
+      openedFrom: 'picker',
+      displayPath: target,
+      displayName: '未命名文档'
+    })
+    if (!opened.ok) {
+      // 注册被拒（容量/读不了）：临时模板没有保留价值，清掉再回分类失败
+      await unlink(target).catch(() => undefined)
+      return opened
+    }
+    blankTempFiles.set(opened.document.documentId, {
+      owner: event.sender.id,
+      path: target,
+      realPath: opened.document.absolutePath
+    })
+    return opened
+  })
+
   ipcMain.handle(IPC_CHANNELS.office.openFromSession, async (event, ...args) => {
     const [threadId, relative, readOnly] = parseIpcArgs(
       officeOpenFromSessionArgsSchema,
@@ -259,10 +352,20 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
     return documents.read(documentId, event.sender.id)
   })
 
-  ipcMain.handle(IPC_CHANNELS.office.release, (event, ...args) => {
+  ipcMain.handle(IPC_CHANNELS.office.release, async (event, ...args) => {
     const [documentId] = parseIpcArgs(officeDocumentIdArgsSchema, args, IPC_CHANNELS.office.release)
     watchSender(event.sender)
+    // task-80：释放前先取注册表信息，判断文档是否仍指向 blank 的临时落点（另存为后就不是了）
+    const info = documents.info(documentId, event.sender.id)
     documents.release(documentId, event.sender.id)
+    const temp = blankTempFiles.get(documentId)
+    if (temp !== undefined && temp.owner === event.sender.id) {
+      blankTempFiles.delete(documentId)
+      if (info === null || samePathIgnoringCase(info.absolutePath, temp.realPath)) {
+        // 等删除完成再回包：关标签后立刻重开/检查文件时不会看到残留
+        await unlink(temp.path).catch(() => undefined)
+      }
+    }
     // 幂等、无回包：未知 id / 非本窗口 id 都是空操作
     return undefined
   })

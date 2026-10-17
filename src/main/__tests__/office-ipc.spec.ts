@@ -15,7 +15,16 @@
  * Electron 全部 mock（`ipcMain.handle` 收进 Map、dialog 可注入），一个真进程都不起。
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -62,7 +71,11 @@ import {
   officeSurfaceUrls
 } from '../../shared/office-editor'
 import { registerOfficeIpc, scriptedOfficeOpenPath, scriptedOfficeSaveAsPath } from '../ipc/office'
-import { defaultOfficeDocumentIo, type OfficeDocumentIo } from '../office-documents'
+import {
+  createOfficeDocuments,
+  defaultOfficeDocumentIo,
+  type OfficeDocumentIo
+} from '../office-documents'
 
 const directories: string[] = []
 
@@ -131,6 +144,8 @@ function register(options: {
   isPackaged?: boolean
   rendererUrl?: string
   io?: OfficeDocumentIo
+  documents?: ReturnType<typeof createOfficeDocuments>
+  tempDir?: string
   showSaveDialog?: (
     parent: unknown,
     options: unknown
@@ -142,6 +157,8 @@ function register(options: {
     env: options.env ?? {},
     rootForThread: () => options.root ?? tempDir(),
     ...(options.io === undefined ? {} : { io: options.io }),
+    ...(options.documents === undefined ? {} : { documents: options.documents }),
+    ...(options.tempDir === undefined ? {} : { tempDir: options.tempDir }),
     ...(options.showSaveDialog === undefined ? {} : { showSaveDialog: options.showSaveDialog })
   })
 }
@@ -152,6 +169,7 @@ describe('注册面：通道清单', () => {
     expect([...mocks.handlers.keys()].sort()).toEqual(
       [
         IPC_CHANNELS.office.config,
+        IPC_CHANNELS.office.createBlank,
         IPC_CHANNELS.office.openDialog,
         IPC_CHANNELS.office.openFromSession,
         IPC_CHANNELS.office.read,
@@ -162,6 +180,7 @@ describe('注册面：通道清单', () => {
     )
     // 通道名口径（shared/ipc.ts 直接挂 office-editor 的常量）
     expect(IPC_CHANNELS.office.config).toBe('office:config')
+    expect(IPC_CHANNELS.office.createBlank).toBe('office:create-blank')
     expect(IPC_CHANNELS.office.openDialog).toBe('office:open-dialog')
     expect(IPC_CHANNELS.office.openFromSession).toBe('office:open-from-session')
     expect(IPC_CHANNELS.office.read).toBe('office:read')
@@ -660,5 +679,80 @@ describe('office:save-as（S3 另存为接线）', () => {
     expect(scriptedOfficeSaveAsPath({ KYCLAW_OFFICE_SAVE_AS: 'D:\\a.docx' }, true)).toBeUndefined()
     // 打开侧的 env 不受影响（两条独立）
     expect(scriptedOfficeOpenPath({ KYCLAW_OFFICE_OPEN: 'D:\\b.docx' }, false)).toBe('D:\\b.docx')
+  })
+})
+
+/**
+ * task-80（新增标签页 v1）：唯一新通道 `office:create-blank`。
+ * 钉：只收 docx / 模板落到注入的临时目录 `kyclaw/未命名-<ts>.docx` / 注册回 info（displayName
+ * = 未命名文档）/ 容量拒绝时不留垃圾 / release 后临时文件尽力清理。
+ */
+describe('office:create-blank（task-80 新建空白 Word 文档）', () => {
+  it('写模板到 %TEMP%/kyclaw、注册回 OfficeDocumentInfo（displayName=未命名文档）；release 清临时文件', async () => {
+    const temp = tempDir()
+    register({ tempDir: temp })
+    const event = eventOf(1)
+
+    const result = (await invoke(IPC_CHANNELS.office.createBlank, event, {
+      kind: 'docx'
+    })) as {
+      ok: boolean
+      document?: { documentId: string; displayName: string; displayPath: string; size: number }
+      alreadyOpen?: boolean
+    }
+
+    expect(result.ok).toBe(true)
+    expect(result.alreadyOpen).toBe(false)
+    expect(result.document?.displayName).toBe('未命名文档')
+    expect(result.document?.displayPath).toContain(join(temp, 'kyclaw'))
+    expect(result.document?.displayPath).toMatch(/未命名-\d+\.docx$/)
+    expect(result.document?.size ?? 0).toBeGreaterThan(0)
+
+    // 落盘是合法 zip（docx 以 PK 开头），不是空占位
+    const path = result.document?.displayPath ?? ''
+    const bytes = readFileSync(path)
+    expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK')
+    expect(bytes.length).toBe(result.document?.size)
+
+    // 关标签（release）→ 未另存为的临时文件被清掉
+    await invoke(IPC_CHANNELS.office.release, event, result.document?.documentId)
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('入参闸门：只接受 {kind:"docx"}（xlsx / 多余字段 / 缺参都直接拒，不写文件）', async () => {
+    const temp = tempDir()
+    register({ tempDir: temp })
+    const event = eventOf(1)
+
+    await expect(invoke(IPC_CHANNELS.office.createBlank, event, { kind: 'xlsx' })).rejects.toThrow()
+    await expect(
+      invoke(IPC_CHANNELS.office.createBlank, event, { kind: 'docx', extra: 1 })
+    ).rejects.toThrow()
+    await expect(invoke(IPC_CHANNELS.office.createBlank, event)).rejects.toThrow()
+    expect(existsSync(join(temp, 'kyclaw'))).toBe(false)
+  })
+
+  it('容量拒绝（注册表已满）：回 too-many-open 且不留下临时文件', async () => {
+    const temp = tempDir()
+    const seed = tempDir()
+    const seedPath = writeFile(seed, '已有.docx')
+    const documents = createOfficeDocuments(defaultOfficeDocumentIo, { maxOpenDocuments: 1 })
+    const opened = await documents.open(seedPath, {
+      owner: 1,
+      openedFrom: 'picker',
+      displayPath: seedPath
+    })
+    expect(opened.ok).toBe(true)
+    register({ tempDir: temp, documents, env: {} })
+
+    const result = (await invoke(IPC_CHANNELS.office.createBlank, eventOf(1), {
+      kind: 'docx'
+    })) as { ok: boolean; code?: string }
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('too-many-open')
+    // 临时模板写出来后发现注册被拒 → 已清理，目录里不残留
+    const leftover = existsSync(join(temp, 'kyclaw')) ? readdirSync(join(temp, 'kyclaw')) : []
+    expect(leftover).toEqual([])
   })
 })

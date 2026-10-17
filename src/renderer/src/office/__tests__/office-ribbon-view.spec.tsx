@@ -152,7 +152,7 @@ describe('OfficeRibbonView：命令状态（active / disabled / select / split�
     expect(adapter.calls).toEqual([])
   })
 
-  it('select 选项来自 command state.options，切换后按 option.args 执行', () => {
+  it('select 走自绘 listbox：选项来自 command state.options，点选后按 option.args 执行', () => {
     const { adapter } = renderView()
     act(() =>
       adapter.setState('fontSize', {
@@ -163,10 +163,77 @@ describe('OfficeRibbonView：命令状态（active / disabled / select / split�
         ]
       })
     )
-    const select = screen.getByTestId('office-ribbon-font-size') as HTMLSelectElement
-    expect(select.value).toBe('0')
-    fireEvent.change(select, { target: { value: '1' } })
+    const trigger = screen.getByTestId('office-ribbon-font-size')
+    // task-76：不再是原生 <select>，是 combobox trigger + portal listbox
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger).toHaveAttribute('role', 'combobox')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveAttribute('data-value', '12')
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    const menu = screen.getByTestId('office-ribbon-font-size-menu')
+    expect(menu).toHaveAttribute('role', 'listbox')
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(2)
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(options[1]!)
     expect(adapter.calls).toEqual([{ id: 'fontSize', args: { points: 14 } }])
+    expect(screen.queryByTestId('office-ribbon-font-size-menu')).not.toBeInTheDocument()
+  })
+
+  it('select 键盘：↓ 打开、↓/↑ 移动、Enter 执行、Esc 关闭', () => {
+    const { adapter } = renderView()
+    act(() =>
+      adapter.setState('fontSize', {
+        value: 12,
+        options: [
+          { label: '12', args: { points: 12 } },
+          { label: '14', args: { points: 14 } },
+          { label: '16', args: { points: 16 } }
+        ]
+      })
+    )
+    const trigger = screen.getByTestId('office-ribbon-font-size')
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(screen.getByTestId('office-ribbon-font-size-menu')).toBeInTheDocument()
+    // 初始高亮 = 当前值（12, index 0）；↓ 到 14，Enter 执行
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    expect(adapter.calls).toEqual([{ id: 'fontSize', args: { points: 14 } }])
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(screen.getByTestId('office-ribbon-font-size-menu')).toBeInTheDocument()
+    fireEvent.keyDown(trigger, { key: 'Escape' })
+    expect(screen.queryByTestId('office-ribbon-font-size-menu')).not.toBeInTheDocument()
+  })
+
+  it('select：Home/End 跳到首尾；点外关闭；选项列表在 portal（body 直下）', () => {
+    const { adapter } = renderView()
+    act(() =>
+      adapter.setState('fontSize', {
+        value: 12,
+        options: [
+          { label: '12', args: { points: 12 } },
+          { label: '14', args: { points: 14 } },
+          { label: '16', args: { points: 16 } }
+        ]
+      })
+    )
+    const trigger = screen.getByTestId('office-ribbon-font-size')
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    const menu = screen.getByTestId('office-ribbon-font-size-menu')
+    expect(menu.parentElement).toBe(document.body)
+    fireEvent.keyDown(trigger, { key: 'End' })
+    expect(menu.querySelector('[data-active="true"]')?.textContent).toContain('16')
+    fireEvent.keyDown(trigger, { key: 'Home' })
+    expect(menu.querySelector('[data-active="true"]')?.textContent).toContain('12')
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    expect(adapter.calls).toEqual([{ id: 'fontSize', args: { points: 12 } }])
+    // 点外关闭
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(screen.getByTestId('office-ribbon-font-size-menu')).toBeInTheDocument()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByTestId('office-ribbon-font-size-menu')).not.toBeInTheDocument()
   })
 
   it('颜色 split：打开色板，点色块按 { color } 执行并关闭', () => {

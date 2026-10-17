@@ -1,0 +1,18 @@
+/**
+ * 「新建 Word 文档」的随包最小模板（task-80，`.superpowers/tab-newpage/DESIGN.md` §9.3-B）。
+ *
+ * 只用**空 body**：docx 本质是 zip；4 个部件 = [Content_Types].xml / _rels/.rels /
+ * word/document.xml / word/_rels/document.xml.rels，**不带样式、不带主题、不带字体**。
+ * 实测 1,154 B（DEFLATE）；内联成 base64 常量，避免为单个模板文件改打包配置
+ * （electron-builder 的 extraResources 不在本任务写域）。
+ *
+ * 为什么不用 office 编辑器生成：create-blank 要在**主进程**写盘并注册（渲染端拿到的
+ * 只是 OfficeDocumentInfo）；主进程没有 docx 生成依赖，模板常量是零依赖的诚实做法。
+ */
+const BLANK_DOCX_BASE64 =
+  'UEsDBBQAAAAIAM4TUl3JTxqw6wAAAK4BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH1QvU7DMBDeeQrLK4odGBBCSTrwMwJDeYCTfUks7LPlc0v79jht6YAK4933q69b7YIXW8zsIvXyRrVSIJloHU29/Fi/NPdScAGy4CNhL/fIcjVcdet9QhZVTNzLuZT0oDWbGQOwigmpImPMAUo986QTmE+YUN+27Z02kQpSacriIYfuCUfY+CKed/V9LJLRsxSPR+KS1UtIyTsDpeJ6S/ZXSnNKUFV54PDsEl9XgtQXExbk74CT7q0uk51F8Q65vEKoLP0Vs9U2mk2oSvW/zYWecRydwbN+cUs5GmSukwevzkgARz/99WHu4RtQSwMEFAAAAAgAzhNSXbmBRHGwAAAAKgEAAAsAAABfcmVscy8ucmVsc43POw7CMAwG4J1TRN5pWgaEUJMuCKkrKgeIEjeNaB5KwqO3JwMDIAZG278/y233sDO5YUzGOwZNVQNBJ70yTjM4D8f1DkjKwikxe4cMFkzQ8VV7wlnkspMmExIpiEsMppzDntIkJ7QiVT6gK5PRRytyKaOmQciL0Eg3db2l8d0A/mGSXjGIvWqADEvAf2w/jkbiwcurRZd/nPhKFFlEjZnB3UdF1atdFRYob+nHi/wJUEsDBBQAAAAIAM4TUl3eb8D2jQAAAK8AAAARAAAAd29yZC9kb2N1bWVudC54bWxFjUEOwiAQRfeegszeTnVhTFPozhPoARCwbVJmCIPW3l5cGFc/Lz95rx/ecVGvkGVm0nBoWlCBHPuZRg2362V/BiXFkrcLU9CwBYHB7Pq18+yeMVBR1UDSrRqmUlKHKG4K0UrDKVD9HpyjLRXziCtnnzK7IFIDccFj254w2pnAVOWd/fbdhKbHH+I/ZT5QSwMEFAAAAAgAzhNSXShGJbB+AAAAnAAAABwAAAB3b3JkL19yZWxzL2RvY3VtZW50LnhtbC5yZWxzVcxBDsIgEIXhvacgs7egC2MMtLsewOgBJnQEYjsQhhi9vSx1+fLnfXZ6b6t6UZWU2cFhMKCIfV4SBwf327w/g5KGvOCamRx8SGAad/ZKK7b+kZiKqI6wOIitlYvW4iNtKEMuxL08ct2w9VmDLuifGEgfjTnp+mvAaPUfOn4BUEsBAhQAFAAAAAgAzhNSXclPGrDrAAAArgEAABMAAAAAAAAAAAAAAIABAAAAAFtDb250ZW50X1R5cGVzXS54bWxQSwECFAAUAAAACADOE1JduYFEcbAAAAAqAQAACwAAAAAAAAAAAAAAgAEcAQAAX3JlbHMvLnJlbHNQSwECFAAUAAAACADOE1Jd3m/A9o0AAACvAAAAEQAAAAAAAAAAAAAAgAH1AQAAd29yZC9kb2N1bWVudC54bWxQSwECFAAUAAAACADOE1JdKEYlsH4AAACcAAAAHAAAAAAAAAAAAAAAgAGxAgAAd29yZC9fcmVscy9kb2N1bWVudC54bWwucmVsc1BLBQYAAAAABAAEAAMBAABpAwAAAAA='
+
+/** 模板字节（每次新副本，避免调用方改写缓存） */
+export function blankDocxBytes(): Uint8Array {
+  return new Uint8Array(Buffer.from(BLANK_DOCX_BASE64, 'base64'))
+}

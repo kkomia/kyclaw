@@ -799,6 +799,13 @@ const officeApi: KyclawOfficeApi = {
     if (!parsed.success) throw new Error('[kyclaw] Office 打开响应结构不合法')
     return parsed.data
   },
+  createBlank: async (input) => {
+    const parsed = officeOpenResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.createBlank, input)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] Office 新建响应结构不合法')
+    return parsed.data
+  },
   read: async (documentId) => {
     const parsed = officeReadResultSchema.safeParse(
       await ipcRenderer.invoke(IPC_CHANNELS.office.read, documentId)

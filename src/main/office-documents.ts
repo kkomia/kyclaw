@@ -56,6 +56,11 @@ export interface OfficeOpenContext {
    * 缺省 = 传进来的 filePath。
    */
   displayPath?: string
+  /**
+   * 仅供界面显示的标题（task-80）：新建空白文档时主进程给「未命名文档」（文件名里带时间戳，
+   * 不适合当标签标题）。缺省 = 文件名 basename。
+   */
+  displayName?: string
 }
 
 /** 文件系统 IO 的可注入子集（默认实现见 `defaultOfficeDocumentIo`） */
@@ -426,7 +431,7 @@ export function createOfficeDocuments(
       const record: OfficeDocumentRecord = {
         documentId: randomUUID(),
         realPath,
-        displayName: basename(realPath),
+        displayName: context.displayName ?? basename(realPath),
         displayPath: context.displayPath === undefined ? filePath : context.displayPath,
         // 只读回包字段（infoOf 从 realPath 再取，这里满足 OfficeDocumentInfo 的形状）
         absolutePath: realPath,

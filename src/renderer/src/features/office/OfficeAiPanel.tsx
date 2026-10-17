@@ -93,9 +93,8 @@ export function OfficeAiPanel({
           </div>
 
           <div className="flex flex-col gap-2">
-            <p className="text-c2 font-medium tracking-wide text-ink-tertiary uppercase">
-              试试这些
-            </p>
+            {/* 装饰眉题按章程改为正常大小写 11/500 三级灰（中文不做全大写、也不额外拉字距） */}
+            <p className="text-[11px] font-medium text-ink-tertiary">试试这些</p>
             <div className="flex flex-col items-stretch gap-2">
               {AI_SUGGESTIONS.map((suggestion) => (
                 <button

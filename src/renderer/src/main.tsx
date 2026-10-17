@@ -8,6 +8,7 @@ import './styles/tailwind.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { scheduleOfficeFontPrewarm } from './features/office/office-font-prewarm'
 import { useSettingsStore } from './lib/settings-store'
 import { advanceStartupSplash, failStartupSplash } from './lib/startup-splash'
 import { startupMark } from './lib/startup-timing'
@@ -18,7 +19,7 @@ startupMark('渲染端入口')
 // 阶段百分比的真实事件：bundle 已加载并开始执行（不是按时间猜的百分比）
 advanceStartupSplash('renderer-entry')
 
-// 先落默认外观（跟系统 + 默认字号），再异步读落盘设置覆盖 —— 中间不留白屏/闪色
+// 先落默认外观（跟系统 + 默认字号 scale=1.000），再异步读落盘设置覆盖 —— 中间不留白屏/闪色/字号跳变
 initTheme()
 void useSettingsStore
   .getState()
@@ -45,3 +46,8 @@ function start(): void {
 }
 
 start()
+
+// task-76：产品启动即预热 Office 字体（用户口径：不要等打开文档才注册）。
+// 排在首屏提交之后走 idle 时段（见 office-font-prewarm.ts）：建一个隐藏的
+// kyclaw-office://surface 面把 22 面/46 注册/27MB 注册进同一 session，首个文档面复用 HTTP cache。
+scheduleOfficeFontPrewarm()

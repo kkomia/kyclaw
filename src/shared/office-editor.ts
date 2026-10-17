@@ -44,7 +44,13 @@ export const OFFICE_IPC_CHANNELS = {
   /** S5：主进程 → 壳：退出/关窗确认请求（壳据此弹三态对话框） */
   quitRequest: 'office:quit-request',
   /** S5：壳 → 主进程：退出确认结果（saved / discarded / cancelled） */
-  quitResult: 'office:quit-result'
+  quitResult: 'office:quit-result',
+  /**
+   * task-80（新增标签页 v1）：新建空白 Word 文档——主进程把随包最小模板写到
+   * `app.getPath('temp')/kyclaw/未命名-<ts>.docx`、注册进文档注册表后返回 `OfficeOpenResult`。
+   * v1 只接 docx（xlsx/pptx 编辑器未就绪，入口在新增标签页里隐藏）。
+   */
+  createBlank: 'office:create-blank'
 } as const
 
 /**
@@ -198,6 +204,13 @@ export const officeDocumentIdArgsSchema = z.tuple([z.string().min(1)])
 
 /** `office:config` / `office:open-dialog` 入参：空 */
 export const officeNoArgsSchema = z.tuple([])
+
+/**
+ * `office:create-blank` 入参：`[{ kind: 'docx' }]`（task-80）。
+ * v1 只允许 docx；别的 kind 由 handler 按 `unsupported-format` 拒绝（不做幽灵格式）。
+ */
+export const officeCreateBlankArgsSchema = z.tuple([z.strictObject({ kind: z.literal('docx') })])
+export type OfficeCreateBlankInput = z.infer<typeof officeCreateBlankArgsSchema>[0]
 
 /** 面常量：与 `src/main/office-protocol.ts` 的 OFFICE_SCHEME / OFFICE_HOST 一致（单测钉住） */
 export const OFFICE_SURFACE_ORIGIN = 'kyclaw-office://surface'

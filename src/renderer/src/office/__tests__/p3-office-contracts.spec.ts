@@ -148,3 +148,22 @@ describe('P3 Office 面：surface.css fallback 收敛 + 字号复核', () => {
     expect(surfaceCss).toContain('调试条（S2/S3')
   })
 })
+
+describe('P2 字体小规格（task-67 字体统一收口）', () => {
+  it('ribbon tab 字重 500（章程 §9.7-1；不再 600 过重）', () => {
+    const tab = blockOf(chromeCss, '.ofr-tab')
+    expect(tab).toContain('font-weight: 500;')
+    expect(tab).not.toContain('font-weight: 600;')
+  })
+
+  it('文档名 14（原 12 比 ribbon 其它文字低一档）', () => {
+    expect(blockOf(chromeCss, '.ofr-doc-title')).toContain('font-size: 14px;')
+  })
+
+  it('AI 面板装饰眉题：正常大小写 + 11/500 三级灰，不再 uppercase/拉字距', () => {
+    const panelSource = readSource('../../features/office/OfficeAiPanel.tsx')
+    expect(panelSource).not.toContain('uppercase')
+    expect(panelSource).not.toContain('tracking-wide')
+    expect(panelSource).toContain('text-[11px] font-medium text-ink-tertiary')
+  })
+})

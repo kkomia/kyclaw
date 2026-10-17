@@ -157,7 +157,7 @@ describe('IPC 契约：settings 通道', () => {
     }
 
     reject({ theme: 'blue' })
-    reject({ fontTier: 'huge' })
+    reject({ uiFontSize: 99 })
     reject({ theme: 'dark', evil: 1 })
     reject('dark')
     reject(null)

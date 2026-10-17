@@ -39,6 +39,7 @@ import type { OfficePreviewPriority, OfficePreviewResult } from './office-previe
 import {
   OFFICE_IPC_CHANNELS,
   type OfficeConfig,
+  type OfficeCreateBlankInput,
   type OfficeOpenResult,
   type OfficeQuitRequestPayload,
   type OfficeQuitResult,
@@ -1322,6 +1323,12 @@ export interface KyclawOfficeApi {
    * 授权失败/文件不存在会抛人话；文件级失败（格式/大小/占用）回 `ok:false` 分类。
    */
   openFromSession(threadId: string, relative: string, readOnly?: boolean): Promise<OfficeOpenResult>
+  /**
+   * task-80（新增标签页 v1）：新建空白 Word 文档。主进程把随包最小模板复制到
+   * `app.getPath('temp')/kyclaw/未命名-<ts>.docx`、注册进文档注册表后返回与打开同一形状的
+   * `OfficeOpenResult`（`displayName = 未命名文档`）。v1 只支持 docx；容量/写盘失败回分类结果。
+   */
+  createBlank(input: OfficeCreateBlankInput): Promise<OfficeOpenResult>
   /** 按 documentId 重读字节，并复核/刷新注册表里的 stat/hash（重载/冲突复查用） */
   read(documentId: string): Promise<OfficeReadResult>
   /**

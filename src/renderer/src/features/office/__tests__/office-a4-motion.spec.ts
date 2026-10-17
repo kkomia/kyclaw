@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
  *   - 一份 CSS 两处消费：shell `OfficeStatusBar` + 面内 QAT（office/main.tsx + OfficeRibbonView class），
  *     不在办公室（office-chrome.css）里再写第二份换词动画；
  *   - ribbon 折叠：展开 enter 档、收起 exit 档，reduced-motion 面内兜底 0.01ms；
- *   - 暗色纸面：canvas filter 的校准值（invert(0.78)）与注释边界；
+ *   - 纸面：task-76 起暗色主题也用原生白（覆盖 A4 的 invert 灰纸），只钉「无滤镜 + 白底」；
  *   - 状态栏：高度用 `--office-status-height`、不写死像素；OfficePage 作为 workspace 最后一个 flex 子项渲染。
  */
 function read(relativePath: string): string {
@@ -16,6 +16,8 @@ function read(relativePath: string): string {
 
 const swapCss = read('../../../office/office-save-swap.css')
 const chromeCss = read('../../../office/office-chrome.css')
+/** 去 CSS 注释：历史说明里会提到旧暗纸 filter，只对生效代码断言 */
+const chromeCode = chromeCss.replace(/\/\*[\s\S]*?\*\//g, '')
 const officeMainTsx = read('../../../office/main.tsx')
 const ribbonViewTsx = read('../../../office/components/OfficeRibbonView.tsx')
 const statusBarTsx = read('../OfficeStatusBar.tsx')
@@ -63,14 +65,17 @@ describe('ribbon 折叠动效（A2 收尾）', () => {
   })
 })
 
-describe('暗色纸面校准（用户拍板：灰纸）', () => {
-  it('canvas filter 用校准后的 invert(0.78) + hue-rotate + contrast（只动视图）', () => {
+describe('文档纸面：task-76 覆盖 A4 灰纸，改回原生白', () => {
+  it('暗色主题纸面 = 原生白（无 invert/hue-rotate 滤镜；红色/图片不再被反相）', () => {
+    // 用户 2026-10-18 新口径：「word 底还是采用 原生的白色把。不然 用户他不知道自己到底是啥颜色啊」
     expect(chromeCss).toContain('.oox-root.dark .canvas-page')
-    expect(chromeCss).toMatch(/filter:\s*invert\(0\.78\)\s+hue-rotate\(180deg\)\s+contrast\(0\.9\)/)
-    // 不允许用纯反相 (invert(1)) 当暗纸；也不允许去改文档字体/字色
-    expect(chromeCss).not.toMatch(/filter:\s*invert\(1\)/)
-    expect(chromeCss).toContain('@media print')
-    expect(chromeCss).toMatch(/@media print\s*\{[\s\S]*?filter:\s*none/)
+    expect(chromeCss).toContain('background-color: #ffffff')
+    // A4 的暗纸滤镜必须被删掉（否则文档颜色不是 Word 里的真实颜色）
+    expect(chromeCode).not.toMatch(/filter:\s*invert\(0\.78\)/)
+    expect(chromeCode).not.toMatch(/filter:\s*invert\(1\)/)
+    expect(chromeCss).toContain('覆盖 A4')
+    // 画布/周边仍暗：--doc-canvas-bg 映射不动（surface.css 仍把 .oox-root 的 --doc-bg 接到画布 token）
+    expect(chromeCss).toContain('--doc-canvas-bg 不动')
   })
 
   it('窄窗 720：不做会裁纸的 minWidth CSS 覆盖（内核 min-layout，A5 走上游 fit-width）', () => {

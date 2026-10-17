@@ -178,18 +178,25 @@ describe('SurfaceBoot：握手状态机', () => {
 })
 
 describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
-  it('收到 doc:open 后先注册本地字体，字体就绪再挂编辑器；布局完成回 doc:loaded', async () => {
+  it('面挂载即注册本地字体（不等 doc:open）；字体就绪回 surface:fonts-ready，收到文档后直接挂编辑器', async () => {
     const postMessage = vi.spyOn(window, 'postMessage')
     render(<SurfaceBoot />)
-    const nonce = await handshake(postMessage)
 
+    // task-76：字体注册从挂载就开始（不再等文档），并回一条 fonts-ready 给壳
+    await waitFor(() => expect(fontsMock.ensureSurfaceFonts).toHaveBeenCalledTimes(1))
+    const fontsReady = sentMessages(postMessage).find(
+      (message) => message.type === 'surface:fonts-ready'
+    )
+    expect(fontsReady).toMatchObject({
+      type: 'surface:fonts-ready',
+      prewarm: false,
+      stats: { faces: 22, registrations: 46, fetchedBytes: 27_383_772 }
+    })
+
+    const nonce = await handshake(postMessage)
     act(() => {
       dispatchFromParent({ ...DOC, nonce })
     })
-
-    // 字体注册前：显示加载态，不挂编辑器
-    expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument()
-    await waitFor(() => expect(fontsMock.ensureSurfaceFonts).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.getByTestId('surface-docx-editor')).toBeInTheDocument())
     expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-state', 'loaded')
     expect(screen.getByTestId('surface-docx-editor')).toHaveAttribute('data-document-id', 'doc-1')
@@ -201,6 +208,26 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     const loaded = sentMessages(postMessage).find((message) => message.type === 'doc:loaded')
     expect(loaded).toMatchObject({ documentId: 'doc-1', pages: 3 })
     expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+  })
+
+  it('预热面（?officePrewarm=1）发出的 fonts-ready 带 prewarm:true（壳据此释放 hidden iframe）', async () => {
+    window.history.replaceState({}, '', '/?officePrewarm=1')
+    const postMessage = vi.spyOn(window, 'postMessage')
+    try {
+      render(<SurfaceBoot />)
+      await waitFor(() =>
+        expect(
+          sentMessages(postMessage).some((message) => message.type === 'surface:fonts-ready')
+        ).toBe(true)
+      )
+      const fontsReady = sentMessages(postMessage).find(
+        (message) => message.type === 'surface:fonts-ready'
+      )
+      expect(fontsReady?.prewarm).toBe(true)
+      expect(fontsReady?.stats).toBeTruthy()
+    } finally {
+      window.history.replaceState({}, '', '/')
+    }
   })
 
   it('编辑 → doc:changed（revision 单调）；编辑器保存请求 → doc:save-request', async () => {

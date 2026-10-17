@@ -46,6 +46,7 @@ import {
   OFFICE_SURFACE_ORIGIN,
   OFFICE_SURFACE_URL,
   type OfficeConfig,
+  type OfficeCreateBlankInput,
   type OfficeDocumentInfo,
   type OfficeOpenResult,
   type OfficeQuitRequestPayload,
@@ -661,6 +662,7 @@ export interface OfficeApiStub {
   openFromSession: Mock<
     (threadId: string, relative: string, readOnly?: boolean) => Promise<OfficeOpenResult>
   >
+  createBlank: Mock<(input: OfficeCreateBlankInput) => Promise<OfficeOpenResult>>
   read: Mock<(documentId: string) => Promise<OfficeReadResult>>
   save: Mock<(input: OfficeSaveRequest) => Promise<OfficeSaveResult>>
   saveAs: Mock<(input: OfficeSaveAsRequest) => Promise<OfficeSaveAsResult>>
@@ -706,6 +708,11 @@ export function officeApiStub(): OfficeApiStub {
       ok: false,
       code: 'cancelled',
       message: '已取消'
+    })),
+    createBlank: vi.fn(async (): Promise<OfficeOpenResult> => ({
+      ok: false,
+      code: 'write-failed',
+      message: '测试桩：不写盘'
     })),
     read: vi.fn(async (): Promise<OfficeReadResult> => ({
       ok: false,
