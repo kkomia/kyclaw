@@ -21,8 +21,9 @@
  *   - 来源按**规范化 URL**去重（忽略 fragment、保留 query、host/协议小写、去默认端口、
  *     `www.` 与非默认端口的展示/匹配口径一致），顺序 = 首次出现顺序；后面出现的 title
  *     回填给第一次没写 title 的那条；
- *   - 已完成 web_search / fetch 的工具结果建立 allowlist（授权）；web_search 的
- *     title/snippet 只用于补 hover 卡（fetch 没有标题就不编）；
+ *   - 已完成 web_search / fetch 的工具结果建立 allowlist（授权）；两者的 title/snippet
+ *     用于补 hover 卡（2026-10-18 引用返工：fetch 也解析 HTML title/meta 或正文摘要，
+ *     不再"没有标题就不编"；仍缺就由正文引用上下文兜底）；
  *   - `extractCitations()` 必须显式传 allowlist（没有默认空 map 的旁路），文本按 part 分别提取，
  *     避免未闭合围栏跨 text part 把下一段正文一起吞掉。
  */
@@ -507,6 +508,8 @@ interface RawMarkdownLink {
   label: string
   url: string
   title?: string
+  /** 链接在 markdown 原文里的起点（collectLinks 填；上下文摘句用） */
+  start: number
   end: number
 }
 
@@ -593,6 +596,7 @@ function parseLinkAt(text: string, open: number): RawMarkdownLink | null {
     label: text.slice(open + 1, labelEnd),
     url: decodedUrl,
     ...(decodedTitle === undefined || decodedTitle === '' ? {} : { title: decodedTitle }),
+    start: open,
     end: cursor + 1
   }
 }
@@ -634,6 +638,7 @@ function parseReferenceLinkAt(
     label: labelText,
     url: definition.url,
     ...(definition.title === undefined ? {} : { title: definition.title }),
+    start: open,
     end
   }
 }
@@ -735,6 +740,60 @@ export function extractCitationsFromTexts(
   return withKnownHints(byKey, knownSources)
 }
 
+/**
+ * 工具输出里没有 title/snippet 时的**正文上下文兜底**（2026-10-18 引用返工）：
+ * 找到正文里该 citation 的链接位置，截引用前后各 ~100 字、去掉 markdown 标记后作为
+ * 「引用上下文」给 hover 卡。代码块/行内码里的引用不算（与 provenance 同口径）。
+ *
+ * 返回 citationKey → 上下文；同一 key 只取第一次出现。
+ */
+const CITATION_CONTEXT_RADIUS = 100
+const CITATION_CONTEXT_CHARS = 140
+
+function contextAroundLink(masked: string, start: number, end: number): string {
+  const from = Math.max(0, start - CITATION_CONTEXT_RADIUS)
+  const to = Math.min(masked.length, end + CITATION_CONTEXT_RADIUS)
+  const window = masked.slice(from, to)
+  const plain = window
+    // 链接 / 图片整段去掉（上下文里不留引用序号/URL）；窗口可能从链接中间开始，截断括号一并清掉
+    .replace(/!?\[[^\]]{0,160}\]\([^)]*\)/g, ' ')
+    .replace(/!?\[[^\]]{0,160}\]/g, ' ')
+    // 行内码 / 围栏残片
+    .replace(/`{1,3}[^`]*`{1,3}/g, ' ')
+    .replace(/[#>*_~|]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s*\n\s*/g, ' ')
+    .trim()
+  if (plain === '') return ''
+  const prefix = from > 0 ? '…' : ''
+  const suffix = to < masked.length ? '…' : ''
+  return `${prefix}${clipSnippet(plain, CITATION_CONTEXT_CHARS)}${suffix}`
+}
+
+export function citationContextsFromText(
+  text: string,
+  knownSources: KnownSources
+): Map<string, string> {
+  const contexts = new Map<string, string>()
+  if (knownSources.size === 0 || text.trim() === '') return contexts
+  const links = collectLinks(text)
+  if (links.length === 0) return contexts
+  const { masked } = prepareMarkdownText(text)
+  for (const link of links) {
+    const label = citationLabel(link.label)
+    if (label === undefined) continue
+    const url = safeHttpUrl(link.url)
+    if (url === undefined) continue
+    const key = citationKey(url)
+    if (key === undefined || !knownSources.has(key) || contexts.has(key)) continue
+    const context = contextAroundLink(masked, link.start, link.end)
+    if (context === '') continue
+    contexts.set(key, context)
+    if (contexts.size >= MAX_SOURCES) break
+  }
+  return contexts
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -781,7 +840,15 @@ function sourceRecord(value: unknown): WebSearchSource | null {
       ? value.snippet
       : typeof value.content === 'string'
         ? value.content
-        : ''
+        : typeof value.description === 'string'
+          ? value.description
+          : typeof value.highlights === 'string'
+            ? value.highlights
+            : Array.isArray(value.highlights)
+              ? value.highlights
+                  .filter((item): item is string => typeof item === 'string')
+                  .join(' ')
+              : ''
   return {
     title,
     url,
@@ -941,6 +1008,116 @@ function fetchResultUrls(part: CitationToolPartLike): string[] {
   return urls
 }
 
+/** fetch 回执里能展示给 hover 卡的信息（2026-10-18 引用返工：fetch 不再只授权 URL） */
+export interface FetchSourceHint {
+  title?: string
+  snippet?: string
+}
+
+const FETCH_TITLE_CHARS = 120
+
+function firstNonEmpty(...values: (string | undefined)[]): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed !== undefined && trimmed !== '') return trimmed
+  }
+  return undefined
+}
+
+function cleanInlineHtml(value: string): string {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** HTML 正文 → 可见文本（去 script/style/noscript/svg 与标签，保留段落空格） */
+function htmlToVisibleText(html: string): string {
+  return cleanInlineHtml(
+    html
+      .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
+      .replace(/<\/(?:p|div|li|h[1-6]|tr|section|article|header|footer|blockquote)>/gi, ' ')
+  )
+}
+
+/** Jina reader / 纯文本：去掉 reader 头部与 markdown 标记，只留可读正文 */
+function cleanReaderBody(body: string): string {
+  const marker = /^[ \t]*Markdown Content:[ \t]*$/im.exec(body)
+  const content = marker === null ? body : body.slice(marker.index + marker[0].length)
+  return content
+    .replace(/^[ \t]*(?:Title|URL Source|Published Time|Warning):[^\n]*$/gim, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]{0,160})\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]{0,3}>[ \t]?/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * 解析 fetch 回执的可展示信息（页面标题 + 摘要）。
+ *
+ * 回执形状（`readResponseText`）：`HTTP 200` / `content-type: …` / 可选 `final-url: …`，
+ * 空行之后是正文。正文可能是：
+ *   - 原始 HTML：`<title>` / og:title / `<h1>` 取标题；meta description → 首个 `<p>` → 全文可见文本
+ *     依次兜底（优先描述，避免把导航/面包屑当摘要）；
+ *   - reader 模式（Jina Markdown）：`Title: …` / `Published Time: …` / `Markdown Content:`，
+ *     取 `Title:` 行，摘要用 Markdown Content 之后的正文；
+ *   - 纯文本：标题缺失就不编（`title` 不返回），摘要截正文。
+ * 解析不出任何可读内容时返回空对象（不猜）。
+ */
+export function parseFetchSource(output: unknown): FetchSourceHint {
+  const text = textOfToolOutput(output)
+  if (text.trim() === '') return {}
+  const separator = text.search(/\r?\n\r?\n/)
+  const body = (separator < 0 ? '' : text.slice(separator)).replace(/^\r?\n\r?\n/, '')
+  if (body.trim() === '') return {}
+
+  const looksHtml = /<\s*(?:!doctype\s+html|html|head|body|title|meta|article)\b/i.test(body)
+  let rawTitle = ''
+  let rawSnippet = ''
+
+  if (looksHtml) {
+    const metaTitle =
+      /<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1] ??
+      /<meta[^>]+(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*content=["']([^"']*)["']/i.exec(
+        body
+      )?.[1] ??
+      /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(body)?.[1] ??
+      ''
+    rawTitle = cleanInlineHtml(metaTitle)
+    const description =
+      /<meta[^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]*content=["']([^"']*)["']/i.exec(
+        body
+      )?.[1] ?? ''
+    const firstParagraph = /<p[^>]*>([\s\S]*?)<\/p>/i.exec(body)?.[1] ?? ''
+    rawSnippet =
+      firstNonEmpty(
+        cleanInlineHtml(description),
+        cleanInlineHtml(firstParagraph),
+        htmlToVisibleText(body)
+      ) ?? ''
+  } else {
+    const head = body.slice(0, 4_000)
+    rawTitle =
+      firstNonEmpty(
+        /^[ \t]*Title:[ \t]*(.+)$/im.exec(head)?.[1]?.trim(),
+        /^[ \t]{0,3}#[ \t]+(.+)$/m.exec(head)?.[1]?.trim()
+      ) ?? ''
+    rawSnippet = cleanReaderBody(body)
+  }
+
+  const title = cleanInlineHtml(rawTitle)
+  const snippet = rawSnippet.replace(/\s+/g, ' ').trim()
+  return {
+    ...(title === '' ? {} : { title: clipSnippet(title, FETCH_TITLE_CHARS) }),
+    ...(snippet === '' ? {} : { snippet: clipSnippet(snippet) })
+  }
+}
+
 function addKnownSource(
   known: Map<string, CitationHint>,
   rawUrl: string,
@@ -992,8 +1169,11 @@ export function knownSourcesFromParts(
       continue
     }
     if (isFetchPart(part)) {
+      // 2026-10-18 引用返工：fetch 回执也解析 title/snippet（HTML title/meta、reader Title、
+      // 正文干净摘要），否则 hover 卡只剩 URL；解析不出就只授权、由正文上下文兜底。
+      const info = parseFetchSource(part.output)
       for (const url of fetchResultUrls(part)) {
-        addKnownSource(known, url)
+        addKnownSource(known, url, info.title, info.snippet)
         if (known.size >= MAX_HINTS) return known
       }
     }

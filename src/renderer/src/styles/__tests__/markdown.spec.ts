@@ -55,13 +55,19 @@ describe('markdown.css · Shiki 变量映射', () => {
 })
 
 describe('markdown.css · P0 三声部与极简配方（2026-10-18）', () => {
-  it('正文/标题走阅读声部 --font-reading（拉丁衬线 + 中文 Noto Sans SC 混排）', () => {
-    expect(markdownBody).toMatch(/\.markdown-body \{[\s\S]*?font-family:\s*var\(--font-reading\)/)
+  it('正文拉丁+数字统一 --font-ui（2026-10-18 实拍修订），数字 tabular-nums；标题仍 --font-reading', () => {
+    // 正文块本身：中英数同族（--font-ui），不再用拉丁衬线阅读声部混排中文黑体
+    const bodyBlock = /\.markdown-body \{([^}]*)\}/.exec(markdownBody)?.[1] ?? ''
+    expect(bodyBlock).toContain('font-family: var(--font-ui);')
+    expect(bodyBlock).not.toContain('--font-reading')
+    // 数字等宽：Sitka 默认 proportional figures 会跳（1111 vs 9999 宽度不同）
+    expect(bodyBlock).toContain('font-variant-numeric: tabular-nums;')
+    // 标题仍走阅读声部（衬线只保留在标题/字标）
     expect(markdownBody).toMatch(
       /\.markdown-body h1,[\s\S]*?\.markdown-body h6 \{[^}]*font-family:\s*var\(--font-reading\)/
     )
     // 行高 1.8（中文阅读下限，章程 §2.4）
-    expect(markdownBody).toMatch(/\.markdown-body \{[\s\S]*?line-height:\s*1\.8/)
+    expect(bodyBlock).toContain('line-height: 1.8;')
   })
 
   it('叙事行宽 = --prose-measure（只压叙事块；代码块/表格可更宽）', () => {

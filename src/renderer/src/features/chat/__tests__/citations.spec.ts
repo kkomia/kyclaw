@@ -3,6 +3,7 @@ import {
   EMPTY_KNOWN_SOURCES,
   MAX_SOURCES,
   SOURCE_SNIPPET_CHARS,
+  citationContextsFromText,
   citationKey,
   citationLabel,
   clipSnippet,
@@ -12,6 +13,7 @@ import {
   hostOf,
   knownSourcesFromParts,
   mergeKnownSources,
+  parseFetchSource,
   parseWebSearchSources,
   safeHttpUrl,
   type CitationHint
@@ -616,5 +618,123 @@ describe('knownSourcesFromParts：已完成工具结果的 provenance allowlist'
       snippet: 'Keep snippet'
     })
     expect(target.get(keyOf('https://b.example/y'))).toEqual({ title: 'B' })
+  })
+})
+
+describe('parseFetchSource：fetch 回执的标题/摘要（2026-10-18 引用返工）', () => {
+  it('原始 HTML：<title> + meta description（优先描述，不把导航噪音当摘要）', () => {
+    const output = [
+      'HTTP 200',
+      'content-type: text/html; charset=utf-8',
+      '',
+      '<!doctype html><html><head><title>示例页面标题</title>',
+      '<meta name="description" content="这是页面的 meta 描述。"></head>',
+      '<body><nav>导航噪音</nav><p>正文第一段。</p></body></html>'
+    ].join('\n')
+
+    const hint = parseFetchSource(output)
+    expect(hint.title).toBe('示例页面标题')
+    expect(hint.snippet).toContain('这是页面的 meta 描述')
+    expect(hint.snippet).not.toContain('导航噪音')
+  })
+
+  it('无 meta description：退回首个 <p>；再退回全文可见文本（script 不残留）', () => {
+    const paragraphOnly = parseFetchSource(
+      'HTTP 200\ncontent-type: text/html\n\n<html><body><p>第一段正文。</p><p>第二段。</p></body></html>'
+    )
+    expect(paragraphOnly.title).toBeUndefined()
+    expect(paragraphOnly.snippet).toContain('第一段正文')
+
+    const bodyOnly = parseFetchSource(
+      'HTTP 200\n\n<html><body><script>alert("x")</script><div>可见文字</div></body></html>'
+    )
+    expect(bodyOnly.snippet).toContain('可见文字')
+    expect(bodyOnly.snippet).not.toContain('alert')
+  })
+
+  it('reader 形状（Jina Markdown）：Title 行取标题；Markdown Content 之后取摘要', () => {
+    const output = [
+      'HTTP 200',
+      'content-type: text/plain',
+      '',
+      'Title: Jina 页面标题',
+      '',
+      'URL Source: https://example.org/page',
+      '',
+      'Markdown Content:',
+      '这是干净的正文内容，包含 [链接](https://example.org/x) 与 **加粗**。'
+    ].join('\n')
+
+    const hint = parseFetchSource(output)
+    expect(hint.title).toBe('Jina 页面标题')
+    expect(hint.snippet).toContain('这是干净的正文内容')
+    expect(hint.snippet).not.toContain('URL Source')
+    expect(hint.snippet).not.toContain('https://example.org/x')
+  })
+
+  it('纯文本：不编标题；摘要截到 160 字', () => {
+    const hint = parseFetchSource(`HTTP 200\ncontent-type: text/plain\n\n${'正文'.repeat(200)}`)
+    expect(hint.title).toBeUndefined()
+    expect(hint.snippet?.endsWith('…')).toBe(true)
+    expect(Array.from(hint.snippet ?? '').length).toBeLessThanOrEqual(SOURCE_SNIPPET_CHARS + 1)
+  })
+
+  it('空输出 / 二进制占位：不猜（返回空对象）', () => {
+    expect(parseFetchSource('')).toEqual({})
+    expect(parseFetchSource('HTTP 200\n\n')).toEqual({})
+  })
+})
+
+describe('knownSourcesFromParts：fetch 也补 title/snippet', () => {
+  it('fetch 回的 HTML 标题/描述写进 allowlist（不再只有 URL）', () => {
+    const known = knownSourcesFromParts([
+      {
+        type: 'tool-fetch',
+        state: 'output-available',
+        input: { url: 'https://example.org/page' },
+        output: [
+          'HTTP 200',
+          'content-type: text/html',
+          '',
+          '<html><head><title>页面标题</title>',
+          '<meta name="description" content="页面描述。"></head><body></body></html>'
+        ].join('\n')
+      }
+    ])
+
+    expect(known.get(keyOf('https://example.org/page'))).toMatchObject({
+      title: '页面标题',
+      snippet: '页面描述。'
+    })
+  })
+})
+
+describe('citationContextsFromText：正文上下文兜底', () => {
+  const known: Map<string, CitationHint> = new Map([[keyOf('https://example.org/paris'), {}]])
+
+  it('命中 allowlist 的引用返回所在句子（去掉链接标记/URL/序号）', () => {
+    const contexts = citationContextsFromText(
+      '第一句不算。巴黎人口约 210 万 [1](https://example.org/paris "Paris - Wikipedia")。第三句。',
+      known
+    )
+    const context = contexts.get(keyOf('https://example.org/paris')) ?? ''
+    expect(context).toContain('巴黎人口约 210 万')
+    expect(context).not.toContain('https://example.org/paris')
+    expect(context).not.toContain('[1]')
+  })
+
+  it('未命中 allowlist / 代码块里的引用不产生上下文', () => {
+    expect(citationContextsFromText('[1](https://not-in-tools.example/x)', known).size).toBe(0)
+
+    const fenced = [
+      '```',
+      '[1](https://example.org/paris)',
+      '```',
+      '正文 [1](https://example.org/paris)。'
+    ].join('\n')
+    const contexts = citationContextsFromText(fenced, known)
+    const context = contexts.get(keyOf('https://example.org/paris')) ?? ''
+    expect(context).toContain('正文')
+    expect(context).not.toContain('```')
   })
 })

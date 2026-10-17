@@ -31,12 +31,20 @@
   --shiki-token-link: var(--Syntax-String);
 }
 
-/* ===== markdown 正文（P0：阅读声部 = 拉丁衬线 + 中文 Noto Sans SC） =====
-   章程 §2.5/§9.2：对话正文衬线 15/1.8；叙事行宽 --prose-measure 44em（≈660px，中文约 44 字/行），
-   但代码块/表格可以更宽 —— 所以行宽只挂在「叙事块」上，不压整篇。
-   字距：拉丁衬线小字 0.002em（中文正文不加字距；0.002em 在 CJK 上不可感知）。 */
+/* ===== markdown 正文（2026-10-18 用户实拍修订：正文拉丁+数字统一无衬线）=====
+   章程 §2.5/§9.2 原口径是「对话正文 = 拉丁衬线 + 中文 Noto Sans SC」；真实截图里
+   `Gemini 4 Argon` / `19.2%` / `1200+` / `10-18` 这些拉丁与数字走 Sitka 衬线、中文走黑体，
+   两套骨架混排显突兀（且 Sitka 默认 proportional figures：1111 宽 27.64px、9999 宽 36.16px）。
+   修订（A 方案，证据见 `.superpowers/handover/chat-number-font-report.md`）：
+     - 正文拉丁+数字统一 `--font-ui`（Noto Sans SC 自带拉丁字形 → 中英数同族）；
+     - 数字 `tabular-nums`（成组数字/时间/百分比不跳动）；
+     - **标题 h1-h6 与字标/欢迎 tagline 仍走 `--font-reading`**（阅读声部只在"标题声部"保留）。
+   行高 15/1.8、叙事行宽 --prose-measure 44em、字距 0.002em 均不变。 */
 .markdown-body {
-  font-family: var(--font-reading);
+  /* 正文中英数同族：--font-ui（DSH 中文链含 Noto Sans SC 的拉丁字形） */
+  font-family: var(--font-ui);
+  /* 数字等宽：追加/滚动时字宽不跳（Sitka 默认 proportional: 1111=27.64 / 9999=36.16） */
+  font-variant-numeric: tabular-nums;
   font-size: var(--ui-B1-font-size);
   line-height: 1.8;
   letter-spacing: 0.002em;
@@ -70,7 +78,8 @@
   margin: var(--space-3) 0;
 }
 
-/* 标题：衬线 600；h1/h2 只差一档 18，h3 16（章程 §2.4/§9.2） */
+/* 标题声部：衬线 600（正文改 sans 后，衬线只保留在标题/字标——2026-10-18 修订）；
+   h1/h2 只差一档 18，h3 16（章程 §2.4/§9.2） */
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
@@ -139,60 +148,51 @@
   color: var(--link-hover);
 }
 
-/* ===== 网页引用角标（0.1.3） =====
-   外链本体撑到 24×24（命中区口径），可见的小胶囊放在内层 `.citation-chip-face`：
-   视觉仍是上标数字、不撑行高（负 margin），鼠标/触摸/键盘的命中区不再小于 24px。
-   卡片由 CitationChip portal 画；hover / focus 只换 face 的填充档，不画新边线。 */
+/* ===== 网页引用角标（0.1.3 → 2026-10-18 Claude 风返工） =====
+   去掉胶囊底/边框：纯数字上标（accent 文本色、10.5px、自然上标），与正文基线衔接。
+   命中区仍 ≥24×24：外链本体 24px 盒（负 margin 吃掉行高影响），`.citation-chip-face`
+   只负责数字的字形/微位移；hover/focus 只做颜色/下划线/焦点环，不画底色。
+   卡片由 CitationChip portal 画（见组件内注释）。 */
 .markdown-body a.citation-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 24px;
   min-height: 24px;
-  margin: -0.4em 0.02em -0.4em 0;
-  padding: 0;
-  border-radius: var(--radius-pill);
+  margin: -0.42em -0.34em;
+  padding: 0 2px;
+  border-radius: 4px;
   color: var(--link);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
   text-decoration: none;
-  vertical-align: middle;
+  vertical-align: -0.18em;
   touch-action: manipulation;
+  transition: color var(--motion-fast) var(--motion-ease-inout);
 }
 
 .markdown-body .citation-chip-face {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.15em;
-  height: 1.15em;
-  padding: 0 0.18em;
-  border-radius: var(--radius-pill);
-  background-color: var(--fill-selected);
-  font-size: 0.68em;
-  font-weight: 600;
-  line-height: 1;
-  text-decoration: none;
-  transform: translateY(-0.32em);
-  transition:
-    background-color var(--motion-fast) var(--motion-ease-inout),
-    color var(--motion-fast) var(--motion-ease-inout);
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  /* 自然上标：数字浮在正文基线之上（transform 不改行高/命中盒） */
+  transform: translateY(-0.2em);
 }
 
-.markdown-body a.citation-chip:hover .citation-chip-face {
-  background-color: var(--fill-hover);
+.markdown-body a.citation-chip:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .markdown-body a.citation-chip:focus-visible {
   text-decoration: none;
   outline: 2px solid var(--link);
-  outline-offset: 2px;
-}
-
-.markdown-body a.citation-chip:focus-visible .citation-chip-face {
-  background-color: var(--fill-hover);
+  outline-offset: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .markdown-body .citation-chip-face {
+  .markdown-body a.citation-chip {
     transition: none;
   }
 }

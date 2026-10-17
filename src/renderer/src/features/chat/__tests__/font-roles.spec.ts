@@ -29,9 +29,11 @@ describe('AI 回复 = 阅读声部', () => {
     expect(messageTsx).toContain('pl-[18px]')
   })
 
-  it('Markdown 正文容器 = reading 声部（衬线 class + data 属性）', () => {
-    expect(textPartTsx).toContain('markdown-body font-serif')
+  it('Markdown 正文容器 = 阅读车道 + UI 字体族（2026-10-18 实拍修订：正文不再衬线）', () => {
+    // 车道语义保留在 data-font-role；字体族改为 --font-ui（Sitka 数字/英文与中文黑体混排被用户否掉）
     expect(textPartTsx).toContain('data-font-role="reading"')
+    expect(textPartTsx).toContain('markdown-body font-sans')
+    expect(textPartTsx).not.toContain('markdown-body font-serif')
   })
 
   it('用户消息 = 右侧便条：UI 声部 14、气泡底、12/4 圆角、65% 上限', () => {

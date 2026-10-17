@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ClassAttributes,
@@ -15,8 +16,13 @@ import {
 } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { CitationHintsContext, EMPTY_CITATION_HINTS } from '../citation-hints'
 import {
+  CitationContextsContext,
+  CitationHintsContext,
+  EMPTY_CITATION_HINTS
+} from '../citation-hints'
+import {
+  citationContextsFromText,
   citationKey,
   citationLabel,
   decodeHtmlEntities,
@@ -140,6 +146,7 @@ function MarkdownLink({
   children
 }: ComponentProps<'a'> & ExtraProps): React.JSX.Element {
   const knownSources = useContext(CitationHintsContext)
+  const citationContexts = useContext(CitationContextsContext)
   const label = citationLabel(plainText(children))
   const url = label === undefined ? undefined : safeHttpUrl(href)
   const key = url === undefined ? undefined : citationKey(url)
@@ -150,6 +157,7 @@ function MarkdownLink({
         url={url}
         title={title ?? undefined}
         hint={knownSources.get(key)}
+        context={citationContexts.get(key)}
       />
     )
   }
@@ -337,6 +345,8 @@ export function TextPart({
   const withTables = tables ?? streaming !== undefined
   const shown = useCadencedText(text, live)
   const sources = knownSources ?? EMPTY_CITATION_HINTS
+  // 工具结果缺 title/snippet 时的兜底：按 markdown 原文算引用所在句子（流式每帧文本变化才重算）
+  const citationContexts = useMemo(() => citationContextsFromText(text, sources), [text, sources])
   /**
    * P1b 配方 1：每个流式 chunk 到达时给**最后一块**补一次 120ms 淡入。
    * 为什么不用 class：分块渲染的稳定前缀块会原地复用（round 73 的 DOM 逐字节约定），
@@ -370,23 +380,27 @@ export function TextPart({
   }, [shown, live])
   return (
     <CitationHintsContext.Provider value={sources}>
-      <div
-        ref={markdownRef}
-        data-testid="message-text"
-        data-font-role="reading"
-        data-streaming={live ? 'true' : undefined}
-        className="markdown-body font-serif"
-      >
-        {live ? (
-          <StreamingMarkdown text={shown} tables={withTables} />
-        ) : (
-          <MarkdownBody text={shown} tables={withTables} />
-        )}
-        {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
-        {live && text === '' ? (
-          <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />
-        ) : null}
-      </div>
+      <CitationContextsContext.Provider value={citationContexts}>
+        <div
+          ref={markdownRef}
+          data-testid="message-text"
+          // 阅读**车道**语义（外层 lane 仍是 reading）；2026-10-18 用户实拍后正文拉丁+数字
+          // 统一 UI 声部（--font-ui）——font-serif 会再次引入 Sitka 数字/英文与中文黑体混排。
+          data-font-role="reading"
+          data-streaming={live ? 'true' : undefined}
+          className="markdown-body font-sans"
+        >
+          {live ? (
+            <StreamingMarkdown text={shown} tables={withTables} />
+          ) : (
+            <MarkdownBody text={shown} tables={withTables} />
+          )}
+          {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
+          {live && text === '' ? (
+            <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />
+          ) : null}
+        </div>
+      </CitationContextsContext.Provider>
     </CitationHintsContext.Provider>
   )
 }

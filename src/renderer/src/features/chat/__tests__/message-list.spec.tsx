@@ -204,12 +204,13 @@ describe('流式逐段呈现（mock transport）', () => {
 })
 
 /**
- * P1a · 三声部落点（章程 §2 / §9.2）：
- * AI 回复进「阅读车道」（衬线 markdown + 44em + 左侧 1px 页边线 + 18px 缩进），
+ * P1a · 三声部落点（章程 §2 / §9.2；2026-10-18 实拍修订）：
+ * AI 回复进「阅读车道」（44em + 左侧 1px 页边线 + 18px 缩进），但**正文字体族改 UI 声部**
+ * （--font-ui：中文/英文/数字同族；标题仍衬线，见 markdown.css）；
  * 用户消息是右侧便条（UI 声部 14、气泡底、12/4 圆角、65% 上限）。
  */
 describe('消息声部（P1a）', () => {
-  it('AI 回复：阅读车道 + markdown 阅读声部', () => {
+  it('AI 回复：阅读车道 + 正文 UI 字体族（markdown-body font-sans）', () => {
     render(<MessageList messages={[assistantWith('**结论**：先跑测试。')]} status="ready" />)
 
     const lane = screen.getByTestId('message-reading-lane')
@@ -218,7 +219,8 @@ describe('消息声部（P1a）', () => {
 
     const text = screen.getByTestId('message-text')
     expect(text).toHaveAttribute('data-font-role', 'reading')
-    expect(text).toHaveClass('markdown-body', 'font-serif')
+    expect(text).toHaveClass('markdown-body', 'font-sans')
+    expect(text).not.toHaveClass('font-serif')
   })
 
   it('用户消息：右侧便条（UI 声部、气泡底、12/4 圆角、65% 上限），不带阅读页边线', () => {

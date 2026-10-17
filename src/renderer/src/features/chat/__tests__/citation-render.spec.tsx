@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UIMessage } from 'ai'
@@ -254,7 +256,7 @@ describe('正文角标：provenance 门控', () => {
 })
 
 describe('hover / focus 摘要卡', () => {
-  it('focus 立即出卡：标题 / host / 摘要 + 本地站点视觉，无远程图片；Escape / 失焦 / 窗口失焦收起', async () => {
+  it('focus 立即出卡：标题 / 摘要 / #序号 / host / 路径 / 打开网页；Escape / 失焦 / 窗口失焦收起', async () => {
     renderReady([
       assistant([
         webSearch(),
@@ -268,8 +270,15 @@ describe('hover / focus 摘要卡', () => {
     const card = await screen.findByTestId('citation-card')
     expect(card).toHaveAttribute('role', 'tooltip')
     expect(card).toHaveTextContent('Paris - Wikipedia')
-    expect(card).toHaveTextContent('example.org')
     expect(card).toHaveTextContent('巴黎是法国的首都，人口约 210 万。')
+    // 卡必须有内容结构：#序号 / host / 标题 / 摘要 / 路径 / 打开网页（不能只有 URL）
+    expect(within(card).getByTestId('citation-card-label')).toHaveTextContent('#1')
+    expect(within(card).getByTestId('citation-card-host')).toHaveTextContent('example.org')
+    expect(within(card).getByTestId('citation-card-path')).toHaveTextContent('/paris')
+    expect(within(card).getByTestId('citation-card-open')).toHaveAttribute(
+      'href',
+      'https://example.org/paris'
+    )
     expect(card.querySelector('img')).toBeNull()
     expect(within(card).getByTestId('site-mark')).toHaveAttribute('data-site-host', 'example.org')
     expect(within(card).getByTestId('site-mark')).toHaveTextContent('E')
@@ -291,7 +300,7 @@ describe('hover / focus 摘要卡', () => {
     await waitFor(() => expect(screen.queryByTestId('citation-card')).toBeNull())
   })
 
-  it('hover 延迟打开，移出收起（不加载远程 favicon）', () => {
+  it('hover 延迟打开；从角标移向卡片经过宽限期不消失；离开卡片宽限后收起', () => {
     vi.useFakeTimers()
     renderReady([
       assistant([webSearch(), text('巴黎 [1](https://example.org/paris "Paris - Example")。')])
@@ -301,15 +310,111 @@ describe('hover / focus 摘要卡', () => {
     fireEvent.mouseEnter(chip)
     expect(screen.queryByTestId('citation-card')).toBeNull()
     act(() => {
-      vi.advanceTimersByTime(200)
+      vi.advanceTimersByTime(150)
     })
 
     const card = screen.getByTestId('citation-card')
     expect(card).toHaveTextContent('Paris - Example')
     expect(card.querySelector('img')).toBeNull()
 
+    // 指针离开角标、还没进卡片：140ms 宽限内保持（安全区/宽限）
     fireEvent.mouseLeave(chip)
+    act(() => {
+      vi.advanceTimersByTime(80)
+    })
+    expect(screen.getByTestId('citation-card')).toBeInTheDocument()
+
+    // 进入卡片外层（含 8px 安全区内边距）：取消关闭
+    fireEvent.mouseEnter(screen.getByTestId('citation-card-anchor'))
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    expect(screen.getByTestId('citation-card')).toBeInTheDocument()
+
+    // 离开卡片：宽限结束后收起
+    fireEvent.mouseLeave(screen.getByTestId('citation-card-anchor'))
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
     expect(screen.queryByTestId('citation-card')).toBeNull()
+  })
+
+  it('卡片可交互（pointer-events-auto）；卡内滚动不关闭，锚点在视口内滚动不关闭', () => {
+    renderReady([
+      assistant([webSearch(), text('巴黎 [1](https://example.org/paris "Paris - Example")。')])
+    ])
+
+    const chip = screen.getByTestId('citation-chip')
+    vi.spyOn(chip, 'getBoundingClientRect').mockReturnValue({
+      top: 120,
+      bottom: 144,
+      left: 80,
+      right: 104,
+      width: 24,
+      height: 24,
+      x: 80,
+      y: 120,
+      toJSON: () => ({})
+    } as DOMRect)
+    fireEvent.focus(chip)
+
+    const card = screen.getByTestId('citation-card')
+    expect(card.parentElement).toHaveClass('pointer-events-auto')
+
+    // 卡片内部滚动：窗口 capture 监听会收到，但不能关
+    fireEvent.scroll(within(card).getByTestId('citation-card-snippet'))
+    expect(screen.getByTestId('citation-card')).toBeInTheDocument()
+
+    // 锚点仍在视口内：window 滚动只重定位，不关
+    act(() => {
+      window.dispatchEvent(new Event('scroll'))
+    })
+    expect(screen.getByTestId('citation-card')).toBeInTheDocument()
+  })
+
+  it('fetch 回执也能补出标题+摘要（HTML title / meta description），不是只有 URL', () => {
+    const html = [
+      'HTTP 200',
+      'content-type: text/html; charset=utf-8',
+      '',
+      '<!doctype html><html><head><title>示例页面标题</title>',
+      '<meta name="description" content="这是页面的 meta 描述。"></head>',
+      '<body><nav>导航噪音</nav><p>正文第一段。</p></body></html>'
+    ].join('\n')
+
+    renderReady([
+      assistant([
+        fetchPart('https://example.org/page', html),
+        text('参考 [1](https://example.org/page)。')
+      ])
+    ])
+
+    fireEvent.focus(screen.getByTestId('citation-chip'))
+    const card = screen.getByTestId('citation-card')
+    expect(within(card).getByTestId('citation-card-title')).toHaveTextContent('示例页面标题')
+    expect(within(card).getByTestId('citation-card-snippet')).toHaveTextContent(
+      '这是页面的 meta 描述。'
+    )
+    expect(card).toHaveTextContent('example.org')
+  })
+
+  it('fetch 没有标题/摘要：用正文引用所在句子兜底，卡片不会只剩 URL', () => {
+    renderReady([
+      assistant([
+        fetchPart('https://example.org/ctx', 'HTTP 200\n\n'),
+        text('这是引用前的背景句。这里引用 [1](https://example.org/ctx)。')
+      ])
+    ])
+
+    fireEvent.focus(screen.getByTestId('citation-chip'))
+    const card = screen.getByTestId('citation-card')
+    expect(within(card).getByTestId('citation-card-context')).toHaveTextContent(
+      '这是引用前的背景句'
+    )
+    expect(within(card).getByTestId('citation-card-path')).toHaveTextContent('/ctx')
+    // 永远不会只剩 URL：host / #序号 / 兜底说明之一必在
+    expect(card).toHaveTextContent('#1')
+    expect(card).toHaveTextContent('example.org')
   })
 })
 
@@ -459,5 +564,42 @@ describe('历史回读', () => {
     const card = await screen.findByTestId('citation-card')
     expect(card).toHaveTextContent('Paris - Wikipedia')
     expect(card).toHaveTextContent('巴黎是法国的首都，人口约 210 万。')
+  })
+})
+
+describe('角标样式契约（Claude 风上标，2026-10-18 返工）', () => {
+  const markdownCss = readFileSync(
+    join(process.cwd(), 'src/renderer/src/styles/markdown.css'),
+    'utf8'
+  )
+  const chipBlock = /\.markdown-body a\.citation-chip \{([^}]*)\}/.exec(markdownCss)?.[1] ?? ''
+  const faceBlock = /\.markdown-body \.citation-chip-face \{([^}]*)\}/.exec(markdownCss)?.[1] ?? ''
+
+  it('角标本体：纯数字上标（无胶囊底/边框），accent 文本色，10.5px', () => {
+    expect(chipBlock).toContain('color: var(--link)')
+    expect(chipBlock).toContain('font-size: 10.5px')
+    expect(chipBlock).toContain('vertical-align:')
+    expect(chipBlock).not.toContain('background')
+    expect(chipBlock).not.toMatch(/border(?:-(?:width|style|color|top|right|bottom|left))?:/)
+    expect(chipBlock).not.toContain('radius-pill')
+    // 视觉去胶囊了，但命中区口径不能缩水
+    expect(chipBlock).toContain('min-width: 24px')
+    expect(chipBlock).toContain('min-height: 24px')
+  })
+
+  it('数字面：只做上标微位移与 tabular-nums，不带任何底色/边框', () => {
+    expect(faceBlock).toContain('transform: translateY')
+    expect(faceBlock).toContain('font-variant-numeric: tabular-nums')
+    expect(faceBlock).not.toContain('background')
+    expect(faceBlock).not.toContain('border')
+  })
+
+  it('hover / focus 轻反馈：换色 + 下划线 / 焦点环，不恢复胶囊', () => {
+    expect(markdownCss).toMatch(
+      /a\.citation-chip:hover \{[\s\S]*?color: var\(--link-hover\)[\s\S]*?text-decoration: underline/
+    )
+    expect(markdownCss).toMatch(
+      /a\.citation-chip:focus-visible \{[\s\S]*?outline: 2px solid var\(--link\)/
+    )
   })
 })
