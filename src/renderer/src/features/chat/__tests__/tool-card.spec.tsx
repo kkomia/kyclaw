@@ -7,7 +7,7 @@ import { RESULT_PREVIEW_CHARS } from '@renderer/features/chat/parts/tool-part'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { formatToolName } from '@shared/mcp'
-import { defaultSettings, type McpServerConfig } from '@shared/settings'
+import { defaultMotionSettings, defaultSettings, type McpServerConfig } from '@shared/settings'
 
 /**
  * 工具行（round 6 起是"行 + 折叠体"形态，对照《对话UI-工具链与显示口径 v0.1》§1.4-§1.6）：
@@ -430,5 +430,37 @@ describe('P1b · 工具行动效', () => {
     const live = screen.getByTestId('tool-state')
     expect(live).toHaveClass('trace-live')
     expect(live.querySelector('.chat-swap')).toBeNull()
+  })
+})
+
+/** 动效 B §2.2：状态行动画的开关/画法门控（状态文字本身永远在）。 */
+describe('动效 B · 状态行开关', () => {
+  it('statusLine 关：运行中不再扫光（文字仍显示「调用中」）', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), statusLine: false } }
+    })
+    try {
+      render(<ToolCard part={{ toolName: 'write', state: 'input-available' }} running />)
+      const state = screen.getByTestId('tool-state')
+      expect(state).toHaveTextContent('调用中')
+      expect(state).not.toHaveClass('trace-live')
+      expect(state).not.toHaveClass('trace-wash')
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
+  })
+
+  it('statusPaint=wash：运行中挂渐变流动画法', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), statusPaint: 'wash' } }
+    })
+    try {
+      render(<ToolCard part={{ toolName: 'write', state: 'input-available' }} running />)
+      expect(screen.getByTestId('tool-state')).toHaveClass('trace-wash')
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
   })
 })

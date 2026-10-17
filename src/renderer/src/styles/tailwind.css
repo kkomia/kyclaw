@@ -492,14 +492,27 @@
   }
 }
 
-/* 尊重 prefers-reduced-motion（我们自定的一条，UI 参考没有）。 */
+/* 尊重 prefers-reduced-motion（我们自定的一条，UI 参考没有）。
+   task-58 起与「动效」设置的三档联动：
+   - 系统减弱 + 用户没选「总是」（html 没有 data-motion="full"）→ 全局压档；
+   - 用户明确选「减弱」（data-motion="reduced"）→ 即使系统没开也压档；
+   - 用户选「总是」（data-motion="full"）→ 跳过媒体查询规则，由 motion.css 重声明真实时长。 */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :root:not([data-motion='full']) *,
+  :root:not([data-motion='full']) *::before,
+  :root:not([data-motion='full']) *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }

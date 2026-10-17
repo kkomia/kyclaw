@@ -15,7 +15,7 @@
  *   6 工具行出现 + stagger   .chat-tool-enter（150ms；每行 +70ms，最多 5 行）
  *   7 TraceFold 开合         .trace-fold / .trace-fold-in 覆盖（展开 200ms / 收起 120ms）
  *   8 Dock 首次入场          .chat-dock-enter（250ms settle）
- *   9 发送气泡               [data-send-animate]（320ms，origin 右下，scale .96 + 6px rise）
+ *   9 消息气泡入场           [data-send-animate=grow]（320ms scale 0→1，origin 右下；flight 走 send-flight.ts）
  */
 
 :root {
@@ -273,21 +273,23 @@
   }
 }
 
-/* ── 9) 发送气泡（320ms，origin 右下，scale .96→1 + 6px rise） ───────── */
-[data-testid^='message-'][data-role='user'][data-send-animate='true'] {
-  animation: chat-send-bubble var(--motion-enter) var(--motion-ease-enter) both;
+/* ── 9) 消息气泡入场（动效 B §2.6）─────────────────────────────────────
+   flight = 真实气泡从 Composer rect 飞到目标位（WAAPI，见 send-flight.ts）；
+   grow = 原地长出来（320ms scale 0→1，origin 右下；CSS 这档）。 */
+[data-testid^='message-'][data-role='user'][data-send-animate='grow'] {
+  animation: chat-send-grow var(--motion-enter) var(--motion-ease-enter) both;
   transform-origin: 100% 100%;
 }
 
-@keyframes chat-send-bubble {
+@keyframes chat-send-grow {
   from {
     opacity: 0;
-    transform: translateY(var(--chat-send-rise)) scale(var(--motion-scale-dialog));
+    transform: scale(0);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: scale(1);
   }
 }
 
@@ -297,7 +299,7 @@
   .chat-swap,
   .chat-tool-enter,
   .chat-dock-enter,
-  [data-testid^='message-'][data-role='user'][data-send-animate='true'] {
+  [data-testid^='message-'][data-role='user'][data-send-animate] {
     animation: none !important;
   }
 
@@ -330,5 +332,152 @@
   .trace-fold-in,
   .trace-fold[data-open='true'] > .trace-fold-in {
     transition-duration: var(--motion-reduced) !important;
+  }
+}
+
+/* ── 动效 B：状态行 wash 画法（doc §2.2：7 层径向色斑 5s 游走 + 4s 色相转一圈） ── */
+.trace-wash {
+  background-image:
+    radial-gradient(circle at 18% 40%, var(--text-secondary) 0 18%, transparent 42%),
+    radial-gradient(circle at 38% 65%, var(--text-tertiary) 0 16%, transparent 40%),
+    radial-gradient(circle at 56% 30%, var(--text-secondary) 0 18%, transparent 44%),
+    radial-gradient(circle at 72% 60%, var(--text-tertiary) 0 14%, transparent 40%),
+    radial-gradient(circle at 86% 35%, var(--text-secondary) 0 16%, transparent 40%),
+    radial-gradient(circle at 30% 20%, var(--text-tertiary) 0 12%, transparent 38%),
+    radial-gradient(circle at 64% 82%, var(--text-secondary) 0 14%, transparent 40%);
+  background-size: 180% 180%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation:
+    chat-wash-drift 5s linear infinite,
+    chat-wash-hue 4s linear infinite;
+}
+
+@keyframes chat-wash-drift {
+  0% {
+    background-position: 0% 0%;
+  }
+
+  50% {
+    background-position: 30% 20%;
+  }
+
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+@keyframes chat-wash-hue {
+  from {
+    filter: hue-rotate(0deg);
+  }
+
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+/* ── 动效 B：用户开关门控（聊天根 data-*，见 lib/motion.ts） ─────────── */
+[data-chat-reveal='off'] .markdown-body[data-streaming='true'] > :last-child {
+  animation: none !important;
+}
+
+[data-status-line='off'] .chat-waiting-dot {
+  animation: none !important;
+  opacity: 0.6;
+}
+
+[data-status-line='off'] .trace-live,
+[data-status-line='off'] .trace-wash {
+  animation: none !important;
+  background: none;
+  color: var(--text-secondary);
+  -webkit-background-clip: initial;
+  background-clip: initial;
+}
+
+[data-status-line='off'] .chat-swap {
+  animation: none !important;
+}
+
+[data-status-paint='wash'] .chat-waiting .trace-live,
+[data-status-paint='wash'] .chat-waiting .trace-wash {
+  animation:
+    chat-wash-drift 5s linear infinite,
+    chat-wash-hue 4s linear infinite;
+}
+
+[data-message-enter='none'] [data-send-animate] {
+  animation: none !important;
+}
+
+/* ── mode=reduced（A 的语义：不依赖 OS 媒体查询也要静态） ─────────────── */
+[data-motion='reduced'] .markdown-body[data-streaming='true'] > :last-child,
+[data-motion='reduced'] .chat-swap,
+[data-motion='reduced'] .chat-tool-enter,
+[data-motion='reduced'] .chat-dock-enter,
+[data-motion='reduced'] [data-send-animate] {
+  animation: none !important;
+}
+
+[data-motion='reduced'] .streaming-cursor,
+[data-motion='reduced']
+  .markdown-body[data-streaming='true']
+  > :last-child:not(.streaming-cursor)::after,
+[data-motion='reduced'] .composer-caret {
+  animation: none !important;
+  opacity: 1;
+}
+
+[data-motion='reduced'] .composer-caret {
+  transition: none !important;
+}
+
+[data-motion='reduced'] .chat-waiting-dot {
+  animation: none !important;
+  opacity: 0.6;
+}
+
+[data-motion='reduced'] .trace-live,
+[data-motion='reduced'] .trace-wash {
+  animation: none !important;
+  background: none;
+  color: var(--text-secondary);
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  filter: none;
+}
+
+/* ── mode=full：无障碍例外，忽略系统减弱（doc §3；默认不选） ─────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-motion='full'] .composer-caret {
+    animation: chat-caret-blink-block var(--chat-caret-blink) steps(2, end) infinite !important;
+    opacity: 1;
+  }
+
+  [data-motion='full'] .chat-waiting-dot {
+    animation: chat-waiting-bounce var(--motion-dot) var(--motion-ease-spring) infinite !important;
+    opacity: 1;
+  }
+
+  [data-motion='full'] .trace-live {
+    animation: chat-sweep var(--motion-sweep) steps(48, end) var(--chat-sweep-delay) infinite !important;
+    background-image: linear-gradient(
+      105deg,
+      var(--text-secondary) 0%,
+      var(--text-secondary) 43%,
+      var(--text-primary) 50%,
+      var(--text-secondary) 57%,
+      var(--text-secondary) 100%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent !important;
+  }
+
+  [data-motion='full'] [data-send-animate='grow'] {
+    animation: chat-send-grow var(--motion-enter) var(--motion-ease-enter) both !important;
   }
 }

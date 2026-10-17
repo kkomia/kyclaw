@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { UIMessage } from 'ai'
+import { useEffectiveMotion } from '@renderer/lib/motion'
+import { animateSendFlight } from './send-flight'
 import {
   Check,
   Copy,
@@ -404,6 +406,19 @@ export function Message({
    */
   const [reasoningOverrides, setReasoningOverrides] = useState<ReasoningOverrides>(() => new Map())
   const [overridesOwner, setOverridesOwner] = useState(message.id)
+  /** 动效 B：消息气泡入场（flight=真实气泡从 Composer rect 飞上来；grow=CSS 原地长出来） */
+  const motion = useEffectiveMotion()
+  const bubbleRef = useRef<HTMLDivElement | null>(null)
+  const sendAnimate = animateSend && motion.chatSend ? motion.messageEnter : undefined
+  useLayoutEffect(() => {
+    if (sendAnimate !== 'flight') return
+    const bubble = bubbleRef.current
+    if (bubble === null) return
+    const animation = animateSendFlight(bubble)
+    // 量不到 Composer rect（切窗/空会话）→ 退回 CSS grow，而不是"凭空出现"
+    if (animation === null)
+      bubble.closest('[data-role="user"]')?.setAttribute('data-send-animate', 'grow')
+  }, [sendAnimate])
   // 同一个组件实例换成另一条消息（列表复用 / 列表被顶掉）：上一条的手动开合不许跟过去。
   // 渲染期按 props 调整 state（同 TraceFold 的写法）：提交前就带上新值，不会多画一帧旧状态。
   if (overridesOwner !== message.id) {
@@ -576,6 +591,7 @@ export function Message({
       >
         {bodyText === '' && visible ? null : (
           <div
+            ref={bubbleRef}
             data-testid="message-bubble"
             data-font-role="ui"
             className="max-w-[65%] rounded-[12px] rounded-br-[4px] bg-(--bg-bubble) px-4 py-2 font-sans text-b2 break-words whitespace-pre-wrap text-ink"
@@ -634,7 +650,7 @@ export function Message({
       <article
         data-testid={`message-${message.id}`}
         data-role="user"
-        data-send-animate={animateSend ? 'true' : undefined}
+        data-send-animate={sendAnimate}
         className="animate-message-in group flex flex-col items-end gap-1.5"
       >
         {draft === null ? (

@@ -15,12 +15,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path'
 import {
   appSettingsSchema,
+  defaultMotionSettings,
   DEFAULT_REASONING_TRANSLATE,
   DEFAULT_SEMANTIC_RECALL,
   defaultSettings,
   LANGFUSE_PRESET,
   SETTINGS_FILE,
-  type AppSettings
+  type AppSettings,
+  type MotionSettings
 } from '../shared/settings'
 import { DEFAULT_WEB_SEARCH } from '../shared/search'
 import { defaultWorkspacePatch } from './projects'
@@ -43,6 +45,8 @@ export function settingsPath(userDataDir: string): string {
  * round 86 的 langfuse.enabled（010 的显式开关，缺了补 `true`：没显式关过 = 开着）、
  * 0.1.3 的 closeToTrayMode（托盘驻留的三档关闭偏好；老文件的旧提示标记 true 迁成 `tray` 保旧行为，
  * 其余补 `ask`，旧键 closeToTrayHintShown 一并剥掉）。
+ * task-58 的 motion（DSH 动画效果面板的 9 键）：老文件没有这一段就补默认（默认值 = 用户截图里的选择），
+ * 段内坏枚举/坏布尔**逐字段回默认**（不把整份设置当坏文件，见 migrateMotionSettings）。
  * 缺了就直接进 strict  schema 会把整份设置当坏文件（主题/provider/工作区全丢），所以先补空值再解析。
  * 只补这些"追加型"字段：其余字段的缺失仍按"坏文件"处理（既有口径）。
  *
@@ -110,9 +114,39 @@ function migrateStoredSettings(raw: unknown): unknown {
   if (next.updateUrl === undefined) next.updateUrl = ''
   // round 75："工作区之外"那一档 —— 缺了补保守档 `ask`；取值不合法也当没设过（缺省就是安全方向）
   if (next.outsideWorkspaceMode !== 'full') next.outsideWorkspaceMode = 'ask'
+  // task-58：动效段（DSH 动画效果面板 9 键）—— 缺段补默认；段内坏值逐字段回默认
+  next.motion = migrateMotionSettings(next.motion)
   // round 66：PPT 模板选择改会话级（libsql 的 session_ppt_templates）——全局字段废除，旧值不迁移
   delete next.pptTemplate
   return next
+}
+
+/**
+ * 动效设置的容错归一（task-58，见 `.superpowers/handover/dsh-motion-design.md`）：
+ *   - 老 settings.json 没有 `motion` 段 → 整段补默认（默认值 = 用户截图里的选择，不丢用户已存设置）；
+ *   - 段内字段被手改坏（坏枚举 / 非布尔 / 未知键）→ **逐字段回默认**，不把整份当坏文件；
+ *   - 只重建这 9 个键：未知键一并丢掉，否则 strictObject 会让整份设置失败（与 migrate 其它段同口径）。
+ */
+function migrateMotionSettings(raw: unknown): MotionSettings {
+  const motion = defaultMotionSettings()
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return motion
+  const entry = raw as Record<string, unknown>
+  if (entry.mode === 'system' || entry.mode === 'reduced' || entry.mode === 'always') {
+    motion.mode = entry.mode
+  }
+  if (typeof entry.chatScroll === 'boolean') motion.chatScroll = entry.chatScroll
+  if (typeof entry.statusLine === 'boolean') motion.statusLine = entry.statusLine
+  if (typeof entry.preciseStatus === 'boolean') motion.preciseStatus = entry.preciseStatus
+  if (entry.statusPaint === 'sweep' || entry.statusPaint === 'wash') {
+    motion.statusPaint = entry.statusPaint
+  }
+  if (entry.caret === 'typing' || entry.caret === 'off') motion.caret = entry.caret
+  if (entry.reveal === 'on' || entry.reveal === 'off') motion.reveal = entry.reveal
+  if (entry.messageEnter === 'grow' || entry.messageEnter === 'flight') {
+    motion.messageEnter = entry.messageEnter
+  }
+  if (typeof entry.chatSend === 'boolean') motion.chatSend = entry.chatSend
+  return motion
 }
 
 /**

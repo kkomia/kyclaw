@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { UIMessage } from 'ai'
 import { ArrowDown, ChevronRight } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
+import { useEffectiveMotion } from '@renderer/lib/motion'
 import { approvalRequestOf } from '../approval'
 import type { ReasoningOverrides } from '../reasoning-overrides'
 import { ReasoningPart } from './ReasoningPart'
@@ -70,6 +71,12 @@ export function TurnProcess({
   onReasoningToggle
 }: TurnProcessProps): React.JSX.Element {
   const [override, setOverride] = useState<boolean | null>(null)
+  const motion = useEffectiveMotion()
+  const livePaint = motion.statusLine
+    ? motion.statusPaint === 'wash'
+      ? 'trace-wash'
+      : 'trace-live'
+    : undefined
   const [elapsedMs, setElapsedMs] = useState(0)
   /** 跑完那一刻冻住的用时（null = 还没跑完 / 没开始过） */
   const [frozenMs, setFrozenMs] = useState<number | null>(null)
@@ -172,10 +179,7 @@ export function TurnProcess({
           onClick={() => setOverride(!open)}
           className="group/row flex min-h-6 w-full cursor-pointer items-center gap-2 text-left text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
         >
-          <span
-            data-testid="turn-process-summary"
-            className={cn('shrink-0', running && 'trace-live')}
-          >
+          <span data-testid="turn-process-summary" className={cn('shrink-0', running && livePaint)}>
             {summary}
           </span>
           <span

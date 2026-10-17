@@ -20,6 +20,18 @@ describe('AppSettings schema', () => {
     expect(DEFAULT_SETTINGS).toEqual({
       theme: 'system',
       fontTier: 'default',
+      // task-58：动效 9 键默认值 = 用户截图里的选择（随系统 / 全开 / 扫光 / 打字光标 / 淡入 / 飞上来）
+      motion: {
+        mode: 'system',
+        chatScroll: true,
+        statusLine: true,
+        preciseStatus: true,
+        statusPaint: 'sweep',
+        caret: 'typing',
+        reveal: 'on',
+        messageEnter: 'flight',
+        chatSend: true
+      },
       globalRules: '',
       providers: [],
       workspaces: [],
@@ -81,8 +93,10 @@ describe('AppSettings schema', () => {
     first.langfuse.endpoint = 'https://leaked.example'
     first.langfuse.proxyUrl = 'http://127.0.0.1:7890'
     first.langfuse.enabled = false
+    first.motion.mode = 'always'
 
     expect(DEFAULT_SETTINGS.theme).toBe('system')
+    expect(DEFAULT_SETTINGS.motion.mode).toBe('system')
     expect(DEFAULT_SETTINGS.providers).toEqual([])
     expect(DEFAULT_SETTINGS.langfuse).toEqual({
       enabled: true,
@@ -543,5 +557,80 @@ describe('AppSettings 补丁 schema（settings:update 的入参）', () => {
     expect(appSettingsPatchSchema.safeParse({ evil: 1 }).success).toBe(false)
     expect(appSettingsPatchSchema.safeParse('dark').success).toBe(false)
     expect(appSettingsPatchSchema.safeParse(null).success).toBe(false)
+  })
+})
+
+/**
+ * 动效设置（task-58，抄 DSH claude-style「动画效果」面板；doc:
+ * `.superpowers/handover/dsh-motion-design.md` §0/§1.1）。
+ * 三个关注点：① 9 键默认值 = 用户截图选择；② patch 可整体替换 motion 段；
+ * ③ 枚举/布尔严格，未知键拒绝（设置页只发合法值；坏数据由主进程迁移归一）。
+ */
+describe('动效设置 schema（task-58）', () => {
+  it('默认值：9 键 = 用户截图里的选择（system / 全开 / sweep / typing / reveal on / flight）', () => {
+    expect(DEFAULT_SETTINGS.motion).toEqual({
+      mode: 'system',
+      chatScroll: true,
+      statusLine: true,
+      preciseStatus: true,
+      statusPaint: 'sweep',
+      caret: 'typing',
+      reveal: 'on',
+      messageEnter: 'flight',
+      chatSend: true
+    })
+    // 每次取新副本（改一份不污染另一份）
+    const first = defaultSettings()
+    first.motion.statusPaint = 'wash'
+    expect(defaultSettings().motion.statusPaint).toBe('sweep')
+  })
+
+  it('三档 mode / 画法 / 光标 / 淡入 / 气泡出场都只收字面量枚举', () => {
+    for (const mode of ['system', 'reduced', 'always']) {
+      expect(
+        appSettingsSchema.safeParse({
+          ...DEFAULT_SETTINGS,
+          motion: { ...DEFAULT_SETTINGS.motion, mode }
+        }).success,
+        mode
+      ).toBe(true)
+    }
+    for (const bad of ['full', 'reducedd', '', 1]) {
+      expect(
+        appSettingsSchema.safeParse({
+          ...DEFAULT_SETTINGS,
+          motion: { ...DEFAULT_SETTINGS.motion, mode: bad }
+        }).success,
+        String(bad)
+      ).toBe(false)
+    }
+    // 布尔项必须真布尔
+    for (const key of ['chatScroll', 'statusLine', 'preciseStatus', 'chatSend']) {
+      expect(
+        appSettingsSchema.safeParse({
+          ...DEFAULT_SETTINGS,
+          motion: { ...DEFAULT_SETTINGS.motion, [key]: 'yes' }
+        }).success,
+        key
+      ).toBe(false)
+    }
+    // motion 段是 strictObject：未知键拒绝（避免落盘脏字段导致整份设置失败）
+    expect(
+      appSettingsSchema.safeParse({
+        ...DEFAULT_SETTINGS,
+        motion: { ...DEFAULT_SETTINGS.motion, extra: 1 }
+      }).success
+    ).toBe(false)
+  })
+
+  it('patch：motion 段整体替换（部分字段不算合法 patch，要求 9 键齐）；坏值拒绝', () => {
+    const next = { ...DEFAULT_SETTINGS.motion, chatScroll: false, statusPaint: 'wash' as const }
+    expect(appSettingsPatchSchema.parse({ motion: next })).toEqual({ motion: next })
+    expect(appSettingsPatchSchema.safeParse({ motion: { mode: 'same' } }).success).toBe(false)
+    expect(
+      appSettingsPatchSchema.safeParse({
+        motion: { ...next, mode: 'full' }
+      }).success
+    ).toBe(false)
   })
 })

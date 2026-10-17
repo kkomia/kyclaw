@@ -15,6 +15,7 @@ import {
   Wrench
 } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
+import { useEffectiveMotion } from '@renderer/lib/motion'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatToolName } from '@shared/mcp'
@@ -156,6 +157,12 @@ export function ToolCard({
   staggerIndex = 0
 }: ToolCardProps): React.JSX.Element {
   const [override, setOverride] = useState<boolean | null>(null)
+  const motion = useEffectiveMotion()
+  const livePaint = motion.statusLine
+    ? motion.statusPaint === 'wash'
+      ? 'trace-wash'
+      : 'trace-live'
+    : undefined
   // MCP 工具显示用户注册的服务名（round 14）：`mcp__mcp-1__search` → 「知识库 · search」
   const mcpServers = useSettingsStore((state) => state.settings.mcpServers)
   /**
@@ -214,7 +221,7 @@ export function ToolCard({
         data-font-role="ui"
         className={cn(
           'ml-auto shrink-0 text-c1',
-          live ? 'trace-live' : TONE_CLASS[tone],
+          live ? livePaint : TONE_CLASS[tone],
           // "已调用"不是告警腔：中性色（等审批/出错那几档才吃语气色）
           !live && part.state === 'input-available' && 'text-ink-tertiary'
         )}

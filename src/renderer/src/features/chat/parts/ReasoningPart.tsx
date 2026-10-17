@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { ChevronRight, Lightbulb } from 'lucide-react'
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
+import { useEffectiveMotion } from '@renderer/lib/motion'
 import { TraceFold } from './TraceFold'
 import { useReasoningTranslation } from './use-reasoning-translation'
 
@@ -173,6 +174,12 @@ export function ReasoningPart({
 }: ReasoningPartProps): React.JSX.Element {
   // 用户手动折叠/展开过就听用户的；没动过就跟流式状态走（流式期间展开、结束收起）
   const [ownOverride, setOwnOverride] = useState<boolean | null>(null)
+  const motion = useEffectiveMotion()
+  const livePaint = motion.statusLine
+    ? motion.statusPaint === 'wash'
+      ? 'trace-wash'
+      : 'trace-live'
+    : undefined
   const override = controlledOverride === undefined ? ownOverride : controlledOverride
   // 「后面有内容了」这只自动收一次（渲染期按 props 调整 state，同 TraceFold 的写法：
   // React 会在提交前用新值重渲染，不走 effect 就没有"先开着再收一下"的闪）
@@ -209,7 +216,7 @@ export function ReasoningPart({
         >
           <Lightbulb className="size-[15px] text-ink-tertiary" />
         </span>
-        <span className={cn('shrink-0', streaming && 'trace-live')}>
+        <span className={cn('shrink-0', streaming && livePaint)}>
           {streaming ? (
             '思考中…'
           ) : (
@@ -251,7 +258,7 @@ export function ReasoningPart({
               className="flex animate-fade-in flex-wrap items-center gap-3"
             >
               {translation.pending ? (
-                <span data-testid="reasoning-translating" className="trace-live text-c1">
+                <span data-testid="reasoning-translating" className={cn(livePaint, 'text-c1')}>
                   翻译中…
                 </span>
               ) : null}

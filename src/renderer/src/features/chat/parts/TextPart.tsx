@@ -16,6 +16,7 @@ import {
 } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useEffectiveMotion } from '@renderer/lib/motion'
 import {
   CitationContextsContext,
   CitationHintsContext,
@@ -355,16 +356,11 @@ export function TextPart({
    */
   const markdownRef = useRef<HTMLDivElement>(null)
   const lastChunkFadeRef = useRef(0)
+  const motion = useEffectiveMotion()
   useEffect(() => {
-    if (!live) return
+    if (!live || motion.reveal !== 'on') return
     const last = markdownRef.current?.lastElementChild
     if (last === null || last === undefined || typeof last.animate !== 'function') return
-    if (
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
-      return
-    }
     const now = performance.now()
     if (now - lastChunkFadeRef.current < 120) return
     lastChunkFadeRef.current = now
@@ -377,7 +373,7 @@ export function TextPart({
       easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
       fill: 'none'
     })
-  }, [shown, live])
+  }, [shown, live, motion.reveal])
   return (
     <CitationHintsContext.Provider value={sources}>
       <CitationContextsContext.Provider value={citationContexts}>

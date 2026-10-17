@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Info,
   Palette,
+  Sparkles,
   type LucideIcon
 } from 'lucide-react'
 
@@ -41,6 +42,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     navTestId: 'settings-nav-appearance',
     groupTestId: 'settings-group-appearance',
     icon: Palette
+  },
+  {
+    /* task-58：动效（照抄 DSH claude-style 的「动画效果」面板；深链 /settings/motion） */
+    id: 'motion',
+    label: '动效',
+    navTestId: 'settings-nav-motion',
+    groupTestId: 'settings-group-motion',
+    icon: Sparkles
   },
   {
     id: 'model',

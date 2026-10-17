@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useMemo, useRef } from 'react'
+import { Fragment, useMemo, useRef } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
+import { motionDataAttributes, useEffectiveMotion } from '@renderer/lib/motion'
 import {
   EMPTY_CITATIONS,
   extractCitationsFromTexts,
@@ -15,6 +16,7 @@ import { deliverablesByTurnTail } from './deliverable'
 import { Message } from './Message'
 import { MessageRail } from './MessageRail'
 import { WaitingLine } from './parts/WaitingLine'
+import { useChatFollow } from './use-chat-follow'
 import { shouldShowWaitingLine } from './waiting-line'
 // P1b：对话区的签名动效（角色令牌全在 motion.css，本文件只做 chat 域类名/关键帧）
 import './chat-motion.css'
@@ -67,8 +69,6 @@ export interface MessageListProps {
 }
 
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
-const STICK_THRESHOLD = 40
-
 /** 末尾内容指纹：条数 + part 数 + 可见内容量 —— 文本增量、工具行出现/状态转档
  *  （调用中 → 已完成）都会让它变，贴底的人跟着新内容走。 */
 function tailSignature(messages: UIMessage[]): string {
@@ -188,40 +188,34 @@ export function MessageList({
   )
 
   const viewRef = useRef<HTMLDivElement>(null)
-  const stickyRef = useRef(true)
   const tail = tailSignature(messages)
+  const motion = useEffectiveMotion()
+  /** 动效 B：聊天区滚动跟随（弹簧/限速/贴底/大跳追赶；关/reduced 回 P1b 瞬时） */
+  const follow = useChatFollow({ viewRef, tail, enabled: motion.chatScroll })
 
-  /**
-   * round 59：分界线插在第几条消息之前（null = 不画）。
-   * 压缩进行中画在"现在"（列表末尾）——正在发生的事就在时间轴的最新一点；压完按上层的锚点
-   * 定位（手动压缩那一刻冻结，见 ChatPage），没有锚点（重开会话）就按时间戳规则算。
-   */
+  /** round 59：分界线插在第几条消息之前（null = 不画）。
+   *  压缩进行中画在"现在"（列表末尾）——正在发生的事就在时间轴的最新一点；压完按上层的锚点
+   *  定位（手动压缩那一刻冻结，见 ChatPage），没有锚点（重开会话）就按时间戳规则算。 */
   const markerIndex = compacting
     ? messages.length
     : (compactionIndex ?? compactionRowIndex(messages, compaction))
-
-  useEffect(() => {
-    const view = viewRef.current
-    if (view && stickyRef.current) view.scrollTop = view.scrollHeight
-  }, [tail])
 
   return (
     // round 21：外层**不带 relative**——消息导览轨（absolute）的定位基准因此上溯到
     // ChatFrame 的 chat 页根（整幅、相对定位），横线列/浮窗贴 chat 区最右缘 8px；
     // 之前这里自带 relative，轨道被钉在限宽内容列（约 800px）的右缘，图2 的偏差即由此来。
-    <div data-testid="message-list-frame" className="flex min-h-0 flex-1 flex-col">
+    <div
+      data-testid="message-list-frame"
+      {...motionDataAttributes(motion)}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       {/* 消息区不显示滚动条（round 8 用户实拍：右侧那条滚动条去掉）——滚动能力不变，
           只隐藏原生条；全局 ::-webkit-scrollbar 样式与其它区域不动。 */}
       <div
         ref={viewRef}
         data-testid="message-list"
         className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        onScroll={() => {
-          const view = viewRef.current
-          if (!view) return
-          stickyRef.current =
-            view.scrollHeight - view.scrollTop - view.clientHeight < STICK_THRESHOLD
-        }}
+        onScroll={follow.onScroll}
       >
         <div className="flex w-full flex-col gap-6 py-6 pr-14 pl-4">
           {messages.map((message, index) => (
@@ -265,7 +259,7 @@ export function MessageList({
               data-font-role="reading"
               className="flex max-w-[calc(var(--prose-measure)+18px)] border-l border-(--hairline-soft) pl-[18px]"
             >
-              <WaitingLine />
+              <WaitingLine status={status} messages={messages} />
             </div>
           ) : null}
         </div>

@@ -382,9 +382,69 @@ export const archivedThreadSchema = z.strictObject({
 
 export type ArchivedThread = z.infer<typeof archivedThreadSchema>
 
+/**
+ * 动效设置（task-58；规格来自 `.superpowers/handover/dsh-motion-design.md` §0/§1.1，
+ * 抄 DSH claude-style 的「动画效果」面板）。**9 个键的默认值 = 用户截图里的选择**：
+ * mode=system、chatScroll/statusLine/preciseStatus/chatSend=true、statusPaint=sweep、
+ * caret=typing、reveal=on（插件默认是 off，按用户选择取 on）、messageEnter=flight。
+ *
+ * `mode` 三档语义（doc §3）：system = 跟 `prefers-reduced-motion`；reduced = 一律减弱（静态）；
+ * always = 忽略系统、一律动。真正生效由渲染端 `lib/motion.ts`（B 实现）解析成
+ * `<html data-motion="reduced|full">`，CSS 与组件读它；本文件只负责可落盘的模型与默认值。
+ */
+export const motionModeSchema = z.enum(['system', 'reduced', 'always'])
+export const statusPaintSchema = z.enum(['sweep', 'wash'])
+export const caretMotionSchema = z.enum(['typing', 'off'])
+export const revealMotionSchema = z.enum(['on', 'off'])
+export const messageEnterSchema = z.enum(['grow', 'flight'])
+
+export const motionSettingsSchema = z.strictObject({
+  mode: motionModeSchema,
+  /** 聊天区滚动动画（弹簧跟随 + 可读性优化） */
+  chatScroll: z.boolean(),
+  /** 状态行动画（等待行三点/扫光/换词） */
+  statusLine: z.boolean(),
+  /** 精确状态行（具体在做什么；statusLine 关时灰） */
+  preciseStatus: z.boolean(),
+  /** 状态行画法：扫光 / 渐变流动 */
+  statusPaint: statusPaintSchema,
+  /** Composer 光标动画：typing = 自绘滑行光标；off = 原生光标 */
+  caret: caretMotionSchema,
+  /** 流式新文字 120ms 淡入（on）/ 直接出现（off） */
+  reveal: revealMotionSchema,
+  /** 消息气泡出场：原地长出来 / 从输入框飞上来 */
+  messageEnter: messageEnterSchema,
+  /** 消息气泡动画总开关 */
+  chatSend: z.boolean()
+})
+
+export type MotionMode = z.infer<typeof motionModeSchema>
+export type StatusPaint = z.infer<typeof statusPaintSchema>
+export type CaretMotion = z.infer<typeof caretMotionSchema>
+export type RevealMotion = z.infer<typeof revealMotionSchema>
+export type MessageEnter = z.infer<typeof messageEnterSchema>
+export type MotionSettings = z.infer<typeof motionSettingsSchema>
+
+/** 默认值的新副本（面板/主进程/测试都从这一份取；改动前先看 doc §0 的用户选择表） */
+export function defaultMotionSettings(): MotionSettings {
+  return {
+    mode: 'system',
+    chatScroll: true,
+    statusLine: true,
+    preciseStatus: true,
+    statusPaint: 'sweep',
+    caret: 'typing',
+    reveal: 'on',
+    messageEnter: 'flight',
+    chatSend: true
+  }
+}
+
 export const appSettingsSchema = z.strictObject({
   theme: themeModeSchema,
   fontTier: fontTierSchema,
+  /** 动效（task-58）：9 键，默认值 = 用户截图选择，见上方 motionSettingsSchema */
+  motion: motionSettingsSchema,
   globalRules: globalRulesSchema,
   /** T8 的 provider 列表（模型与密钥页；密钥不在里面，见 main/secrets.ts） */
   providers: z.array(providerConfigSchema),
@@ -590,6 +650,7 @@ export function effectiveReasoningTranslate(settings: ReasoningTranslateSettings
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   fontTier: 'default',
+  motion: defaultMotionSettings(),
   globalRules: '',
   providers: [],
   workspaces: [],
@@ -623,6 +684,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export function defaultSettings(): AppSettings {
   return {
     ...DEFAULT_SETTINGS,
+    motion: defaultMotionSettings(),
     providers: [],
     workspaces: [],
     projects: [],

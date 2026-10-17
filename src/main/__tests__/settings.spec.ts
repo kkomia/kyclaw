@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  defaultMotionSettings,
   DEFAULT_REASONING_TRANSLATE,
   DEFAULT_SETTINGS,
   LANGFUSE_PRESET
@@ -31,6 +32,7 @@ describe('设置存储（userData 下的 settings.json）', () => {
     const settings = {
       theme: 'dark' as const,
       fontTier: 'large' as const,
+      motion: defaultMotionSettings(),
       globalRules: '',
       providers: [],
       workspaces: [],
@@ -143,6 +145,8 @@ describe('设置存储（userData 下的 settings.json）', () => {
     expect(readSettings(file)).toEqual({
       theme: 'dark',
       fontTier: 'large',
+      // task-58：旧文件没有 motion 段 → 补默认 9 键（默认值 = 用户截图选择）
+      motion: defaultMotionSettings(),
       globalRules: '',
       providers: [],
       workspaces: [],
@@ -697,5 +701,77 @@ describe('updateSettings（打补丁 → 合并 → 校验 → 落盘）', () =>
     // 直接调函数时（没走 IPC 闸门）也要拦住：schema 是最后一道
     expect(() => updateSettings(file, { theme: 'blue' } as unknown as { theme: 'dark' })).toThrow()
     expect(readSettings(file)).toEqual({ ...DEFAULT_SETTINGS, theme: 'light' })
+  })
+})
+
+/**
+ * 动效设置迁移（task-58）：老 settings.json 没有 motion 段 → 补默认（默认 = 用户截图选择），
+ * 且**不丢用户原有设置**；段内坏值逐字段回默认（不把整份当坏文件）；合法值原样保留。
+ */
+describe('动效设置迁移（task-58）', () => {
+  it('老文件没有 motion 段：补默认，其它设置原样保留', () => {
+    const file = settingsPath(dir)
+    const raw = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete raw.motion
+    writeFileSync(file, JSON.stringify(raw), 'utf8')
+
+    const migrated = readSettings(file)
+    expect(migrated.motion).toEqual(defaultMotionSettings())
+    expect(migrated.theme).toBe('dark')
+  })
+
+  it('段内坏值逐字段回默认；合法值保留；未知键丢掉（不整份失败）', () => {
+    const file = settingsPath(dir)
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...DEFAULT_SETTINGS,
+        motion: {
+          mode: 'full',
+          chatScroll: 'yes',
+          statusLine: false,
+          preciseStatus: false,
+          statusPaint: 'rainbow',
+          caret: 'off',
+          reveal: 'on',
+          messageEnter: 'grow',
+          chatSend: true,
+          unknownKey: 1
+        }
+      }),
+      'utf8'
+    )
+
+    const migrated = readSettings(file)
+    expect(migrated.motion).toEqual({
+      mode: 'system',
+      chatScroll: true,
+      statusLine: false,
+      preciseStatus: false,
+      statusPaint: 'sweep',
+      caret: 'off',
+      reveal: 'on',
+      messageEnter: 'grow',
+      chatSend: true
+    })
+    expect(Object.keys(migrated.motion)).toHaveLength(9)
+  })
+
+  it('合法 motion 段往返：写进去什么就读出来什么', () => {
+    const file = settingsPath(dir)
+    const motion = {
+      mode: 'always' as const,
+      chatScroll: false,
+      statusLine: true,
+      preciseStatus: false,
+      statusPaint: 'wash' as const,
+      caret: 'off' as const,
+      reveal: 'off' as const,
+      messageEnter: 'grow' as const,
+      chatSend: false
+    }
+    writeSettings(file, { ...DEFAULT_SETTINGS, motion })
+    expect(readSettings(file).motion).toEqual(motion)
+    expect(JSON.parse(readFileSync(file, 'utf8')).motion).toEqual(motion)
   })
 })

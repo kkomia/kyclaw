@@ -9,7 +9,7 @@ import {
   type KyclawBridgeStubs
 } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
-import { defaultSettings, type AppSettings } from '@shared/settings'
+import { defaultMotionSettings, defaultSettings, type AppSettings } from '@shared/settings'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 
 /**
@@ -2288,5 +2288,25 @@ describe('P1b · Composer 自绘 caret', () => {
     fireEvent.blur(input)
     expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument()
     expect(input).toHaveAttribute('data-caret', 'native')
+  })
+})
+
+/** 动效 B §2.4：caret=off 时不自绘、走原生 caret（颜色已是 --accent）。 */
+describe('动效 B · Composer caret 开关', () => {
+  it('设置 caret=off → 不渲染自绘条、data-caret=native', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), caret: 'off' } }
+    })
+    try {
+      setup()
+      const input = screen.getByTestId('composer-input')
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: '光标关掉' } })
+      expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument()
+      expect(input).toHaveAttribute('data-caret', 'native')
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
   })
 })

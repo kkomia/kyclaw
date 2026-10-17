@@ -48,6 +48,8 @@ import {
   type ReferenceKind
 } from './reference-markers'
 import { folderNameOf, sessionRootPathOf, sessionWorkspaceOf } from './session-workspace'
+import { useEffectiveMotion } from '@renderer/lib/motion'
+import { rememberComposerRect } from './send-flight'
 
 /**
  * 输入卡（UI 参考 §4.6 实测）：宽 max 768、圆角 24（--chat-input-radius）；
@@ -313,11 +315,14 @@ export function Composer({
     () => parseReferenceMarkers(draft).some((segment) => segment.kind !== 'text'),
     [draft]
   )
-  const caretCustom = shouldShowComposerCaret({
-    focused: composerFocused,
-    composing,
-    hasReferenceMarkers
-  })
+  const motion = useEffectiveMotion()
+  const caretCustom =
+    motion.caret === 'typing' &&
+    shouldShowComposerCaret({
+      focused: composerFocused,
+      composing,
+      hasReferenceMarkers
+    })
 
   const syncComposerCaret = useCallback((): void => {
     const textarea = textareaRef.current
@@ -595,6 +600,9 @@ export function Composer({
   const submit = (): void => {
     // round 76：实例没就绪就不发（草稿一个字都不动 —— 就绪之后接着发）
     if (!sendable) return
+    // 动效 B：记下输入卡的真实位置，新消息的 flight 从它飞到气泡目标位
+    const card = document.querySelector<HTMLElement>('[data-testid="composer"]')
+    rememberComposerRect(card?.getBoundingClientRect() ?? null)
     onSend(composeOutgoing({ text: draft, attachments }))
     trackDraft('')
     setAttachments([])

@@ -1,0 +1,418 @@
+/**
+ * 设置 →「动效」面板（task-58）的样式与 demo 动画。
+ *
+ * 版式照抄 DSH claude-style 的「动画效果」面板（doc §1.2）：
+ *   - 行：flex / 说明在标题下 / 右侧控件；行间 1px hairline；subRow（精确状态行）无分隔线；
+ *   - 二选一预览卡：grid auto-fit minmax(132px,1fr)、gap 8、min-height 64、radius 12、
+ *     1px hairline、选中描边 accent、focus-visible 2px accent；
+ *   - 减弱态：卡 opacity .72 + 行下 `motionStillNote`（选择仍可改，值照存）。
+ *
+ * demo 规格（doc §1.3）：扫光 1500ms steps(48)；渐变流动 5s 游走 + 4s 色相；
+ * 打字 4s = 打 2s + 静置 2s（Hello World! 12 字符）、光标 1s 步进闪；
+ * 淡入 4s = 到达 1.8s + 静置（13 字、每个 120ms 从 .2 淡到 1）；
+ * 气泡 2.6s/条（grow 320ms 回弹；flight 320ms 升起 + 过冲，keyframes 按插件 demo 采样）。
+ * 全部 CSS 循环、不引依赖；颜色只用现有 token（浅深两套自动跟随）。
+ */
+
+.motion-panel {
+  padding: 0 16px;
+  border-radius: var(--radius-panel);
+  background: var(--bg-secondary);
+}
+
+.motion-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+}
+
+/* 行间分隔线：只有上一条 row 之后的普通行才有；subRow 贴紧上一行 */
+.motion-row + .motion-row {
+  border-top: 1px solid var(--border-hairline);
+}
+
+.motion-row--sub {
+  border-top: none;
+  padding-top: 0;
+}
+
+.motion-row--block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.motion-row__text {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.motion-row__title {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.motion-row__desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.motion-row__note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* 三档 segmented 在行右端不挤标题（窄窗由 flex 自然换行） */
+.motion-mode-segmented {
+  flex: none;
+}
+
+/* ── 二选一预览卡 ─────────────────────────────────────────────────────────── */
+.motion-demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.motion-preview-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: 14px 12px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  transition:
+    border-color var(--motion-feedback, 120ms) var(--motion-ease-glide, ease-out),
+    opacity var(--motion-feedback, 120ms) var(--motion-ease-glide, ease-out);
+}
+
+.motion-preview-card:hover {
+  border-color: var(--text-tertiary);
+}
+
+.motion-preview-card--active {
+  border-color: var(--accent);
+}
+
+.motion-preview-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.motion-preview-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* 减弱态：卡压到 .72（选择仍可改；demo 在下面各自动画里定格） */
+.motion-group[data-motion='reduced'] .motion-preview-card {
+  opacity: 0.72;
+}
+
+.motion-group[data-motion='reduced'] .motion-preview-card--active {
+  opacity: 1;
+}
+
+/* ── demo ①：状态画法（扫光 / 渐变流动）────────────────────────────────────── */
+.motion-demo-status {
+  position: relative;
+  display: inline-block;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.motion-demo-status__base {
+  color: var(--text-secondary);
+}
+
+.motion-demo-status__paint {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+  pointer-events: none;
+}
+
+.motion-demo-status__paint--sweep {
+  background-image: linear-gradient(
+    105deg,
+    transparent 38%,
+    var(--text-primary) 50%,
+    transparent 62%
+  );
+  background-size: 220% 100%;
+  animation: motion-sweep 1500ms steps(48, end) infinite;
+}
+
+.motion-demo-status__paint--wash {
+  background-image:
+    radial-gradient(60% 140% at 20% 50%, var(--accent), transparent 60%),
+    radial-gradient(60% 140% at 55% 30%, var(--positive), transparent 62%),
+    radial-gradient(60% 140% at 80% 70%, var(--link), transparent 64%),
+    linear-gradient(var(--text-secondary), var(--text-secondary));
+  background-size: 200% 100%;
+  animation:
+    motion-wash-drift 5s ease-in-out infinite alternate,
+    motion-wash-hue 4s linear infinite;
+}
+
+@keyframes motion-sweep {
+  from {
+    background-position: 120% 0;
+  }
+
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes motion-wash-drift {
+  from {
+    background-position: 0% 0;
+  }
+
+  to {
+    background-position: 100% 0;
+  }
+}
+
+@keyframes motion-wash-hue {
+  from {
+    filter: hue-rotate(0deg);
+  }
+
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+/* ── demo ②：光标（打字 + 滑动光标 / 直接出现）────────────────────────────── */
+.motion-demo-caret {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.motion-demo-caret__text {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.motion-demo-caret__text--typing {
+  width: 0;
+  animation: motion-typing 4s steps(12, end) infinite;
+}
+
+.motion-demo-caret__text--off {
+  width: auto;
+}
+
+.motion-demo-caret__bar {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: var(--accent);
+  animation: motion-caret-blink 1s step-end infinite;
+}
+
+@keyframes motion-typing {
+  0% {
+    width: 0;
+  }
+
+  50% {
+    width: 12ch;
+  }
+
+  100% {
+    width: 12ch;
+  }
+}
+
+@keyframes motion-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── demo ③：新文字淡入（逐字淡入 / 直接出现）─────────────────────────────── */
+.motion-demo-reveal {
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.motion-demo-reveal__char {
+  display: inline-block;
+}
+
+.motion-demo-reveal--on .motion-demo-reveal__char {
+  animation: motion-reveal-char 4s linear infinite;
+  animation-delay: calc(var(--motion-char-index) * 138ms);
+}
+
+@keyframes motion-reveal-char {
+  0% {
+    opacity: 0.2;
+  }
+
+  4% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ── demo ④：消息气泡（原地长出来 / 从输入框飞上来）────────────────────────── */
+.motion-demo-bubbles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.motion-demo-bubble {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.motion-demo-bubble--grow {
+  transform-origin: 100% 100%;
+  animation: motion-bubble-grow 2.6s var(--motion-ease-enter, ease-out) infinite;
+  animation-delay: calc(var(--motion-bubble-index) * 260ms);
+}
+
+.motion-demo-bubble--flight {
+  animation: motion-bubble-flight 2.6s linear infinite;
+  animation-delay: calc(var(--motion-bubble-index) * 260ms);
+}
+
+@keyframes motion-bubble-grow {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+
+  12% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* flight：插件的 dsh-claude-enter-card-rise 采样（320ms 段）压缩到 2.6s 循环的 0–12.3% */
+@keyframes motion-bubble-flight {
+  0% {
+    transform: translateY(28px) scale(0.6);
+    opacity: 0;
+  }
+
+  3.08% {
+    transform: translateY(9.88px) scale(0.859);
+    opacity: 1;
+  }
+
+  5.38% {
+    transform: translateY(0.28px) scale(0.996);
+  }
+
+  6.15% {
+    transform: translateY(-0.9px) scale(1.013);
+  }
+
+  7.69% {
+    transform: translateY(-1.51px) scale(1.022);
+  }
+
+  9.23% {
+    transform: translateY(-1.05px) scale(1.015);
+  }
+
+  12.3%,
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ── 减弱 / 定格（doc §1.3）：不跑动画；每个 demo 给一个可读的静态帧 ───────── */
+.motion-group[data-motion='reduced'] .motion-demo-status__paint,
+.motion-group[data-motion='reduced'] .motion-demo-caret__bar,
+.motion-group[data-motion='reduced'] .motion-demo-reveal__char,
+.motion-group[data-motion='reduced'] .motion-demo-bubble {
+  animation: none !important;
+}
+
+.motion-group[data-motion='reduced'] .motion-demo-status__paint {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--text-secondary);
+}
+
+.motion-group[data-motion='reduced'] .motion-demo-caret__text--typing {
+  width: auto;
+}
+
+.motion-group[data-motion='reduced'] .motion-demo-caret__bar {
+  opacity: 0.7;
+}
+
+.motion-group[data-motion='reduced'] .motion-demo-reveal__char {
+  opacity: 0.6;
+}
+
+.motion-group[data-motion='reduced'] .motion-demo-bubble {
+  opacity: 1;
+  transform: none;
+}
+
+/* 没拿到 data-motion（首帧/异常）时的兜底：系统 reduced 也定格 */
+@media (prefers-reduced-motion: reduce) {
+  .motion-group:not([data-motion='full']) .motion-demo-status__paint,
+  .motion-group:not([data-motion='full']) .motion-demo-caret__bar,
+  .motion-group:not([data-motion='full']) .motion-demo-reveal__char,
+  .motion-group:not([data-motion='full']) .motion-demo-bubble {
+    animation: none !important;
+  }
+}

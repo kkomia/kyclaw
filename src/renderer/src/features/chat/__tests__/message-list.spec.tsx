@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import type { UIMessage } from 'ai'
+import { defaultMotionSettings } from '@shared/settings'
+import { useSettingsStore } from '@renderer/lib/settings-store'
 import { ChatSession } from '@renderer/features/chat/ChatPage'
 import { MessageList } from '@renderer/features/chat/MessageList'
 import { createMockTransport } from './mock-transport'
@@ -135,13 +137,19 @@ describe('滚动跟随', () => {
   const first: UIMessage = { id: 'u1', role: 'user', parts: [{ type: 'text', text: '问' }] }
   const second: UIMessage = { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: '答' }] }
 
-  it('本来贴在底部：新内容到达（流式增量）就跟着滚到底', () => {
+  it('本来贴在底部：新内容到达（流式增量）就跟着滚到底（弹簧跟随，等落定）', async () => {
     const { rerender } = render(<MessageList messages={[first]} status="streaming" />)
     const view = withLayout()
     view.scrollTop = 600 // 1000 - 600 - 400 = 0 → 贴底
     fireEvent.scroll(view)
 
+    // 模拟"新内容让列表变长"：目标底部从 600 抬到 1000
+    Object.defineProperty(view, 'scrollHeight', { value: 1400, configurable: true })
     rerender(<MessageList messages={[first, second]} status="streaming" />)
+    // 动效 B：开启时是弹簧跟随（非瞬移），等它落定再断言终态
+    await act(async () => {
+      for (let frame = 0; frame < 80; frame += 1) await nextFrame()
+    })
 
     expect(view.scrollTop).toBe(1000)
   })
@@ -155,6 +163,26 @@ describe('滚动跟随', () => {
     rerender(<MessageList messages={[first, second]} status="streaming" />)
 
     expect(view.scrollTop).toBe(100)
+  })
+
+  it('动效 B：mode=reduced 时滚动回瞬时（直接贴底，不跑弹簧）', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), mode: 'reduced' } }
+    })
+    try {
+      const { rerender } = render(<MessageList messages={[first]} status="streaming" />)
+      const view = withLayout()
+      view.scrollTop = 600
+      fireEvent.scroll(view)
+
+      Object.defineProperty(view, 'scrollHeight', { value: 1400, configurable: true })
+      rerender(<MessageList messages={[first, second]} status="streaming" />)
+      // 同步生效：reduced 不排 rAF
+      expect(view.scrollTop).toBe(1000)
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
   })
 })
 

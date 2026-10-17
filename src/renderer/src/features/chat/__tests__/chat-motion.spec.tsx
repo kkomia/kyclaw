@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { UIMessage } from 'ai'
+import { defaultMotionSettings } from '@shared/settings'
+import { useSettingsStore } from '@renderer/lib/settings-store'
 import { MessageList } from '@renderer/features/chat/MessageList'
 import { shouldShowWaitingLine } from '@renderer/features/chat/waiting-line'
 
@@ -60,7 +62,11 @@ describe('P1b：动效时长全部来自 motion.css 角色令牌', () => {
     expect(css).toContain('chat-tool-in')
     expect(css).toContain('chat-fold-enter')
     expect(css).toContain('chat-dock-in')
-    expect(css).toContain('chat-send-bubble')
+    expect(css).toContain('chat-send-grow')
+    expect(css).toContain('trace-wash')
+    expect(css).toContain('data-chat-reveal')
+    expect(css).toContain('data-status-line')
+    expect(css).toContain('data-motion=')
     // 扫光必须 steps(48, end) + 300ms 延迟组合
     expect(css).toContain('steps(48, end)')
     expect(css).toContain('--chat-sweep-delay')
@@ -136,7 +142,17 @@ describe('P1b：等待行 / 发送气泡接线', () => {
     const waiting = screen.getByTestId('waiting-line')
     expect(waiting).toHaveAttribute('role', 'status')
     expect(waiting.querySelectorAll('.chat-waiting-dot')).toHaveLength(3)
-    expect(waiting.querySelector('.trace-live')).toHaveTextContent('正在思考…')
+    // 默认 preciseStatus=true：submitted 的精确说法是「正在准备工具调用」
+    expect(waiting.querySelector('.trace-live')).toHaveTextContent('正在准备工具调用')
+    // 动效 B：消息列表根带 6 个门控 attr（默认=用户截图选择）
+    const frame = screen.getByTestId('message-list-frame')
+    expect(frame).toHaveAttribute('data-motion', 'full')
+    expect(frame).toHaveAttribute('data-chat-scroll', 'on')
+    expect(frame).toHaveAttribute('data-chat-reveal', 'on')
+    expect(frame).toHaveAttribute('data-status-line', 'on')
+    expect(frame).toHaveAttribute('data-status-paint', 'sweep')
+    expect(frame).toHaveAttribute('data-chat-send', 'on')
+    expect(frame).toHaveAttribute('data-message-enter', 'flight')
   })
 
   it('assistant 正文一到等待行消失；最后一条用户消息在非 ready 时挂发送动画标记', () => {
@@ -147,7 +163,7 @@ describe('P1b：等待行 / 发送气泡接线', () => {
       />
     )
     expect(screen.getByTestId('waiting-line')).toBeInTheDocument()
-    expect(screen.getByTestId('message-u1')).toHaveAttribute('data-send-animate', 'true')
+    expect(screen.getByTestId('message-u1')).toHaveAttribute('data-send-animate', 'grow')
 
     rerender(
       <MessageList
@@ -159,7 +175,7 @@ describe('P1b：等待行 / 发送气泡接线', () => {
       />
     )
     expect(screen.queryByTestId('waiting-line')).not.toBeInTheDocument()
-    expect(screen.getByTestId('message-u1')).toHaveAttribute('data-send-animate', 'true')
+    expect(screen.getByTestId('message-u1')).toHaveAttribute('data-send-animate', 'grow')
 
     // 历史回灌（ready）不播发送气泡
     rerender(
@@ -172,5 +188,59 @@ describe('P1b：等待行 / 发送气泡接线', () => {
       />
     )
     expect(screen.getByTestId('message-u1')).not.toHaveAttribute('data-send-animate')
+  })
+})
+
+/**
+ * 动效 B：聊天根 data-* 门控（lib/motion.ts 的 9 键折算）——
+ * reduced 时滚动/状态行/淡入/气泡全部静态，但文案仍在（不是消失）。
+ */
+describe('动效 B：reduced 三档门控', () => {
+  it('mode=reduced：聊天根 attr 全静态；等待行只留文字、不挂扫光/三点/气泡动画', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), mode: 'reduced' } }
+    })
+    try {
+      render(
+        <MessageList
+          messages={[{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '在吗' }] }]}
+          status="submitted"
+        />
+      )
+      const frame = screen.getByTestId('message-list-frame')
+      expect(frame).toHaveAttribute('data-motion', 'reduced')
+      expect(frame).toHaveAttribute('data-chat-scroll', 'off')
+      expect(frame).toHaveAttribute('data-chat-reveal', 'off')
+      expect(frame).toHaveAttribute('data-status-line', 'off')
+      expect(frame).toHaveAttribute('data-chat-send', 'off')
+      expect(frame).toHaveAttribute('data-message-enter', 'none')
+
+      const waiting = screen.getByTestId('waiting-line')
+      expect(waiting.querySelectorAll('.chat-waiting-dot')).toHaveLength(0)
+      expect(waiting.querySelector('.trace-live, .trace-wash')).toBeNull()
+      expect(waiting).toHaveTextContent('正在准备') // 文案仍在（statusLine 关 → 粗粒度说法）
+      expect(screen.getByTestId('message-u1')).not.toHaveAttribute('data-send-animate')
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
+  })
+
+  it('messageEnter=grow + chatSend=on：用户气泡挂 grow（不用 flight）', () => {
+    const original = useSettingsStore.getState().settings
+    useSettingsStore.setState({
+      settings: { ...original, motion: { ...defaultMotionSettings(), messageEnter: 'grow' } }
+    })
+    try {
+      render(
+        <MessageList
+          messages={[{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '在吗' }] }]}
+          status="streaming"
+        />
+      )
+      expect(screen.getByTestId('message-u1')).toHaveAttribute('data-send-animate', 'grow')
+    } finally {
+      useSettingsStore.setState({ settings: original })
+    }
   })
 })

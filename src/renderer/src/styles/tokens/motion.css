@@ -67,3 +67,38 @@
     --motion-swap-gap: var(--motion-reduced);
   }
 }
+
+/* 用户三档（task-58，doc §3）：`<html data-motion>` 由渲染端 `lib/motion.ts` 解析 mode +
+   系统偏好后写入（B 的行为接线读它；本文件只提供 CSS 侧语义）。
+   - `reduced`（面板选「减弱」）：attr 选择器特异性高于 `:root`，压过系统媒体查询；
+   - `full`（面板选「总是」）：重声明真实时长，实现「忽略系统减弱、一律动」；
+   - 默认/未写 attr：沿用上面的媒体查询（随系统）。 */
+:root[data-motion='reduced'] {
+  --motion-feedback: var(--motion-reduced);
+  --motion-reveal: var(--motion-reduced);
+  --motion-exit: var(--motion-reduced);
+  --motion-open: var(--motion-reduced);
+  --motion-enter: var(--motion-reduced);
+  --motion-flight: var(--motion-reduced);
+  --motion-spring: var(--motion-reduced);
+  --motion-stagger: var(--motion-reduced);
+  --motion-dot: var(--motion-reduced);
+  --motion-sweep: var(--motion-reduced);
+  --motion-swap: var(--motion-reduced);
+  --motion-swap-gap: var(--motion-reduced);
+}
+
+:root[data-motion='full'] {
+  --motion-feedback: 120ms;
+  --motion-reveal: 150ms;
+  --motion-exit: 120ms;
+  --motion-open: 250ms;
+  --motion-enter: 320ms;
+  --motion-flight: 400ms;
+  --motion-spring: 500ms;
+  --motion-stagger: 70ms;
+  --motion-dot: 500ms;
+  --motion-sweep: 1500ms;
+  --motion-swap: 150ms;
+  --motion-swap-gap: 50ms;
+}
