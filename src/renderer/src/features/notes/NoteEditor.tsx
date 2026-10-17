@@ -9,9 +9,11 @@ import { useNotesStore } from './notes-store'
 import { clockLabel } from './notes-format'
 
 /**
- * 右区编辑器（plan §4.2）：标题 24/32 衬线（标题声部 = reading）+ 正文 `--font-prose` 15/27
- * （与预览/主 chat 同一声部：中文黑体、拉丁衬线；编辑⇄预览切换不跳字体）。
- * 自动保存 debounce 在 store（600ms）；这里只负责 Ctrl+S、Tab 两空格、编辑⇄预览与删除确认。
+ * 右区编辑器（task-94 美术层）：**一张有页眉的稿纸**。
+ *
+ * 标题层（衬线 27）→ 信头细线（保存态 · 字数 · 编辑⇄预览）→ 正文（prose 声部，44em 阅读宽）。
+ * 预览沿用 chat 的 Markdown 管线（TextPart），只换页面框。自动保存 debounce 在 store（600ms）；
+ * 这里只负责 Ctrl+S、Tab 两空格、编辑⇄预览、删除确认与「新建后标题聚焦」。
  */
 export function NoteEditor(): React.JSX.Element {
   const selectedId = useNotesStore((state) => state.selectedId)
@@ -94,21 +96,25 @@ export function NoteEditor(): React.JSX.Element {
             ? '已保存'
             : `已保存 ${clockLabel(savedAt)}`
 
+  const statusState =
+    saveState === 'saving' ? 'saving' : saveState === 'error' ? 'error' : dirty ? 'dirty' : 'saved'
+
+  // 稿纸读数：正文非空白字符数（真实值，不是占位）
+  const wordCount = body.replace(/\s+/g, '').length
+
   return (
-    <div
-      data-testid="note-editor"
-      className="animate-fade-in [animation-duration:var(--motion-reveal)] mx-auto flex w-full max-w-(--content-max-width) flex-col px-(--page-gutter) py-8"
-      onKeyDown={onKeyDown}
-    >
+    <div data-testid="note-editor" className="np-sheet" onKeyDown={onKeyDown}>
       {noteLoading ? (
-        <div data-testid="note-editor-loading" className="flex flex-col gap-3">
-          <div className="h-8 w-2/3 animate-pulse rounded-control bg-hover" />
-          <div className="h-4 w-full animate-pulse rounded-control bg-hover" />
-          <div className="h-4 w-5/6 animate-pulse rounded-control bg-hover" />
+        <div data-testid="note-editor-loading" className="np-editor-loading">
+          <div className="np-loading-title" />
+          <div className="np-loading-meta" />
+          <div className="np-loading-line" />
+          <div className="np-loading-line" />
+          <div className="np-loading-line" />
         </div>
       ) : (
         <>
-          <div className="flex items-start gap-3">
+          <div className="np-sheet-head">
             <input
               ref={titleRef}
               data-testid="note-title"
@@ -116,7 +122,7 @@ export function NoteEditor(): React.JSX.Element {
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="笔记标题"
-              className="min-w-0 flex-1 bg-transparent font-serif text-[24px] leading-[32px] font-semibold text-ink outline-none placeholder:text-(--text-quaternary)"
+              className="np-title font-serif"
             />
             <Dialog
               open={confirmDelete}
@@ -150,46 +156,54 @@ export function NoteEditor(): React.JSX.Element {
             <IconButton
               label="删除笔记"
               data-testid="notes-delete"
+              className="np-delete"
               icon={<Trash2 aria-hidden="true" />}
               onClick={() => setConfirmDelete(true)}
             />
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <button
-              type="button"
-              data-testid="notes-save-status"
-              aria-live="polite"
-              onClick={() => {
-                if (saveState === 'error') void retrySave()
-              }}
-              className={
-                saveState === 'error'
-                  ? 'rounded-control px-1 py-0.5 text-c1 text-danger tabular-nums hover:underline'
-                  : 'rounded-control px-1 py-0.5 text-c1 text-ink-tertiary tabular-nums hover:text-ink'
-              }
-            >
-              {status}
-              {saveState === 'error' ? ' · 重试' : ''}
-            </button>
-            <Segmented
-              ariaLabel="编辑或预览"
-              value={mode}
-              onChange={(next) => setMode(next)}
-              options={[
-                { value: 'edit', label: '编辑', testId: 'notes-mode-edit' },
-                { value: 'preview', label: '预览', testId: 'notes-mode-preview' }
-              ]}
-            />
+          <div className="np-toolbar">
+            <div className="np-toolbar-left">
+              <button
+                type="button"
+                data-testid="notes-save-status"
+                data-state={statusState}
+                aria-live="polite"
+                onClick={() => {
+                  if (saveState === 'error') void retrySave()
+                }}
+                className="np-status-button"
+              >
+                <span className="np-status-dot" aria-hidden="true" />
+                <span>
+                  {status}
+                  {saveState === 'error' ? ' · 重试' : ''}
+                </span>
+              </button>
+              <span className="np-words tabular-nums" data-testid="note-word-count">
+                {wordCount} 字
+              </span>
+            </div>
+            <div className="np-toolbar-right">
+              <Segmented
+                ariaLabel="编辑或预览"
+                value={mode}
+                onChange={(next) => setMode(next)}
+                options={[
+                  { value: 'edit', label: '编辑', testId: 'notes-mode-edit' },
+                  { value: 'preview', label: '预览', testId: 'notes-mode-preview' }
+                ]}
+              />
+            </div>
           </div>
 
           {saveState === 'error' && saveError !== null ? (
-            <p data-testid="notes-save-error" className="mt-1 text-c1 text-danger">
+            <p data-testid="notes-save-error" className="np-save-error">
               {saveError}
             </p>
           ) : null}
 
-          <div className="mt-4 min-h-0 flex-1">
+          <div className="np-body-wrap">
             {mode === 'edit' ? (
               <textarea
                 ref={bodyRef}
@@ -200,16 +214,16 @@ export function NoteEditor(): React.JSX.Element {
                 onKeyDown={onBodyKeyDown}
                 placeholder="开始写…（Markdown）"
                 spellCheck={false}
-                className="min-h-[45vh] w-full resize-none bg-transparent font-prose text-[15px] leading-[27px] text-ink outline-none placeholder:text-(--text-quaternary)"
+                className="np-body font-prose"
                 style={{ caretColor: 'var(--accent)' }}
               />
             ) : (
               <div
                 data-testid="note-preview"
-                className="animate-fade-in [animation-duration:var(--motion-reveal)] min-h-[45vh] text-b1 text-ink"
+                className="np-preview animate-fade-in [animation-duration:var(--motion-reveal)]"
               >
                 {body.trim() === '' ? (
-                  <p className="text-ink-tertiary">还没有正文。</p>
+                  <p className="np-preview-empty">还没有正文。</p>
                 ) : (
                   <TextPart text={body} />
                 )}

@@ -1,0 +1,767 @@
+/**
+ * 笔记页美术层（task-94）。
+ *
+ * 方向：**桌面上的稿纸**。左侧是一叠细线目录（纸叠），右侧是一张有页眉的稿纸：
+ * 衬线标题层 → 细线页眉（保存态/字数）→ 正文基线节奏。纸感只用细线、留白、字阶与
+ * tabular 读数表达；不加噪点/渐变/光斑假材质（章程 §4 红线）。
+ *
+ * 只做视觉：宽度/结构/行为沿用现状（列表 240 = --sidebar-width，内容列 800 = --content-max-width）；
+ * 逻辑（保存/搜索/置顶/删除/窄窗）在 notes-store / NotesPage / NoteEditor，本文件不参与。
+ */
+
+/* ── 页面骨架 ──────────────────────────────────────────────────────────── */
+.np-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.np-band {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 48px;
+  padding: 0 var(--page-gutter);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.np-band-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.np-band-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(20px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(28px * var(--ui-scale, 1));
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+}
+
+.np-band-count {
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(10px * var(--ui-scale, 1));
+  line-height: calc(14px * var(--ui-scale, 1));
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.np-band-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.np-page-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.np-main {
+  min-width: 0;
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+/* ── 左列：稿纸目录 ────────────────────────────────────────────────────── */
+.np-list-column {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+
+/* 搜索：安静的凹槽行，焦点才显边框（不抢列表的戏） */
+.np-search-wrap {
+  flex: none;
+  padding: 10px 10px 8px;
+}
+
+.np-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-tertiary);
+  transition:
+    border-color var(--motion-feedback) var(--motion-ease-glide),
+    background-color var(--motion-feedback) var(--motion-ease-glide);
+}
+
+.np-search:hover {
+  background: var(--bg-primary);
+}
+
+.np-search:focus-within {
+  border-color: var(--border-hairline);
+  background: var(--bg-primary);
+}
+
+.np-search-input {
+  min-width: 0;
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: calc(14px * var(--ui-scale, 1));
+  line-height: calc(18px * var(--ui-scale, 1));
+  outline: none;
+}
+
+.np-search-input::placeholder {
+  color: var(--text-tertiary-readable);
+}
+
+.np-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.np-search-clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--text-tertiary);
+}
+
+.np-search-clear:hover {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+/* 列表滚动区：左右 6px 内缩，行以 8px 圆角成叠 */
+.np-list-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 6px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hairline) transparent;
+}
+
+.np-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 5px;
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(10px * var(--ui-scale, 1));
+  line-height: calc(12px * var(--ui-scale, 1));
+  letter-spacing: 0.1em;
+  user-select: none;
+}
+
+.np-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--hairline-soft);
+}
+
+.np-row-wrap {
+  position: relative;
+}
+
+.np-row {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 54px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 8px;
+  text-align: left;
+  transition:
+    background-color var(--motion-feedback) var(--motion-ease-glide),
+    color var(--motion-feedback) var(--motion-ease-glide);
+}
+
+.np-row:hover {
+  background: var(--fill-hover);
+}
+
+.np-row[data-selected='true'] .np-row-title {
+  font-weight: 600;
+}
+
+.np-row-top {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.np-row-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: calc(14px * var(--ui-scale, 1));
+  font-weight: 500;
+  line-height: calc(19px * var(--ui-scale, 1));
+}
+
+.np-row[data-selected='true'] .np-row-title {
+  font-weight: 600;
+}
+
+.np-row-pin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-secondary);
+  transform: rotate(-20deg);
+}
+
+.np-row-meta {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(11px * var(--ui-scale, 1));
+  line-height: calc(16px * var(--ui-scale, 1));
+}
+
+.np-row-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(10px * var(--ui-scale, 1));
+  line-height: calc(14px * var(--ui-scale, 1));
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.np-row-excerpt {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-row-meta-dot {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+/* 置顶按钮：hover/focus 才完全显形，置顶后常驻；不与标题抢 */
+.np-pin {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+}
+
+.np-pin[data-pinned='true'] {
+  color: var(--text-secondary);
+}
+
+.np-list-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 6px;
+}
+
+.np-skeleton-row {
+  height: 54px;
+  border-radius: 8px;
+  background: var(--fill-hover);
+  animation: np-pulse 1.8s ease-in-out infinite;
+}
+
+.np-skeleton-row:nth-child(2) {
+  animation-delay: 160ms;
+  opacity: 0.75;
+}
+
+.np-skeleton-row:nth-child(3) {
+  animation-delay: 320ms;
+  opacity: 0.55;
+}
+
+.np-list-hint {
+  margin: 0;
+  padding: 10px 10px 2px;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(18px * var(--ui-scale, 1));
+}
+
+.np-list-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 10px 8px;
+}
+
+.np-list-empty-title {
+  color: var(--text-secondary);
+  font-family: var(--font-reading);
+  font-size: calc(15px * var(--ui-scale, 1));
+  line-height: calc(22px * var(--ui-scale, 1));
+  font-weight: 600;
+}
+
+.np-list-empty-sub {
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(17px * var(--ui-scale, 1));
+}
+
+.np-list-error {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(18px * var(--ui-scale, 1));
+}
+
+.np-list-foot {
+  flex: none;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--hairline-soft);
+}
+
+.np-open-folder {
+  display: inline-flex;
+  height: 30px;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(16px * var(--ui-scale, 1));
+  transition:
+    color var(--motion-feedback) var(--motion-ease-glide),
+    background-color var(--motion-feedback) var(--motion-ease-glide);
+}
+
+.np-open-folder:hover {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+}
+
+.np-notice {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(10px * var(--ui-scale, 1));
+  line-height: calc(15px * var(--ui-scale, 1));
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 右区：稿纸 ───────────────────────────────────────────────────────── */
+.np-sheet {
+  display: flex;
+  width: 100%;
+  max-width: var(--content-max-width);
+  min-height: 100%;
+  flex-direction: column;
+  margin: 0 auto;
+  padding: 22px var(--page-gutter) 40px;
+}
+
+.np-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.np-title {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(24px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(32px * var(--ui-scale, 1));
+  letter-spacing: -0.008em;
+  outline: none;
+}
+
+.np-title::placeholder {
+  color: var(--text-tertiary);
+}
+
+.np-delete {
+  flex: none;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity var(--motion-feedback) var(--motion-ease-glide);
+}
+
+.np-sheet:hover .np-delete,
+.np-sheet:focus-within .np-delete {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .np-delete {
+    opacity: 1;
+  }
+}
+
+/* 页眉细线：保存态 / 字数 / 编辑⇄预览；像稿纸的信头 */
+.np-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 7px 0 9px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.np-toolbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.np-status-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 4px;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(11px * var(--ui-scale, 1));
+  line-height: calc(16px * var(--ui-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: color var(--motion-feedback) var(--motion-ease-glide);
+}
+
+.np-status-button:hover {
+  color: var(--text-primary);
+}
+
+.np-status-button[data-state='error'] {
+  color: var(--danger);
+}
+
+.np-status-button[data-state='dirty'] {
+  color: var(--warning);
+}
+
+.np-status-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.np-status-button[data-state='saving'] .np-status-dot {
+  background: var(--accent);
+  opacity: 1;
+  animation: np-breathe 1.2s ease-in-out infinite;
+}
+
+.np-words {
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(10px * var(--ui-scale, 1));
+  line-height: calc(14px * var(--ui-scale, 1));
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.np-toolbar-right {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
+.np-save-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(17px * var(--ui-scale, 1));
+}
+
+.np-body-wrap {
+  flex: 1;
+  min-height: 0;
+  padding-top: 18px;
+}
+
+.np-body,
+.np-preview {
+  max-width: var(--prose-measure);
+}
+
+.np-body {
+  width: 100%;
+  min-height: 52vh;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  outline: none;
+  caret-color: var(--accent);
+}
+
+.np-body::placeholder {
+  color: var(--text-tertiary);
+}
+
+.np-preview {
+  color: var(--text-primary);
+}
+
+.np-preview-empty {
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(20px * var(--ui-scale, 1));
+}
+
+/* 编辑器骨架 */
+.np-editor-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.np-loading-title {
+  width: 58%;
+  height: 34px;
+  border-radius: 6px;
+  background: var(--fill-hover);
+  animation: np-pulse 1.8s ease-in-out infinite;
+}
+
+.np-loading-meta {
+  width: 30%;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--fill-hover);
+  opacity: 0.7;
+}
+
+.np-loading-line {
+  height: 12px;
+  border-radius: 4px;
+  background: var(--fill-hover);
+  opacity: 0.55;
+}
+
+.np-loading-line:nth-child(4) {
+  width: 82%;
+}
+
+.np-loading-line:nth-child(5) {
+  width: 64%;
+}
+
+/* ── 入场：列表/编辑器的第一屏只做一次轻入场（不逐块 fade-up） ───────── */
+.np-row {
+  animation: np-row-in var(--motion-reveal) var(--motion-ease-glide) both;
+}
+
+.np-row-wrap:nth-child(2) .np-row {
+  animation-delay: calc(var(--motion-stagger) * 1);
+}
+
+.np-row-wrap:nth-child(3) .np-row {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.np-row-wrap:nth-child(4) .np-row {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.np-row-wrap:nth-child(5) .np-row {
+  animation-delay: calc(var(--motion-stagger) * 4);
+}
+
+.np-row-wrap:nth-child(6) .np-row {
+  animation-delay: calc(var(--motion-stagger) * 5);
+}
+
+.np-sheet {
+  animation: np-sheet-in var(--motion-reveal) var(--motion-ease-glide) both;
+}
+
+@keyframes np-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes np-sheet-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes np-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes np-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-row,
+  .np-sheet,
+  .np-status-button[data-state='saving'] .np-status-dot {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .np-row,
+:root[data-motion='reduced'] .np-sheet,
+:root[data-motion='reduced'] .np-status-button[data-state='saving'] .np-status-dot {
+  animation: none;
+}
+
+/* ── 深色：纸/墨由 token 切换，这里只补两处层差 ───────────────────────── */
+:root[data-theme='dark'] .np-search {
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+}
+
+:root[data-theme='dark'] .np-search:hover,
+:root[data-theme='dark'] .np-search:focus-within {
+  background: var(--bg-secondary);
+}
+
+/* ── 响应式：窄窗 <900 列表与编辑器整屏互斥（行为不变，只收版式） ─────── */
+@media (max-width: 1100px) {
+  .np-sheet {
+    padding-top: 18px;
+  }
+
+  .np-title {
+    font-size: calc(22px * var(--ui-scale, 1));
+    line-height: calc(35px * var(--ui-scale, 1));
+  }
+}
+
+@media (max-width: 899px) {
+  .np-band {
+    height: 50px;
+    padding: 0 14px;
+  }
+
+  .np-band-title {
+    font-size: calc(18px * var(--ui-scale, 1));
+    line-height: calc(26px * var(--ui-scale, 1));
+  }
+
+  .np-sheet {
+    padding: 16px 14px 32px;
+  }
+
+  .np-title {
+    font-size: calc(23px * var(--ui-scale, 1));
+    line-height: calc(32px * var(--ui-scale, 1));
+  }
+
+  .np-list-column {
+    width: 100%;
+  }
+
+  .np-list-scroll {
+    padding: 2px 10px 8px;
+  }
+}
+
+/* 输入面的焦点表达：编辑器/标题/搜索不画外框（caret + 搜索凹槽 focus-within 已足够），
+   避免全局 :focus-visible 在正文 textarea 上画出一整圈"输入框框"。 */
+.np-title:focus,
+.np-title:focus-visible,
+.np-body:focus,
+.np-body:focus-visible,
+.np-search-input:focus,
+.np-search-input:focus-visible {
+  outline: none;
+  /* 全局 :focus-visible 的 inset 环在「整张稿纸」上读成一圈输入框框；
+     标题/正文用 caret、搜索用凹槽 focus-within 边框表达焦点（键盘依旧可见）。 */
+  box-shadow: none;
+}

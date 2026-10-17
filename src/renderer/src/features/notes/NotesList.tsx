@@ -1,13 +1,15 @@
 import { FolderOpen, Pin, PinOff, Search, X } from 'lucide-react'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/components/ui/cn'
+import type { NoteMeta } from '@shared/notes'
 import { useNotesStore } from './notes-store'
-import { rowMetaText } from './notes-format'
+import { listTimeLabel } from './notes-format'
 
 /**
- * 左列（300）：搜索 → 列表 → 打开数据文件夹。
- * 列表行 48 高（plan §4.1 的 44–52 档），选中吃 `--fill-selected` 实底；
- * 置顶是行右侧的小图标动作（真落 index.json，见 notes:pin）。
+ * 左列（task-94 美术层）：**一叠稿纸目录**。
+ *
+ * 搜索（凹槽行）→ 列表（置顶/全部两组小节；行 54：标题 + 时间 · 摘要；选中吃实底 + 2px 暖线；
+ * 置顶别针常驻）→ 打开数据文件夹。宽度/井线/行为不变（240 = --sidebar-width，右缘接缝）。
  */
 export function NotesList(): React.JSX.Element {
   const notes = useNotesStore((state) => state.notes)
@@ -26,15 +28,18 @@ export function NotesList(): React.JSX.Element {
   const clearNotice = useNotesStore((state) => state.clearNotice)
 
   const searchingNow = searchHits !== null
+  const pinned = notes.filter((note) => note.pinned)
+  const showSections = pinned.length > 0 && !searchingNow
+  const rest = notes.filter((note) => !note.pinned)
 
   return (
     <aside
       data-testid="notes-list-column"
-      className="flex w-(--sidebar-width) shrink-0 flex-col border-r border-(--seam-line) bg-(--bg-sidebar)"
+      className="np-list-column w-(--sidebar-width) shrink-0 border-r border-(--seam-line) bg-(--bg-sidebar)"
     >
-      <div className="shrink-0 px-2 pt-2 pb-1">
-        <div className="group flex h-9 items-center gap-1.5 rounded-control px-2 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover focus-within:bg-hover">
-          <Search aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary" />
+      <div className="np-search-wrap">
+        <div className="np-search">
+          <Search aria-hidden="true" className="size-3.5 shrink-0" />
           <input
             data-testid="notes-search"
             type="search"
@@ -42,7 +47,7 @@ export function NotesList(): React.JSX.Element {
             onChange={(event) => search(event.target.value)}
             placeholder="搜索笔记"
             aria-label="搜索笔记"
-            className="min-w-0 flex-1 bg-transparent text-b2 text-ink outline-none placeholder:text-(--text-tertiary-readable) [&::-webkit-search-cancel-button]:hidden"
+            className="np-search-input"
           />
           {query === '' ? null : (
             <button
@@ -50,7 +55,7 @@ export function NotesList(): React.JSX.Element {
               aria-label="清空搜索"
               data-testid="notes-search-clear"
               onClick={clearSearch}
-              className="inline-flex size-5 shrink-0 items-center justify-center rounded-pill text-ink-tertiary hover:bg-active hover:text-ink"
+              className="np-search-clear"
             >
               <X aria-hidden="true" className="size-3" />
             </button>
@@ -58,87 +63,79 @@ export function NotesList(): React.JSX.Element {
         </div>
       </div>
 
-      <div data-testid="notes-list" className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+      <div data-testid="notes-list" className="np-list-scroll">
         {listLoading && notes.length === 0 ? (
-          <div data-testid="notes-list-loading" className="flex flex-col gap-1 pt-1">
+          <div data-testid="notes-list-loading" className="np-list-loading">
             {[0, 1, 2].map((index) => (
-              <div key={index} className="h-12 animate-pulse rounded-control bg-hover" />
+              <div key={index} className="np-skeleton-row" />
             ))}
           </div>
         ) : listError !== null ? (
-          <p data-testid="notes-list-error" className="px-2 py-3 text-c1 text-danger">
+          <p data-testid="notes-list-error" className="np-list-error">
             {listError}
           </p>
-        ) : searchingNow && searchHits.length === 0 ? (
-          <p className="px-2 py-3 text-c1 text-ink-tertiary">
-            {searching ? '搜索中…' : '没有匹配的笔记'}
-          </p>
-        ) : (searchingNow ? searchHits : notes).length === 0 ? (
-          <p data-testid="notes-list-empty" className="px-2 py-3 text-c1 text-ink-tertiary">
-            {searchingNow ? '没有匹配的笔记' : '还没有笔记。点右上角「新建笔记」开始。'}
-          </p>
         ) : searchingNow ? (
-          searchHits!.map((hit) => (
-            <SearchRow
-              key={hit.id}
-              id={hit.id}
-              title={hit.title}
-              snippet={hit.snippet}
-              selected={selectedId === hit.id}
-              onSelect={() => void select(hit.id)}
+          searchHits!.length === 0 ? (
+            <p className="np-list-hint">{searching ? '搜索中…' : '没有匹配的笔记'}</p>
+          ) : (
+            searchHits!.map((hit) => (
+              <SearchRow
+                key={hit.id}
+                id={hit.id}
+                title={hit.title}
+                snippet={hit.snippet}
+                selected={selectedId === hit.id}
+                onSelect={() => void select(hit.id)}
+              />
+            ))
+          )
+        ) : notes.length === 0 ? (
+          <div data-testid="notes-list-empty" className="np-list-empty">
+            <span className="np-list-empty-title">还没有笔记</span>
+            <span className="np-list-empty-sub">点右上角「新建笔记」，开始写第一张稿纸。</span>
+          </div>
+        ) : showSections ? (
+          <>
+            <SectionLabel>置顶</SectionLabel>
+            {pinned.map((note) => (
+              <NoteRow
+                key={note.id}
+                note={note}
+                selected={selectedId === note.id}
+                onSelect={() => void select(note.id)}
+                onTogglePin={() => void togglePin(note.id)}
+              />
+            ))}
+            {rest.length > 0 ? <SectionLabel>全部笔记</SectionLabel> : null}
+            {rest.map((note) => (
+              <NoteRow
+                key={note.id}
+                note={note}
+                selected={selectedId === note.id}
+                onSelect={() => void select(note.id)}
+                onTogglePin={() => void togglePin(note.id)}
+              />
+            ))}
+          </>
+        ) : (
+          notes.map((note) => (
+            <NoteRow
+              key={note.id}
+              note={note}
+              selected={selectedId === note.id}
+              onSelect={() => void select(note.id)}
+              onTogglePin={() => void togglePin(note.id)}
             />
           ))
-        ) : (
-          notes.map((note) => {
-            const selected = selectedId === note.id
-            return (
-              <div key={note.id} className="group relative">
-                <button
-                  type="button"
-                  data-testid={`note-row-${note.id}`}
-                  aria-current={selected ? 'true' : undefined}
-                  onClick={() => void select(note.id)}
-                  className={cn(
-                    'flex h-12 w-full flex-col items-start justify-center gap-0.5 rounded-control px-2 pr-8 text-left transition-colors duration-(--motion-feedback) ease-main motion-reduce:transition-none',
-                    selected ? 'bg-selected' : 'hover:bg-hover'
-                  )}
-                >
-                  <span className="w-full truncate text-b2 font-medium text-ink">{note.title}</span>
-                  <span className="w-full truncate text-c1 text-ink-tertiary tabular-nums">
-                    {rowMetaText(note.excerpt, note.updatedAt)}
-                  </span>
-                </button>
-                <IconButton
-                  label={note.pinned ? `取消置顶「${note.title}」` : `置顶「${note.title}」`}
-                  data-testid={`note-pin-${note.id}`}
-                  aria-pressed={note.pinned}
-                  onClick={() => void togglePin(note.id)}
-                  className={cn(
-                    'absolute top-1/2 right-1 size-6 -translate-y-1/2 border-0',
-                    note.pinned
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-                  )}
-                  icon={
-                    note.pinned ? (
-                      <Pin className="size-3.5" aria-hidden="true" />
-                    ) : (
-                      <PinOff className="size-3.5" aria-hidden="true" />
-                    )
-                  }
-                />
-              </div>
-            )
-          })
         )}
       </div>
 
-      <div className="shrink-0 border-t border-hairline px-2 py-1.5">
+      <div className="np-list-foot">
         <button
           type="button"
           data-testid="notes-open-folder"
           onClick={() => void openFolder()}
-          className="inline-flex h-8 w-full items-center gap-1.5 rounded-control px-2 text-c1 text-ink-tertiary transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink hover:underline"
+          className="np-open-folder"
         >
           <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
           打开数据文件夹
@@ -148,7 +145,7 @@ export function NotesList(): React.JSX.Element {
             type="button"
             data-testid="notes-notice"
             onClick={clearNotice}
-            className="mt-1 w-full truncate rounded-control px-2 py-1 text-left text-c1 text-ink-tertiary"
+            className="np-notice"
             title={notice}
           >
             {notice}
@@ -159,6 +156,78 @@ export function NotesList(): React.JSX.Element {
   )
 }
 
+function SectionLabel({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="np-section-label" data-testid="notes-section-label">
+      {children}
+    </div>
+  )
+}
+
+/** 稿纸目录行：标题 +（置顶别针）+ 时间 · 摘要；选中吃实底并亮出 2px 暖线 */
+function NoteRow({
+  note,
+  selected,
+  onSelect,
+  onTogglePin
+}: {
+  note: NoteMeta
+  selected: boolean
+  onSelect: () => void
+  onTogglePin: () => void
+}): React.JSX.Element {
+  const excerpt = note.excerpt.trim()
+  return (
+    <div className="np-row-wrap group relative">
+      <button
+        type="button"
+        data-testid={`note-row-${note.id}`}
+        aria-current={selected ? 'true' : undefined}
+        data-selected={selected ? 'true' : 'false'}
+        onClick={onSelect}
+        className="np-row ui-list-row"
+      >
+        <span className="np-row-top">
+          <span className="np-row-title">{note.title}</span>
+          {note.pinned ? <Pin className="np-row-pin" aria-hidden="true" /> : null}
+        </span>
+        <span className="np-row-meta">
+          <span className="np-row-time tabular-nums">{listTimeLabel(note.updatedAt)}</span>
+          {excerpt === '' ? null : (
+            <>
+              <span className="np-row-meta-dot" aria-hidden="true">
+                ·
+              </span>
+              <span className="np-row-excerpt">{excerpt}</span>
+            </>
+          )}
+        </span>
+      </button>
+      <IconButton
+        label={note.pinned ? `取消置顶「${note.title}」` : `置顶「${note.title}」`}
+        data-testid={`note-pin-${note.id}`}
+        aria-pressed={note.pinned}
+        data-pinned={note.pinned ? 'true' : 'false'}
+        onClick={onTogglePin}
+        className={cn(
+          'np-pin size-6 border-0',
+          note.pinned
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+        )}
+        icon={
+          note.pinned ? (
+            <Pin className="size-3.5" aria-hidden="true" />
+          ) : (
+            <PinOff className="size-3.5" aria-hidden="true" />
+          )
+        }
+      />
+    </div>
+  )
+}
+
+/** 搜索结果行：标题 + 主进程压过的命中片段（不带时间，片段才是信息） */
 function SearchRow({
   id,
   title,
@@ -177,14 +246,16 @@ function SearchRow({
       type="button"
       data-testid={`note-row-${id}`}
       aria-current={selected ? 'true' : undefined}
+      data-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
-      className={cn(
-        'flex h-12 w-full flex-col items-start justify-center gap-0.5 rounded-control px-2 text-left transition-colors duration-(--motion-feedback) ease-main motion-reduce:transition-none',
-        selected ? 'bg-selected' : 'hover:bg-hover'
-      )}
+      className="np-row ui-list-row"
     >
-      <span className="w-full truncate text-b2 font-medium text-ink">{title}</span>
-      <span className="w-full truncate text-c1 text-ink-tertiary">{snippet}</span>
+      <span className="np-row-top">
+        <span className="np-row-title">{title}</span>
+      </span>
+      <span className="np-row-meta">
+        <span className="np-row-excerpt">{snippet}</span>
+      </span>
     </button>
   )
 }

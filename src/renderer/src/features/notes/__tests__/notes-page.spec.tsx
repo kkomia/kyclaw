@@ -1,4 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NoteMeta } from '@shared/notes'
 import { NotesPage } from '@renderer/features/notes/NotesPage'
@@ -111,7 +113,7 @@ describe('列表 / 选中 / 空态', () => {
 
     const empty = await screen.findByTestId('notes-empty')
     expect(empty).toHaveTextContent('写下第一篇笔记')
-    expect(empty).toHaveTextContent('本机上的 Markdown 文件')
+    expect(empty).toHaveTextContent('笔记存在本机')
     expect(empty.querySelector('img,svg[role="img"]')).toBeNull()
     expect(screen.getByTestId('notes-empty-create')).toBeInTheDocument()
   })
@@ -329,5 +331,75 @@ describe('字体声部（task-64 字体一致性）', () => {
     // 列表次行时间用 tabular（数字不跳宽）
     const row = screen.getByTestId(`note-row-${NOTE_A.id}`)
     expect(row.querySelector('.tabular-nums')).not.toBeNull()
+  })
+})
+
+describe('美术层（task-94 纸/稿：书眉 / 目录 / 稿纸 / 空态）', () => {
+  it('书眉：衬线标题 + 篇数读数 + 新建；列表行有选中实底 / 时间 tabular / 摘要', async () => {
+    seedStore()
+    render(<NotesPage />)
+
+    const band = document.querySelector('.np-band')
+    expect(band).not.toBeNull()
+    expect(screen.getByTestId('notes-page-title')).toHaveClass('ui-page-title')
+    expect(screen.getByTestId('notes-count')).toHaveTextContent('2 篇')
+
+    const rowA = await screen.findByTestId(`note-row-${NOTE_A.id}`)
+    expect(rowA).toHaveClass('np-row')
+    expect(rowA).toHaveAttribute('data-selected', 'true')
+    expect(rowA.querySelector('.np-row-time.tabular-nums')).not.toBeNull()
+    expect(rowA).toHaveTextContent('决定下周上线。')
+
+    // 置顶分级：NOTE_B 已置顶 → 出现「置顶」小节标签（真实信息，不是装饰）
+    const labels = screen.getAllByTestId('notes-section-label')
+    expect(labels.length).toBeGreaterThan(0)
+    expect(labels[0]).toHaveTextContent('置顶')
+  })
+
+  it('稿纸：信头保存态 + 字数读数 + 页眉细线；预览仍是 markdown 管线', () => {
+    seedStore()
+    render(<NotesPage />)
+
+    const status = screen.getByTestId('notes-save-status')
+    expect(status).toHaveAttribute('data-state', 'saved')
+    expect(screen.getByTestId('note-word-count')).toHaveTextContent(/\d+ 字/)
+    expect(document.querySelector('.np-toolbar')).not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('notes-mode-preview'))
+    expect(screen.getByTestId('note-preview').querySelector('.markdown-body')).not.toBeNull()
+  })
+
+  it('空态：一页没写字的稿纸（四条线 + 页边）+ 衬线标题 + 一个实物动作', async () => {
+    bridge.notes.list.mockResolvedValue({ notes: [] })
+    render(<NotesPage />)
+
+    const empty = await screen.findByTestId('notes-empty')
+    expect(empty).toHaveClass('ui-empty')
+    expect(empty.querySelector('.np-empty-mark')).not.toBeNull()
+    expect(empty.querySelectorAll('.np-empty-mark span')).toHaveLength(4)
+    expect(empty.querySelector('.ui-empty-title')).toHaveTextContent('写下第一篇笔记')
+    expect(screen.getByTestId('notes-empty-create')).toBeInTheDocument()
+  })
+
+  it('CSS 契约：选中暖线 + 衬线标题 + 细线页眉；reduced 静态（不加装饰性渐变/噪点）', () => {
+    const css = readFileSync(
+      resolve(process.cwd(), 'src/renderer/src/features/notes/notes.css'),
+      'utf8'
+    )
+    // 选中暖线是跨页共享规格（page-chrome.css 的 .ui-list-row），笔记只挂 class
+    const chrome = readFileSync(
+      resolve(process.cwd(), 'src/renderer/src/components/ui/page-chrome.css'),
+      'utf8'
+    )
+    expect(chrome).toMatch(
+      /\.ui-list-row\[data-selected='true'\]::before \{[\s\S]*?background: var\(--accent\)/
+    )
+    expect(
+      readFileSync(resolve(process.cwd(), 'src/renderer/src/features/notes/NotesList.tsx'), 'utf8')
+    ).toContain('ui-list-row')
+    expect(css).toMatch(/\.np-title \{[\s\S]*?font-family: var\(--font-reading\)/)
+    expect(css).toMatch(/\.np-toolbar \{[\s\S]*?border-bottom: 1px solid var\(--border-hairline\)/)
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.np-row/)
+    expect(css).not.toMatch(/repeating-gradient|noise\.png|text-shadow/)
   })
 })
