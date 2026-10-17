@@ -92,6 +92,8 @@ describe('OfficeAiPanel：320px 诚实占位组件', () => {
     const placeholder = screen.getByTestId('office-ai-placeholder')
     expect(placeholder).toHaveTextContent('AI 编辑能力将在后续版本接入')
     expect(placeholder).toHaveTextContent('不会读取文档内容')
+    // P3（章程 §9.7-6）：AI 面板空态左侧 2px 陶土橙线（全产品唯一允许 accent 的装饰面）
+    expect(placeholder).toHaveClass('border-l-2', 'border-l-(--accent)', 'pl-3')
 
     const chips = screen.getAllByTestId('office-ai-chip')
     expect(chips).toHaveLength(3)

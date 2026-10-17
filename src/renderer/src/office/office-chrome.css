@@ -9,24 +9,25 @@
  *   A2 新增 --office-ribbon-tabs-height / --office-ribbon-body-height / --office-motion-*
  * 不新建第二套颜色（用户 2026-10-17 定调 + 设计研究 §四：零 text-shadow、零霓虹）。
  *
- * 字体三声部（研究 §二）：
- *   - chrome 文案/按钮 = 系统 sans（隔离面没有 tailwind.css 的 @theme 字体，故在此镜像同一栈）；
- *   - 数字/快捷键/组标签等技术标签 = mono + tabular-nums（缩放/页码/保存计数不跳动）；
+ * 字体三声部（P0 章程 §2.1/§2.5；P3 对齐）：**面内只读 semantic.css 的字体 token，不再镜像第二份栈**——
+ *   - chrome 文案/按钮/组标签 = `--font-ui`（DSH 中文链，A5 真机曾因旧镜像栈落到雅黑）；
+ *   - 数字/快捷键等技术标签 = `--font-code` + tabular-nums（缩放/页码/保存计数不跳动）；
  *   - 文档内容完全不碰（Word-faithful 红线；内核对 canvas 的绘制不由本文件改）。
+ * 焦点（P3）：暖灰，不用 accent/品牌蓝——1px `--text-tertiary` 环 + 2px 偏移（下方 --ofr-focus-*）。
+ * accent 只留给保存态圆点这类状态点（<10% 占比）。
  *
  * 动效（研究 §三.2）：反馈 120ms、入场/展开 --office-motion-enter、离场 --office-motion-exit；
  * 只有保存态圆点用 spring（小元素），其余 settle；reduced-motion 全部压到 0.01ms（不是 0）。
  */
 .ofr-ribbon {
-  /* 隔离面拿不到 tailwind.css 的 --font-sans/--font-mono，这里镜像同一套系统栈（不引外链字体）。 */
-  --ofr-font-sans:
-    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
-    'Noto Sans CJK SC', sans-serif;
-  --ofr-font-mono:
-    'Geist Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+  /* P3：P0 的 identity→semantic 已在 main.tsx 先 import，字体栈直接接 token（唯一数据源）。
+     A2 的 --ofr-* 名字保留兼容：面内样式仍只认这两个变量，不再出现"镜像系统栈"。 */
+  --ofr-font-sans: var(--font-ui);
+  --ofr-font-mono: var(--font-code);
   --ofr-button-size: 30px;
-  --ofr-focus-halo: 0 0 0 1px var(--bg-primary);
-  --ofr-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 42%, transparent);
+  /* 暖灰焦点：1px --text-tertiary 环 + 2px 偏移（halo 用底色垫出 2px 缝隙）；不引 accent。 */
+  --ofr-focus-halo: 0 0 0 2px var(--bg-primary);
+  --ofr-focus-ring: 0 0 0 3px var(--text-tertiary);
   --ofr-ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
 
   flex: 0 0 auto;
@@ -139,7 +140,7 @@
   padding: 0 6px 0 2px;
   border-radius: 6px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -317,14 +318,15 @@
   min-height: 0;
 }
 
-/* 组标签：HF 结构 + 研究 §二 的技术标签声部（mono / tabular-nums） */
+/* 组标签：P3 对齐章程 §2.5/§9.7-1 —— 无衬线 11/14、500、三级灰（Office 局部档，不进全局字阶）；
+   tabular-nums 保留（带数字的组名不跳动）。band 仍 80px，组名一行。 */
 .ofr-group-label {
   flex: 0 0 auto;
-  padding: 0 2px 3px;
-  font-family: var(--ofr-font-mono);
-  font-size: 9.5px;
-  line-height: 1;
-  letter-spacing: 0.02em;
+  padding: 0 2px 2px;
+  font-family: var(--ofr-font-sans);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary);
   white-space: nowrap;

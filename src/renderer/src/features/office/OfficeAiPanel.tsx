@@ -76,8 +76,14 @@ export function OfficeAiPanel({
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-          {/* 诚实说明：占位面板不读内容、不产生修改 */}
-          <div data-testid="office-ai-placeholder" className="flex flex-col gap-2">
+          {/*
+            诚实说明：占位面板不读内容、不产生修改。
+            P3（章程 §9.7-6）：唯一允许 accent 的装饰面 —— 左侧 2px 陶土橙线；其余 chrome 不引 accent。
+          */}
+          <div
+            data-testid="office-ai-placeholder"
+            className="flex flex-col gap-2 border-l-2 border-l-(--accent) pl-3"
+          >
             <p className="text-b2 text-ink-secondary">
               AI 编辑能力将在后续版本接入。当前可以先用主对话处理文档内容。
             </p>
