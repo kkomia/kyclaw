@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { Briefcase, Plus } from 'lucide-react'
 import { navItemClass } from '@renderer/components/shell/nav-item'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, OFFICE_PANEL_ID } from './office-kinds'
+import { OfficeSurface, type OfficeSurfaceStatus } from './OfficeSurface'
 import { useOfficeTabsStore, type OfficeOpenInput, type OfficeTab } from './office-tabs-store'
 import { useOfficeUiStore } from './office-ui-store'
 
@@ -119,6 +121,20 @@ export function OfficePage(): React.JSX.Element {
 function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
+  // M3-S1（临时调试）：DOCX 标签挂隔离面，状态条把 loading/ready/fatal 露出来；
+  // 不接编辑器，其它格式仍是占位。S2 起由文档注册表/编辑器取代这块。
+  const isDocx = tab.kind === 'docx'
+  // 状态带 tabId：同一个 OfficeWorkspace 实例跨标签复用，切走再切回来时旧状态自动失效
+  // （不用 effect 复位——render 期按 tab.id 过滤，天然回到 loading）
+  const [surfaceState, setSurfaceState] = useState<{ tabId: string; status: OfficeSurfaceStatus }>({
+    tabId: tab.id,
+    status: 'loading'
+  })
+  const surfaceStatus = surfaceState.tabId === tab.id ? surfaceState.status : 'loading'
+  const handleSurfaceStatus = (status: OfficeSurfaceStatus): void => {
+    setSurfaceState({ tabId: tab.id, status })
+  }
+
   return (
     <div
       id={OFFICE_PANEL_ID}
@@ -141,6 +157,17 @@ function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {isDocx ? (
+              // M3-S1 临时调试展示：隔离面握手状态（S2 接编辑器后由真实文档状态取代）
+              <span
+                data-testid="office-surface-status"
+                data-state={surfaceStatus}
+                title="Office 隔离面握手状态（S1 调试展示）"
+                className="inline-flex items-center rounded-badge bg-selected px-1.5 py-0.5 text-c2 text-ink-tertiary"
+              >
+                隔离面 {surfaceStatus}
+              </span>
+            ) : null}
             {tab.readOnly ? (
               <span className="rounded-badge border-(length:--hairline-width) border-hairline px-1.5 py-0.5 text-c2 text-ink-tertiary">
                 只读
@@ -161,16 +188,20 @@ function OfficeWorkspace({ tab }: { tab: OfficeTab }): React.JSX.Element {
             </span>
           </div>
         </div>
-        <div
-          data-testid="office-editor-placeholder"
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
-        >
-          <Icon aria-hidden="true" className="size-(--icon-size-lg) text-ink-tertiary" />
-          <p className="text-b2 text-ink-secondary">编辑器接入中</p>
-          <p className="max-w-md text-c1 text-ink-tertiary">
-            {OFFICE_KIND_LABEL[tab.kind]}编辑器会在这里打开；切换标签不会关闭或重置其他文档。
-          </p>
-        </div>
+        {isDocx ? (
+          <OfficeSurface onStatusChange={handleSurfaceStatus} />
+        ) : (
+          <div
+            data-testid="office-editor-placeholder"
+            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+          >
+            <Icon aria-hidden="true" className="size-(--icon-size-lg) text-ink-tertiary" />
+            <p className="text-b2 text-ink-secondary">编辑器接入中</p>
+            <p className="max-w-md text-c1 text-ink-tertiary">
+              {OFFICE_KIND_LABEL[tab.kind]}编辑器会在这里打开；切换标签不会关闭或重置其他文档。
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )

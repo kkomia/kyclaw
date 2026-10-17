@@ -6,9 +6,17 @@
     <title>kyclaw</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <!-- connect-src 放行 127.0.0.1 的任意端口：主进程内嵌的 agent 服务每次启动端口随机（T6） -->
+    <!--
+      frame-src（M3-S1，整个 0.2.0 Office 接入里**主 CSP 唯一**的改动，别再加别的）：
+      嵌 Office 隔离面用。两个来源：
+        · kyclaw-office:     preview / 打包态的隔离面（另一个 origin，无 preload、无 window.kyclaw）；
+        · http://localhost:5173  dev 的 Vite 页面（dev 下 iframe 与主窗口同源，隔离不成立，只影响开发期）。
+      script-src 仍是 'self'（**没有** wasm-unsafe-eval）：编辑器的 WASM 只在 office 面的 CSP 里放开，
+      探针断言主 frame 的 WebAssembly.compile 必须被拒（.superpowers/handover/office-docx-plan.md §3.4）。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*; frame-src 'self' kyclaw-office: http://localhost:5173"
     />
     <!--
       012（启动白屏，用户返工：要确定的百分比进度）：启动画面写死在 HTML 壳里，样式也内联 ——

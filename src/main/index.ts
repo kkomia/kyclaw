@@ -5,7 +5,7 @@
  * T17 起多了两族接线：更新通道（updater.ts，源没配就是"什么都不做"的实例）与追踪通道
  * （telemetry，Langfuse 默认关）——两者都不挡窗口、失败只记日志。
  */
-import { app, autoUpdater } from 'electron'
+import { app, autoUpdater, protocol } from 'electron'
 import { join } from 'node:path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
@@ -26,6 +26,11 @@ import { registerWorkspaceIpc } from './ipc/workspace'
 import { registerWorkbenchIpc } from './ipc/workbench'
 import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
+import {
+  createOfficeProtocolHandler,
+  OFFICE_SCHEME,
+  OFFICE_SCHEME_PRIVILEGES
+} from './office-protocol'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
 import { printPdf } from './print-pdf'
 import { readBundledReleaseNotes } from './release-notes'
@@ -53,6 +58,18 @@ import type { AgentEndpoint } from '../shared/ipc'
 // R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
 // 必须在这里、在任何动态 import mastra 之前设置；main/index.ts 是应用最早的执行点。
 process.env.MASTRA_TELEMETRY_DISABLED = 'true'
+
+/**
+ * M3-S1：`kyclaw-office://` 隔离面协议的 **privileged 注册**。
+ *
+ * Electron 硬要求：`protocol.registerSchemesAsPrivileged` 必须在本进程 ready 之前调用
+ * （文档原话：after the ready event the API is no longer usable），所以放模块顶层；
+ * 真正接资源的 `protocol.handle` 在 `app.whenReady()` 里、创建主窗口之前注册。
+ * 协议只读 `out/renderer`，dev 形态下 iframe 走 Vite（同源，不经过这个协议）。
+ */
+protocol.registerSchemesAsPrivileged([
+  { scheme: OFFICE_SCHEME, privileges: OFFICE_SCHEME_PRIVILEGES }
+])
 
 /** 任务栏归组/通知的 AppUserModelID：与 electron-builder.yml 的 appId 同值（NSIS 快捷方式写的也是它） */
 const APP_USER_MODEL_ID = 'com.kkomia.kyclaw'
@@ -245,6 +262,14 @@ if (!app.requestSingleInstanceLock()) {
     })
     // round 73：冷启动打点 —— IPC 通道注册完（窗口在这之前一直没建：这些注册都在关键路径上）
     mainMark('IPC 通道注册完')
+    // M3-S1：隔离面资源服务（`kyclaw-office://surface/…` → out/renderer 下的真实文件）。
+    // 必须在创建主窗口之前注册：主窗口一出来渲染端就可能挂 iframe 请求资源。
+    // 根目录表达式与 window.ts 的 loadFile(join(__dirname,'../renderer/index.html')) 同源；
+    // 打包态 __dirname 在 app.asar/out/main，fs 直读 asar 内文件是支持的。
+    protocol.handle(
+      OFFICE_SCHEME,
+      createOfficeProtocolHandler({ rootDir: join(__dirname, '../renderer') })
+    )
     const mainWindow = showMainWindow()
     // round 73：冷启动打点 —— 窗口建好并开始加载渲染端；之后的"可见 / 文档加载完"挂在这个窗口上
     mainMark('窗口已创建')

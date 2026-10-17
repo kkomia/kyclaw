@@ -40,7 +40,10 @@ describe('OfficePage：workspace 占位与空态（标签条已上移到顶栏�
 
     expect(screen.queryByTestId('office-empty')).not.toBeInTheDocument()
     expect(screen.getByTestId('office-workspace')).toHaveTextContent('项目计划')
-    expect(screen.getByTestId('office-editor-placeholder')).toHaveTextContent('编辑器接入中')
+    // M3-S1：DOCX 标签挂的是隔离面（iframe + 握手状态条），不再是纯占位
+    expect(screen.getByTestId('office-surface-iframe')).toBeInTheDocument()
+    expect(screen.getByTestId('office-surface-status')).toHaveAttribute('data-state', 'loading')
+    expect(screen.queryByTestId('office-editor-placeholder')).not.toBeInTheDocument()
     expect(screen.getByTestId('office-dirty-status')).toHaveAttribute('data-dirty', 'false')
     // v2（用户 2026-10-17）：编辑器没接之前不许写「已保存」，改中性占位
     expect(screen.getByTestId('office-dirty-status')).toHaveTextContent('未接编辑器')
