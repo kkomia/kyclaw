@@ -11,6 +11,10 @@ import {
   type OfficeShortcutAction
 } from '@renderer/features/office/office-actions'
 import {
+  isOfficeQuitInFlight,
+  useOfficeQuitStore
+} from '@renderer/features/office/office-quit-flow'
+import {
   OFFICE_KIND_ICON,
   OFFICE_KIND_LABEL,
   officePanelIdOf
@@ -96,6 +100,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
 
   const requestClose = useCallback(
     (id: string): void => {
+      // 退出确认在飞：不再拉起标签级脏三态（否则两个对话框叠一起）
+      if (isOfficeQuitInFlight()) return
       const tab = useOfficeTabsStore.getState().tabs.find((entry) => entry.id === id)
       if (tab === undefined) return
       if (tab.dirty) {
@@ -109,6 +115,17 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
   )
 
   /**
+   * 反向互斥（M3-S5-2）：退出确认一开始（主进程请求写进 store）就把**已显示**的标签级脏三态收掉
+   * —— 两个 modal 不叠加。用 store.subscribe 的回调（外部系统更新）而不是在 effect 体内直接
+   * setState（react-hooks/set-state-in-effect）；请求清空（用户取消退出）不会重新拉起旧框。
+   */
+  useEffect(() => {
+    return useOfficeQuitStore.subscribe((state) => {
+      if (state.request !== null) setPendingCloseId(null)
+    })
+  }, [])
+
+  /**
    * 快捷键唯一实现（壳侧按键 + 面内 surface:shortcut 共用）。
    * 返回 true = 消费这次按键（调用方 preventDefault）；false = 不归我们管、不抢默认。
    *
@@ -117,7 +134,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
   const runShortcut = useCallback(
     (action: OfficeShortcutAction): boolean => {
       const state = useOfficeTabsStore.getState()
-      const dialogsOpen = confirming || useOfficeUiStore.getState().pickerOpen
+      const dialogsOpen =
+        confirming || useOfficeUiStore.getState().pickerOpen || isOfficeQuitInFlight()
 
       if (action === 'save') {
         if (!inOffice || state.tabs.length === 0) return false

@@ -1,6 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Link, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OfficeQuitRequestPayload } from '@shared/office-editor'
+import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { resetOfficeQuitFlowForTest } from '@renderer/features/office/office-quit-flow'
+import { resetOfficeTabsStore } from '@renderer/features/office/office-tabs-store'
 import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { isWorkPanelSpaceConstrained, useShellStore } from '@renderer/lib/shell-store'
 import { AppShell } from '../AppShell'
@@ -683,5 +687,44 @@ describe('AppShell · round 64（Ctrl+K 新建会话）', () => {
     })
 
     expect(useSessionsStore.getState().activeId).toBeNull()
+  })
+})
+
+describe('AppShell · M3-S5-2 退出确认挂载点', () => {
+  afterEach(() => {
+    clearKyclawBridge()
+    resetOfficeQuitFlowForTest()
+    resetOfficeTabsStore()
+  })
+
+  it('壳空闲时不渲染退出确认（没收到请求就没有 DOM）', () => {
+    installKyclawBridge()
+    renderShell('/chat')
+    expect(screen.queryByTestId('office-quit-dialog')).not.toBeInTheDocument()
+  })
+
+  it('主进程推退出请求 → 壳上弹退出确认（/chat 也弹）；取消回 cancelled 并收起', async () => {
+    const bridge = installKyclawBridge()
+    let quitListener: ((payload: OfficeQuitRequestPayload) => void) | undefined
+    bridge.office.onQuitRequest.mockImplementation((listener) => {
+      quitListener = listener
+      return () => undefined
+    })
+    renderShell('/chat')
+
+    act(() => quitListener?.({ requestId: 'req-1', reason: 'quit', dirtyCount: 1 }))
+
+    // 挂在壳上（不在 OfficePage）：聊天页/设置页触发退出也能看到保存确认
+    expect(screen.getByTestId('office-quit-dialog')).toBeInTheDocument()
+    expect(screen.getByText('退出前保存更改？')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('office-quit-cancel'))
+    await waitFor(() =>
+      expect(bridge.office.respondQuitRequest).toHaveBeenCalledWith({
+        requestId: 'req-1',
+        action: 'cancelled'
+      })
+    )
+    expect(screen.queryByTestId('office-quit-dialog')).not.toBeInTheDocument()
   })
 })

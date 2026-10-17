@@ -7,6 +7,8 @@ import {
   useShellStore
 } from '@renderer/lib/shell-store'
 import { startupMark } from '@renderer/lib/startup-timing'
+import { OfficeQuitDialog } from '@renderer/features/office/OfficeQuitDialog'
+import { useOfficeDirtyReporter } from '@renderer/features/office/use-office-dirty-reporter'
 import { SettingsNav } from '@renderer/features/settings/SettingsNav'
 import { SessionsController } from '@renderer/features/sessions/SessionsController'
 import { useNewSessionShortcut } from '@renderer/features/sessions/use-new-session-shortcut'
@@ -83,6 +85,9 @@ function readLengthToken(name: string, fallback: number): number {
 export function AppShell(): React.JSX.Element {
   // 全局快捷键（Ctrl+K / Cmd+K）：等价于点侧栏的「新建会话」——壳常驻，任何路由都收得到
   useNewSessionShortcut()
+  // M3-S5-2：退出拦截的壳侧桥（脏计数上报 + 主进程退出请求订阅）；返回待决请求 → 条件渲染对话框。
+  // 壳对所有路由常驻，所以退出确认在设置页/聊天页也能弹（Office 页不常驻在路由上没关系）。
+  const officeQuitRequest = useOfficeDirtyReporter()
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
   const sidebarAutoCollapsed = useShellStore((state) => state.sidebarAutoCollapsed)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
@@ -283,6 +288,12 @@ export function AppShell(): React.JSX.Element {
           </ContentRegion>
         </div>
       </div>
+      {/* M3-S5-2：退出确认（真退出 / 真关窗 + 有未保存文档时，主进程推 office:quit-request 触发）。
+          无条件挂载点、空闲时不渲染；对话框自己管三态与回包（见 OfficeQuitDialog）。
+          key=requestId：换一条请求就是一次新的确认（对话框状态从「确认」重新开始）。 */}
+      {officeQuitRequest === null ? null : (
+        <OfficeQuitDialog key={officeQuitRequest.requestId} request={officeQuitRequest} />
+      )}
     </div>
   )
 }
