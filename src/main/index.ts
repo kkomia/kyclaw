@@ -11,8 +11,10 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { startAgentServer } from './agent/service'
 import { registerAgentIpc } from './ipc/agent'
 import { registerAttachmentsIpc } from './ipc/attachments'
+import { registerKnowledgeIpc } from './ipc/knowledge'
 import { registerLocalModelsIpc, pushLocalModelsOverview } from './ipc/local-models'
 import { registerMemoryIpc } from './ipc/memory'
+import { registerNotesIpc } from './ipc/notes'
 import { registerOfficeIpc } from './ipc/office'
 import { registerPluginIpc } from './ipc/plugins'
 import { registerProjectsIpc } from './ipc/projects'
@@ -269,6 +271,9 @@ if (!app.requestSingleInstanceLock()) {
     // 内嵌浏览器的护栏（webview 的分区/window.open/右键菜单口径，进程级挂一次）
     installWebviewGuard()
     registerProjectsIpc(userDataDir)
+    // M5：笔记 / 知识库（本地优先；数据在 userData/notes、userData/knowledge，全在本机）
+    registerNotesIpc(userDataDir)
+    registerKnowledgeIpc(userDataDir)
     registerRulesIpc(userDataDir, { processorRegistered: () => agentRulesRegistered })
     // round 64：内置技能目录由这一层算（要 app），插件页总览与 agent 侧共用同一个路径
     registerPluginIpc(userDataDir, { builtinSkillsDir: builtinSkillsDir() })

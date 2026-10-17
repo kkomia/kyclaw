@@ -5,8 +5,10 @@ import {
   agentApiStub,
   attachmentsApiStub,
   filesApiStub,
+  knowledgeApiStub,
   localModelsApiStub,
   memoryApiStub,
+  notesApiStub,
   officeApiStub,
   pluginsApiStub,
   projectsApiStub,
@@ -35,7 +37,8 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
   // T5 起 KyclawApi 多了 settings 面、T6 起多了 agent 面、T18 起多了 projects 面、T17 起多了
   // updates / telemetry 面、round 28 起多了 memory 面、模块 3B 起多了 localModels 面、
   // 工作台起多了 workbench / terminal 面、round 32 起多了 translate 面、模块 2 起多了 attachments 面、
-  // round 53 起多了 files 面（File → 绝对路径的小桥）：本文件只测窗口面，其余给桩即可
+  // round 53 起多了 files 面（File → 绝对路径的小桥）、M5 起多了 notes / knowledge 面：
+  // 本文件只测窗口面，其余给桩即可
   window.kyclaw = {
     window: api,
     settings: settingsApiStub(),
@@ -44,6 +47,8 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
     terminal: terminalApiStub(),
     office: officeApiStub(),
     projects: projectsApiStub(),
+    notes: notesApiStub(),
+    knowledge: knowledgeApiStub(),
     agent: agentApiStub(),
     attachments: attachmentsApiStub(),
     files: filesApiStub(),

@@ -35,6 +35,8 @@ import {
   type KyclawFilesApi,
   type KyclawLocalModelsApi,
   type KyclawMemoryApi,
+  type KyclawNotesApi,
+  type KyclawKnowledgeApi,
   type KyclawOfficeApi,
   type KyclawPluginsApi,
   type KyclawProjectsApi,
@@ -301,6 +303,36 @@ const projectsApi: KyclawProjectsApi = {
     if (!parsed.success) throw new Error('[kyclaw] 打开项目文件夹响应结构不合法')
     return parsed.data
   }
+}
+
+/**
+ * 笔记面（M5）：本地 Markdown 的增删改查 + 搜索 + 打开数据目录。
+ * 纪律：**闸门在主进程**（入参 zod + 正文/标题上限），这里只做转 invoke，不二次校验。
+ */
+const notesApi: KyclawNotesApi = {
+  list: async () => ipcRenderer.invoke(IPC_CHANNELS.notes.list),
+  get: async (id) => ipcRenderer.invoke(IPC_CHANNELS.notes.get, id),
+  create: async (input = {}) => ipcRenderer.invoke(IPC_CHANNELS.notes.create, input),
+  save: async (input) => ipcRenderer.invoke(IPC_CHANNELS.notes.save, input),
+  remove: async (id) => ipcRenderer.invoke(IPC_CHANNELS.notes.delete, id),
+  pin: async (id, pinned) => ipcRenderer.invoke(IPC_CHANNELS.notes.pin, id, pinned),
+  search: async (query) => ipcRenderer.invoke(IPC_CHANNELS.notes.search, query),
+  openFolder: async () => ipcRenderer.invoke(IPC_CHANNELS.notes.openFolder)
+}
+
+/**
+ * 知识库面（M5）：导入/检索/查看 + 资源管理器动作。
+ * 导入路径只由主进程原生选择器给；这里同样只转 invoke，业务闸门在主进程。
+ */
+const knowledgeApi: KyclawKnowledgeApi = {
+  list: async () => ipcRenderer.invoke(IPC_CHANNELS.knowledge.list),
+  import: async () => ipcRenderer.invoke(IPC_CHANNELS.knowledge.import),
+  readText: async (id) => ipcRenderer.invoke(IPC_CHANNELS.knowledge.readText, id),
+  search: async (query) => ipcRenderer.invoke(IPC_CHANNELS.knowledge.search, query),
+  rename: async (id, title) => ipcRenderer.invoke(IPC_CHANNELS.knowledge.rename, { id, title }),
+  remove: async (id) => ipcRenderer.invoke(IPC_CHANNELS.knowledge.delete, id),
+  reveal: async (id) => ipcRenderer.invoke(IPC_CHANNELS.knowledge.reveal, id),
+  openFolder: async () => ipcRenderer.invoke(IPC_CHANNELS.knowledge.openFolder)
 }
 
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */
@@ -818,6 +850,8 @@ export const kyclawApi: KyclawApi = {
   terminal: terminalApi,
   office: officeApi,
   projects: projectsApi,
+  notes: notesApi,
+  knowledge: knowledgeApi,
   agent: agentApi,
   attachments: attachmentsApi,
   files: filesApi,

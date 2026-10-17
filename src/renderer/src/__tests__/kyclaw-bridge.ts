@@ -57,6 +57,26 @@ import {
   type OfficeSaveResult
 } from '@shared/office-editor'
 import type { TextPageCursor, TextPageResult, TextVersionResult } from '@shared/workbench-text'
+import type {
+  KnowledgeDeleteResult,
+  KnowledgeDoc,
+  KnowledgeImportResult,
+  KnowledgeListResult,
+  KnowledgePathResult,
+  KnowledgeReadTextResult,
+  KnowledgeRenameResult,
+  KnowledgeSearchResult
+} from '@shared/knowledge'
+import type {
+  NoteCreateResult,
+  NoteDeleteResult,
+  NoteGetResult,
+  NoteMeta,
+  NoteSaveResult,
+  NotesListResult,
+  NotesOpenFolderResult,
+  NotesSearchResult
+} from '@shared/notes'
 
 /**
  * jsdom 里没有真的 preload，`window.kyclaw` 默认不存在。
@@ -856,6 +876,96 @@ export function localModelsApiStub(
   }
 }
 
+/** 笔记面（M5）的桩：默认空列表 / 空正文；写操作回最小成功对象（页面用例可覆写） */
+export interface NotesApiStub {
+  list: Mock<() => Promise<NotesListResult>>
+  get: Mock<(id: string) => Promise<NoteGetResult>>
+  create: Mock<(input?: { title?: string }) => Promise<NoteCreateResult>>
+  save: Mock<(input: { id: string; title: string; text: string }) => Promise<NoteSaveResult>>
+  remove: Mock<(id: string) => Promise<NoteDeleteResult>>
+  pin: Mock<(id: string, pinned: boolean) => Promise<NoteSaveResult>>
+  search: Mock<(query: string) => Promise<NotesSearchResult>>
+  openFolder: Mock<() => Promise<NotesOpenFolderResult>>
+}
+
+/** 一条示例笔记（id 用 noteIdSchema 认的 UUID 形状；用例按需覆写字段） */
+function sampleNote(patch: Partial<NoteMeta> = {}): NoteMeta {
+  return {
+    id: '00000000-0000-4000-8000-000000000000',
+    title: '未命名笔记',
+    createdAt: '2026-10-18T00:00:00.000Z',
+    updatedAt: '2026-10-18T00:00:00.000Z',
+    pinned: false,
+    excerpt: '',
+    ...patch
+  }
+}
+
+export function notesApiStub(): NotesApiStub {
+  return {
+    list: vi.fn(async () => ({ notes: [] })),
+    get: vi.fn(async () => ({ text: '' })),
+    create: vi.fn(async (input?: { title?: string }): Promise<NoteCreateResult> => ({
+      note: sampleNote({ title: input?.title ?? '未命名笔记' }),
+      text: ''
+    })),
+    save: vi.fn(
+      async (input: { id: string; title: string; text: string }): Promise<NoteSaveResult> => ({
+        note: sampleNote({ id: input.id, title: input.title })
+      })
+    ),
+    remove: vi.fn(async () => ({ ok: true as const })),
+    pin: vi.fn(async (id: string, pinned: boolean): Promise<NoteSaveResult> => ({
+      note: sampleNote({ id, pinned })
+    })),
+    search: vi.fn(async () => ({ hits: [] })),
+    openFolder: vi.fn(async () => ({ path: 'C:\\笔记' }))
+  }
+}
+
+/** 知识库面（M5）的桩：默认空列表 / 空文本；写操作回最小成功对象（页面用例可覆写） */
+export interface KnowledgeApiStub {
+  list: Mock<() => Promise<KnowledgeListResult>>
+  import: Mock<() => Promise<KnowledgeImportResult>>
+  readText: Mock<(id: string) => Promise<KnowledgeReadTextResult>>
+  search: Mock<(query: string) => Promise<KnowledgeSearchResult>>
+  rename: Mock<(id: string, title: string) => Promise<KnowledgeRenameResult>>
+  remove: Mock<(id: string) => Promise<KnowledgeDeleteResult>>
+  reveal: Mock<(id: string) => Promise<KnowledgePathResult>>
+  openFolder: Mock<() => Promise<KnowledgePathResult>>
+}
+
+/** 一条示例文档（id 用 knowledgeIdSchema 认的 UUID 形状） */
+function sampleDoc(patch: Partial<KnowledgeDoc> = {}): KnowledgeDoc {
+  return {
+    id: '00000000-0000-4000-8000-000000000001',
+    title: '示例资料.txt',
+    originalPath: 'C:\\资料\\示例资料.txt',
+    size: 12,
+    ext: 'txt',
+    addedAt: '2026-10-18T00:00:00.000Z',
+    updatedAt: '2026-10-18T00:00:00.000Z',
+    charCount: 6,
+    excerpt: '示例资料',
+    ...patch
+  }
+}
+
+export function knowledgeApiStub(): KnowledgeApiStub {
+  return {
+    list: vi.fn(async () => ({ documents: [] })),
+    import: vi.fn(async () => ({ documents: [], skipped: [] })),
+    readText: vi.fn(async () => ({ text: '', truncated: false })),
+    search: vi.fn(async () => ({ hits: [] })),
+    rename: vi.fn(async (id: string, title: string): Promise<KnowledgeRenameResult> => ({
+      document: sampleDoc({ id, title })
+    })),
+    remove: vi.fn(async () => ({ ok: true as const })),
+    reveal: vi.fn(async (id: string) => ({ path: `C:\\资料\\${id}.txt` })),
+    openFolder: vi.fn(async () => ({ path: 'C:\\资料' }))
+  }
+}
+
 /** installKyclawBridge 的返回值：settings 面的方法（原样）+ 其余各面的桩 */
 export interface KyclawBridgeStubs extends SettingsApiStub {
   workspace: WorkspaceApiStub
@@ -863,6 +973,8 @@ export interface KyclawBridgeStubs extends SettingsApiStub {
   terminal: TerminalApiStub
   office: OfficeApiStub
   projects: ProjectsApiStub
+  notes: NotesApiStub
+  knowledge: KnowledgeApiStub
   updates: UpdatesApiStub
   telemetry: TelemetryApiStub
   plugins: PluginsApiStub
@@ -892,6 +1004,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const search = searchApiStub()
   const attachments = attachmentsApiStub()
   const files = filesApiStub()
+  const notes = notesApiStub()
+  const knowledge = knowledgeApiStub()
   const api: KyclawApi = {
     window: windowApiStub(),
     settings,
@@ -900,6 +1014,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     terminal,
     office,
     projects,
+    notes,
+    knowledge,
     agent: agentApiStub(),
     attachments,
     files,
@@ -920,6 +1036,8 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
     terminal,
     office,
     projects,
+    notes,
+    knowledge,
     updates,
     telemetry,
     plugins,

@@ -55,6 +55,29 @@ import {
   type AppSettingsPatch,
   type WorkspaceMode
 } from './settings'
+import {
+  noteCreateInputSchema,
+  noteIdSchema,
+  noteSaveInputSchema,
+  type NoteCreateResult,
+  type NoteDeleteResult,
+  type NoteGetResult,
+  type NoteSaveResult,
+  type NotesListResult,
+  type NotesOpenFolderResult,
+  type NotesSearchResult
+} from './notes'
+import {
+  knowledgeIdSchema,
+  knowledgeRenameInputSchema,
+  type KnowledgeDeleteResult,
+  type KnowledgeImportResult,
+  type KnowledgeListResult,
+  type KnowledgePathResult,
+  type KnowledgeReadTextResult,
+  type KnowledgeRenameResult,
+  type KnowledgeSearchResult
+} from './knowledge'
 
 export const resolvedThemeSchema = z.enum(['light', 'dark'])
 export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>
@@ -258,6 +281,50 @@ export const IPC_CHANNELS = {
      * 路径解析主进程做（按项目 id 查 settings.projects），渲染端传不了任意路径。
      */
     openInExplorer: 'projects:open-in-explorer'
+  },
+  /**
+   * M5：笔记（本地 Markdown，数据在 userData/notes/）。
+   * 所有回包都只含元数据/正文，不暴露库目录以外的路径；`openFolder` 只回打开的目录本身。
+   */
+  notes: {
+    /** 列全部笔记（NoteMeta[]，按置顶 + updatedAt 排序；含 excerpt 首 120 字） */
+    list: 'notes:list',
+    /** 读一篇正文（入参 [id]，返回 { text }） */
+    get: 'notes:get',
+    /** 新建（入参 [{ title? }]，返回 { note, text: '' }） */
+    create: 'notes:create',
+    /** 保存（入参 [{ id, title, text }]，返回 { note }；updatedAt 由主进程生成） */
+    save: 'notes:save',
+    /** 删除（入参 [id]，返回 { ok: true }） */
+    delete: 'notes:delete',
+    /** 置顶开关（入参 [id, pinned]，返回 { note }；pinned 真落 index.json） */
+    pin: 'notes:pin',
+    /** 搜索标题 + 正文（入参 [query]，返回 { hits }；上限 50 条） */
+    search: 'notes:search',
+    /** 在系统文件资源管理器里打开数据目录（无入参，返回 { path }） */
+    openFolder: 'notes:open-folder'
+  },
+  /**
+   * M5：知识库（本地文本资料库，数据在 userData/knowledge/）。
+   * 导入用**原生多选**（路径只由主进程选择器给），渲染端永远传不了任意路径。
+   */
+  knowledge: {
+    /** 列全部文档（KnowledgeDoc[]，含 excerpt 首 120 字） */
+    list: 'knowledge:list',
+    /** 原生多选导入（无入参，返回 { documents, skipped }） */
+    import: 'knowledge:import',
+    /** 读抽取文本（入参 [id]，返回 { text, truncated }） */
+    readText: 'knowledge:read-text',
+    /** 搜索标题 + 正文（入参 [query]，返回 { hits }；上限 50 条） */
+    search: 'knowledge:search',
+    /** 重命名标题（入参 [{ id, title }]，返回 { document }） */
+    rename: 'knowledge:rename',
+    /** 删除（入参 [id]，返回 { ok: true }） */
+    delete: 'knowledge:delete',
+    /** 在资源管理器中显示该文档（入参 [id]，返回 { path }） */
+    reveal: 'knowledge:reveal',
+    /** 打开数据目录（无入参，返回 { path }） */
+    openFolder: 'knowledge:open-folder'
   },
   agent: {
     /** 读本地 agent 服务端点（返回 AgentEndpoint：baseUrl + token） */
@@ -569,6 +636,32 @@ export const projectBaseSchema = z.strictObject({ base: z.string().min(1) })
 
 /** projects:pick-folder 的回包：挑中的文件夹（归一后）或 null（取消） */
 export const projectFolderSchema = z.strictObject({ path: z.string().min(1).nullable() })
+
+// ── M5：笔记 / 知识库的入参闸门（只管形状；业务校验与磁盘动作在主进程 handler）─────────
+
+/** notes:create 的入参：[{ title? }]（缺省标题由主进程兜底成「未命名笔记」） */
+export const noteCreateArgsSchema = z.tuple([noteCreateInputSchema])
+
+/** notes:save 的入参：[{ id, title, text }]（正文上限/标题 trim 在主进程 handler） */
+export const noteSaveArgsSchema = z.tuple([noteSaveInputSchema])
+
+/** notes:get / notes:delete 的入参：[id] */
+export const noteIdArgsSchema = z.tuple([noteIdSchema])
+
+/** notes:pin 的入参：[id, pinned]（置顶是写操作，id 仍走 uuid 闸门） */
+export const notePinArgsSchema = z.tuple([noteIdSchema, z.boolean()])
+
+/** notes:search 的入参：[query]（trim 后为空由 handler 直接回空列表） */
+export const notesSearchArgsSchema = z.tuple([z.string().min(1)])
+
+/** knowledge:readText / knowledge:delete / knowledge:reveal 的入参：[id] */
+export const knowledgeIdArgsSchema = z.tuple([knowledgeIdSchema])
+
+/** knowledge:rename 的入参：[{ id, title }]（标题 trim/空值校验在主进程 handler） */
+export const knowledgeRenameArgsSchema = z.tuple([knowledgeRenameInputSchema])
+
+/** knowledge:search 的入参：[query]（trim 后为空由 handler 直接回空列表） */
+export const knowledgeSearchArgsSchema = z.tuple([z.string().min(1)])
 
 /** 写密钥的回包：只有"有没有"，没有明文（strict：连字段名都锁死） */
 export const setProviderKeyResultSchema = z.strictObject({ hasKey: z.literal(true) })
@@ -1070,6 +1163,60 @@ export interface KyclawProjectsApi {
 }
 
 /**
+ * preload 暴露给渲染端的**笔记**面（M5）：本地 Markdown 的增删改查 + 搜索 + 打开数据目录。
+ *
+ * 纪律：
+ *   1. id 只认主进程生成的 UUID（形状闸门 `noteIdSchema`）；
+ *   2. 正文上限 2 MB、标题上限 120 字（超限抛人话，不静默截断）；
+ *   3. `openFolder` 只打开 `userData/notes/`，不接受任何路径入参。
+ */
+export interface KyclawNotesApi {
+  /** 列全部笔记（置顶优先 + updatedAt 倒序；含 excerpt） */
+  list(): Promise<NotesListResult>
+  /** 读一篇正文 */
+  get(id: string): Promise<NoteGetResult>
+  /** 新建（标题可省略；返回新元数据 + 空正文） */
+  create(input?: { title?: string }): Promise<NoteCreateResult>
+  /** 保存标题 + 正文（updatedAt 由主进程生成） */
+  save(input: { id: string; title: string; text: string }): Promise<NoteSaveResult>
+  /** 删除（index 与 .md 一起清） */
+  remove(id: string): Promise<NoteDeleteResult>
+  /** 置顶开关（真落 index.json；返回置顶后的元数据） */
+  pin(id: string, pinned: boolean): Promise<NoteSaveResult>
+  /** 搜索标题 + 正文（query trim 后为空 = 空结果） */
+  search(query: string): Promise<NotesSearchResult>
+  /** 在系统文件资源管理器里打开数据目录 */
+  openFolder(): Promise<NotesOpenFolderResult>
+}
+
+/**
+ * preload 暴露给渲染端的**知识库**面（M5）：本地文本资料的导入/检索/查看 + 资源管理器动作。
+ *
+ * 纪律：
+ *   1. 导入走**原生多选**（渲染端传不了任意路径）；扩展名白名单与大小/数量上限在主进程；
+ *   2. 原文件复制进库，删除只动库内三处（index / files / text），绝不碰用户原文件；
+ *   3. 正文与搜索都在主进程做，不把整库文本发给渲染端。
+ */
+export interface KyclawKnowledgeApi {
+  /** 列全部文档（含 excerpt） */
+  list(): Promise<KnowledgeListResult>
+  /** 原生多选导入（返回成功清单 + 被跳过的原因） */
+  import(): Promise<KnowledgeImportResult>
+  /** 读一篇抽取文本（超过 2 MB 截断并如实标 truncated） */
+  readText(id: string): Promise<KnowledgeReadTextResult>
+  /** 搜索标题 + 正文 */
+  search(query: string): Promise<KnowledgeSearchResult>
+  /** 重命名标题 */
+  rename(id: string, title: string): Promise<KnowledgeRenameResult>
+  /** 删除（index / files / text 一起清；原文件不动） */
+  remove(id: string): Promise<KnowledgeDeleteResult>
+  /** 在资源管理器中显示该文档（回实际 reveal 的路径） */
+  reveal(id: string): Promise<KnowledgePathResult>
+  /** 打开知识库数据目录 */
+  openFolder(): Promise<KnowledgePathResult>
+}
+
+/**
  * preload 暴露给渲染端的工作台面（右侧边栏四项工具里的文件 / Git 两项）。
  * 三个共同纪律：
  *   1. 第一个入参是 threadId —— 会话根在主进程按 sessionRoots 同口径解析（渲染端传不了绝对路径）；
@@ -1239,6 +1386,10 @@ export interface KyclawApi {
   /** M3-S2：Office 文档注册表（打开选择器 / 会话打开 / 按 id 读字节 / 释放） */
   office: KyclawOfficeApi
   projects: KyclawProjectsApi
+  /** M5：笔记（本地 Markdown；数据在 userData/notes/，不经过对话） */
+  notes: KyclawNotesApi
+  /** M5：知识库（本地文本资料；数据在 userData/knowledge/，不经过对话） */
+  knowledge: KyclawKnowledgeApi
   agent: KyclawAgentApi
   /** 模块 2：附件能力（PDF 文字层抽取；抽取在主进程） */
   attachments: KyclawAttachmentsApi
