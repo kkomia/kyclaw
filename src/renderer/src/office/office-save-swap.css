@@ -1,0 +1,35 @@
+/*
+ * 保存态「换词」动效（A4；研究 §三.3 文案换词 + Lead A4 口径）。
+ *
+ * 一份定义、两处消费（不写两份）：
+ *   - shell 状态栏：`features/office/OfficeStatusBar.tsx` import；
+ *   - 面内 QAT 保存态：`office/main.tsx` import（OfficeRibbonView 里加 class）。
+ *
+ * 口径：150ms glide + 新词晚 50ms；opacity + translateY(4px) + blur(2px)；
+ * `prefers-reduced-motion` 压到 0.01ms（不是 0 —— 保留"有一个极短动画"的语义）。
+ * 曲线用全局 `--clp-ease-out`（kimi-tokens，shell 与面都 import 同一套 token）。
+ */
+.office-save-swap {
+  display: inline-block;
+  animation: office-save-swap-in 150ms var(--clp-ease-out, cubic-bezier(0.23, 1, 0.32, 1)) 50ms both;
+}
+
+@keyframes office-save-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-save-swap {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+  }
+}

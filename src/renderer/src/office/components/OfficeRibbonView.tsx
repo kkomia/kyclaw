@@ -557,7 +557,7 @@ export function OfficeRibbonView({
             aria-live="polite"
           >
             <span className="ofr-save-dot" data-state={saveState} aria-hidden="true" />
-            <span key={saveState} className="ofr-save-text">
+            <span key={saveState} className="ofr-save-text office-save-swap">
               {SAVE_STATE_LABEL[saveState]}
             </span>
           </span>

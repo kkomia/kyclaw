@@ -28,7 +28,7 @@ import zhCN from '@betteroffice/docx-i18n/zh-CN'
 import type { SurfaceTheme } from './bridge-protocol'
 import { OfficeRibbon } from './components/OfficeRibbon'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
-import { officeDefaultZoom } from './components/office-zoom'
+import { officeDefaultZoom, OFFICE_ZOOM_RESIZE_DEBOUNCE_MS } from './components/office-zoom'
 
 export interface DocxEditorPaneHandle {
   /** 保存三阶段的 generate：flush 未提交输入 → `save()` 拿字节；失败回 null（错误已回调） */
@@ -97,6 +97,33 @@ export const DocxEditorPane = forwardRef<DocxEditorPaneHandle, DocxEditorPanePro
     const [viewSettings, setViewSettings] = useState<OfficeViewSettings>(INITIAL_VIEW_SETTINGS)
     /** 默认缩放：用户定调「1280 窗口下纸面视觉宽 ≈ 860px」（office-zoom.ts） */
     const [initialZoom] = useState(() => officeDefaultZoom(window.innerWidth))
+    /**
+     * A4：窗口 resize 后按 fit-width 重算 zoom（内核 `ref.setZoom`，clamp 在 officeDefaultZoom 内）。
+     * 防抖 120ms：拖动窗口时只跟最后一帧；`initialZoom` 仍是 mount 的初始 prop。
+     */
+    const zoomRef = useRef(initialZoom)
+
+    useEffect(() => {
+      let timer: number | null = null
+      const apply = (): void => {
+        const next = officeDefaultZoom(window.innerWidth)
+        if (next === zoomRef.current) return
+        zoomRef.current = next
+        editorRef.current?.setZoom(next)
+      }
+      const onResize = (): void => {
+        if (timer !== null) window.clearTimeout(timer)
+        timer = window.setTimeout(() => {
+          timer = null
+          apply()
+        }, OFFICE_ZOOM_RESIZE_DEBOUNCE_MS)
+      }
+      window.addEventListener('resize', onResize)
+      return () => {
+        window.removeEventListener('resize', onResize)
+        if (timer !== null) window.clearTimeout(timer)
+      }
+    }, [initialZoom])
 
     useEffect(
       () => () => {

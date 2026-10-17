@@ -21,12 +21,24 @@ export const OFFICE_PAGE_WIDTH = 816
 /** 用户定调的纸面视觉宽（860；验收区间 830–880） */
 export const OFFICE_TARGET_PAGE_WIDTH = 860
 
-/** fit 档两侧各留的安全边距（单边 48px） */
-export const OFFICE_VIEWPORT_SIDE_PADDING = 48
+/**
+ * fit 档两侧各留的最小安全边距（单边 12px）。
+ * A3 的 320px AI 面板展开后，1280 窗口的 iframe 只剩 ≈898px：若按 48px 边距 fit，
+ * 纸面会被压到 ≈802px（低于 830–880 验收区间）；12px 让 860 目标档仍放得下，
+ * 窄窗（720 → iframe 659）再退化为 fit 不溢出。
+ */
+export const OFFICE_VIEWPORT_SIDE_PADDING = 12
 
 /** 缩放夹取范围（与内核 zoom 的可用区间一致） */
 export const OFFICE_MIN_ZOOM = 0.5
 export const OFFICE_MAX_ZOOM = 2
+
+/**
+ * A4：窗口 resize → 重算 fit-width zoom 的防抖窗口。
+ * 拖拽窗口时 `resize` 高频触发；120ms 内只算最后一次（与 `--office-motion-feedback` 同档，
+ * 用户松手后一帧内跟手，且不会把内核 `setZoom` 打成动画队列）。
+ */
+export const OFFICE_ZOOM_RESIZE_DEBOUNCE_MS = 120
 
 /**
  * 面内默认缩放（1 = 100%）。

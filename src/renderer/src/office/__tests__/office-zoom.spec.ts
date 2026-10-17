@@ -26,11 +26,19 @@ describe('office-zoom：默认 fit-width 缩放', () => {
     expect(OFFICE_PAGE_WIDTH * officeDefaultZoom(1538)).toBeCloseTo(860, 0)
   })
 
-  it('窄窗退化为 fit（两侧各留 48px），不产生横向溢出', () => {
+  it('窄窗退化为 fit（两侧各留 12px 最小边距），不产生横向溢出', () => {
     const narrow = 860
     const zoom = officeDefaultZoom(narrow)
     expect(zoom).toBeLessThan(1.054)
-    expect(zoom * OFFICE_PAGE_WIDTH).toBeLessThanOrEqual(narrow - 96 + 0.001)
+    // zoom 保留 3 位小数会带来 ±0.5px 取整误差：只要总量仍小于可用宽即可
+    expect(zoom * OFFICE_PAGE_WIDTH).toBeLessThanOrEqual(narrow - 20)
+  })
+
+  it('A4：A3 AI 面板展开后 1280 窗口 iframe ≈898，仍保持 860 目标档（≥830 验收线）', () => {
+    // 48px 边距会在这里算出 ≈802（不达标）；12px 后仍是 preferred 档
+    const zoom = officeDefaultZoom(898)
+    expect(zoom).toBeCloseTo(1.054, 3)
+    expect(OFFICE_PAGE_WIDTH * zoom).toBeGreaterThanOrEqual(830)
   })
 
   it('非法/极端输入被夹在 [0.5, 2]，且非有限值回退首选档', () => {

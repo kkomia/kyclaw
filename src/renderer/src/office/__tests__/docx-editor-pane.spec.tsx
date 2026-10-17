@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DocxEditorPane } from '../DocxEditorPane'
-import { officeDefaultZoom } from '../components/office-zoom'
+import { officeDefaultZoom, OFFICE_ZOOM_RESIZE_DEBOUNCE_MS } from '../components/office-zoom'
 
 /**
  * DocxEditorPane 的 A2 接线断言（不加载真实内核）：
@@ -13,6 +13,7 @@ import { officeDefaultZoom } from '../components/office-zoom'
  */
 const kernel = vi.hoisted(() => {
   const calls: Array<{ id: string; args?: unknown }> = []
+  const zoomCalls: number[] = []
   const state = {
     active: false,
     enabled: true,
@@ -29,13 +30,31 @@ const kernel = vi.hoisted(() => {
     },
     subscribe: (): (() => void) => () => undefined
   }
-  return { calls, source, props: null as Record<string, unknown> | null }
+  return {
+    calls,
+    zoomCalls,
+    setZoom: (zoom: number): void => {
+      zoomCalls.push(zoom)
+    },
+    source,
+    props: null as Record<string, unknown> | null
+  }
 })
 
 vi.mock('@betteroffice/docx-react', async () => {
   const React = await import('react')
-  const DocxEditor = React.forwardRef(function DocxEditorStub(props: Record<string, unknown>) {
+  const DocxEditor = React.forwardRef(function DocxEditorStub(
+    props: Record<string, unknown>,
+    ref: Ref<unknown>
+  ) {
     kernel.props = props
+    React.useImperativeHandle(ref, () => ({
+      setZoom: kernel.setZoom,
+      whenLayoutComplete: async (): Promise<number> => 1,
+      flushPendingInput: async (): Promise<void> => undefined,
+      save: async (): Promise<ArrayBuffer | null> => null,
+      loadDocumentBuffer: async (): Promise<void> => undefined
+    }))
     return React.createElement(
       'div',
       { 'data-testid': 'docx-editor-stub' },
@@ -84,6 +103,7 @@ function editorProps(): Record<string, unknown> {
 afterEach(() => {
   vi.useRealTimers()
   kernel.calls.length = 0
+  kernel.zoomCalls.length = 0
 })
 
 describe('DocxEditorPane × OfficeRibbon（A2 接线）', () => {
@@ -161,5 +181,63 @@ describe('DocxEditorPane × OfficeRibbon（A2 接线）', () => {
       { id: 'undo', args: undefined },
       { id: 'redo', args: undefined }
     ])
+  })
+})
+
+describe('DocxEditorPane × 默认 fit-width（A4 resize 校准）', () => {
+  const initialInnerWidth = window.innerWidth
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: initialInnerWidth
+    })
+  })
+
+  it('窗口 resize 后按 fit-width 重算 zoom：120ms 防抖只调一次内核 setZoom', () => {
+    vi.useFakeTimers()
+    renderPane()
+    expect(editorProps().initialZoom).toBe(officeDefaultZoom(initialInnerWidth))
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 720 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    // 拖拽窗口：防抖窗口内不调内核（避免动画队列抖动）
+    expect(kernel.zoomCalls).toEqual([])
+
+    act(() => {
+      vi.advanceTimersByTime(OFFICE_ZOOM_RESIZE_DEBOUNCE_MS)
+    })
+    expect(kernel.zoomCalls).toEqual([officeDefaultZoom(720)])
+
+    // 连续 resize 只跟最后一帧
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 900 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+      window.dispatchEvent(new Event('resize'))
+    })
+    act(() => {
+      vi.advanceTimersByTime(OFFICE_ZOOM_RESIZE_DEBOUNCE_MS)
+    })
+    expect(kernel.zoomCalls).toEqual([officeDefaultZoom(720), officeDefaultZoom(900)])
+  })
+
+  it('宽度没变（算出的 zoom 相同）不重复调用 setZoom', () => {
+    vi.useFakeTimers()
+    renderPane()
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: initialInnerWidth + 1
+    })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    act(() => {
+      vi.advanceTimersByTime(OFFICE_ZOOM_RESIZE_DEBOUNCE_MS)
+    })
+    // 1600 级窗口都取 preferred 档（1.054），+1px 不产生新 zoom
+    expect(kernel.zoomCalls).toEqual([])
   })
 })

@@ -165,7 +165,6 @@
 
 .ofr-save-text {
   display: inline-block;
-  animation: ofr-swap var(--office-motion-feedback) var(--clp-ease-out);
 }
 
 /* tab 组 */
@@ -263,7 +262,14 @@
 .ofr-body {
   height: var(--office-ribbon-body-height);
   overflow: hidden;
-  transition: height var(--office-motion-enter) var(--clp-ease-out);
+  /* 离场（收起）走 120ms；展开在下面单独覆盖成 enter 档（200ms settle） */
+  transition: height var(--office-motion-exit) var(--clp-ease-out);
+}
+
+/* 展开：入场 150–320ms 档（--office-motion-enter = --duration-base 200ms）；
+   高度切换只发生在折叠/展开，切 tab 时高度恒为 80px（band 内部换组），不抖。 */
+.ofr-ribbon:not([data-collapsed='true']) .ofr-body {
+  transition-duration: var(--office-motion-enter);
 }
 
 .ofr-ribbon[data-collapsed='true'] .ofr-body {
@@ -439,18 +445,9 @@ html[data-theme='dark'] .ofr-select {
 }
 
 /* ── 动效关键帧 ────────────────────────────────────────────────────── */
-@keyframes ofr-swap {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-    filter: blur(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-    filter: blur(0);
-  }
-}
+/* 保存态换词（slide/blur）不在这里定义：A4 起与 shell 状态栏共用
+   `office/office-save-swap.css`（150ms + 新词晚 50ms + reduced-motion 0.01ms），
+   QAT 只加 `.office-save-swap` class，不写第二份动画。 */
 
 @keyframes ofr-pop {
   0% {
@@ -509,18 +506,31 @@ html[data-theme='dark'] .ofr-select {
 }
 
 /*
+ * 窄窗 720（A4 调研结论，**不采用** CSS 覆盖）：
+ *
+ * 内核 DocxEditorShell 给滚动容器里的内容包裹层写了行内 `minWidth = 2×20(outline 预留) + 页面宽(≈834)`；
+ * 720 窗口的 iframe 只有 659，所以画布内部仍会横向滚动（A3 的 720 截图也是这个行为）。
+ * A4 试过在 <=900px 解除该 min-width：盒子会缩到 659 但页面 canvas 的绝对定位左右偏移由内核
+ * 布局结果给出，不随之重算 → 纸面右侧被**裁掉且无法滚动看到**，比保留滚动条更糟，故回退。
+ * 结论：720 的验收口径是「页面级不横向溢出 + 纸面可完整滚动查看」；要做到画布内也不横滚，
+ * 需要内核提供 fit-width/re-layout API（A5 评估/上游 issue），不在 CSS 层硬覆盖。
+ */
+
+/*
  * 深色纸面（用户 2026-10-17 第 5 条：要灰色；A2 先查清楚，A4 再微调）。
  *
  * 内核 0.4.3 的分页视图是 **canvas**（`.canvas-pages > canvas.canvas-page`），
  * editor.css 里 `.oox-root.dark .layout-page { filter: invert(...) }` 是旧 DOM 渲染期的选择器，
  * canvas 路径不会命中（A1 真机截图里深色纸面仍是白纸即因此）。
  * 这里只对**纸面 canvas**加 `filter`：纯视图层、不改文档字色字体、不写回文档。
- * 用 `invert(0.8)`（不是 invert(1)）：白纸 → #333 深灰、黑字 → #ccc 浅灰，避免纯黑页；
+ * 部分反相（invert(0.78)）而不是全反相：白纸 → #3f3f3f 中性深灰、黑字 → #c0c0c0 浅灰（可读）；
  * 再 hue-rotate(180deg) 把彩色拉回原色相。风险：canvas 内的图片/形状会被一起反相
- * （内核当前无按元素豁免的能力），见 a2-report.md「用户 5 条定调落地情况」。
+ * （内核当前无按元素豁免的能力），见 a4-report.md「暗色纸面校准」。
  */
 .oox-root.dark .canvas-page {
-  filter: invert(0.8) hue-rotate(180deg) contrast(0.9);
+  /* A4 校准：invert(0.78) → 纸面 #3f3f3f 中性灰、正文 #c0c0c0（实测对比 ≈5.8:1，可读）；
+     hue-rotate 保持彩色内容色相（红字/链接不会变绿）。 */
+  filter: invert(0.78) hue-rotate(180deg) contrast(0.9);
 }
 
 @media print {

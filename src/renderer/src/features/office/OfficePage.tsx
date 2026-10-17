@@ -11,6 +11,7 @@ import {
   type OfficeShortcutAction
 } from './office-actions'
 import { OfficeAiPanel } from './OfficeAiPanel'
+import { OfficeStatusBar } from './OfficeStatusBar'
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
@@ -585,6 +586,19 @@ function OfficeWorkspace({
           </p>
         </div>
       )}
+
+      {/*
+        A4：底部状态栏（workspace 最后一个 flex 子项）→ 横跨「画布 + AI 面板」整行下方；
+        数据全是壳真值（tab.dirty / saving / readOnly + doc:loaded 页数），不新增协议。
+      */}
+      <OfficeStatusBar
+        documentName={loaded?.info.displayName ?? tab.title}
+        kind={tab.kind}
+        pageCount={pageCount}
+        dirty={tab.dirty}
+        saving={saving}
+        readOnly={tab.readOnly}
+      />
     </div>
   )
 }
