@@ -24,6 +24,23 @@ import '@xterm/xterm/css/xterm.css'
 /** 未认领的输出最多缓冲多少字符（start 的回包还没到时的早到输出；防重启时越积越多） */
 const PENDING_LIMIT = 64 * 1024
 
+/**
+ * xterm 的 `fontFamily` 只能是**字符串**（画布按它做字体测量），不能直接写 CSS `var()`；
+ * 所以从根元素读 `--font-code` 的计算值 —— 即章程 §2 的 mono 声部（Cascadia Mono → …
+ * → DSH 中文链），保证终端里的中文路径/输出和产品其它技术位命中同一套字体。
+ *
+ * `--font-code` 读不到（独立渲染组件的单测 / 极端启动时序还没挂 token）时退回**章程逐字串**；
+ * 两处必须同步（语义 token 本身由 `styles/__tests__/tokens.spec.ts` 钉住，这里只做兜底）。
+ */
+const FALLBACK_TERMINAL_FONT =
+  "'Cascadia Mono', 'Cascadia Code', Consolas, 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif"
+
+function terminalFontFamily(): string {
+  if (typeof document === 'undefined') return FALLBACK_TERMINAL_FONT
+  const token = getComputedStyle(document.documentElement).getPropertyValue('--font-code').trim()
+  return token === '' ? FALLBACK_TERMINAL_FONT : token
+}
+
 export function TerminalTool({
   root,
   active
@@ -87,7 +104,8 @@ export function TerminalTool({
     const term = new Terminal({
       convertEol: false,
       cursorBlink: true,
-      fontFamily: "'Geist Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace",
+      // 字体走产品 mono 声部（--font-code 含 DSH 中文链），不再硬编码第二套字栈
+      fontFamily: terminalFontFamily(),
       fontSize: 13,
       theme: terminalTheme(),
       scrollback: 5000

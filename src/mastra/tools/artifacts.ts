@@ -199,11 +199,17 @@ export function escapeHtml(text: string): string {
 /**
  * 报告外壳的内联样式（自带、无外部请求、离线可看；打印时不带阴影与底色）。
  * 颜色只做浅色一套：报告是"给人看的文档"，打印与投屏都以浅色为准（深色版留后续）。
+ *
+ * 字体（P2 字体统一）：这是**独立 HTML**（不能读产品的 CSS var），所以按章程 §2 的逐字字面量写，
+ * 与产品界面同一条 DSH 中文链——拉丁回退用系统无衬线（'Segoe UI'），中文段
+ * Noto Sans SC → Source Han Sans SC → PingFang SC → Hiragino Sans GB → 微软雅黑；
+ * 代码位用 mono 声部（Cascadia Mono → … → 同一条中文链）。改这里必须与
+ * `styles/tokens/semantic.css` 的 `--font-ui/--font-code` 保持同一套族名与顺序。
  */
 const REPORT_STYLE = `:root{--ink:#1f1f1e;--ink-2:#5b5b58;--line:#e4e2df;--bg:#f5f4f2;--accent:#3b6ea5}
 *{box-sizing:border-box}
 body{margin:0;padding:32px 16px;background:var(--bg);color:var(--ink);
-font:16px/1.75 -apple-system,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
+font:16px/1.75 'Segoe UI','Noto Sans SC','Source Han Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
 -webkit-print-color-adjust:exact;print-color-adjust:exact}
 .kyclaw-report{max-width:820px;margin:0 auto;padding:48px 56px;background:#fff;border-radius:8px;
 box-shadow:0 1px 3px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.06)}
@@ -218,7 +224,7 @@ li{margin:6px 0}
 li>ul,li>ol{margin:6px 0}
 a{color:var(--accent)}
 blockquote{margin:16px 0;padding:8px 16px;border-left:3px solid var(--accent);background:#f7f8fa;color:var(--ink-2)}
-code{font-family:"Cascadia Mono",Consolas,"Courier New",monospace;font-size:.92em;background:#f3f3f1;
+code{font-family:'Cascadia Mono','Cascadia Code',Consolas,'Noto Sans SC','Source Han Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',monospace;font-size:.92em;background:#f3f3f1;
 padding:2px 5px;border-radius:4px}
 pre{margin:16px 0;padding:14px 16px;background:#f6f6f4;border:1px solid var(--line);border-radius:6px;
 overflow:auto}

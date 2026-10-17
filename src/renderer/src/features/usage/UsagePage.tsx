@@ -32,7 +32,13 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-/** 汇总 + 按模型拆分（数据已到位才渲染，所以 data 是确定的） */
+/**
+ * 汇总 + 按模型拆分（数据已到位才渲染，所以 data 是确定的）。
+ *
+ * 数字排版（P2 字体统一）：用量/次数是**数据读数** → mono + tabular-nums（章程 §2.4/§2.5）：
+ *   - 总量的 t1 可以保留字号，但必须 mono + tabular（等宽数字不跳动）；
+ *   - 模型行的数字单独包一层 mono+tabular，后面的「Token / 次」标签仍是 sans（继承外层文字声部）。
+ */
 function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
   return (
     <>
@@ -42,7 +48,10 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
       >
         <div className="flex flex-col gap-1">
           <span className="text-b2 text-ink-secondary">Token</span>
-          <span data-testid="usage-tokens" className="text-t1 font-medium text-ink">
+          <span
+            data-testid="usage-tokens"
+            className="font-mono text-t1 font-medium text-ink tabular-nums"
+          >
             {formatTokens(data.tokens.total)}
           </span>
         </div>
@@ -80,9 +89,12 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
               </div>
               <div className="flex justify-between gap-4 text-c1 text-ink-secondary">
                 <span data-testid={`usage-model-${index}-tokens`}>
-                  {formatTokens(row.tokens.total)} Token
+                  <span className="font-mono tabular-nums">{formatTokens(row.tokens.total)}</span>{' '}
+                  Token
                 </span>
-                <span data-testid={`usage-model-${index}-runs`}>{row.runs} 次</span>
+                <span data-testid={`usage-model-${index}-runs`}>
+                  <span className="font-mono tabular-nums">{row.runs}</span> 次
+                </span>
               </div>
             </div>
           ))}

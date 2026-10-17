@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { UsagePage } from '../UsagePage'
@@ -158,8 +158,9 @@ describe('用量页：今日', () => {
 
     fireEvent.click(screen.getByTestId('usage-range-month'))
 
-    // 切窗口会重新取数：等新数字上屏（25,000 只在本月档出现）
-    await screen.findByText('25,000')
+    // 切窗口会重新取数：等新数字上屏（25,000 只在本月档出现；按汇总节点断言，
+    // 因为按模型行的数字现在单独包了一层 mono 节点，纯文本查找会命中两处）
+    await waitFor(() => expect(screen.getByTestId('usage-tokens')).toHaveTextContent('25,000'))
     expect(server.calls.at(-1)?.range).toBe('month')
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('25,000')
     expect(screen.getByTestId('usage-models').children).toHaveLength(2) // 标题 + 一行
@@ -187,5 +188,27 @@ describe('用量页：今日', () => {
 
     expect(await screen.findByTestId('usage-summary')).toBeInTheDocument()
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('1,500')
+  })
+
+  it('数字排版（P2 字体统一）：用量/次数是 mono + tabular-nums，「Token/次」标签保持 sans', async () => {
+    installFakeUsage({ today: TODAY, month: MONTH })
+    render(<UsagePage />)
+    await screen.findByTestId('usage-summary')
+
+    // 总量：mono + tabular（等宽数字不跳动）
+    const total = screen.getByTestId('usage-tokens')
+    expect(total).toHaveClass('font-mono')
+    expect(total).toHaveClass('tabular-nums')
+
+    // 按模型行：数字单独包 mono+tabular，文本读数不变
+    for (const testId of ['usage-model-0-tokens', 'usage-model-0-runs']) {
+      const cell = screen.getByTestId(testId)
+      const numeric = cell.querySelector('.tabular-nums')
+      expect(numeric).not.toBeNull()
+      expect(numeric).toHaveClass('font-mono')
+    }
+    expect(screen.getByTestId('usage-model-0-tokens')).toHaveTextContent('1,200 Token')
+    expect(screen.getByTestId('usage-model-0-runs')).toHaveTextContent('2 次')
+    expect(screen.getByTestId('usage-model-1-tokens')).toHaveTextContent('300 Token')
   })
 })

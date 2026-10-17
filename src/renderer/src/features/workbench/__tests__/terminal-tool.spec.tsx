@@ -93,6 +93,7 @@ beforeEach(() => {
 afterEach(() => {
   teardownWorkbench()
   vi.unstubAllGlobals()
+  document.documentElement.style.removeProperty('--font-code')
 })
 
 describe('TerminalTool', () => {
@@ -165,5 +166,40 @@ describe('TerminalTool', () => {
     await waitFor(() => expect(mocks.fits[0]?.fit.mock.calls.length ?? 0).toBeGreaterThan(before))
     expect(bed.bridge.terminal.resize).toHaveBeenCalledWith('term-1', 80, 24)
     expect(mocks.instances[0]?.focus).toHaveBeenCalled()
+  })
+
+  it('xterm 字体读 --font-code（含 DSH 中文链）；token 缺失时退回章程逐字串，不再硬编码 Geist', async () => {
+    const original = window.getComputedStyle.bind(window)
+    const token =
+      "'Cascadia Mono', 'Cascadia Code', Consolas, 'Noto Sans SC', 'PingFang SC', monospace"
+    const spy = vi.spyOn(window, 'getComputedStyle').mockImplementation((element: Element) => {
+      if (element === document.documentElement) {
+        return {
+          getPropertyValue: (name: string): string => (name === '--font-code' ? token : '')
+        } as CSSStyleDeclaration
+      }
+      return original(element)
+    })
+
+    const first = render(<TerminalTool root={rootOf()} active />)
+    await waitFor(() => expect(bed.bridge.terminal.start).toHaveBeenCalled())
+    // 直接拿 token 的计算值当 xterm fontFamily（CSS 变量值本身就是合法的 fontFamily 串）
+    expect(String(mocks.instances[0]?.options.fontFamily)).toBe(token)
+    first.unmount()
+    spy.mockRestore()
+
+    // 读不到 token（独立渲染 / 极端启动时序）：退回章程逐字串（中文链含 Noto Sans SC/雅黑）
+    mocks.instances.length = 0
+    mocks.fits.length = 0
+    bed.bridge.terminal.start.mockClear()
+    render(<TerminalTool root={rootOf()} active />)
+    await waitFor(() => expect(mocks.instances.length).toBe(1))
+    const fallback = String(mocks.instances[0]?.options.fontFamily)
+    expect(fallback).toContain('Cascadia Mono')
+    expect(fallback).toContain('Noto Sans SC')
+    expect(fallback).toContain('Microsoft YaHei')
+    // 旧硬编码（Geist/ui-monospace）不能再出现
+    expect(fallback).not.toContain('Geist')
+    expect(fallback).not.toContain('ui-monospace')
   })
 })

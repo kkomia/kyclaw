@@ -71,6 +71,23 @@ describe('renderReportHtml：自带样式的单文件报告', () => {
     expect(html).toContain('@media print')
     expect(html).toContain('break-inside:avoid')
   })
+
+  it('字体栈 = 章程逐字 DSH 中文链（拉丁回退 Segoe UI）；代码位 mono 同链；旧栈不再出现', () => {
+    const html = renderReportHtml({ title: 'T', body: '<pre><code>x</code></pre>' })
+
+    // 正文：系统无衬线拉丁回退 + DSH 中文链（顺序逐字，与 semantic.css 的 --font-ui 一致）
+    expect(html).toContain(
+      "font:16px/1.75 'Segoe UI','Noto Sans SC','Source Han Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif"
+    )
+    // 代码位：mono 声部（Cascadia Mono 起）+ 同一条 DSH 中文链
+    expect(html).toMatch(
+      /code\{font-family:'Cascadia Mono','Cascadia Code',Consolas,'Noto Sans SC','Source Han Sans SC','PingFang SC','Hiragino Sans GB','Microsoft YaHei',monospace/
+    )
+    // P2 修掉的旧栈：Apple 系统字、雅黑优先、本机未装的 Noto Sans CJK SC 都不该再出现
+    expect(html).not.toContain('-apple-system')
+    expect(html).not.toContain('Noto Sans CJK SC')
+    expect(html).not.toContain('"Microsoft YaHei","PingFang SC"')
+  })
 })
 
 describe('defaultArtifactName：从标题派生文件名', () => {
