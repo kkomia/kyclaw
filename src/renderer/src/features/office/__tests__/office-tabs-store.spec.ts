@@ -253,3 +253,147 @@ describe('office-tabs-store：M3-S4 绝对路径身份（只读，只用于匹�
     expect(useOfficeTabsStore.getState().tabs[0]?.absolutePath).toBe('D:\\根\\docs\\a.docx')
   })
 })
+
+describe('office-tabs-store：M3-S5-3 dormant（占位标签）', () => {
+  it('dormant 缺省 undefined；setDormant 批量置位、幂等、未知 id 忽略', () => {
+    const { open } = useOfficeTabsStore.getState()
+    const a = open({ kind: 'docx', path: 'a.docx' })
+    const b = open({ kind: 'docx', path: 'b.docx' })
+    const at = (id: string): boolean | undefined =>
+      useOfficeTabsStore.getState().tabs.find((tab) => tab.id === id)?.dormant
+
+    expect(at(a)).toBeUndefined()
+    expect(at(b)).toBeUndefined()
+
+    useOfficeTabsStore.getState().setDormant([a, '不存在的标签'])
+    expect(at(a)).toBe(true)
+    expect(at(b)).toBeUndefined()
+
+    // 幂等：再置一次不换引用、不报错
+    const before = useOfficeTabsStore.getState().tabs
+    useOfficeTabsStore.getState().setDormant([a])
+    expect(useOfficeTabsStore.getState().tabs).toBe(before)
+  })
+
+  it('dirty 标签永不 dormant（卸载编辑器 = 丢未保存内容）', () => {
+    const { open, markDirty } = useOfficeTabsStore.getState()
+    const clean = open({ kind: 'docx', path: 'clean.docx' })
+    const dirty = open({ kind: 'docx', path: 'dirty.docx' })
+    markDirty(dirty)
+
+    useOfficeTabsStore.getState().setDormant([clean, dirty])
+    const tabs = useOfficeTabsStore.getState().tabs
+    expect(tabs.find((tab) => tab.id === clean)?.dormant).toBe(true)
+    expect(tabs.find((tab) => tab.id === dirty)?.dormant).toBeUndefined()
+  })
+
+  it('clearDormant 恢复挂载；activate 也会自动清 dormant 并刷新 lastActiveAt', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000)
+    const { open, activate } = useOfficeTabsStore.getState()
+    const first = open({ kind: 'docx', path: 'a.docx' })
+    const second = open({ kind: 'docx', path: 'b.docx' })
+
+    useOfficeTabsStore.getState().setDormant([first])
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === first)?.dormant).toBe(true)
+
+    useOfficeTabsStore.getState().clearDormant(first)
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === first)?.dormant).toBe(false)
+
+    // 再休眠 → 激活：active 永不 dormant（否则"激活的标签却没挂编辑器"）
+    useOfficeTabsStore.getState().setDormant([first])
+    vi.setSystemTime(2_000)
+    activate(first)
+    const activated = useOfficeTabsStore.getState().tabs.find((tab) => tab.id === first)
+    expect(activated?.dormant).toBe(false)
+    expect(activated?.lastActiveAt).toBe(2_000)
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(first)
+    // 非激活标签不受影响
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === second)?.lastActiveAt).toBe(
+      1_000
+    )
+  })
+})
+
+describe('office-tabs-store：M3-S5-3 打开闸门（openDocumentChecked / 旧签名兼容）', () => {
+  /** 用一个标签占位（不等价于 openDocument：这里只关心数量/脏计数） */
+  function seed(count: number, dirtyCount = 0): string[] {
+    const ids: string[] = []
+    for (let index = 0; index < count; index += 1) {
+      const id = useOfficeTabsStore.getState().open({ kind: 'docx', path: `seed-${index}.docx` })
+      if (index < dirtyCount) useOfficeTabsStore.getState().markDirty(id)
+      ids.push(id)
+    }
+    return ids
+  }
+
+  it('正常路径：openDocumentChecked 返回 ok + tabId（与旧签名同一个标签）', () => {
+    const result = useOfficeTabsStore
+      .getState()
+      .openDocumentChecked(
+        officeDocumentFixture({ documentId: 'doc-ok', displayName: '方案.docx' })
+      )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(useOfficeTabsStore.getState().tabs.map((tab) => tab.id)).toEqual([result.tabId])
+    }
+  })
+
+  it('标签数到上限：拒绝新文档（ok:false + max-open），不新增标签；同文档去重仍放行', () => {
+    const seeded = seed(5)
+    const existingDoc = seeded[0]
+    // 给第一条换成有 documentId 的标签（模拟已经打开的文档）
+    useOfficeTabsStore.setState((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === existingDoc ? { ...tab, documentId: 'doc-existing' } : tab
+      )
+    }))
+
+    const blocked = useOfficeTabsStore
+      .getState()
+      .openDocumentChecked(
+        officeDocumentFixture({ documentId: 'doc-new', displayName: '新的.docx' })
+      )
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) {
+      expect(blocked.block.code).toBe('max-open')
+      expect(blocked.block.kind).toBe('docx')
+      expect(blocked.block.message.length).toBeGreaterThan(0)
+    }
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(5)
+
+    // 去重激活：已有标签不算"新开"，上限不挡
+    const reopened = useOfficeTabsStore
+      .getState()
+      .openDocumentChecked(officeDocumentFixture({ documentId: 'doc-existing' }))
+    expect(reopened).toEqual({ ok: true, tabId: existingDoc })
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(existingDoc)
+  })
+
+  it('未保存数到上限：拒绝新文档（max-dirty）；打开数未满是前提', () => {
+    seed(3, 3)
+    const blocked = useOfficeTabsStore
+      .getState()
+      .openDocumentChecked(
+        officeDocumentFixture({ documentId: 'doc-more', displayName: '再一份.docx' })
+      )
+    expect(blocked.ok).toBe(false)
+    if (!blocked.ok) expect(blocked.block.code).toBe('max-dirty')
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(3)
+  })
+
+  it('旧签名 openDocument 兼容：正常返回 id；被闸门拒绝时返回空串（不新增、不抛）', () => {
+    const normal = useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-legacy' }))
+    expect(normal).not.toBe('')
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === normal)).toBeDefined()
+
+    seed(4) // 4 + 1 = 5 条，已到打开上限
+    const refused = useOfficeTabsStore
+      .getState()
+      .openDocument(officeDocumentFixture({ documentId: 'doc-refused' }))
+    expect(refused).toBe('')
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(5)
+  })
+})

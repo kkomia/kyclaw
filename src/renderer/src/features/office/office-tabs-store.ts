@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { OfficeDocumentInfo } from '@shared/office-editor'
+import { openBlockReason, type OpenBlock } from './office-capacity'
 
 /**
  * Office 工作区的标签模型（0.2.0 只做骨架，编辑器后续接）。
@@ -41,6 +42,13 @@ export interface OfficeTab {
   readOnly: boolean
   /** 最近一次被激活的毫秒时间戳（以后按最近使用排序用） */
   lastActiveAt: number
+  /**
+   * M3-S5-3：dormant = **占位标签**——标签还在（可激活、标题/路径不变），但它那块
+   * `OfficeWorkspace`（= 整个 iframe）已卸载：编辑器/wasm 内存放掉，激活时从磁盘重读字节重建。
+   * 约束：active 恒不为 dormant；**dirty 恒不为 dormant**（存了未保存内容还卸载 = 丢内容）。
+   * 缺省 undefined = 正常挂载。
+   */
+  dormant?: boolean
 }
 
 export type OfficeOpenInput =
@@ -68,8 +76,23 @@ export interface OfficeTabsState {
    * M3-S2：按主进程的 `OfficeDocumentInfo` 打开/激活 DOCX 标签。
    * **按 documentId 去重**（realpath 同一文件只开一个标签）；title=displayName、
    * path=displayPath、kind='docx'、readOnly 跟主进程回包。已存在时只激活，不重置 dirty/readOnly。
+   *
+   * M3-S5-3：这是**旧签名**（超限被拒时返回空串、拿不到原因，只为既有调用方不破）。新接线
+   * （打开入口展示"为什么打不开"）请用 `openDocumentChecked`。
    */
   openDocument: (info: OfficeDocumentInfo) => string
+  /**
+   * M3-S5-3：带原因的打开（`office-capacity` 的打开闸门）：同 documentId → 只激活；
+   * 新文档且标签数/未保存数超限 → `{ok:false, block}` 且**不新增标签**（不静默加）。
+   */
+  openDocumentChecked: (info: OfficeDocumentInfo) => OfficeDocumentOpenResult
+  /**
+   * M3-S5-3：批量置 dormant（幂等；未知 id 忽略；**dirty 标签跳过**——绝不把未保存内容卸载）。
+   * 调用方一般直接喂 `planMounts(...).dormant`。
+   */
+  setDormant: (ids: readonly string[]) => void
+  /** M3-S5-3：恢复挂载（激活时会自动清；这里给"只预挂不激活"的场景用） */
+  clearDormant: (id: string) => void
   /**
    * M3-S3：另存为成功后按 documentId 更新既有标签的标题/路径/只读（documentId 不变）。
    * 不触碰 dirty/active（脏由保存状态机单独 commit）。
@@ -122,6 +145,9 @@ export function officeTabTitleOf(input: OfficeOpenInput): string {
   return segments[segments.length - 1] ?? input.path
 }
 
+/** M3-S5-3：带原因的打开结果（同文档去重 → ok:true；超限才是 ok:false + 分类） */
+export type OfficeDocumentOpenResult = { ok: true; tabId: string } | { ok: false; block: OpenBlock }
+
 export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
   tabs: [],
   activeTabId: '',
@@ -144,13 +170,17 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }))
     return tab.id
   },
-  openDocument: (info) => {
+  openDocumentChecked: (info) => {
     const existing = get().tabs.find((tab) => tab.documentId === info.documentId)
     if (existing !== undefined) {
-      // 同一真实文件（选择器/会话/聊天入口都可能点第二次）：只激活，不重置 dirty/readOnly
+      // 同一真实文件（选择器/会话/聊天入口都可能点第二次）：只激活，不重置 dirty/readOnly。
+      // 去重激活**不受上限限制**（这本就是已有标签，不算"新开"）。
       get().activate(existing.id)
-      return existing.id
+      return { ok: true, tabId: existing.id }
     }
+    // 打开闸门（标签数 / 未保存数超限）：拒绝并带回原因，**不新增标签**（不静默加）
+    const block = openBlockReason(get().tabs, 'docx')
+    if (block !== null) return { ok: false, block }
     const tab: OfficeTab = {
       id: nextTabId('docx'),
       kind: 'docx',
@@ -163,7 +193,35 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       lastActiveAt: Date.now()
     }
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }))
-    return tab.id
+    return { ok: true, tabId: tab.id }
+  },
+  openDocument: (info) => {
+    // 旧签名：超限被拒时返回空串（拿不到原因）。新接线请用 openDocumentChecked。
+    const result = get().openDocumentChecked(info)
+    return result.ok ? result.tabId : ''
+  },
+  setDormant: (ids) => {
+    const wanted = new Set(ids)
+    set((state) => {
+      let changed = false
+      const tabs = state.tabs.map((tab) => {
+        if (!wanted.has(tab.id)) return tab
+        // 幂等：已经 dormant 的不换引用；**dirty 永不 dormant**（卸载编辑器 = 丢未保存内容）
+        if (tab.dormant === true || tab.dirty) return tab
+        changed = true
+        return { ...tab, dormant: true }
+      })
+      return changed ? { tabs } : {}
+    })
+  },
+  clearDormant: (id) => {
+    set((state) => {
+      const target = state.tabs.find((tab) => tab.id === id)
+      if (target === undefined || target.dormant !== true) return {}
+      return {
+        tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, dormant: false } : tab))
+      }
+    })
   },
   replaceDocument: (info) => {
     set((state) => {
@@ -200,7 +258,12 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       if (!state.tabs.some((tab) => tab.id === id)) return {}
       return {
         activeTabId: id,
-        tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, lastActiveAt: Date.now() } : tab))
+        tabs: state.tabs.map((tab) => {
+          if (tab.id !== id) return tab
+          const next = { ...tab, lastActiveAt: Date.now() }
+          // M3-S5-3：active 永不 dormant —— 激活一个 dormant 标签 = 恢复挂载（调用方随后从磁盘重读）
+          return tab.dormant === true ? { ...next, dormant: false } : next
+        })
       }
     }),
   reorder: (id, toIndex) =>
