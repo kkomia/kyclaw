@@ -217,7 +217,7 @@ describe('分块与总名', () => {
       />
     )
 
-    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('使用 2 个工具')
+    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('执行 1 次思考 · 调用 2 次工具')
   })
 
   it('正文把过程 run 切开：两条文本之间是两个过程块', () => {
@@ -238,9 +238,10 @@ describe('分块与总名', () => {
     )
 
     expect(screen.getAllByTestId('trace-block')).toHaveLength(2)
-    expect(screen.getAllByTestId('trace-toggle').map((node) => node.textContent)).toEqual([
-      '使用 1 个工具',
-      '使用 1 个工具'
+    // task-52：头部摘要换成「执行 N 次思考 · 调用 M 次工具」+ 状态（旧「使用 N 个工具」退休）
+    expect(screen.getAllByTestId('turn-process-summary').map((node) => node.textContent)).toEqual([
+      '调用 1 次工具',
+      '调用 1 次工具'
     ])
   })
 

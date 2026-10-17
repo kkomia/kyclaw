@@ -157,7 +157,7 @@ describe('Message：交付卡落在消息末尾的最终交付区', () => {
     // 过程块只数真正的过程工具（read）；已完成的 deliver 不再作为工具行重复出现
     const traces = within(article).getAllByTestId('trace-block')
     expect(traces).toHaveLength(1)
-    expect(within(traces[0]).getByTestId('trace-toggle')).toHaveTextContent('使用 1 个工具')
+    expect(within(traces[0]).getByTestId('trace-toggle')).toHaveTextContent('调用 1 次工具')
   })
 
   it('流式中 deliver 已出结果：卡当场在最终位，后续过程 part 不会把它挤回中间', () => {

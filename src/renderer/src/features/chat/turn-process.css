@@ -1,0 +1,44 @@
+/**
+ * 「本轮过程」统一容器（task-52）——固定长度的内部滚动区。
+ *
+ * 口径（对照 DSH claude-style 插件的 `--dsh-claude-message-fold-cap:320px` 与
+ * `.dsh-claude-file-io-section{max-height:150px;overflow-y:auto}`）：
+ *   - 高度是**上限**不是固定值：内容少时容器自然高度，超过 `--turn-process-max-height`
+ *     就内部滚动 —— 聊天流的总高度因此**不随工具输出增长**；
+ *   - `overscroll-behavior: contain`：滚到容器底部后不把滚动传给聊天流（避免"滚过程
+ *     顺带把整页滚走"）；
+ *   - `scrollbar-gutter: stable`：有/无滚动条切换时行不横向跳；
+ *   - 动效：滚动行为遵守 reduced-motion（跟随新行用瞬时定位，不逐帧平滑滚动）。
+ */
+:root {
+  /* 可在 320–420 之间调；360 是 6–8 行工具行的观感上限（一屏对话里不压过正文） */
+  --turn-process-max-height: 360px;
+}
+
+.turn-process-body {
+  max-height: var(--turn-process-max-height, 360px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* 行距：单行紧凑（工具行 24px 行高由 ToolCard 自己给），段间 8px 而不是原来的 12px */
+.turn-process-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 「回到底部」浮在滚动区右下角（不占行高、不遮正文首行） */
+.turn-process-back-to-bottom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-process-body {
+    scroll-behavior: auto;
+  }
+}

@@ -174,7 +174,7 @@ describe('助手消息里的工具 part（过程块包装）', () => {
     render(<Message message={message} />)
 
     expect(screen.getByTestId('message-text')).toHaveTextContent('先读文件：')
-    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('使用 1 个工具')
+    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('调用 1 次工具')
     // 跑完自动收起：行还没上 DOM
     expect(screen.queryByTestId('tool-card')).not.toBeInTheDocument()
 

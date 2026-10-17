@@ -52,7 +52,7 @@ import {
   type ReasoningOverrides
 } from './reasoning-overrides'
 import { TextPart } from './parts/TextPart'
-import { TraceBlock, type TraceBlockEntry } from './parts/TraceBlock'
+import { TurnProcess, type TurnProcessEntry } from './parts/TurnProcess'
 import { isToolPart, toToolCardPart } from './parts/tool-part'
 import { parseReferenceMarkers } from './reference-markers'
 import { ReferenceChip } from './reference-chip'
@@ -313,7 +313,7 @@ function hasVisibleContent(part: UIMessage['parts'][number]): boolean {
  */
 type RenderChunk =
   | { kind: 'text'; part: TextPartType; index: number }
-  | { kind: 'process'; entries: TraceBlockEntry[] }
+  | { kind: 'process'; entries: TurnProcessEntry[] }
 
 function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[] {
   const lastIndex = lastRenderableIndex(parts)
@@ -332,7 +332,7 @@ function chunkParts(parts: UIMessage['parts'], streaming: boolean): RenderChunk[
       const tool = toToolCardPart(part)
       const deliverable = tool === null ? null : deliverableOf(tool)
       if (deliverable !== null) return
-      const entry: TraceBlockEntry = {
+      const entry: TurnProcessEntry = {
         part,
         index,
         streaming: streaming && index === lastIndex,
@@ -880,7 +880,7 @@ export function Message({
               })
             }
             return (
-              <TraceBlock
+              <TurnProcess
                 key={`process-${chunkIndex}`}
                 entries={chunk.entries}
                 running={streaming}
