@@ -281,11 +281,7 @@ export function MotionSettings(): React.JSX.Element {
       {/* 区块标题与 SettingsGroup 同口径：16/600 衬线（task-67 字体统一 P2 收尾） */}
       <h2 className="font-serif text-t2 font-semibold text-ink">动效</h2>
       <div className="motion-panel">
-        <Row
-          title="动画效果"
-          description="请按需调整动画效果。动画会给设备带来渲染压力。"
-          testId="motion-row-mode"
-        >
+        <Row title="动画效果" testId="motion-row-mode">
           <Segmented
             ariaLabel="动画效果模式"
             className="motion-mode-segmented"

@@ -16,6 +16,7 @@ import { useLocation } from 'react-router'
 import { AboutSettings } from './AboutSettings'
 import { ArchiveSettings } from './ArchiveSettings'
 import { ModelSettings } from './ModelSettings'
+import { PageTitle } from '@renderer/components/ui/page-chrome'
 import { MotionSettings } from './MotionSettings'
 import { ReasoningTranslateSettings } from './ReasoningTranslateSettings'
 import { RecallSettings } from './RecallSettings'
@@ -163,10 +164,6 @@ function FontSizeRow(): React.JSX.Element {
         onChange={(event) => apply(Number(event.target.value))}
         className="h-1 w-full cursor-pointer accent-(--accent)"
       />
-      <p data-testid="font-size-hint" className="text-c1 text-ink-tertiary">
-        默认 14px；整站界面字号跟着这一档缩放（范围 {UI_FONT_SIZE_MIN}–{UI_FONT_SIZE_MAX}
-        px）。调小会更紧凑。
-      </p>
     </div>
   )
 }
@@ -192,9 +189,7 @@ function CloseWindowOptions(): React.JSX.Element {
         }))}
       />
       <p data-testid="close-mode-hint" className="text-c1 text-ink-tertiary">
-        {
-          'Windows / Linux 有效：选「直接退出」时点关闭立即退出，选「最小化到托盘」时窗口收进托盘、后台任务继续跑。macOS 的关闭行为跟随 Dock（不受这里影响）；托盘不可用时一律按正常关闭处理。'
-        }
+        Windows / Linux 有效；macOS 跟随 Dock。
       </p>
     </div>
   )
@@ -215,10 +210,8 @@ export function SettingsPage(): React.JSX.Element {
         data-testid="settings-page-column"
         className="content-column flex flex-col gap-5 px-(--page-gutter) py-5"
       >
-        {/* 标题声部 = reading（章程 §9.4-2：设置大标题 22/600 衬线；表单/开关保持 sans） */}
-        <h1 className="font-serif text-[22px] leading-[30px] font-semibold text-ink">
-          {meta.label}
-        </h1>
+        {/* 页面 h1 走全站统一档（PageTitle：衬线 22/30 × --ui-scale；表单/开关仍是 sans） */}
+        <PageTitle data-testid="settings-page-title">{meta.label}</PageTitle>
 
         {/* key = 栏目：切栏目时内容重挂一次 -> 进场动效跟着走（不硬切） */}
         <div key={meta.id} className="animate-page-in flex flex-col gap-6">
@@ -258,14 +251,14 @@ export function SettingsPage(): React.JSX.Element {
             <div data-testid="settings-group-memory" className="flex flex-col gap-4">
               <div
                 data-testid="memory-card-base"
-                className="rounded-panel bg-secondary px-4 [&>*+*]:border-t [&>*+*]:border-surface-border [&>*]:py-4"
+                className="border-t border-hairline px-0 [&>*+*]:border-t [&>*+*]:border-surface-border [&>*]:py-4"
               >
                 <RecallSettings />
                 <MemorySpaceEntry />
               </div>
               <div
                 data-testid="memory-card-rules"
-                className="rounded-panel bg-secondary px-4 [&>*]:py-4"
+                className="border-t border-hairline px-0 [&>*]:py-4"
               >
                 <RulesEntry />
               </div>

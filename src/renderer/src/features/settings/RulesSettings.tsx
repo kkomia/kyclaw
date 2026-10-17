@@ -128,7 +128,7 @@ function ProjectPicker({
             data-testid="rules-project-select"
             aria-label="选择项目记忆指令"
             // 字段外观与设置页其他字段同档（40 高 / 圆角 12 / 半像素描边，见 components/ui/input）
-            className="flex h-(--field-height) w-full items-center justify-between gap-2 rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+            className="flex h-(--field-height) w-full items-center justify-between gap-2 rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-feedback) ease-main hover:bg-hover"
           >
             {/* 长名在这里截断（版面不被一个项目名撑破），全名挂 title；菜单里条目仍写全名 */}
             <span

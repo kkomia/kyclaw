@@ -38,15 +38,29 @@ describe('task-85 · 页面外层几何统一（token + 用例）', () => {
     expect(sidebar).toContain('w-(--sidebar-width)')
   })
 
-  it('笔记/知识库正文区内容列 = 800 + 页面 gutter 16（不再 720/40）', () => {
+  it('笔记/知识库正文区内容列 = 800 + 页面 gutter 16（统一由 page-chrome / notes.css 规格承担）', () => {
+    // task-100：笔记空态改统一 EmptyState，内容列几何下沉到共享规格（仍是 800 + 16，不放松）
+    const chrome = read('src/renderer/src/components/ui/page-chrome.css')
+    expect(chrome).toMatch(/\.ui-empty \{[^}]*max-width: var\(--content-max-width\)/)
+    expect(chrome).toMatch(/\.ui-empty \{[^}]*padding: 0 var\(--page-gutter\)/)
+    // 笔记稿纸列：notes.css 同一几何；编辑器只挂 np-sheet（不再各写 max-width/px）
+    const notesCss = read(`${NOTES}notes.css`)
+    expect(notesCss).toMatch(/\.np-sheet \{[^}]*max-width: var\(--content-max-width\)/)
+    expect(notesCss).toMatch(/\.np-sheet \{[^}]*padding: 22px var\(--page-gutter\)/)
+    expect(read(`${NOTES}NoteEditor.tsx`)).toContain('np-sheet')
+    expect(read(`${NOTES}NotesPage.tsx`)).toContain('EmptyState')
+    // 知识库详情仍走 content-column + gutter16（详情几何未变）
+    const detail = read(`${KNOWLEDGE}KnowledgeDetail.tsx`)
+    expect(detail).toContain('content-column')
+    expect(detail).toContain('px-(--page-gutter)')
+    // 旧的 720/40 口径在笔记（含 CSS）与知识库详情里都不再出现
     for (const file of [
       `${NOTES}NotesPage.tsx`,
       `${NOTES}NoteEditor.tsx`,
+      `${NOTES}notes.css`,
       `${KNOWLEDGE}KnowledgeDetail.tsx`
     ]) {
       const source = read(file)
-      expect(source, file).toContain('max-w-(--content-max-width)')
-      expect(source, file).toContain('px-(--page-gutter)')
       expect(source, file).not.toContain('max-w-[720px]')
       expect(source, file).not.toContain('px-10')
     }
@@ -54,10 +68,10 @@ describe('task-85 · 页面外层几何统一（token + 用例）', () => {
     const settings = read('src/renderer/src/features/settings/SettingsPage.tsx')
     expect(settings).toContain('content-column')
     expect(settings).toContain('px-(--page-gutter)')
-    // 知识库页 band 与提示条同样退到 16
+    // 知识库页 band / 提示条同样退到 16（空态几何在共享模板）
     const knowledgePage = read(`${KNOWLEDGE}KnowledgePage.tsx`)
-    expect(knowledgePage).toContain('px-(--page-gutter) pt-5 pb-4')
-    expect(knowledgePage).not.toContain('px-6 pt-5 pb-4')
+    expect(knowledgePage).toContain('px-(--page-gutter)')
+    expect(knowledgePage).not.toContain('px-6')
   })
 
   it('主对话正文阅读宽保持：content-column + 输入卡 768 + 44em 不变', () => {

@@ -26,8 +26,8 @@ export function SettingsGroup({
         <h2 className="font-serif text-t2 font-semibold text-ink">{title}</h2>
         {action}
       </div>
-      {/* task-69 密度收口：卡片内边距 16→14（分组之间 12→10），整页更紧凑 */}
-      <div className="rounded-panel bg-secondary p-3.5">{children}</div>
+      {/* task-100 去卡片矩阵：组间用 1px hairline + 纸面，与笔记/知识库的「细线」语言一致 */}
+      <div className="border-t border-hairline pt-3.5">{children}</div>
     </section>
   )
 }

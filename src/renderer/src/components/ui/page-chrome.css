@@ -1,0 +1,170 @@
+/**
+ * 页面级 chrome 规格（task-100 · 设计一致性）。
+ *
+ * 字号 = 基准档 × `--ui-scale`（随「字号」设置缩放）；只允许评审 §4.1 的档位：
+ *   h1 22/30 · 详情 h2 24/32 · section 24/28 · 界面正文 14/21 · 说明 12/18 · mono 读数 10/14（眉题 11/16）
+ * 选中态：内容列表 = `--fill-selected` 实底 + 2px `--accent` 左线；hover = `--fill-hover` 120ms。
+ */
+
+.ui-page-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(22px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(30px * var(--ui-scale, 1));
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+}
+
+.ui-page-meta {
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(10px * var(--ui-scale, 1));
+  font-variant-numeric: tabular-nums;
+  line-height: calc(14px * var(--ui-scale, 1));
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.ui-detail-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(24px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(32px * var(--ui-scale, 1));
+  letter-spacing: -0.008em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-section-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(24px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(28px * var(--ui-scale, 1));
+  letter-spacing: -0.005em;
+}
+
+/* ── 空态模板：可选 mark/icon/眉题 + 22/30 衬线标题 + 一句邀请 + 可选标签 + 可选动作 ── */
+.ui-empty {
+  display: flex;
+  width: 100%;
+  max-width: var(--content-max-width);
+  min-height: 100%;
+  margin-inline: auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0 var(--page-gutter) 8vh;
+  animation: ui-empty-in var(--motion-reveal) var(--motion-ease-glide) both;
+}
+
+.ui-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+
+.ui-empty-eyebrow {
+  margin: 0 0 8px;
+  color: var(--text-tertiary);
+  font-family: var(--font-code);
+  font-size: calc(11px * var(--ui-scale, 1));
+  line-height: calc(16px * var(--ui-scale, 1));
+  letter-spacing: 0.1em;
+}
+
+.ui-empty-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-reading);
+  font-size: calc(22px * var(--ui-scale, 1));
+  font-weight: 600;
+  line-height: calc(30px * var(--ui-scale, 1));
+  letter-spacing: -0.008em;
+}
+
+.ui-empty-desc {
+  max-width: 42ch;
+  margin: 8px 0 0;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-ui);
+  font-size: calc(14px * var(--ui-scale, 1));
+  line-height: calc(20px * var(--ui-scale, 1));
+}
+
+.ui-empty-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-empty-tags li {
+  padding: 1px 6px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 4px;
+  color: var(--text-tertiary-readable);
+  font-family: var(--font-code);
+  font-size: calc(12px * var(--ui-scale, 1));
+  line-height: calc(18px * var(--ui-scale, 1));
+}
+
+.ui-empty-action {
+  margin-top: 20px;
+}
+
+@keyframes ui-empty-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-empty {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .ui-empty {
+  animation: none;
+}
+
+/* ── 内容列表选中态（笔记 / 知识库共用）：实底 + 2px accent 左线 ── */
+.ui-list-row {
+  position: relative;
+}
+
+.ui-list-row[data-selected='true'] {
+  background: var(--fill-selected);
+}
+
+.ui-list-row[data-selected='true']::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}

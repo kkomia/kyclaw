@@ -79,11 +79,8 @@ export function OfficeStatusBar({
       {/* 左：文档名 + 类型（类型是技术标签 → mono + tabular-nums） */}
       <span className="flex min-w-0 items-center gap-2">
         <Icon aria-hidden="true" className="size-(--icon-size-sm) shrink-0" />
-        <span
-          data-testid="office-status-doc-title"
-          className="min-w-0 truncate text-ink-secondary"
-          title={documentName}
-        >
+        {/* task-100 R1：文档名一屏最多 2 处（标签页 + ribbon）；状态栏只保留语义（sr-only） */}
+        <span data-testid="office-status-doc-title" className="sr-only" title={documentName}>
           {documentName}
         </span>
         <span

@@ -280,7 +280,7 @@ export function AppShell(): React.JSX.Element {
                 data-testid="work-panel-toggle"
                 label="展开工作台"
                 icon={<PanelRightOpen />}
-                className="absolute top-0.5 right-2 z-10 border-transparent hover:bg-hover"
+                className="absolute top-0.5 right-2 z-10 size-7 rounded-control border-transparent hover:bg-hover"
                 onClick={toggleWorkPanel}
               />
             ) : null}

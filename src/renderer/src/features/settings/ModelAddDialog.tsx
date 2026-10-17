@@ -134,7 +134,7 @@ function ModelOptionsMenu({
           type="button"
           data-testid={testId}
           aria-label="端点上的模型"
-          className="flex h-(--field-height) w-full items-center justify-between rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+          className="flex h-(--field-height) w-full items-center justify-between rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-feedback) ease-main hover:bg-hover"
         >
           <span>{`选一个（${options.length} 个可选）`}</span>
           <ChevronDown
@@ -408,7 +408,7 @@ export function ModelAddDialog({
                 type="button"
                 data-testid="model-add-channel"
                 aria-label="渠道"
-                className="flex h-(--field-height) w-full items-center justify-between rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+                className="flex h-(--field-height) w-full items-center justify-between rounded-field border-(length:--hairline-width) border-(--border-field) bg-(--field-bg) px-3 text-left text-b2 text-ink transition-colors duration-(--motion-feedback) ease-main hover:bg-hover"
               >
                 <span className={channel === null ? 'text-(--text-quaternary)' : undefined}>
                   {channel === null ? '选一个渠道' : channelLabel(channel)}

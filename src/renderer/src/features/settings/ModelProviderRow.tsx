@@ -191,7 +191,7 @@ export function ProviderRow({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full items-center gap-2 rounded-panel px-3 py-2 text-left transition-colors duration-(--motion-fast) ease-main hover:bg-hover"
+        className="flex w-full items-center gap-2 rounded-control border-t border-hairline px-3 py-2 text-left transition-colors duration-(--motion-feedback) ease-main hover:bg-hover"
       >
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="shrink-0 text-b1 font-medium text-ink">{providerLabel(provider)}</span>
@@ -234,7 +234,7 @@ export function ProviderRow({
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            'size-(--icon-size-sm) shrink-0 text-ink-tertiary transition-transform duration-(--motion-fast) ease-main motion-reduce:transition-none',
+            'size-(--icon-size-sm) shrink-0 text-ink-tertiary transition-transform duration-(--motion-feedback) ease-main motion-reduce:transition-none',
             open && 'rotate-90'
           )}
         />

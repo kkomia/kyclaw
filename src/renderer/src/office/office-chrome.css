@@ -373,7 +373,7 @@
   max-width: 118px;
   min-width: 54px;
   border: 1px solid var(--border-hairline);
-  border-radius: 6px;
+  border-radius: 8px;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--ofr-font-sans);
@@ -394,6 +394,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+  /* task-98 验收 P2：工具栏读数值只走文字声部（primary）；accent 只留给保存/脏状态点，
+     不随 hover / 展开 / 焦点态继承任何强调色（浅/深一致）。 */
+  color: var(--text-primary);
 }
 
 .ofr-select-chevron {

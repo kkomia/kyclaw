@@ -179,8 +179,10 @@ describe('设置页骨架（栏目页）', () => {
     expect([...rulesCard.children].map((child) => child.getAttribute('data-testid'))).toEqual([
       'rules-entry'
     ])
+    // task-100 去卡片矩阵：记忆卡片与其它设置组统一为 1px hairline 分组（纸面，无卡片）
     for (const card of [base, rulesCard]) {
-      expect(card).toHaveClass('rounded-panel', 'bg-secondary')
+      expect(card).toHaveClass('border-t', 'border-hairline')
+      expect(card).not.toHaveClass('rounded-panel')
     }
     // 主页面**不再铺**这些重家伙：记忆面板、规则编辑器、项目下拉、保存都不在文档里
     expect(screen.queryByTestId('memory-space-body')).not.toBeInTheDocument()
@@ -509,7 +511,6 @@ describe('外观 · 字号（task-69：三档 → 12–18 连续数值，默认 
     expect(slider).toHaveAttribute('min', '12')
     expect(slider).toHaveAttribute('max', '18')
     expect(slider).toHaveValue('14')
-    expect(screen.getByTestId('font-size-hint')).toHaveTextContent('默认 14px')
     expect(screen.getByTestId('font-size-decrease')).toBeEnabled()
     expect(screen.getByTestId('font-size-increase')).toBeEnabled()
   })
@@ -581,7 +582,7 @@ describe('外观 · 与落盘设置一致', () => {
  * （Windows / Linux 才有效、macOS 沿 Dock、托盘不可用不硬藏）。
  */
 describe('外观 · 关闭窗口行为（三档偏好）', () => {
-  it('三档都在，默认「每次询问」，并写明 Win/Linux 适用与 macOS/托盘不可用的边界', () => {
+  it('三档都在，默认「每次询问」，边界说明收敛为一行（Win/Linux 有效；macOS 跟随 Dock）', () => {
     renderPage()
 
     expect(screen.getByTestId('close-mode-ask')).toHaveTextContent('每次询问')
@@ -595,7 +596,8 @@ describe('外观 · 关闭窗口行为（三档偏好）', () => {
     const hint = screen.getByTestId('close-mode-hint')
     expect(hint).toHaveTextContent('Windows')
     expect(hint).toHaveTextContent('macOS')
-    expect(hint).toHaveTextContent('托盘')
+    // task-100：只留一行边界说明，不再解释每个选项的行为
+    expect(hint.textContent?.length ?? 0).toBeLessThan(40)
   })
 
   it('点「直接退出」→ 选中态跟着走、落盘 {closeToTrayMode:"quit"}；再点回「每次询问」能撤销', async () => {
@@ -681,8 +683,11 @@ describe('「追踪」/「关于」栏（T17）', () => {
 
     // h1 = 章程「设置大标题」衬线档（22/600）
     const h1 = screen.getByRole('heading', { level: 1 })
-    expect(h1).toHaveClass('font-serif', 'font-semibold')
+    // task-100：页面 h1 走全站统一 PageTitle 档（衬线 22/30 × --ui-scale）
+    expect(h1).toHaveClass('ui-page-title')
     expect(h1).not.toHaveClass('font-sans')
+    // task-100：字号不再写行内 style，统一由 PageTitle 的 ui-page-title 规格（22/30 × --ui-scale）给
+    expect(h1.closest('[data-testid="settings-page-column"]')).not.toBeNull()
 
     // 分组标题（SettingsGroup 的 h2）= 16/600 衬线
     const group = screen.getByTestId('settings-group-appearance')

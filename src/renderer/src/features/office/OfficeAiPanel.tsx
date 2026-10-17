@@ -69,7 +69,7 @@ export function OfficeAiPanel({
             aria-label="收起 AI 助手"
             title="收起 AI 助手"
             onClick={onCollapse}
-            className="no-drag flex size-6 shrink-0 items-center justify-center rounded-badge text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink"
+            className="no-drag flex size-6 shrink-0 items-center justify-center rounded-badge text-ink-tertiary transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink"
           >
             <PanelRightClose aria-hidden="true" className="size-4" />
           </button>
@@ -103,7 +103,7 @@ export function OfficeAiPanel({
                   data-testid="office-ai-chip"
                   disabled
                   title="AI 编辑能力接入后可用"
-                  className="flex items-center gap-2 rounded-control border-(length:--hairline-width) border-hairline px-3 py-2 text-left text-b2 text-ink-tertiary transition-colors duration-(--motion-fast) ease-main disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex items-center gap-2 rounded-control border-(length:--hairline-width) border-hairline px-3 py-2 text-left text-b2 text-ink-tertiary transition-colors duration-(--motion-feedback) ease-main disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Sparkles aria-hidden="true" className="size-3.5 shrink-0" />
                   <span className="min-w-0 truncate">{suggestion}</span>

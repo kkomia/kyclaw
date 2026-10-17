@@ -41,10 +41,10 @@ describe('OfficePage：空态与真实「打开文件」（M3-S2）', () => {
     expect(screen.getByTestId('office-page-title')).toHaveTextContent('Office')
     expect(screen.getByTestId('office-empty')).toHaveTextContent('还没有打开的文档')
     expect(screen.getByTestId('office-empty')).toHaveTextContent('标签不绑定会话')
-    // task-67：空态一句标题 = 衬线（章程 §9.6；不放大字号）
+    // task-100：空态标题走全站统一模板（衬线 22/30 × --ui-scale）
     expect(
       within(screen.getByTestId('office-empty')).getByRole('heading', { level: 2 })
-    ).toHaveClass('font-serif')
+    ).toHaveClass('ui-empty-title')
     expect(screen.getByTestId('office-open')).toHaveAccessibleName('打开文件')
     expect(screen.queryByTestId('office-tabs')).not.toBeInTheDocument()
     expect(screen.queryByTestId('office-workspace')).not.toBeInTheDocument()

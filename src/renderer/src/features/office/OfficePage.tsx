@@ -3,6 +3,7 @@ import { Briefcase, Plus, Sparkles } from 'lucide-react'
 import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
+import { EmptyState, PageTitle } from '@renderer/components/ui/page-chrome'
 import { openBlockReason, planMounts, shouldReloadSurface } from './office-capacity'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, officePanelIdOf } from './office-kinds'
 import {
@@ -206,9 +207,10 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
         收进下面每个 workspace 的隐藏 strip（A2 ribbon / A4 状态栏接管）。标题仍以 sr-only h1
         保留语义（既有 testid 契约：module-host / routes 单测与 e2e 都在用）。
       */}
-      <h1 data-testid="office-page-title" className="sr-only">
+      {/* 页面标题登记：Office 是无可见 h1 的「元数据式」页面（全出血文档画布），sr-only 保留语义 */}
+      <PageTitle data-testid="office-page-title" className="sr-only">
         Office
-      </h1>
+      </PageTitle>
 
       {/* task-80：空白伪标签在前台 → 渲染新增标签页；下面文档区 hidden + inert 但**保持挂载**
           （iframe / 面内编辑器 / wasm / 未保存内容都不卸载，切回文档标签即原样回来）。 */}
@@ -220,35 +222,24 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
         className={blankVisible ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}
       >
         {tabs.length === 0 ? (
-          <div
-            data-testid="office-empty"
-            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center"
-          >
-            {/* 空态 = 灰画布上的一张「白纸」：--doc-page-bg / --doc-page-shadow 的可见落点 */}
-            <div className="flex max-w-md flex-col items-center gap-4 rounded-overlay border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-8 py-10 shadow-(--doc-page-shadow)">
-              <span
-                aria-hidden="true"
-                className="flex size-12 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
-              >
-                <Briefcase className="size-(--icon-size-lg)" />
-              </span>
-              <div className="flex flex-col gap-1">
-                {/* 空态一句标题 = 衬线（章程 §9.6；不放大字号、不放插画） */}
-                <h2 className="font-serif text-t2 font-medium text-ink">还没有打开的文档</h2>
-                <p className="text-b2 text-ink-secondary">
-                  打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
-                </p>
-              </div>
-              <Button
-                data-testid="office-open"
-                icon={<Plus />}
-                loading={opening}
-                disabled={opening}
-                onClick={() => void openViaDialog()}
-              >
-                打开文件
-              </Button>
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col bg-(--doc-canvas-bg)">
+            <EmptyState
+              data-testid="office-empty"
+              icon={<Briefcase />}
+              title="还没有打开的文档"
+              description="打开一份 .docx 开始；标签不绑定会话，切换会话不会关掉这里。"
+              action={
+                <Button
+                  data-testid="office-open"
+                  icon={<Plus />}
+                  loading={opening}
+                  disabled={opening}
+                  onClick={() => void openViaDialog()}
+                >
+                  打开文件
+                </Button>
+              }
+            />
           </div>
         ) : (
           // M3-S4：所有已打开标签都挂载，非激活 `hidden + inert`——切标签只换可见性，
@@ -759,7 +750,7 @@ function OfficeWorkspace({
                 title={aiPanelAutoCollapsed ? '窗口变宽后可展开 AI 助手（占位）' : '展开 AI 助手'}
                 disabled={aiPanelAutoCollapsed}
                 onClick={onToggleAiPanel}
-                className="absolute top-[124px] right-4 z-10 flex items-center gap-1 rounded-badge border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-2 py-1 text-c1 text-ink-secondary shadow-(--doc-page-shadow) transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                className="absolute top-[124px] right-4 z-10 flex items-center gap-1 rounded-badge border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-2 py-1 text-c1 text-ink-secondary shadow-(--doc-page-shadow) transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Sparkles aria-hidden="true" className="size-3.5" />
                 AI

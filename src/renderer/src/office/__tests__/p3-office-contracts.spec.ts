@@ -167,3 +167,33 @@ describe('P2 字体小规格（task-67 字体统一收口）', () => {
     expect(panelSource).toContain('text-[11px] font-medium text-ink-tertiary')
   })
 })
+
+describe('验收 P2（task-98）：工具栏读数不用 accent + 字体资产不内联', () => {
+  it('工具栏读数值（字号/字体名/行距共用 .ofr-select-value）只走 text-primary；accent 只留给保存/脏状态点', () => {
+    const select = blockOf(chromeCss, '.ofr-select')
+    expect(select).toContain('color: var(--text-primary);')
+    const value = blockOf(chromeCss, '.ofr-select-value')
+    expect(value).toContain('color: var(--text-primary);')
+    expect(value).not.toContain('--accent')
+    // 读数/下拉相关规则块里都不出现 accent（accent 只在 save-dot / dirty-badge / 状态栏点这类 <10% 状态）
+    for (const selector of [
+      '.ofr-select',
+      '.ofr-select-value',
+      '.ofr-select-chevron',
+      '.ofr-select-option',
+      '.ofr-select-menu'
+    ]) {
+      expect(blockOf(chromeCss, selector), selector).not.toContain('--accent')
+    }
+  })
+
+  it('渲染端构建把字体资产当文件树（不内联 data: URI）→ 主页面 CSP 的 default-src self 可加载，reload 不再有 data:font 违规', () => {
+    // 根因（task-98）：KaTeX_Size3-Regular.woff2（3,624 B < Vite 默认 4KB）被内联成 data:，
+    // 主页面 index.html 的 CSP 未声明 font-src → 兜底 default-src 'self' 拦截（reload 后 2 条日志）。
+    // 修法：renderer build 明确把字体扩展名排除出内联清单 → 输出同源文件 URL。
+    const viteConfig = readSource('../../../../../electron.vite.config.ts')
+    expect(viteConfig).toContain('assetsInlineLimit')
+    expect(viteConfig).toMatch(/woff2\?\|ttf\|otf\|eot/)
+    expect(viteConfig).toMatch(/assetsInlineLimit:[\s\S]{0,300}false/)
+  })
+})
