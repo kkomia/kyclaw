@@ -1,0 +1,290 @@
+{
+  "name": "kyclaw pixel otter · launch-v1 subset",
+  "version": "v1-rev3（暖棕圆脸/奶油口鼻+胸毛/有耳/无胡须）",
+  "target": "src/renderer/src/assets/pixel-otter/",
+  "source": "assets/manifest.json",
+  "generatedAt": "2026-10-17T16:39:02.754Z",
+  "grid": 24,
+  "totalBytes": 28263,
+  "fileCount": 42,
+  "palette": {
+    "light": {
+      "o": "#2A1D14",
+      "e": "#2A1D14",
+      "f": "#8A6647",
+      "s": "#6B4E37",
+      "c": "#E7D2B0",
+      "a": "#D97757"
+    },
+    "dark": {
+      "o": "#F0E2CC",
+      "e": "#2A1D14",
+      "f": "#B58A63",
+      "s": "#8A684C",
+      "c": "#E7D2B0",
+      "a": "#D97757"
+    },
+    "uniqueColors": {
+      "light": ["#2A1D14", "#8A6647", "#6B4E37", "#E7D2B0", "#D97757"],
+      "dark": ["#F0E2CC", "#2A1D14", "#B58A63", "#8A684C", "#E7D2B0", "#D97757"]
+    },
+    "rules": [
+      "透明底；仅使用角色色，禁止半透明像素",
+      " accent #d97757 只给贝壳（每只海獭一处）",
+      "描边 1px；暗色用亮墨 #FAF9F5（边=高光）",
+      "无抗锯齿：输出尺寸为整数倍，或由最近邻采样"
+    ]
+  },
+  "usage": {
+    "splash": {
+      "surface": "启动加载 splash（全窗口/启动窗）",
+      "sizes": [128, 256],
+      "states": ["loading"],
+      "fallback": "reduced-motion 用 loading reducedFrame #0 静态 PNG",
+      "sheets": "sheets/{light,dark}/otter-loading.sheet@4x.png",
+      "stills": "stills/{light,dark}/otter-loading-{128,256}.png",
+      "notes": "4x sheet 的 cell = 96px，显示 128/256 时由浏览器最近邻放大；静态用 stills。"
+    },
+    "chatHeader": {
+      "surface": "chat 顶部右侧（标题/标签条下方、窗口控件左侧）",
+      "sizes": [24, 32],
+      "states": ["idle", "think", "type"],
+      "fallback": "reduced-motion 用各状态 reducedFrame 静态 PNG",
+      "sheets": "sheets/{light,dark}/otter-{idle,think,type}.sheet.png（1x）与 @2x",
+      "stills": "stills/{light,dark}/otter-{idle,think,type}-{24,32}.png",
+      "notes": "24 = 1x，32 由 24 最近邻放大；不抢文字、不接收点击。"
+    },
+    "welcomeLogo": {
+      "surface": "chat 初始页 `<kyclaw>` 字标附近",
+      "sizes": [96, 128],
+      "states": ["float", "wave"],
+      "fallback": "reduced-motion 用 float reducedFrame #0 静态 PNG",
+      "sheets": "sheets/{light,dark}/otter-{float,wave}.sheet@4x.png",
+      "stills": "stills/{light,dark}/otter-{float,wave}-{96,128}.png",
+      "notes": "欢迎页主图；首次挂载 wave 一次后回 float。"
+    },
+    "ambientWelcome": {
+      "surface": "chat 初始页右上角氛围小海獭（用户“这个位置的海獭还没有”）",
+      "sizes": [24, 32],
+      "states": ["idle"],
+      "fallback": "reduced-motion 用 idle reducedFrame #0 静态 PNG",
+      "sheets": "sheets/{light,dark}/otter-idle.sheet.png（1x）与 @2x",
+      "stills": "stills/{light,dark}/otter-idle-{24,32}.png",
+      "notes": "页面内容右上角 8–12px 内缩；不接收点击、不随滚动；对话开始即隐藏。"
+    }
+  },
+  "states": {
+    "idle": {
+      "frames": 8,
+      "frameMs": 120,
+      "loop": true,
+      "loopCount": null,
+      "reducedFrame": 0
+    },
+    "loading": {
+      "frames": 6,
+      "frameMs": 80,
+      "loop": true,
+      "loopCount": null,
+      "reducedFrame": 0
+    },
+    "think": {
+      "frames": 6,
+      "frameMs": 120,
+      "loop": true,
+      "loopCount": null,
+      "reducedFrame": 2
+    },
+    "type": {
+      "frames": 4,
+      "frameMs": 80,
+      "loop": true,
+      "loopCount": null,
+      "reducedFrame": 0
+    },
+    "float": {
+      "frames": 6,
+      "frameMs": 120,
+      "loop": true,
+      "loopCount": null,
+      "reducedFrame": 0
+    },
+    "wave": {
+      "frames": 6,
+      "frameMs": 100,
+      "loop": false,
+      "loopCount": 2,
+      "reducedFrame": 0
+    }
+  },
+  "files": [
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-idle.sheet.png",
+      "bytes": 577
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-idle.sheet@2x.png",
+      "bytes": 866
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-idle-24.png",
+      "bytes": 271
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-idle-32.png",
+      "bytes": 298
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-loading.sheet@4x.png",
+      "bytes": 1514
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-loading-128.png",
+      "bytes": 614
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-loading-256.png",
+      "bytes": 1419
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-think.sheet.png",
+      "bytes": 377
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-think.sheet@2x.png",
+      "bytes": 611
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-think-24.png",
+      "bytes": 277
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-think-32.png",
+      "bytes": 304
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-type.sheet.png",
+      "bytes": 399
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-type.sheet@2x.png",
+      "bytes": 565
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-type-24.png",
+      "bytes": 274
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-type-32.png",
+      "bytes": 303
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-float.sheet@4x.png",
+      "bytes": 1629
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-float-96.png",
+      "bytes": 457
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-float-128.png",
+      "bytes": 595
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/light/otter-wave.sheet@4x.png",
+      "bytes": 1446
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-wave-96.png",
+      "bytes": 482
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/light/otter-wave-128.png",
+      "bytes": 630
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-idle.sheet.png",
+      "bytes": 589
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-idle.sheet@2x.png",
+      "bytes": 881
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-idle-24.png",
+      "bytes": 291
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-idle-32.png",
+      "bytes": 321
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-loading.sheet@4x.png",
+      "bytes": 1528
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-loading-128.png",
+      "bytes": 645
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-loading-256.png",
+      "bytes": 1454
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-think.sheet.png",
+      "bytes": 405
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-think.sheet@2x.png",
+      "bytes": 645
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-think-24.png",
+      "bytes": 295
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-think-32.png",
+      "bytes": 326
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-type.sheet.png",
+      "bytes": 413
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-type.sheet@2x.png",
+      "bytes": 585
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-type-24.png",
+      "bytes": 293
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-type-32.png",
+      "bytes": 323
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-float.sheet@4x.png",
+      "bytes": 1653
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-float-96.png",
+      "bytes": 477
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-float-128.png",
+      "bytes": 629
+    },
+    {
+      "path": "assets/subsets/launch-v1/sheets/dark/otter-wave.sheet@4x.png",
+      "bytes": 1456
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-wave-96.png",
+      "bytes": 491
+    },
+    {
+      "path": "assets/subsets/launch-v1/stills/dark/otter-wave-128.png",
+      "bytes": 655
+    }
+  ]
+}

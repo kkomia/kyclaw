@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -9,6 +9,7 @@ import {
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { resetProjectsStore } from '@renderer/features/projects/projects-store'
 import { resetSessionsStore, useSessionsStore } from '@renderer/features/sessions/sessions-store'
+import { resetThreadRunStore, useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 import { defaultSettings } from '@shared/settings'
 import { ChatHeader } from '../ChatHeader'
 
@@ -77,6 +78,9 @@ beforeEach(() => {
 
 afterEach(() => {
   clearKyclawBridge()
+  resetThreadRunStore()
+  // 状态灯让位用例会伪造「欢迎页在场」的 DOM 事实：每个用例后清干净
+  for (const node of document.querySelectorAll('[data-testid="welcome-hero"]')) node.remove()
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
 })
 
@@ -188,5 +192,82 @@ describe('ChatHeader · 名称菜单（与侧栏同款实现）', () => {
 
     await waitFor(() => expect(screen.getByTestId('chat-title')).toHaveTextContent('草稿名'))
     expect(vi.mocked(renameThread)).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 像素海獭 · 状态灯（2026-10-18 v1 / 设计稿 §5.2 / D-32）。
+ * 位置：header 右侧、segmented 左侧 8px（header 的 gap-2），垂直居中；
+ * 只有 idle/think/type 三态；纯装饰（aria-hidden / pointer-events:none），不抢文字不挡按钮。
+ */
+describe('ChatHeader · 像素海獭状态灯（v1）', () => {
+  it('在 header 里、标题之后渲染：32 档 + aria-hidden + title（装饰性，不占新行）', () => {
+    mount()
+
+    const header = screen.getByTestId('chat-header')
+    const otter = screen.getByTestId('pixel-otter')
+    expect(header).toContainElement(otter)
+    expect(otter).toHaveAttribute('aria-hidden', 'true')
+    expect(otter).toHaveAttribute('title', 'kyclaw')
+    expect(otter).toHaveAttribute('data-size', '32')
+    expect(otter).toHaveClass('chat-otter')
+    expect(otter).toHaveAttribute('data-state', 'idle')
+    // 在标题之后（header 仍是单行 flex，没有新增行/改变标题对齐）
+    expect(otter.compareDocumentPosition(screen.getByTestId('chat-title'))).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING
+    )
+  })
+
+  it('AI 生成中 → think；工具运行 → type；本轮结束后保持 1.2s 再回 idle', async () => {
+    mount()
+
+    act(() => {
+      useThreadRunStore.getState().setRunning(THREAD_ID, true)
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'think')
+    )
+
+    // 工具卡在跑（ToolCard 的稳定 DOM 契约）：think → type
+    const card = document.createElement('div')
+    card.setAttribute('data-testid', 'tool-card')
+    card.setAttribute('data-state', 'input-available')
+    act(() => {
+      document.body.appendChild(card)
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'type')
+    )
+    card.remove()
+
+    // 本轮结束：先保持 think/type，1.2s 后才回 idle（不让状态灯"啪"一下灭）
+    act(() => {
+      useThreadRunStore.getState().setRunning(THREAD_ID, false)
+    })
+    expect(screen.getByTestId('pixel-otter')).not.toHaveAttribute('data-state', 'idle')
+    await waitFor(
+      () => expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-state', 'idle'),
+      { timeout: 2200 }
+    )
+  })
+
+  it('初始页（hero 在场）状态灯让位给右上角氛围位：hero 时不渲染、离场后接棒（一屏一只）', async () => {
+    mount()
+    expect(screen.getByTestId('pixel-otter')).toBeInTheDocument()
+
+    // 欢迎页在场（其它 spec 的 DOM 事实；ChatPage 不传 prop，靠这个判据让位）
+    const hero = document.createElement('div')
+    hero.setAttribute('data-testid', 'welcome-hero')
+    hero.setAttribute('data-active', 'true')
+    act(() => {
+      document.body.appendChild(hero)
+    })
+    await waitFor(() => expect(screen.queryByTestId('pixel-otter')).not.toBeInTheDocument())
+
+    // 首条消息发出：欢迎页离场（data-active=false）→ header 状态灯立刻回来
+    act(() => {
+      hero.setAttribute('data-active', 'false')
+    })
+    await waitFor(() => expect(screen.getByTestId('pixel-otter')).toBeInTheDocument())
   })
 })

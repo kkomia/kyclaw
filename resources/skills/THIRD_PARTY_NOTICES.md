@@ -3031,3 +3031,16 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 - 体积口径（未压缩，`@betteroffice/*` npm 包内实测）：`docx` 的 4 个 wasm 合计 30,073,417 B
   （≈ 28.7 MiB）；`fonts` 的 65 个 ttf 合计 14,876,000 B（≈ 14.2 MiB）；`fonts-cjk` 的 5 个 otf
   合计 34,818,280 B（≈ 33.2 MiB）。它们随渲染端 bundle 分发，不进 asar 的 `dependencies`。
+
+---
+
+## 7. 品牌资产 · 像素海獭（kyclaw 自有设计）
+
+`src/renderer/src/assets/pixel-otter/` 下的像素海獭图像（sprite sheet 与单帧 PNG；task-40 rev2
+子集 launch-v1，共 43 个文件 34,785 B）是 kyclaw 项目的**自有原创资产**，随本产品源码与安装包分发：
+
+**© kkomia / kyclaw**
+
+- 不是对 Claude Code 螃蟹或任何第三方像素素材的复制/临摹；
+- 不含第三方字体、图片、CDN 或网络字体（纯色方块逐像素绘制，无抗锯齿、零外链）；
+- 若本文件随安装包分发，本节署名应与上述资产一并保留。

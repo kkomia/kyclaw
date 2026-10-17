@@ -1,0 +1,164 @@
+/**
+ * 像素海獭动画（brand mark · v1 三处）。
+ *
+ * 帧机制：sprite sheet 横向平铺，`steps(N)` 只在整帧之间跳（不做补间 —— 像素图不插值）；
+ * 一种状态只有一档帧数/时长（数值来源 `otter-states.ts` ↔ task-40 manifest）。
+ * 缩放：`image-rendering: pixelated` 最近邻；尺寸由 `--otter-size` 给（组件内联，窄窗由下方 media 覆盖）。
+ * 主题：浅/深两层 sheet，`:root[data-theme='dark']` 切显隐（与全站主题机制唯一来源一致）。
+ * reduced-motion：停动画、停在状态的 `reducedFrame` 静态帧；`data-paused`（滚出视口/页面隐藏/父层不活动）
+ * 时暂定 `animation-play-state`，不重置帧。
+ */
+
+.pixel-otter {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--otter-size);
+  height: var(--otter-size);
+  line-height: 0;
+  pointer-events: none;
+}
+
+.pixel-otter-sheet {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position-x: 0;
+  background-size: calc(var(--otter-frames, 1) * var(--otter-size)) var(--otter-size);
+  image-rendering: pixelated;
+  animation: var(--otter-animation, none);
+}
+
+.pixel-otter-sheet--dark {
+  display: none;
+}
+
+:root[data-theme='dark'] .pixel-otter-sheet--light {
+  display: none;
+}
+
+:root[data-theme='dark'] .pixel-otter-sheet--dark {
+  display: block;
+}
+
+/* ── 每状态一档：帧数 / 时长 / 循环 / reduced 静态帧（与 manifest 对齐） ── */
+.pixel-otter[data-state='idle'] {
+  --otter-frames: 8;
+  --otter-animation: otter-frames-8 960ms steps(8) infinite;
+  --otter-reduced-frame: 0;
+}
+
+.pixel-otter[data-state='loading'] {
+  --otter-frames: 6;
+  --otter-animation: otter-frames-6 480ms steps(6) infinite;
+  --otter-reduced-frame: 0;
+}
+
+.pixel-otter[data-state='float'] {
+  --otter-frames: 6;
+  --otter-animation: otter-frames-6 720ms steps(6) infinite;
+  --otter-reduced-frame: 0;
+}
+
+/* wave：6 帧 ×100ms 播 2 遍（≈1.2s）后停住；由调用方（欢迎页）在 1.2s 时切回 float */
+.pixel-otter[data-state='wave'] {
+  --otter-frames: 6;
+  --otter-animation: otter-frames-6 600ms steps(6) 2 forwards;
+  --otter-reduced-frame: 0;
+}
+
+.pixel-otter[data-state='think'] {
+  --otter-frames: 6;
+  --otter-animation: otter-frames-6 720ms steps(6) infinite;
+  --otter-reduced-frame: 2; /* 三点气泡最长的一帧：静态也能读出"在想" */
+}
+
+.pixel-otter[data-state='type'] {
+  --otter-frames: 4;
+  --otter-animation: otter-frames-4 320ms steps(4) infinite;
+  --otter-reduced-frame: 0;
+}
+
+@keyframes otter-frames-4 {
+  to {
+    background-position-x: calc(-4 * var(--otter-size));
+  }
+}
+
+@keyframes otter-frames-6 {
+  to {
+    background-position-x: calc(-6 * var(--otter-size));
+  }
+}
+
+@keyframes otter-frames-8 {
+  to {
+    background-position-x: calc(-8 * var(--otter-size));
+  }
+}
+
+/* 不可见 / 父层不活动：暂停在当帧（不重置、不卸 DOM） */
+.pixel-otter[data-paused='true'] .pixel-otter-sheet {
+  animation-play-state: paused;
+}
+
+/* reduced-motion：不启动动画，直接停在状态的 reducedFrame（静态帧，不是隐藏） */
+@media (prefers-reduced-motion: reduce) {
+  .pixel-otter-sheet {
+    animation: none !important;
+    background-position-x: calc(-1 * var(--otter-reduced-frame, 0) * var(--otter-size));
+  }
+}
+
+/* ── 两处尺寸的响应式（设计稿：chat header 32→24 / <720 隐藏；欢迎页 128→96） ── */
+@media (max-width: 1279px) {
+  .chat-otter {
+    --otter-size: 24px !important;
+  }
+
+  .welcome-otter {
+    --otter-size: 96px !important;
+  }
+}
+
+@media (max-width: 719px) {
+  .chat-otter {
+    display: none;
+  }
+}
+
+/* ── 初始页右上角氛围小海獭（rev3 第四落点，task-49）──────────────────────────────
+   绝对定位相对「chat 页内容层」（顶部栏之下）。right 用 --content-max-width 折算到**内容列右缘**
+   （宽窗内容列 800 居中，不能钉在页面右缘），内缩 12px；<900 内缩 8 且尺寸 32→24；
+   <720 整个隐藏（空间不够时优先保证文案）。pointer-events:none / aria-hidden 由组件给。 */
+.welcome-ambient-otter {
+  position: absolute;
+  top: 12px;
+  right: calc(max(0px, (100% - var(--content-max-width, 800px)) / 2) + 12px);
+  z-index: 1;
+  pointer-events: none;
+  transition: opacity var(--motion-reveal, 150ms) var(--motion-ease-glide, ease-out);
+}
+
+@media (max-width: 899px) {
+  .welcome-ambient-otter {
+    top: 8px;
+    right: calc(max(0px, (100% - var(--content-max-width, 800px)) / 2) + 8px);
+  }
+
+  .welcome-ambient-otter .pixel-otter {
+    --otter-size: 24px !important;
+  }
+}
+
+@media (max-width: 719px) {
+  .welcome-ambient-otter {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-ambient-otter {
+    transition: none;
+  }
+}

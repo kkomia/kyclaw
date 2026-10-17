@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cn } from '@renderer/components/ui/cn'
+import { PixelOtter } from '@renderer/features/brand/PixelOtter'
+import type { PixelOtterState } from '@renderer/features/brand/otter-states'
 
 /**
  * 对话初始页的品牌标题（round 59）：空会话时输入框竖直居中、标题在它正上方居中。
@@ -17,6 +19,11 @@ import { cn } from '@renderer/components/ui/cn'
  * （sans 12、三级可读档 —— 它是承载信息的小字，不是 caption 装饰档）。
  * **不加任何多余小字 / 提示 / 菜单**（用户口径：首页必须简洁）。
  *
+ * 2026-10-18 像素海獭 v1（设计稿 §5.3/D-32）：字标**上方 16px** 放 96/128 的像素海獭
+ * （128，<1280 由 CSS 降到 96）：首挂载 `wave` 播 2 遍（≈1.2s）→ `float` loop；reduced-motion 直接
+ * `float` 静态帧；离场（active=false）时 `paused` 停帧，随整块一起淡出。它是字标的"图形旁白"，
+ * 一屏一只、`pointer-events:none`，不改变 `<kyclaw>` 结构。
+ *
  * 动效（都不硬切）：
  *   - 进场：整块淡入 + 6px 上浮 —— 既有 `animate-message-in`（主档 .3s / CLP ease-out）；
  *     输入框那一侧由 ChatPage 的页脚用同一套动画、晚 80ms 起步（标题先落，输入框跟上来）。
@@ -27,10 +34,29 @@ import { cn } from '@renderer/components/ui/cn'
  * 出现过就不再卸载（离场要过渡）：挂载时就有历史消息的会话（压根没有初始页）根本不渲染它；
  * 离场后留在 DOM 里（opacity 0 + pointer-events-none，不占高度、不影响布局）。
  */
+/** 首帧就按系统偏好决定（reduced-motion 不播 wave）；jsdom 没有 matchMedia 时按 false */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
+}
+
 export function WelcomeHero({ active }: { active: boolean }): React.JSX.Element | null {
   // render 期按 props 调 state（React 文档认可的写法；不走 effect 就没有级联渲染）
   const [everActive, setEverActive] = useState(active)
   if (active && !everActive) setEverActive(true)
+
+  // 海獭：首挂载 wave → 1.2s 后 float；reduced-motion 首帧就是 float（静态帧由 CSS 停在 #0）
+  const [otterState, setOtterState] = useState<PixelOtterState>(() =>
+    prefersReducedMotion() ? 'float' : 'wave'
+  )
+  useEffect(() => {
+    if (!active || prefersReducedMotion()) return
+    const timer = setTimeout(() => setOtterState('float'), 1200)
+    return () => clearTimeout(timer)
+  }, [active])
+
   if (!everActive) return null
 
   return (
@@ -42,6 +68,16 @@ export function WelcomeHero({ active }: { active: boolean }): React.JSX.Element 
         active ? 'animate-message-in' : 'animate-fade-out'
       )}
     >
+      {/* 品牌图形：字标上方 16px（mb-4）；装饰性、不可点、不参与可访问树 */}
+      <div className="mb-4 flex justify-center">
+        <PixelOtter
+          state={otterState}
+          size={128}
+          paused={!active}
+          title="kyclaw"
+          className="welcome-otter"
+        />
+      </div>
       <h1 data-testid="welcome-title" className="welcome-title font-semibold text-ink">
         <span className="text-accent-text">&lt;</span>
         kyclaw

@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Segmented } from '@renderer/components/ui/segmented'
+import { PixelOtter } from '@renderer/features/brand/PixelOtter'
+import { CHAT_MASCOT_STATE } from '@renderer/features/brand/otter-states'
+import { useChatMascotState } from '@renderer/features/brand/chat-mascot-state'
+import { useWelcomeHeroVisible } from '@renderer/features/brand/welcome-presence'
 import { SessionActionsMenu } from '@renderer/features/sessions/SessionActionsMenu'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 
@@ -21,6 +25,16 @@ import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
  * 轨迹页签（本轮）：头部右侧是「对话 / 轨迹」的分段切换，标题可收缩并让出工作台按钮走廊 —— 轨迹是**并列的一等视图**，
  * 不是藏在抽屉里的面板；切换由 `ChatSession` 持有状态（它与页签、两块内容同层），
  * 这里只负责画与回调。两个 prop 都是可选的：不给就只画标题（旧的调用方与既有用例不受影响）。
+ *
+ * 2026-10-18（像素海獭 v1，设计稿 §5.2/D-32）：segmented **左侧 8px** 放一只 24/32 的状态灯
+ * （idle / think / type；`pointer-events:none`、`aria-hidden`，不抢文字不挡按钮；<720 整个隐藏）。
+ * 状态由 `features/brand/chat-mascot-state` 从 run-store + 工具卡 DOM 推导（ChatPage 不在本任务写域），
+ * 本轮结束后 1.2s 回 idle。它不是第二个 logo，是"这一轮在干嘛"的状态灯。
+ *
+ * 2026-10-18 rev3（task-49）：**初始页（hero）在场时这一枚让位给右上角的氛围小海獭**——
+ * 同一位置不能一屏两只（用户口径：hero 时只有氛围位，进对话后只有 header 状态灯）。
+ * 判据是 DOM 里欢迎页的 `data-active` 事实（`useWelcomeHeroVisible`，ChatPage 内部状态不传 prop）；
+ * 英雄离场后状态灯自动接棒，不重挂 header。
  */
 export type ChatView = 'chat' | 'trajectory'
 
@@ -40,6 +54,10 @@ export function ChatHeader({ threadId, view, onViewChange }: ChatHeaderProps): R
   const draftTitle = useSessionsStore((state) => state.draftTitles[threadId])
   const title = listed?.title ?? draftTitle ?? null
   const [error, setError] = useState<string | null>(null)
+  // 像素海獭状态灯（24/32，idle/think/type）；窗口 <720 由 CSS 隐藏
+  const mascotState = useChatMascotState(threadId)
+  // 初始页在场时让位给右上角的氛围小海獭（一屏一只；hero 结束自动接棒）
+  const welcomeActive = useWelcomeHeroVisible()
 
   return (
     <>
@@ -67,6 +85,17 @@ export function ChatHeader({ threadId, view, onViewChange }: ChatHeaderProps): R
             }
           />
         </div>
+        {/* 状态灯：装在这里而不是 new row —— 与 segmented 同一行、间距 8（header 的 gap-2），
+            不改变左侧标题对齐；纯装饰（aria-hidden/pointer-events:none），title 只做 hover 提示。
+            rev3：初始页（hero 在场）时**整个不渲染**，让位给右上角氛围位（一屏一只）。 */}
+        {welcomeActive ? null : (
+          <PixelOtter
+            state={CHAT_MASCOT_STATE[mascotState]}
+            size={32}
+            title="kyclaw"
+            className="chat-otter"
+          />
+        )}
         {/* 对话 / 轨迹：固定在头部右侧，避开工作台按钮走廊；标题占剩余空间并可收缩。 */}
         {view === undefined || onViewChange === undefined ? null : (
           <Segmented
