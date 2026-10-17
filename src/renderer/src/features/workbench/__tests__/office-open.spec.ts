@@ -134,6 +134,30 @@ describe('openOfficeFromSession：打开 / 去重 / 失败不落标签', () => {
       'Office 通道不可用'
     )
   })
+
+  it('M3-S5-3 打开闸门：标签已满时抛人话且不落第 6 个标签', async () => {
+    for (let index = 0; index < 5; index += 1) {
+      useOfficeTabsStore
+        .getState()
+        .openDocument(
+          officeDocumentFixture({ documentId: `doc-${index}`, displayName: `文档${index}.docx` })
+        )
+    }
+    bridge.office.openFromSession.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({
+        documentId: 'doc-sixth',
+        displayName: '第六篇.docx',
+        absolutePath: 'D:\\工作区\\docs\\第六篇.docx'
+      }),
+      alreadyOpen: false
+    })
+
+    await expect(openOfficeFromSession('thread-1', 'docs/第六篇.docx')).rejects.toThrow(
+      '最多同时打开 5 个标签'
+    )
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(5)
+  })
 })
 
 describe('officeTabForPreview：同一文件匹配（绝对路径优先，跨工作区不误报）', () => {

@@ -58,8 +58,11 @@ export async function openOfficeFromSession(
   const result = await office.openFromSession(threadId, relative)
   if (!result.ok) throw new Error(result.message)
   // 绝对路径已随 `OfficeDocumentInfo` 落进 OfficeTab.absolutePath（store 里只读，仅用于匹配）
-  const tabId = useOfficeTabsStore.getState().openDocument(result.document)
-  return { document: result.document, tabId, alreadyOpen: result.alreadyOpen }
+  // M3-S5-3：打开闸门（标签数/未保存数超限）在这里统一吹哨——被拒就抛人话，**不新增标签**；
+  // 调用方拿到 Error 原样展示（聊天卡/文件树既有错误行），不静默、不假装打开。
+  const opened = useOfficeTabsStore.getState().openDocumentChecked(result.document)
+  if (!opened.ok) throw new Error(opened.block.message)
+  return { document: result.document, tabId: opened.tabId, alreadyOpen: result.alreadyOpen }
 }
 
 /**

@@ -683,3 +683,167 @@ describe('OfficePage：M3-S3 保存链路（按钮 / Ctrl+S / 脏徽标 / 错误
     )
   })
 })
+
+describe('OfficePage：M3-S5-3 容量策略（dormant / 打开闸门 / 整面重载）', () => {
+  /** 按 documentId 回对应文档的桥（多标签用例共用；read 调用次数用来断言"休眠的不读"） */
+  function installMultiDocBridge(): KyclawBridgeStubs {
+    const bridge = installKyclawBridge()
+    bridge.office.read.mockImplementation(async (documentId) => ({
+      ok: true as const,
+      document: officeDocumentFixture({ documentId, displayName: `${documentId}.docx` }),
+      bytes: new Uint8Array([1, 2, 3])
+    }))
+    return bridge
+  }
+
+  interface OpenedDoc {
+    tabId: string
+    documentId: string
+  }
+
+  /** 依次打开 count 个 docx（调用方先开 fake Date；递增时间让 LRU 顺序确定：越早打开越先休眠） */
+  function openDocs(count: number, prefix: string): OpenedDoc[] {
+    const docs: OpenedDoc[] = []
+    for (let index = 0; index < count; index += 1) {
+      const documentId = `${prefix}-${index}`
+      let tabId = ''
+      vi.setSystemTime(1_000 + index * 10)
+      act(() => {
+        tabId = useOfficeTabsStore
+          .getState()
+          .openDocument(officeDocumentFixture({ documentId, displayName: `${documentId}.docx` }))
+      })
+      docs.push({ tabId, documentId })
+    }
+    return docs
+  }
+
+  it('挂载计划：4 个 docx 只挂 3 个 workspace + 1 个 dormant 占位；休眠标签不发 office:read', async () => {
+    const bridge = installMultiDocBridge()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const docs = openDocs(4, 'doc')
+    vi.useRealTimers()
+
+    render(<OfficePage />)
+
+    await waitFor(() => expect(screen.getAllByTestId('office-workspace')).toHaveLength(3))
+    expect(screen.getAllByTestId('office-workspace-dormant')).toHaveLength(1)
+    // 最久未激活的第一篇休眠；active（最后一篇）恒挂载
+    expect(screen.getByTestId('office-workspace-dormant')).toHaveAttribute(
+      'data-document-id',
+      docs[0].documentId
+    )
+    // 休眠标签**绝不**读字节（一个字节都不取）
+    const readIds = bridge.office.read.mock.calls.map((call) => call[0])
+    expect(readIds).not.toContain(docs[0].documentId)
+    expect(readIds.slice().sort()).toEqual(
+      [docs[1].documentId, docs[2].documentId, docs[3].documentId].sort()
+    )
+    // store 里也已同步成 dormant（布局 effect 批量 setDormant）
+    const dormantTab = useOfficeTabsStore.getState().tabs.find((tab) => tab.id === docs[0].tabId)
+    expect(dormantTab?.dormant).toBe(true)
+  })
+
+  it('dirty 永不 dormant：最久未激活但脏的标签仍挂载（S5-2 退出保存不会指向已卸载编辑器）', async () => {
+    const bridge = installMultiDocBridge()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const docs = openDocs(4, 'doc')
+    vi.useRealTimers()
+    // 把最久未激活的第一篇标脏：dirty 是强制挂载项，任何容量策略都不能卸载它
+    act(() => useOfficeTabsStore.getState().markDirty(docs[0].tabId, true))
+    render(<OfficePage />)
+
+    await waitFor(() => expect(screen.getAllByTestId('office-workspace')).toHaveLength(3))
+    // 第一篇仍以 workspace（而不是 dormant 占位）出现，且读字节
+    const firstPanel = document.querySelector(`[data-office-panel="${docs[0].tabId}"]`)
+    expect(firstPanel?.querySelector('[data-testid="office-workspace"]')).not.toBeNull()
+    expect(firstPanel?.querySelector('[data-testid="office-workspace-dormant"]')).toBeNull()
+    expect(bridge.office.read).toHaveBeenCalledWith(docs[0].documentId)
+    // 让位的是另一篇 clean 标签
+    expect(screen.getAllByTestId('office-workspace-dormant')).toHaveLength(1)
+    expect(screen.getByTestId('office-workspace-dormant')).not.toHaveAttribute(
+      'data-document-id',
+      docs[0].documentId
+    )
+  })
+
+  it('激活休眠标签：重新挂载并从磁盘重读字节（dormant 占位让位）', async () => {
+    const bridge = installMultiDocBridge()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const docs = openDocs(4, 'doc')
+    vi.useRealTimers()
+    render(<OfficePage />)
+    await waitFor(() => expect(screen.getByTestId('office-workspace-dormant')).toBeInTheDocument())
+    const target = useOfficeTabsStore.getState().tabs.find((tab) => tab.id === docs[0].tabId)
+    if (target === undefined) throw new Error('缺标签')
+    bridge.office.read.mockClear()
+
+    fireEvent.click(screen.getByTestId('office-workspace-dormant-activate'))
+
+    await waitFor(() => expect(bridge.office.read).toHaveBeenCalledWith(docs[0].documentId))
+    await waitFor(() => expect(screen.getAllByTestId('office-workspace')).toHaveLength(3))
+    // 第一篇已恢复，改由最久未激活的第二篇休眠（active 恒挂载：doc-0 + doc-2 + doc-3）
+    expect(screen.getByTestId('office-workspace-dormant')).toHaveAttribute(
+      'data-document-id',
+      docs[1].documentId
+    )
+    // 恢复的 workspace 有自己的隔离面
+    expect(screen.getAllByTestId('office-surface-iframe')).toHaveLength(3)
+  })
+
+  it('打开闸门：已 5 个标签时再打开 → 不弹选择器、不读字节、展示人话', async () => {
+    const bridge = installMultiDocBridge()
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId: 'doc-extra', displayName: '多出来的.docx' }),
+      alreadyOpen: false
+    })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    openDocs(5, 'doc')
+    vi.useRealTimers()
+    render(<OfficePage />)
+    await waitFor(() => expect(screen.getAllByTestId('office-workspace')).toHaveLength(3))
+    bridge.office.read.mockClear()
+
+    // 走「顶栏＋」同一个标志入口（OfficePage 的 effect 消费 pickerOpen 后发起打开）
+    act(() => useOfficeUiStore.getState().openPicker())
+
+    const error = await screen.findByTestId('office-open-error')
+    expect(error).toHaveTextContent('最多同时打开 5 个标签')
+    expect(bridge.office.openDialog).not.toHaveBeenCalled()
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(5)
+    expect(bridge.office.read).not.toHaveBeenCalled()
+  })
+
+  it('整面重载：复用次数到上限且无 dirty → 失活时卸掉 iframe，再激活重读重建', async () => {
+    const bridge = installMultiDocBridge()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const docs = openDocs(2, 'doc')
+    vi.useRealTimers()
+    render(<OfficePage />)
+    await waitFor(() => expect(screen.getAllByTestId('office-surface-iframe')).toHaveLength(2))
+
+    // 交替切标签 60 次：两个 workspace 各累计 ~30 次复用（> OFFICE_SURFACE_MAX_REUSE=24）
+    for (let index = 0; index < 60; index += 1) {
+      act(() =>
+        useOfficeTabsStore.getState().activate(index % 2 === 0 ? docs[0].tabId : docs[1].tabId)
+      )
+    }
+    // 最后一次激活第二篇 → 第一篇失活且复用超限：其隔离面被卸载（延迟一拍）
+    await waitFor(() =>
+      expect(screen.getAllByTestId('office-surface-unloaded').length).toBeGreaterThanOrEqual(1)
+    )
+
+    bridge.office.read.mockClear()
+    act(() => useOfficeTabsStore.getState().activate(docs[0].tabId))
+    await waitFor(() => expect(bridge.office.read).toHaveBeenCalledWith(docs[0].documentId))
+    // 重新激活的这块面重读磁盘后重建 iframe（另一块刚失活、同样超限 → 轮到它被卸载，属预期）
+    const panelOf = (tabId: string): HTMLElement | null =>
+      document.querySelector(`[data-office-panel="${tabId}"]`)
+    await waitFor(() => {
+      const panel = panelOf(docs[0].tabId)
+      expect(panel?.querySelector('[data-testid="office-surface-iframe"]')).not.toBeNull()
+      expect(panel?.querySelector('[data-testid="office-surface-unloaded"]')).toBeNull()
+    })
+  })
+})

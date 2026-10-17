@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Briefcase, Plus, Sparkles } from 'lucide-react'
 import type { OfficeDocumentInfo } from '@shared/office-editor'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
+import { openBlockReason, planMounts, shouldReloadSurface } from './office-capacity'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, officePanelIdOf } from './office-kinds'
 import {
   handleOfficeShortcut,
@@ -51,7 +52,7 @@ export interface OfficePageProps {
 export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.Element {
   const tabs = useOfficeTabsStore((state) => state.tabs)
   const activeTabId = useOfficeTabsStore((state) => state.activeTabId)
-  const openDocument = useOfficeTabsStore((state) => state.openDocument)
+  const openDocumentChecked = useOfficeTabsStore((state) => state.openDocumentChecked)
   const pickerOpen = useOfficeUiStore((state) => state.pickerOpen)
   const setPickerOpen = useOfficeUiStore((state) => state.setPickerOpen)
   // A3：AI 面板 = 用户手动偏好 && 未被自动收起（纯函数派生；自动收起由 ResizeObserver 写）
@@ -68,6 +69,24 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   const [surfaceUrl, setSurfaceUrl] = useState<string | undefined>(undefined)
   /** 标志消费去重（StrictMode 双跑 / 连点「＋」时只发一次） */
   const openingFromFlagRef = useRef(false)
+
+  /**
+   * M3-S5-3：挂载计划（纯函数）——active 恒挂、dirty 恒挂、其余 clean 按 LRU 只留到上限 3。
+   * 超出的 clean 标签标 dormant（只渲染占位，不建 iframe/编辑器、不读字节）。
+   */
+  const mountPlan = useMemo(() => planMounts(tabs, { activeTabId }), [tabs, activeTabId])
+  const dormantIds = useMemo(() => new Set(mountPlan.dormant), [mountPlan])
+  const openTabCount = tabs.length
+  const dirtyCount = useMemo(() => tabs.filter((tab) => tab.dirty).length, [tabs])
+
+  /**
+   * 批量把本次计划要休眠的标签置 dormant（幂等；store 里 dirty 会再兜底跳过）。
+   * 放 layout effect：先于绘制落库，避免"先闪一下编辑器再变占位"。
+   */
+  useLayoutEffect(() => {
+    if (mountPlan.evicted.length === 0) return
+    useOfficeTabsStore.getState().setDormant(mountPlan.evicted)
+  }, [mountPlan])
 
   useEffect(() => {
     let alive = true
@@ -115,9 +134,21 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     setOpening(true)
     setOpenError('')
     try {
+      // M3-S5-3 打开闸门：超限时**连原生选择器都不开**（先吹哨再开窗），也不读任何字节
+      const preBlock = openBlockReason(useOfficeTabsStore.getState().tabs, 'docx')
+      if (preBlock !== null) {
+        setOpenError(preBlock.message)
+        return
+      }
       const result = await window.kyclaw.office.openDialog()
       if (result.ok) {
-        openDocument(result.document)
+        // 带原因的打开入口（并发/竞态兜底）：被拒时**绝不**先 office:read，直接展示人话；
+        // 主进程注册表已为这次选择留了条目 → 立刻释放，别让它挂到窗口关闭。
+        const opened = openDocumentChecked(result.document)
+        if (!opened.ok) {
+          setOpenError(opened.block.message)
+          void window.kyclaw.office.release(result.document.documentId)
+        }
         return
       }
       // 取消是用户自己的动作，不报错；其余分类原样显示主进程给的人话
@@ -127,7 +158,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     } finally {
       setOpening(false)
     }
-  }, [openDocument])
+  }, [openDocumentChecked])
 
   // 顶栏「＋」→ 标志置位 → 这里发起一次真实选择器（并立刻消费掉标志）
   useEffect(() => {
@@ -185,23 +216,17 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
               打开文件
             </Button>
           </div>
-          {openError === '' ? null : (
-            <p
-              data-testid="office-open-error"
-              role="alert"
-              className="max-w-md text-c1 text-warning"
-            >
-              {openError}
-            </p>
-          )}
         </div>
       ) : (
-        // M3-S4：**所有已打开标签都挂载**，非激活 `hidden + inert`——切标签只换可见性，
+        // M3-S4：所有已打开标签都挂载，非激活 `hidden + inert`——切标签只换可见性，
         // iframe / 面内编辑器 / 未保存修改 / 滚动位置全部保活（不再 key=activeTab.id 重建）。
+        // M3-S5-3：**按 planMounts 收窄**——超上限的 clean 标签只渲染 dormant 占位（不建 iframe、
+        // 不读字节）；dirty 与 active 恒挂载，dirty 永不休眠。
         // A1：全出血画布（灰底），每个 workspace 自己铺满。
         <div data-testid="office-workspaces" className="relative flex min-h-0 flex-1 flex-col">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTab?.id
+            const isDormant = dormantIds.has(tab.id)
             return (
               <div
                 key={tab.id}
@@ -210,24 +235,81 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
                 aria-labelledby={`office-tab-${tab.id}`}
                 data-office-panel={tab.id}
                 data-active={isActive ? 'true' : 'false'}
+                data-dormant={isDormant ? 'true' : 'false'}
                 hidden={!isActive}
                 inert={!isActive}
                 className={isActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
               >
-                <OfficeWorkspace
-                  tab={tab}
-                  active={isActive}
-                  surfaceUrl={surfaceUrl}
-                  aiPanelOpen={aiPanelOpen}
-                  aiPanelAutoCollapsed={aiPanelAutoCollapsed}
-                  onToggleAiPanel={toggleAiPanel}
-                />
+                {isDormant ? (
+                  <DormantWorkspace tab={tab} active={isActive} />
+                ) : (
+                  <OfficeWorkspace
+                    tab={tab}
+                    active={isActive}
+                    surfaceUrl={surfaceUrl}
+                    openTabCount={openTabCount}
+                    dirtyCount={dirtyCount}
+                    aiPanelOpen={aiPanelOpen}
+                    aiPanelAutoCollapsed={aiPanelAutoCollapsed}
+                    onToggleAiPanel={toggleAiPanel}
+                  />
+                )}
               </div>
             )
           })}
         </div>
       )}
+
+      {/* 打开失败的人话（S5-3：打开闸门超限也走这里；空态/有标签两种版式共用一条错误位） */}
+      {openError === '' ? null : (
+        <p
+          data-testid="office-open-error"
+          role="alert"
+          className="shrink-0 px-4 py-2 text-c1 text-warning"
+        >
+          {openError}
+        </p>
+      )}
     </section>
+  )
+}
+
+/**
+ * 已休眠的标签占位（M3-S5-3）：标签还在（可激活 / 可关闭），但它那块 `OfficeWorkspace`
+ * （= 整个 iframe + 面内编辑器 + wasm）已经卸载——激活时重新挂载并从磁盘重读字节。
+ * 只有**干净**标签会走到这里（dirty 恒挂载，见 `office-capacity.planMounts`）。
+ */
+function DormantWorkspace({ tab, active }: { tab: OfficeTab; active: boolean }): React.JSX.Element {
+  const activate = useOfficeTabsStore((state) => state.activate)
+  const Icon = OFFICE_KIND_ICON[tab.kind]
+  return (
+    <div
+      data-testid="office-workspace-dormant"
+      data-document-id={tab.documentId ?? ''}
+      data-active={active ? 'true' : 'false'}
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-(--doc-canvas-bg) p-8 text-center"
+    >
+      <span
+        aria-hidden="true"
+        className="flex size-11 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
+      >
+        <Icon className="size-(--icon-size-lg)" />
+      </span>
+      <p className="max-w-md truncate text-b2 font-medium text-ink" title={tab.title}>
+        {tab.title}
+      </p>
+      <p className="max-w-md text-c1 text-ink-tertiary">
+        已休眠：为控制内存，编辑器已卸载；激活后从磁盘重新读取。
+      </p>
+      <Button
+        data-testid="office-workspace-dormant-activate"
+        variant="ghost"
+        size="sm"
+        onClick={() => activate(tab.id)}
+      >
+        重新打开
+      </Button>
+    </div>
   )
 }
 
@@ -241,6 +323,8 @@ function OfficeWorkspace({
   tab,
   active,
   surfaceUrl,
+  openTabCount,
+  dirtyCount,
   aiPanelOpen,
   aiPanelAutoCollapsed,
   onToggleAiPanel
@@ -249,6 +333,9 @@ function OfficeWorkspace({
   /** 是否当前可见标签（面内快捷键只在该 workspace 上转发，双保险） */
   active: boolean
   surfaceUrl?: string
+  /** M3-S5-3：整面重载判定要的两个全局量（当前标签数 / 未保存数） */
+  openTabCount: number
+  dirtyCount: number
   /** A3：右侧 AI 面板生效展开（docx 才有面板；非 docx 不渲染） */
   aiPanelOpen: boolean
   /** A3：是否因内容区过窄被自动收起（只影响把手 tooltip/可用性） */
@@ -263,6 +350,17 @@ function OfficeWorkspace({
   const theme = useDocumentTheme()
   const surfaceRef = useRef<OfficeSurfaceHandle | null>(null)
   const machineRef = useRef<OfficeSaveMachine | null>(null)
+
+  /**
+   * M3-S5-3 整面重载：同一个 iframe 累计"复用次数"（激活一次 / 重读一次字节各 +1），
+   * 到 `OFFICE_SURFACE_MAX_REUSE` 且**没有 dirty** 时，趁本标签不在前台把整个面卸掉
+   * （唯一能回收 wasm 线性内存的手段）；下次激活重新挂载并重新读盘。
+   * 用 ref 计数（不触发渲染），判定只在失活/激活的 effect 里做。
+   */
+  const reuseCountRef = useRef(0)
+  const [surfaceAlive, setSurfaceAlive] = useState(true)
+  const [reloadGeneration, setReloadGeneration] = useState(0)
+  const wasActiveRef = useRef(false)
 
   const [surfaceStatus, setSurfaceStatus] = useState<OfficeSurfaceStatus>('loading')
   const handleSurfaceStatus = setSurfaceStatus
@@ -297,6 +395,8 @@ function OfficeWorkspace({
       .then((result) => {
         if (!alive) return
         if (result.ok) {
+          // 读盘成功 = 这个面复用了一次（首开/整面重载后的重读都算）
+          reuseCountRef.current += 1
           setLoaded({ info: result.document, bytes: result.bytes })
         } else {
           setDocError(result.message)
@@ -308,7 +408,54 @@ function OfficeWorkspace({
     return () => {
       alive = false
     }
-  }, [isDocx, tab.documentId])
+  }, [isDocx, tab.documentId, reloadGeneration])
+
+  /** M3-S5-3：激活一次 = 复用一次（ref 计数，不触发渲染） */
+  useEffect(() => {
+    if (active && !wasActiveRef.current) reuseCountRef.current += 1
+    wasActiveRef.current = active
+    // 调试探针用：把复用计数/存活状态写到面板属性（只写 DOM，不参与渲染决策）
+    const panel = document.querySelector(`[data-office-panel="${tab.id}"]`)
+    panel?.setAttribute('data-reuse-count', String(reuseCountRef.current))
+    panel?.setAttribute('data-surface-alive', surfaceAlive ? 'true' : 'false')
+  }, [active, tab.id, surfaceAlive])
+
+  /**
+   * M3-S5-3 整面重载（recon §3）：本标签**不在前台**且复用次数到上限、没有未保存内容时，
+   * 把整个隔离面卸掉 —— 这是当前架构下唯一能回收 wasm 线性内存的手段（DOCX 无 dispose）。
+   * 状态变更排到下一拍：避免在 effect 体内同步 setState 造成级联渲染。
+   */
+  useEffect(() => {
+    if (active || !surfaceAlive || !isDocx) return
+    if (tab.dirty) return
+    const reload = shouldReloadSurface({
+      openTabCount,
+      dirtyCount,
+      reuseCount: reuseCountRef.current
+    })
+    if (!reload) return
+    const handle = window.setTimeout(() => {
+      reuseCountRef.current = 0
+      setSurfaceAlive(false)
+      setSurfaceStatus('loading')
+      setLoaded(null)
+      setDocError('')
+      setSaveError('')
+      setEditorReady(false)
+      setPageCount(0)
+    }, 0)
+    return () => window.clearTimeout(handle)
+  }, [active, surfaceAlive, isDocx, tab.dirty, openTabCount, dirtyCount])
+
+  /** M3-S5-3：被卸掉的面在标签重新激活时按需重开（重读磁盘 → 重建 save-machine） */
+  useEffect(() => {
+    if (!active || surfaceAlive || !isDocx) return
+    const handle = window.setTimeout(() => {
+      setSurfaceAlive(true)
+      setReloadGeneration((generation) => generation + 1)
+    }, 0)
+    return () => window.clearTimeout(handle)
+  }, [active, surfaceAlive, isDocx])
 
   // 保存状态机：文档字节到手后创建，并把运行时注册进模块级 registry（S4 的标签条也走它）
   const loadedDocumentId = loaded?.info.documentId
@@ -534,23 +681,36 @@ function OfficeWorkspace({
         // A1 的全出血不变：左侧画布区自己铺满，圆角仍由 content-region 裁。
         <div className="relative flex min-h-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <OfficeSurface
-              ref={surfaceRef}
-              onStatusChange={handleSurfaceStatus}
-              theme={theme}
-              documentInfo={loaded?.info}
-              documentBytes={loaded?.bytes}
-              surfaceUrl={surfaceUrl}
-              onDocLoaded={(pages) => {
-                setEditorReady(true)
-                setPageCount(pages)
-                setDocError('')
-              }}
-              onDocChanged={handleDocChanged}
-              onDocSaveRequest={handleDocSaveRequest}
-              onDocError={handleDocError}
-              onShortcut={handleSurfaceShortcut}
-            />
+            {surfaceAlive ? (
+              <OfficeSurface
+                ref={surfaceRef}
+                onStatusChange={handleSurfaceStatus}
+                theme={theme}
+                documentInfo={loaded?.info}
+                documentBytes={loaded?.bytes}
+                surfaceUrl={surfaceUrl}
+                onDocLoaded={(pages) => {
+                  setEditorReady(true)
+                  setPageCount(pages)
+                  setDocError('')
+                }}
+                onDocChanged={handleDocChanged}
+                onDocSaveRequest={handleDocSaveRequest}
+                onDocError={handleDocError}
+                onShortcut={handleSurfaceShortcut}
+              />
+            ) : (
+              // M3-S5-3：整面重载后的空位——标签还在、字节不占内存；激活时按需重读
+              <div
+                data-testid="office-surface-unloaded"
+                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center"
+              >
+                <p className="text-b2 text-ink-secondary">隔离面已释放以回收内存</p>
+                <p className="text-c1 text-ink-tertiary">
+                  切换回本标签会从磁盘重新读取；有未保存修改的标签永远不会走到这一档。
+                </p>
+              </div>
+            )}
             {/*
               A3：面板收起时，画布右缘给一个窄「AI」把手（aria-expanded=false + tooltip）。
               自动收起（窗口过窄）时禁用并说明原因——不挤压画布，也不假装能开。
