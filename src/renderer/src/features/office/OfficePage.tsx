@@ -23,6 +23,8 @@ import {
   useOfficeUiStore
 } from './office-ui-store'
 import { useDocumentTheme } from './use-document-theme'
+import { NewTabPage } from '@renderer/features/newtab/NewTabPage'
+import { useNewTabStore } from '@renderer/features/newtab/new-tab-store'
 
 /**
  * Office 模块：独立于会话的多标签工作区。
@@ -63,6 +65,10 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   const aiPanelOpen = resolveAiPanelOpen(aiPanelManualOpen, aiPanelAutoCollapsed)
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]
+  /** task-80：空白伪标签在前台（/office 且 active）时渲染新标签页、文档区 hidden 但保持挂载 */
+  const newTabOpen = useNewTabStore((state) => state.isOpen)
+  const newTabActive = useNewTabStore((state) => state.isActive)
+  const blankVisible = newTabOpen && newTabActive
   const [opening, setOpening] = useState(false)
   const [openError, setOpenError] = useState('')
   /** 面 URL 由主进程下发（dev 端口随 Vite 走；preview/打包是 kyclaw-office://surface/） */
@@ -170,6 +176,23 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     })
   }, [active, pickerOpen, setPickerOpen, openViaDialog])
 
+  /**
+   * task-80（DESIGN §9.2）：任何文档激活路径都要先让空白退出前台——不止标签条点击，
+   * 聊天交付卡 / 其他入口直接 `activate` 文档时也走这里。空白标签本身保留在条上（不自动关），
+   * 只有「在本页做出选择」才 consume。
+   *
+   * 只在 activeTabId **发生变化**时执行：OfficePage 首次挂载时若已有文档 + 用户刚开了空白页
+   * （AppTabBar 先开空白再导航 /office），不能把空白误判成"被文档顶掉"。
+   */
+  const previousActiveTabIdRef = useRef(activeTabId)
+  useEffect(() => {
+    const previous = previousActiveTabIdRef.current
+    previousActiveTabIdRef.current = activeTabId
+    if (previous === activeTabId || activeTabId === '') return
+    const newTab = useNewTabStore.getState()
+    if (newTab.isActive) newTab.deactivate()
+  }, [activeTabId])
+
   return (
     <section
       ref={pageRef}
@@ -187,78 +210,89 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
         Office
       </h1>
 
-      {tabs.length === 0 ? (
-        <div
-          data-testid="office-empty"
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center"
-        >
-          {/* 空态 = 灰画布上的一张「白纸」：--doc-page-bg / --doc-page-shadow 的可见落点 */}
-          <div className="flex max-w-md flex-col items-center gap-4 rounded-overlay border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-8 py-10 shadow-(--doc-page-shadow)">
-            <span
-              aria-hidden="true"
-              className="flex size-12 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
-            >
-              <Briefcase className="size-(--icon-size-lg)" />
-            </span>
-            <div className="flex flex-col gap-1">
-              <h2 className="text-t2 font-medium text-ink">还没有打开的文档</h2>
-              <p className="text-b2 text-ink-secondary">
-                打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
-              </p>
-            </div>
-            <Button
-              data-testid="office-open"
-              icon={<Plus />}
-              loading={opening}
-              disabled={opening}
-              onClick={() => void openViaDialog()}
-            >
-              打开文件
-            </Button>
-          </div>
-        </div>
-      ) : (
-        // M3-S4：所有已打开标签都挂载，非激活 `hidden + inert`——切标签只换可见性，
-        // iframe / 面内编辑器 / 未保存修改 / 滚动位置全部保活（不再 key=activeTab.id 重建）。
-        // M3-S5-3：**按 planMounts 收窄**——超上限的 clean 标签只渲染 dormant 占位（不建 iframe、
-        // 不读字节）；dirty 与 active 恒挂载，dirty 永不休眠。
-        // A1：全出血画布（灰底），每个 workspace 自己铺满。
-        <div data-testid="office-workspaces" className="relative flex min-h-0 flex-1 flex-col">
-          {tabs.map((tab) => {
-            const isActive = tab.id === activeTab?.id
-            const isDormant = dormantIds.has(tab.id)
-            return (
-              <div
-                key={tab.id}
-                id={officePanelIdOf(tab.id)}
-                role="tabpanel"
-                aria-labelledby={`office-tab-${tab.id}`}
-                data-office-panel={tab.id}
-                data-active={isActive ? 'true' : 'false'}
-                data-dormant={isDormant ? 'true' : 'false'}
-                hidden={!isActive}
-                inert={!isActive}
-                className={isActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+      {/* task-80：空白伪标签在前台 → 渲染新增标签页；下面文档区 hidden + inert 但**保持挂载**
+          （iframe / 面内编辑器 / wasm / 未保存内容都不卸载，切回文档标签即原样回来）。 */}
+      {blankVisible ? <NewTabPage /> : null}
+      <div
+        data-testid="office-documents"
+        hidden={blankVisible}
+        inert={blankVisible}
+        className={blankVisible ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}
+      >
+        {tabs.length === 0 ? (
+          <div
+            data-testid="office-empty"
+            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center"
+          >
+            {/* 空态 = 灰画布上的一张「白纸」：--doc-page-bg / --doc-page-shadow 的可见落点 */}
+            <div className="flex max-w-md flex-col items-center gap-4 rounded-overlay border-(length:--hairline-width) border-hairline bg-(--doc-page-bg) px-8 py-10 shadow-(--doc-page-shadow)">
+              <span
+                aria-hidden="true"
+                className="flex size-12 items-center justify-center rounded-panel bg-secondary text-ink-tertiary"
               >
-                {isDormant ? (
-                  <DormantWorkspace tab={tab} active={isActive} />
-                ) : (
-                  <OfficeWorkspace
-                    tab={tab}
-                    active={isActive}
-                    surfaceUrl={surfaceUrl}
-                    openTabCount={openTabCount}
-                    dirtyCount={dirtyCount}
-                    aiPanelOpen={aiPanelOpen}
-                    aiPanelAutoCollapsed={aiPanelAutoCollapsed}
-                    onToggleAiPanel={toggleAiPanel}
-                  />
-                )}
+                <Briefcase className="size-(--icon-size-lg)" />
+              </span>
+              <div className="flex flex-col gap-1">
+                {/* 空态一句标题 = 衬线（章程 §9.6；不放大字号、不放插画） */}
+                <h2 className="font-serif text-t2 font-medium text-ink">还没有打开的文档</h2>
+                <p className="text-b2 text-ink-secondary">
+                  打开一份 .docx 文档开始；标签不绑定会话，切换会话不会关掉这里。
+                </p>
               </div>
-            )
-          })}
-        </div>
-      )}
+              <Button
+                data-testid="office-open"
+                icon={<Plus />}
+                loading={opening}
+                disabled={opening}
+                onClick={() => void openViaDialog()}
+              >
+                打开文件
+              </Button>
+            </div>
+          </div>
+        ) : (
+          // M3-S4：所有已打开标签都挂载，非激活 `hidden + inert`——切标签只换可见性，
+          // iframe / 面内编辑器 / 未保存修改 / 滚动位置全部保活（不再 key=activeTab.id 重建）。
+          // M3-S5-3：**按 planMounts 收窄**——超上限的 clean 标签只渲染 dormant 占位（不建 iframe、
+          // 不读字节）；dirty 与 active 恒挂载，dirty 永不休眠。
+          // A1：全出血画布（灰底），每个 workspace 自己铺满。
+          <div data-testid="office-workspaces" className="relative flex min-h-0 flex-1 flex-col">
+            {tabs.map((tab) => {
+              const isActive = tab.id === activeTab?.id
+              const isDormant = dormantIds.has(tab.id)
+              return (
+                <div
+                  key={tab.id}
+                  id={officePanelIdOf(tab.id)}
+                  role="tabpanel"
+                  aria-labelledby={`office-tab-${tab.id}`}
+                  data-office-panel={tab.id}
+                  data-active={isActive ? 'true' : 'false'}
+                  data-dormant={isDormant ? 'true' : 'false'}
+                  hidden={!isActive}
+                  inert={!isActive}
+                  className={isActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+                >
+                  {isDormant ? (
+                    <DormantWorkspace tab={tab} active={isActive} />
+                  ) : (
+                    <OfficeWorkspace
+                      tab={tab}
+                      active={isActive}
+                      surfaceUrl={surfaceUrl}
+                      openTabCount={openTabCount}
+                      dirtyCount={dirtyCount}
+                      aiPanelOpen={aiPanelOpen}
+                      aiPanelAutoCollapsed={aiPanelAutoCollapsed}
+                      onToggleAiPanel={toggleAiPanel}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {/* 打开失败的人话（S5-3：打开闸门超限也走这里；空态/有标签两种版式共用一条错误位） */}
       {openError === '' ? null : (

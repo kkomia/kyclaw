@@ -218,3 +218,34 @@ describe('知识库：窄窗（<900）列表替换式', () => {
     expect(screen.getByTestId('knowledge-detail-area')).not.toBeVisible()
   })
 })
+
+describe('知识库：字体声部（task-64 字体一致性）', () => {
+  it('纯文本正文 = prose（与 .md/主 chat 同声部）；详情标题衬线；meta 数字 mono+tabular', async () => {
+    const doc = docFixture({
+      id: '00000000-0000-4000-8000-000000000007',
+      title: '纯文本.txt',
+      ext: 'txt'
+    })
+    bridge.knowledge.list.mockResolvedValue({ documents: [doc] })
+    bridge.knowledge.readText.mockResolvedValue({ text: '第一段\n\n第二段', truncated: false })
+
+    render(<KnowledgePage />)
+    await screen.findByTestId('knowledge-detail-title')
+
+    const plain = screen.getByTestId('knowledge-plain-text')
+    const paragraphs = plain.querySelectorAll('p')
+    expect(paragraphs).toHaveLength(2)
+    for (const paragraph of paragraphs) {
+      expect(paragraph).toHaveClass('font-prose')
+      expect(paragraph).not.toHaveClass('font-sans')
+    }
+    expect(screen.getByTestId('knowledge-detail-title')).toHaveClass('font-serif')
+
+    // meta：数值/大小/时间走 code 声部 + tabular（列表次行同理）
+    const meta = screen.getByTestId('knowledge-meta')
+    expect(meta).toHaveClass('tabular-nums')
+    expect(meta.querySelectorAll('.font-mono').length).toBeGreaterThanOrEqual(3)
+    const listMeta = screen.getByTestId('knowledge-item').querySelector('.tabular-nums')
+    expect(listMeta).not.toBeNull()
+  })
+})

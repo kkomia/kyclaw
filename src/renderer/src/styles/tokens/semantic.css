@@ -111,6 +111,24 @@
   /* 叙事行宽 44em（≈660px @15px；中文约 44 字/行，章程 §2.5/D-05） */
   --prose-measure: 44em;
 
+  /* ── 字号缩放（task-69：字号设置从三档换成连续数值）──
+     六档字号/行高 = **基准档 × --ui-scale**；--ui-scale 由 lib/theme.ts 写在 html 上
+     （= uiFontSize / 14，保留 3 位）；默认 14px → scale=1 → 下面每条都等于 kimi-tokens 的基准值，
+     观感与改造前逐字一致。行高与字号同比例缩放（不能只缩字号，否则紧凑档行距会变松）。
+     这里覆盖 `--ui-*` 而不是 `--text-*`：Tailwind 的 text-t1/b2/... 都映射到这几条（tailwind.css @theme）。 */
+  --ui-T1-font-size: calc(18px * var(--ui-scale, 1));
+  --ui-T1-line-height: calc(26px * var(--ui-scale, 1));
+  --ui-T2-font-size: calc(16px * var(--ui-scale, 1));
+  --ui-T2-line-height: calc(24px * var(--ui-scale, 1));
+  --ui-B1-font-size: calc(15px * var(--ui-scale, 1));
+  --ui-B1-line-height: calc(22px * var(--ui-scale, 1));
+  --ui-B2-font-size: calc(14px * var(--ui-scale, 1));
+  --ui-B2-line-height: calc(20px * var(--ui-scale, 1));
+  --ui-C1-font-size: calc(12px * var(--ui-scale, 1));
+  --ui-C1-line-height: calc(18px * var(--ui-scale, 1));
+  --ui-C2-font-size: calc(10px * var(--ui-scale, 1));
+  --ui-C2-line-height: calc(14px * var(--ui-scale, 1));
+
   /* ── 控件尺寸（§4.7：按钮 26/32/44、图标按钮 36、输入框/下拉 40；chip 高 36 见 §4.6。
      图标与 spinner 共用一把尺：§4.7 spinner 16/18/20、§4.8 通用图标 18） ── */
   --control-height-sm: 26px;
@@ -122,9 +140,13 @@
   --icon-button-size: 36px;
   --field-height: 40px;
   --chip-height: 36px;
-  --icon-size-sm: 16px;
-  --icon-size-md: 18px;
-  --icon-size-lg: 20px;
+  /* 图标尺寸（task-69：随字号 scale 等比缩放；行高也按同一比例缩放，图标盒/文字基线比例不变。
+     像素图/像素海獭等**位图资产不参与缩放**（必须整数倍绘制，见 brand/像素资产口径）。
+     xs=12 只给行内小标（会话行图钉标记等，task-73 收口）。 */
+  --icon-size-xs: calc(12px * var(--ui-scale, 1));
+  --icon-size-sm: calc(16px * var(--ui-scale, 1));
+  --icon-size-md: calc(18px * var(--ui-scale, 1));
+  --icon-size-lg: calc(20px * var(--ui-scale, 1));
   --icon-opacity: 0.56;
   --icon-opacity-hover: 0.84;
   --icon-opacity-disabled: 0.26;
@@ -161,9 +183,11 @@
   --doc-page-bg: var(--k-paper);
   --doc-page-shadow: var(--k-shadow-paper);
 
-  /* ── Office ribbon（A2）：纯布局与动效值，深浅同值。面内 office-chrome.css 消费 ── */
-  --office-ribbon-tabs-height: 32px;
-  --office-ribbon-body-height: 80px;
+  /* ── Office ribbon（A2；task-76 紧凑化）：纯布局与动效值，深浅同值。面内 office-chrome.css 消费。
+     总高 = tabs 28 + band 54 + 底部 hairline 1 ≈ 83px（用户 2026-10-18「不需要这么高」口径，目标 ≤84）。 */
+  --office-ribbon-tabs-height: 28px;
+  --office-ribbon-body-height: 54px;
+  --office-ribbon-total-height: 83px; /* 28 + 54 + 1px border（探针/契约断言用） */
   --office-status-height: 26px; /* A4 状态栏先登记，A2 不改布局 */
   --office-motion-feedback: 120ms;
   --office-motion-enter: var(--duration-base);
@@ -173,6 +197,14 @@
 
   /* ── 内容层（spec §6.2：消息列 max 800、输入区 max 768） ── */
   --content-max-width: 800px;
+  /* ── 页面外层几何（task-85：四个内容页统一规则） ──
+     - 内容列 = content-column（min(100%, 800)，居中）；
+     - 页面 gutter = 16（标题/正文左右同一条线；原先 chat/notes 16、knowledge 24、settings 20）；
+     - 页面侧栏宽 = --sidebar-width(240)：会话侧栏 / 笔记列表 / 知识库列表同宽（原先 240 / 300 / 300）；
+     - 接缝线 = 面与面之间的 1px 分界（比组件边框 --border-hairline 再弱一档：
+       暗色 0.18 → 0.108 白，浅色 #dedcd2 → ≈#e9e8e4；只给接缝，不动卡片外框）。 */
+  --page-gutter: var(--space-4);
+  --seam-line: color-mix(in srgb, var(--border-hairline) 60%, transparent);
   /* 覆盖层时代的"可见左缘"安全线已退休，值恒 0（ChatPage 还有两处引用，清掉后可删） */
   --content-safe-left: 0px;
   /* 对话输入卡（T7）：UI 参考 §4.6 实测输入框宽 768.3 */

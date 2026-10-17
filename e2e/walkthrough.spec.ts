@@ -434,7 +434,7 @@ test('走查A · 深色壳与聊天页（0.2.0 几何 / 四角 / 缝 / 导览轨
 
     // 深色主按钮 hover（R11 的另一半：浅色在走查B 量了）；菜单开着直接点「设置」（不再 Escape 重开：
     // Radix 菜单 Escape 关闭后紧接着再点触发器，第二次不弹——走查时踩到过一次）
-    await page.getByTestId('nav-settings').click()
+    await page.getByTestId('primary-nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
     // round 48：已配置的模型默认折叠，编辑区要先点开那一行才有「保存」
     await page.getByTestId('provider-deepseek').click()
@@ -476,7 +476,7 @@ test('走查B · 浅色菜单玻璃与主按钮 hover（R9 / R11）', async () =
 
     // 浅色主按钮 hover（R11 走查项）：设置 → 模型 → 加一条自定义 provider，量保存钮的底色变化
     // （round 48：渠道收进「新增」弹窗的渠道下拉里，不再铺在页面上）
-    await page.getByTestId('nav-settings').click()
+    await page.getByTestId('primary-nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
     await page.getByTestId('model-add').click()
     await page.getByTestId('model-add-channel').click()
@@ -605,8 +605,7 @@ test('走查C · 窄窗三档（720/900/1280）+ W7 自动收起 + 工作台铺�
     await expect(page.getByTestId('main-column')).not.toHaveClass(/hidden/)
 
     // 设置页（T5 走查项：内容列居中基准 + 左列设置菜单；W7：主对话不卸载）
-    await page.getByTestId('sidebar-menu-trigger').click()
-    await page.getByTestId('nav-settings').click()
+    await page.getByTestId('primary-nav-settings').click()
     await expect(page.getByTestId('settings-page')).toBeVisible()
     metrics.settingsColumn = await readShell(page)
     // W7 新口径：进设置不再卸载常驻 ChatPage（草稿/滚动保活）
@@ -811,8 +810,7 @@ test('走查D · 换机解密失败抽查（密文解不开 → 需要重新录�
     await waitForChat(page)
 
     // 设置页模型栏：行内状态 = 需要重新录入（不是"已配置"）
-    await page.getByTestId('sidebar-menu-trigger').click()
-    await page.getByTestId('nav-settings').click()
+    await page.getByTestId('primary-nav-settings').click()
     await page.getByTestId('settings-nav-model').click()
     await expect(page.getByTestId('provider-deepseek')).toBeVisible()
     // round 48：密钥状态与重录引导都在展开区里，先点开这一行

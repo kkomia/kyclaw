@@ -1,5 +1,5 @@
 import { Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { IconButton } from '@renderer/components/ui/icon-button'
@@ -9,7 +9,8 @@ import { useNotesStore } from './notes-store'
 import { clockLabel } from './notes-format'
 
 /**
- * 右区编辑器（plan §4.2）：标题 24/32 + 正文 `--font-ui` 15/27。
+ * 右区编辑器（plan §4.2）：标题 24/32 衬线（标题声部 = reading）+ 正文 `--font-prose` 15/27
+ * （与预览/主 chat 同一声部：中文黑体、拉丁衬线；编辑⇄预览切换不跳字体）。
  * 自动保存 debounce 在 store（600ms）；这里只负责 Ctrl+S、Tab 两空格、编辑⇄预览与删除确认。
  */
 export function NoteEditor(): React.JSX.Element {
@@ -28,6 +29,17 @@ export function NoteEditor(): React.JSX.Element {
   const save = useNotesStore((state) => state.save)
   const retrySave = useNotesStore((state) => state.retrySave)
   const remove = useNotesStore((state) => state.remove)
+  /** task-89：新建笔记后把焦点放进标题（store 里的一次性请求序号） */
+  const titleFocusSeq = useNotesStore((state) => state.titleFocusSeq)
+  const clearTitleFocus = useNotesStore((state) => state.clearTitleFocus)
+
+  const titleRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (titleFocusSeq === 0) return
+    // 新笔记已由 create() 选中并渲染出标题；聚焦后立刻消费序号，正常切换笔记不再抢焦点
+    titleRef.current?.focus()
+    clearTitleFocus()
+  }, [titleFocusSeq, clearTitleFocus])
 
   const bodyRef = useRef<HTMLTextAreaElement>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -85,7 +97,7 @@ export function NoteEditor(): React.JSX.Element {
   return (
     <div
       data-testid="note-editor"
-      className="animate-fade-in [animation-duration:var(--motion-reveal)] mx-auto flex w-full max-w-[720px] flex-col px-10 py-8"
+      className="animate-fade-in [animation-duration:var(--motion-reveal)] mx-auto flex w-full max-w-(--content-max-width) flex-col px-(--page-gutter) py-8"
       onKeyDown={onKeyDown}
     >
       {noteLoading ? (
@@ -98,12 +110,13 @@ export function NoteEditor(): React.JSX.Element {
         <>
           <div className="flex items-start gap-3">
             <input
+              ref={titleRef}
               data-testid="note-title"
               aria-label="笔记标题"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="笔记标题"
-              className="min-w-0 flex-1 bg-transparent text-[24px] leading-[32px] font-semibold text-ink outline-none placeholder:text-(--text-quaternary)"
+              className="min-w-0 flex-1 bg-transparent font-serif text-[24px] leading-[32px] font-semibold text-ink outline-none placeholder:text-(--text-quaternary)"
             />
             <Dialog
               open={confirmDelete}
@@ -152,8 +165,8 @@ export function NoteEditor(): React.JSX.Element {
               }}
               className={
                 saveState === 'error'
-                  ? 'rounded-control px-1 py-0.5 text-c1 text-danger hover:underline'
-                  : 'rounded-control px-1 py-0.5 text-c1 text-ink-tertiary hover:text-ink'
+                  ? 'rounded-control px-1 py-0.5 text-c1 text-danger tabular-nums hover:underline'
+                  : 'rounded-control px-1 py-0.5 text-c1 text-ink-tertiary tabular-nums hover:text-ink'
               }
             >
               {status}
@@ -187,7 +200,7 @@ export function NoteEditor(): React.JSX.Element {
                 onKeyDown={onBodyKeyDown}
                 placeholder="开始写…（Markdown）"
                 spellCheck={false}
-                className="min-h-[45vh] w-full resize-none bg-transparent font-sans text-[15px] leading-[27px] text-ink outline-none placeholder:text-(--text-quaternary)"
+                className="min-h-[45vh] w-full resize-none bg-transparent font-prose text-[15px] leading-[27px] text-ink outline-none placeholder:text-(--text-quaternary)"
                 style={{ caretColor: 'var(--accent)' }}
               />
             ) : (

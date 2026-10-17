@@ -115,7 +115,7 @@ export function SessionsController(): React.JSX.Element {
           滚动条静置隐藏（round 50）：指针进栏/区内有焦点才淡入，见 tailwind.css 的 scrollbar-auto-hide */}
       <div
         data-testid="sidebar-nav-scroll"
-        className="scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto"
+        className="scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto pb-2"
       >
         <ProjectsSection />
         <TasksGroup

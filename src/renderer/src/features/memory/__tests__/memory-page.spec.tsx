@@ -146,6 +146,7 @@ describe('记忆页：查看', () => {
     render(<MemoryPage />)
 
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
+    expect(screen.getByTestId('memory-empty')).toHaveClass('font-serif')
     expect(screen.queryByTestId('memory-content')).not.toBeNull()
     expect(screen.getByTestId('memory-clear')).toBeDisabled()
   })
@@ -259,6 +260,7 @@ describe('记忆页：清空', () => {
     fireEvent.click(screen.getByTestId('memory-clear-confirm'))
 
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('还没有记忆')
+    expect(screen.getByTestId('memory-empty')).toHaveClass('font-serif')
     expect(server.calls.at(-1)).toMatchObject({
       method: 'DELETE',
       path: '/api/memory',

@@ -77,7 +77,8 @@ export function KnowledgeList(): React.JSX.Element {
                   )}
                 >
                   <span className="truncate text-b2 font-medium">{doc.title}</span>
-                  <span className="truncate text-c1 text-ink-tertiary">
+                  {/* meta = 读数声部：时间/大小 mono + tabular（与主 chat 数字口径一致） */}
+                  <span className="truncate font-mono text-c1 text-ink-tertiary tabular-nums">
                     {formatDateTime(doc.addedAt)} · {formatBytes(doc.size)}
                   </span>
                 </button>

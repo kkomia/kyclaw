@@ -173,6 +173,7 @@ describe('用量页：今日', () => {
     render(<UsagePage />)
 
     expect(await screen.findByTestId('usage-empty')).toHaveTextContent('还没有用量记录')
+    expect(screen.getByTestId('usage-empty')).toHaveClass('font-serif')
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('0')
     expect(screen.queryByTestId('usage-models')).not.toBeInTheDocument()
   })

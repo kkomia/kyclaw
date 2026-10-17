@@ -93,7 +93,7 @@ export function PluginsPluginPanel({
       <section className="flex flex-col gap-1">
         <h2 className="px-3 text-b2 font-medium text-ink">插件市场</h2>
         {marketplaces.length === 0 ? (
-          <p data-testid="marketplace-empty" className="px-3 text-b2 text-ink-secondary">
+          <p data-testid="marketplace-empty" className="px-3 font-serif text-b2 text-ink-secondary">
             还没有插件市场：点右上角「新增」，填 owner/repo、git 地址或本机文件夹。
           </p>
         ) : (
@@ -150,7 +150,7 @@ export function PluginsPluginPanel({
       <section className="flex flex-col gap-1">
         <h2 className="px-3 text-b2 font-medium text-ink">插件</h2>
         {plugins.length === 0 ? (
-          <p data-testid="plugin-empty" className="px-3 text-b2 text-ink-secondary">
+          <p data-testid="plugin-empty" className="px-3 font-serif text-b2 text-ink-secondary">
             {marketplaces.length === 0
               ? '添加市场后，这里的插件都能装进 kyclaw。'
               : '这个市场还没有插件。'}

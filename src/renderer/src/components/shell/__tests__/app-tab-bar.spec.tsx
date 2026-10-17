@@ -15,6 +15,7 @@ import {
   useOfficeTabsStore
 } from '@renderer/features/office/office-tabs-store'
 import { resetOfficeUiStore, useOfficeUiStore } from '@renderer/features/office/office-ui-store'
+import { resetNewTabStore, useNewTabStore } from '@renderer/features/newtab/new-tab-store'
 import { AppTabBar, type AppTabBarProps } from '../AppTabBar'
 
 beforeEach(() => {
@@ -22,11 +23,13 @@ beforeEach(() => {
   resetOfficeTabsStore()
   resetOfficeUiStore()
   resetOfficeActionsForTest()
+  resetNewTabStore()
 })
 
 afterEach(() => {
   clearKyclawBridge()
   resetOfficeActionsForTest()
+  resetNewTabStore()
 })
 
 /** 路由落点探针：点标签 / 按「＋」之后要能断言真的去了目标路由 */
@@ -418,13 +421,19 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
   })
 
-  it('「＋」：跳 /office 并打开「打开文件（示例）」弹窗（office-ui-store 标志）', () => {
+  it('「＋」：跳 /office 并打开空白页（单例；不再弹文件选择器）', () => {
     renderTabBar()
 
     fireEvent.click(screen.getByTestId('app-tab-add'))
 
     expect(screen.getByTestId('location')).toHaveTextContent('/office')
-    expect(useOfficeUiStore.getState().pickerOpen).toBe(true)
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: true })
+    expect(useOfficeUiStore.getState().pickerOpen).toBe(false)
+    expect(screen.getByTestId('app-tab-add')).toHaveAttribute('aria-label', '新建标签页')
+
+    // 再点一次「＋」：只激活，不叠第二个空白标签
+    fireEvent.click(screen.getByTestId('app-tab-add'))
+    expect(screen.getAllByTestId('app-tab-newtab')).toHaveLength(1)
   })
 
   it('活动标签变化 / 窗口 resize 后 scrollIntoView；滚轮横向滚（拦默认）', () => {
@@ -459,5 +468,114 @@ describe('AppTabBar：顶栏浏览器式标签栏', () => {
     Object.defineProperty(scroll, 'scrollLeft', { configurable: true, writable: true, value: 0 })
     expect(fireEvent.wheel(scroll, { deltaY: 120 })).toBe(false)
     expect(scroll.scrollLeft).toBe(120)
+  })
+})
+
+/**
+ * task-80：新增标签页 v1 的顶栏接线——
+ *   空白伪标签（单例、排在文档之后）＋ 关闭路径（X/中键/Ctrl+W，无脏确认）＋
+ *   任何文档激活都让空白退出前台（标签保留）。
+ */
+describe('AppTabBar · task-80 空白伪标签', () => {
+  function openBlankTab(): void {
+    renderTabBar()
+    fireEvent.click(screen.getByTestId('app-tab-add'))
+  }
+
+  it('渲染：排在文档标签之后、「＋」之前；标题「新标签页」；/office 且前台时是白底 pill', () => {
+    useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    renderTabBar({}, '/office')
+    expect(screen.queryByTestId('app-tab-newtab')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('app-tab-add'))
+
+    const blank = screen.getByTestId('app-tab-newtab')
+    expect(blank).toHaveAttribute('aria-label', '新标签页')
+    expect(blank).toHaveTextContent('新标签页')
+    expect(blank).toHaveAttribute('aria-selected', 'true')
+    expect(blank).toHaveClass('bg-surface', 'rounded-control')
+    // 位置：滚动容器里最后一个标签（＋ 在容器外）
+    const scroll = screen.getByTestId('app-tabbar-scroll')
+    expect(scroll.lastElementChild).toContainElement(blank)
+    expect(screen.getByTestId('app-tab-newtab-close')).toHaveAttribute(
+      'aria-label',
+      '关闭 新标签页'
+    )
+  })
+
+  it('X 关闭：只关空白、不弹脏确认、不动文档标签', async () => {
+    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    useOfficeTabsStore.getState().markDirty(docx)
+    openBlankTab()
+
+    fireEvent.click(screen.getByTestId('app-tab-newtab-close'))
+
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: false, isActive: false })
+    expect(screen.queryByTestId('app-tab-newtab')).not.toBeInTheDocument()
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('中键关闭空白：同一条关闭路径', () => {
+    openBlankTab()
+
+    fireEvent(
+      screen.getByTestId('app-tab-newtab'),
+      new MouseEvent('auxclick', { bubbles: true, button: 1 })
+    )
+
+    expect(useNewTabStore.getState().isOpen).toBe(false)
+    expect(screen.queryByTestId('app-tab-newtab')).not.toBeInTheDocument()
+  })
+
+  it('Ctrl+W：空白在前台时先关空白（即使有脏文档也不弹三态对话框）', () => {
+    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    useOfficeTabsStore.getState().markDirty(docx)
+    openBlankTab()
+
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+    expect(useNewTabStore.getState().isOpen).toBe(false)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(1)
+  })
+
+  it('点文档标签：空白退出前台（标签仍留着），文档恢复高亮', () => {
+    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    openBlankTab()
+
+    fireEvent.click(screen.getAllByTestId('app-tab')[0] as HTMLElement)
+
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: false })
+    expect(screen.getByTestId('app-tab-newtab')).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByRole('tab', { name: /a\.docx/ })).toHaveAttribute('aria-selected', 'true')
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(docx)
+  })
+
+  it('Ctrl+Tab：文档循环不含空白，并让空白退出前台（标签保留）', () => {
+    useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    const second = useOfficeTabsStore.getState().open({ kind: 'pptx', path: 'b.pptx' })
+    openBlankTab()
+
+    expect(fireEvent.keyDown(window, { key: 'Tab', ctrlKey: true })).toBe(false)
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: false })
+    expect(useOfficeTabsStore.getState().activeTabId).toBe(
+      useOfficeTabsStore.getState().tabs[0]?.id
+    )
+    expect(useOfficeTabsStore.getState().activeTabId).not.toBe(second)
+  })
+
+  it('空白不在前台时 Ctrl+W 仍走文档逻辑（不会离奇关掉后台空白）', () => {
+    const docx = useOfficeTabsStore.getState().open({ kind: 'docx', path: 'a.docx' })
+    renderTabBar({}, '/office')
+    fireEvent.click(screen.getByTestId('app-tab-add'))
+    // 点到文档标签：空白退后台
+    fireEvent.click(screen.getAllByTestId('app-tab')[0] as HTMLElement)
+    expect(useNewTabStore.getState()).toMatchObject({ isOpen: true, isActive: false })
+
+    expect(fireEvent.keyDown(window, { key: 'w', ctrlKey: true })).toBe(false)
+    // 关的是激活的干净文档标签，空白保留
+    expect(useOfficeTabsStore.getState().tabs).toHaveLength(0)
+    expect(useNewTabStore.getState().isOpen).toBe(true)
+    expect(useOfficeTabsStore.getState().activeTabId).not.toBe(docx)
   })
 })

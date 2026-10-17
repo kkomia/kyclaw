@@ -191,7 +191,7 @@ export function WorkPanel({
         width === undefined ? undefined : ({ '--work-panel-width': `${width}px` } as CSSProperties)
       }
       className={cn(
-        'relative flex shrink-0 overflow-hidden border-hairline transition-[width] duration-(--motion-main) ease-main',
+        'relative flex shrink-0 overflow-hidden border-(--seam-line) transition-[width] duration-(--motion-main) ease-main',
         open ? 'is-open border-l' : 'w-0',
         open && (fullscreen ? 'flex-1' : 'w-(--work-panel-width)'),
         dragging && 'transition-none'

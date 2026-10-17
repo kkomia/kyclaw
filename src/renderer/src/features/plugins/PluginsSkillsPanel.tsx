@@ -85,7 +85,7 @@ export function PluginsSkillsPanel({
       <section data-testid="skills-user" className="flex flex-col gap-1">
         <h2 className="px-3 text-b2 font-medium text-ink">我的技能</h2>
         {groups.user.length === 0 ? (
-          <p data-testid="skills-user-empty" className="px-3 text-b2 text-ink-secondary">
+          <p data-testid="skills-user-empty" className="px-3 font-serif text-b2 text-ink-secondary">
             还没有自己导入的技能：用右上角「新增」从网址、本地文件或文件夹导入。
           </p>
         ) : (
@@ -96,7 +96,10 @@ export function PluginsSkillsPanel({
       <section data-testid="skills-plugins" className="flex flex-col gap-1">
         <h2 className="px-3 text-b2 font-medium text-ink">插件技能</h2>
         {groups.plugin.length === 0 ? (
-          <p data-testid="skills-plugins-empty" className="px-3 text-b2 text-ink-secondary">
+          <p
+            data-testid="skills-plugins-empty"
+            className="px-3 font-serif text-b2 text-ink-secondary"
+          >
             还没有插件带来的技能：去「插件」里安装一个插件。
           </p>
         ) : (

@@ -55,7 +55,10 @@ export function TasksGroup({
         type="button"
         data-testid="tasks-item"
         aria-expanded={!isCollapsed}
-        className={cn(navItemClass(), 'text-left')}
+        className={cn(
+          navItemClass(),
+          'text-left text-[11px] font-medium text-ink-tertiary hover:text-ink-secondary'
+        )}
         onClick={() => setCollapsed(toggleCollapsed(TASKS_FOLD_ID))}
       >
         <ChevronRight

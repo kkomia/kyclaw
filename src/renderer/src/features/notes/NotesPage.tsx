@@ -35,7 +35,7 @@ export function NotesPage(): React.JSX.Element {
       <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-hairline px-4">
         <h1
           data-testid="notes-page-title"
-          className="text-[18px] leading-[26px] font-semibold text-ink"
+          className="font-serif text-[18px] leading-[26px] font-semibold text-ink"
         >
           笔记
         </h1>
@@ -84,7 +84,7 @@ function EmptyPanel({
   return (
     <div
       data-testid={empty ? 'notes-empty' : 'notes-select-hint'}
-      className="animate-message-in mx-auto flex min-h-full w-full max-w-[720px] flex-col items-start justify-center px-10 py-8"
+      className="animate-message-in mx-auto flex min-h-full w-full max-w-(--content-max-width) flex-col items-start justify-center px-(--page-gutter) py-8"
     >
       <h2 className="font-serif text-[24px] leading-[32px] font-semibold text-ink">
         {empty ? '写下第一篇笔记' : '选择一篇笔记'}

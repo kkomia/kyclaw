@@ -18,7 +18,6 @@ import { ContentRegion } from './ContentRegion'
 import { MainColumn } from './MainColumn'
 import { PrimaryNav } from './PrimaryNav'
 import { Sidebar } from './Sidebar'
-import { SidebarFooter } from './SidebarFooter'
 import { TitleBar } from './TitleBar'
 import { WorkPanel } from './WorkPanel'
 
@@ -247,10 +246,10 @@ export function AppShell(): React.JSX.Element {
                 {inSettings ? (
                   <SettingsNav />
                 ) : (
-                  <>
-                    <SessionsController />
-                    <SidebarFooter />
-                  </>
+                  // task-73：会话侧栏底部不再有第二个「设置」入口 —— 唯一入口是最左 rail 底部的
+                  // PrimaryNav 齿轮（用户反馈：两处设置重复）。列表底部间距由 SessionsController
+                  // 自己的滚动区 pb-2 负责，删掉 footer 后不留空档。
+                  <SessionsController />
                 )}
               </Sidebar>
             ) : null}

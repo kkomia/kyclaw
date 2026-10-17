@@ -8,7 +8,7 @@ import { cn } from '../ui/cn'
  *
  * **它不再是覆盖层，而是内容区圆角卡（ContentRegion）里的一个 flex 子列**：
  * 卡片是一整块面（会话侧栏 + 对话/工作区同属一张卡），左侧这列与右侧主区之间只靠
- * 1px 的 hairline 竖线（`border-r` + `border-hairline`）分界；底色与卡片一致（`bg-surface`，
+ * 1px 的接缝竖线（`border-r` + `border-(--seam-line)`，task-85 调灰一档）分界；底色与卡片一致（`bg-surface`，
  * 即 --bg-primary），不再是壳那层的 --bg-canvas。
  *
  * 折叠（TitleBar 的开合钮，props 语义不变）在卡内做**宽度动画**：外侧 `w-(--sidebar-width)` ↔
@@ -31,7 +31,7 @@ export function Sidebar({ collapsed, children }: SidebarProps): React.JSX.Elemen
       inert={collapsed}
       className={cn(
         'flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface transition-[width] duration-(--motion-main) ease-main',
-        collapsed ? 'is-collapsed w-0' : 'w-(--sidebar-width) border-r border-hairline'
+        collapsed ? 'is-collapsed w-0' : 'w-(--sidebar-width) border-r border-(--seam-line)'
       )}
     >
       {/* 内容层宽度写死：宽度动画期间字不被挤着换行；外层收窄只负责裁剪 */}

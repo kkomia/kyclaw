@@ -25,14 +25,11 @@ function renderAt(path: string): void {
   )
 }
 
-/** 左下角是单一入口（雷点 3）：菜单里只有「设置」一项（round 5 去重），先开菜单再点。 */
-function openFooterMenu(): void {
-  fireEvent.keyDown(screen.getByTestId('sidebar-menu-trigger'), { key: 'ArrowDown' })
-}
-
+/**
+ * 设置入口（task-73：会话侧栏底部齿轮已删，唯一入口是最左 rail 底部的 primary-nav-settings）。
+ */
 function openSettings(): void {
-  openFooterMenu()
-  fireEvent.click(screen.getByTestId('nav-settings'))
+  fireEvent.click(screen.getByTestId('primary-nav-settings'))
 }
 
 describe('路由与页面骨架', () => {
@@ -128,12 +125,13 @@ describe('路由与页面骨架', () => {
     expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
   })
 
-  it('二级菜单只有「设置」一项（round 5 去重：无重复入口）', () => {
+  it('设置入口唯一：rail 底部齿轮在、会话侧栏底部不再有第二个（task-73 去重）', () => {
     renderAt('/chat')
 
-    openFooterMenu()
-
-    expect(screen.getByTestId('nav-settings')).toBeInTheDocument()
+    expect(screen.getByTestId('primary-nav-settings')).toBeInTheDocument()
+    expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-menu-trigger')).not.toBeInTheDocument()
     expect(screen.queryByTestId('nav-memory')).not.toBeInTheDocument()
     expect(screen.queryByTestId('nav-usage')).not.toBeInTheDocument()
   })

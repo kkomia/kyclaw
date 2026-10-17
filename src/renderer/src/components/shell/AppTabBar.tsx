@@ -1,9 +1,10 @@
-import { MessageSquare, Plus, X } from 'lucide-react'
+import { FilePlus2, MessageSquare, Plus, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
+import { useNewTabStore } from '@renderer/features/newtab/new-tab-store'
 import {
   closeOfficeTab,
   registerOfficeShortcutHandler,
@@ -74,7 +75,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
   const tabs = useOfficeTabsStore((state) => state.tabs)
   const activeTabId = useOfficeTabsStore((state) => state.activeTabId)
   const activate = useOfficeTabsStore((state) => state.activate)
-  const openPicker = useOfficeUiStore((state) => state.openPicker)
+  const newTabOpen = useNewTabStore((state) => state.isOpen)
+  const newTabActive = useNewTabStore((state) => state.isActive)
   const navigate = useNavigate()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [pendingCloseId, setPendingCloseId] = useState<string | null>(null)
@@ -82,6 +84,22 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
   const pendingTab = tabs.find((tab) => tab.id === pendingCloseId)
   // 标签若被别的路径关掉，pendingCloseId 可能残留；一律以"还找得到这个标签"为准
   const confirming = pendingTab !== undefined
+
+  /**
+   * task-80：关空白伪标签（X / 中键 / Ctrl+W / Esc）。无确认——它不是文档、没有 dirty。
+   * 焦点还给新激活的文档标签；没有文档回「主对话」标签（不把焦点丢到 body）。
+   */
+  const closeBlankTab = useCallback((): void => {
+    useNewTabStore.getState().close()
+    const activeId = useOfficeTabsStore.getState().activeTabId
+    queueMicrotask(() => {
+      const fallback =
+        activeId === ''
+          ? document.getElementById('app-tab-chat')
+          : document.getElementById(`office-tab-${activeId}`)
+      fallback?.focus()
+    })
+  }, [])
 
   /** 保存服务：默认走 office-actions 的同一实现（与保存按钮/面内转发同一条），测试可注入 */
   const saveService = onSave ?? saveOfficeTab
@@ -148,6 +166,8 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
       if (action === 'next-tab' || action === 'prev-tab') {
         if (!inOffice || state.tabs.length === 0) return false
         if (dialogsOpen) return true
+        // task-80：文档循环（v1）不含空白伪标签；进入文档循环 = 空白退出前台（标签仍保留）
+        useNewTabStore.getState().deactivate()
         const current = state.tabs.findIndex((tab) => tab.id === state.activeTabId)
         const step = action === 'next-tab' ? 1 : -1
         const nextIndex =
@@ -161,7 +181,12 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
         return true
       }
 
-      // close
+      // close（task-80）：空白伪标签可见且在前台 → 先关它（无脏确认、不碰文档）
+      if (useNewTabStore.getState().isOpen && useNewTabStore.getState().isActive) {
+        if (dialogsOpen) return true
+        closeBlankTab()
+        return true
+      }
       if (state.tabs.length === 0) return false
       // D14：非 /office 仍然拦住默认关窗，但不关任何标签
       if (!inOffice) return true
@@ -169,26 +194,26 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
       requestClose(state.activeTabId)
       return true
     },
-    [confirming, inOffice, requestClose, saveService]
+    [closeBlankTab, confirming, inOffice, requestClose, saveService]
   )
 
   // 面内快捷键（焦点在 iframe 编辑器里）经 OfficePage → handleOfficeShortcut → 这里
   useEffect(() => registerOfficeShortcutHandler(runShortcut), [runShortcut])
 
   // 活动标签滚回视野；resize 之后也滚一次（审查 P1：溢出后窗口变窄，活动标签会被挤出可视区）。
-  // 只认文档标签（主对话是固定位、不参与滚动定位）。
+  // 只认文档标签与空白伪标签（主对话是固定位、不参与滚动定位）。
   const scrollActiveIntoView = useCallback((): void => {
     const container = scrollRef.current
     if (container === null) return
     const active = container.querySelector<HTMLElement>(
-      '[data-office-tab-id][aria-selected="true"]'
+      '[data-office-tab-id][aria-selected="true"], [data-newtab-tab][aria-selected="true"]'
     )
     active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [])
 
   useEffect(() => {
     scrollActiveIntoView()
-  }, [activeTabId, inOffice, tabs.length, scrollActiveIntoView])
+  }, [activeTabId, inOffice, tabs.length, newTabOpen, newTabActive, scrollActiveIntoView])
 
   useEffect(() => {
     window.addEventListener('resize', scrollActiveIntoView)
@@ -227,13 +252,22 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
   }, [runShortcut])
 
   const selectTab = (id: string): void => {
+    // task-80：任何文档激活路径都先让空白退出前台（标签留在条上，不自动关）
+    useNewTabStore.getState().deactivate()
     activate(id)
     navigate('/office')
   }
 
-  const openPickerFromTitleBar = (): void => {
+  /** 点空白伪标签：激活它并回 /office（不关这里任何东西） */
+  const selectNewTab = (): void => {
+    useNewTabStore.getState().activate()
     navigate('/office')
-    openPicker()
+  }
+
+  /** 「＋」= 打开空白页（单例：已开只激活）；不再直接弹文件选择器（task-80） */
+  const openNewTab = (): void => {
+    useNewTabStore.getState().open()
+    navigate('/office')
   }
 
   const resolveDirtyClose = (action: DirtyCloseAction): void => {
@@ -369,28 +403,87 @@ export function AppTabBar({ onSave, onClose }: AppTabBarProps = {}): React.JSX.E
                     aria-label={`关闭 ${tab.title}`}
                     onClick={() => requestClose(tab.id)}
                     className={cn(
-                      'absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded-badge text-ink-tertiary transition-opacity duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink',
+                      'absolute top-1/2 right-1 flex size-(--icon-size-lg) -translate-y-1/2 items-center justify-center rounded-badge text-ink-tertiary transition-opacity duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink',
                       active
                         ? 'opacity-100'
                         : 'pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100'
                     )}
                   >
-                    <X aria-hidden="true" className="size-3.5" />
+                    {/* 关闭钮图标随字号 scale（task-73；容器 = --icon-size-lg 20，图标 = sm 16，比例不变不溢出） */}
+                    <X aria-hidden="true" className="size-(--icon-size-sm)" />
                   </button>
                 </div>
               </Fragment>
             )
           })}
+
+          {/* task-80：空白伪标签（单例）——固定排在文档标签之后、「＋」之前；
+              只有 /office 且在前台时高亮；中键/关闭钮关它，不弹脏确认（它不是文档）。 */}
+          {newTabOpen ? (
+            <Fragment>
+              <span
+                aria-hidden="true"
+                data-testid="app-tab-divider"
+                className={cn(
+                  'mx-1 h-4 w-px shrink-0 bg-hairline transition-opacity duration-(--motion-fast) ease-main',
+                  inOffice && newTabActive && 'opacity-0'
+                )}
+              />
+              <div
+                role="presentation"
+                className="group relative flex h-8 max-w-[150px] min-w-[100px] shrink-0 items-center"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  id="app-tab-newtab"
+                  data-testid="app-tab-newtab"
+                  data-newtab-tab="true"
+                  aria-selected={inOffice && newTabActive}
+                  title="新标签页"
+                  aria-label="新标签页"
+                  onClick={selectNewTab}
+                  onAuxClick={(event) => {
+                    if (event.button !== 1) return
+                    event.preventDefault()
+                    closeBlankTab()
+                  }}
+                  className={cn(tabClass(inOffice && newTabActive), 'pr-6 pl-2')}
+                >
+                  <FilePlus2
+                    aria-hidden="true"
+                    className="size-(--icon-size-sm) shrink-0 text-ink-tertiary"
+                    strokeWidth={1.75}
+                  />
+                  <span className="min-w-0 flex-1 truncate">新标签页</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="app-tab-newtab-close"
+                  aria-label="关闭 新标签页"
+                  onClick={closeBlankTab}
+                  className={cn(
+                    'absolute top-1/2 right-1 flex size-(--icon-size-lg) -translate-y-1/2 items-center justify-center rounded-badge text-ink-tertiary transition-opacity duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink',
+                    inOffice && newTabActive
+                      ? 'opacity-100'
+                      : 'pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100'
+                  )}
+                >
+                  <X aria-hidden="true" className="size-(--icon-size-sm)" />
+                </button>
+              </div>
+            </Fragment>
+          ) : null}
         </div>
         <button
           type="button"
           data-testid="app-tab-add"
-          aria-label="打开文件"
-          title="打开文件"
-          onClick={openPickerFromTitleBar}
+          aria-label="新建标签页"
+          title="新建标签页"
+          onClick={openNewTab}
           className="no-drag flex size-7 shrink-0 items-center justify-center rounded-control text-ink-tertiary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink"
         >
-          <Plus aria-hidden="true" className="size-4" />
+          <Plus aria-hidden="true" className="size-(--icon-size-sm)" />
         </button>
         {/* 标签右侧的空白：不给 no-drag，标题栏的 drag-region 在这里继续生效（可拖窗） */}
         <div aria-hidden="true" data-testid="app-tabbar-spacer" className="h-full min-w-0 flex-1" />

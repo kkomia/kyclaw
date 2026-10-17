@@ -184,7 +184,7 @@ export function MemoryPanel(): React.JSX.Element {
             <>
               <div data-testid="memory-content">
                 {content === null ? (
-                  <p data-testid="memory-empty" className="text-b2 text-ink-secondary">
+                  <p data-testid="memory-empty" className="font-serif text-b2 text-ink-secondary">
                     还没有记忆：告诉助手值得长期记住的信息，它会记在这里。
                   </p>
                 ) : (

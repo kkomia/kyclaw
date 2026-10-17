@@ -12,7 +12,10 @@
  * 而焦点在 iframe 内时消息只能先到 OfficePage。AppTabBar 启动时把自己的分发函数注册进来，
  * 面内转发与壳侧按键因此走**完全同一条**逻辑（不会出现两条路径各自判断路由/弹窗状态）。
  */
+import { unwrapIpcError } from '@renderer/lib/ipc-error'
+import { useNewTabStore } from '../newtab/new-tab-store'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
+import { openBlockReason } from './office-capacity'
 
 export interface OfficeRuntime {
   /** 保存当前文档（三阶段）；返回是否成功写盘/commit */
@@ -102,6 +105,94 @@ export function handleOfficeShortcut(action: OfficeShortcutAction): boolean {
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0]
   if (activeTab === undefined) return false
   void saveOfficeTab(activeTab)
+  return true
+}
+
+/**
+ * task-80：新建空白 Word 文档（唯一新 IPC `office:create-blank`）。
+ *
+ * 顺序（DESIGN §5 状态 1）：
+ *   ① 渲染端先过容量闸门（`openBlockReason`；空白伪标签不计入）；
+ *   ② 主进程写随包最小模板到 `%TEMP%/kyclaw/未命名-<ts>.docx` 并注册；
+ *   ③ 渲染端 `openDocumentChecked`（并发兜底：被拒先 `office:release` 再回人话）；
+ *   ④ 成功后 `markDirty`（新文档未保存，首次保存走另存为）。
+ * 不改空白标签状态：成功路径由调用方 consume，失败留在本页。
+ */
+export interface CreateBlankResult {
+  ok: boolean
+  tabId?: string
+  message?: string
+}
+
+export async function createBlankDocument(): Promise<CreateBlankResult> {
+  const block = openBlockReason(useOfficeTabsStore.getState().tabs, 'docx')
+  if (block !== null) return { ok: false, message: block.message }
+
+  const api = window.kyclaw?.office
+  if (api === undefined) return { ok: false, message: '当前环境打不开文档工作区' }
+
+  let result: Awaited<ReturnType<typeof api.createBlank>>
+  try {
+    result = await api.createBlank({ kind: 'docx' })
+  } catch (error) {
+    return { ok: false, message: unwrapIpcError(error) }
+  }
+  if (!result.ok) return { ok: false, message: result.message }
+
+  const opened = useOfficeTabsStore.getState().openDocumentChecked(result.document)
+  if (!opened.ok) {
+    void api.release(result.document.documentId).catch(() => undefined)
+    return { ok: false, message: opened.block.message }
+  }
+  useOfficeTabsStore.getState().markDirty(opened.tabId)
+  return { ok: true, tabId: opened.tabId }
+}
+
+/**
+ * task-80：新增标签页里的「打开 Word 文档…」（v1 诚实降级——选择器只过滤 .docx）。
+ * 取消是一等结果（静默回本页）；容量拒绝先 release 主进程注册表条目再回人话；
+ * 失败给主进程人话（调用方原样显示）。成功不改空白状态，由调用方 consume。
+ */
+export type OpenDocumentOutcome =
+  | { status: 'opened'; tabId: string }
+  | { status: 'cancelled' }
+  | { status: 'blocked'; message: string }
+  | { status: 'failed'; message: string }
+
+export async function openOfficeDocumentFromPicker(): Promise<OpenDocumentOutcome> {
+  const block = openBlockReason(useOfficeTabsStore.getState().tabs, 'docx')
+  if (block !== null) return { status: 'blocked', message: block.message }
+
+  const api = window.kyclaw?.office
+  if (api === undefined) return { status: 'failed', message: '当前环境打不开文档工作区' }
+
+  try {
+    const result = await api.openDialog()
+    if (!result.ok) {
+      if (result.code === 'cancelled') return { status: 'cancelled' }
+      return { status: 'failed', message: result.message }
+    }
+    const opened = useOfficeTabsStore.getState().openDocumentChecked(result.document)
+    if (!opened.ok) {
+      // 选择器已经让主进程注册了文档：容量拒绝必须释放，别让它挂到窗口关闭
+      void api.release(result.document.documentId).catch(() => undefined)
+      return { status: 'blocked', message: opened.block.message }
+    }
+    return { status: 'opened', tabId: opened.tabId }
+  } catch (error) {
+    return { status: 'failed', message: unwrapIpcError(error) }
+  }
+}
+
+/**
+ * task-80：「继续」项激活即消费空白（不新增、不查容量、不弹脏确认）。
+ * 标签已不存在（竞态）返回 false，调用方刷新列表留在本页。
+ */
+export function activateExistingDocument(tabId: string): boolean {
+  const tabs = useOfficeTabsStore.getState().tabs
+  if (!tabs.some((tab) => tab.id === tabId)) return false
+  useOfficeTabsStore.getState().activate(tabId)
+  useNewTabStore.getState().consume()
   return true
 }
 

@@ -133,15 +133,18 @@ describe('ProjectList', () => {
     )
   })
 
-  it('长标题截断不压到 ⋯（round 16）：文本 truncate + ⋯ 固定宽度占位（不绝对定位）', () => {
+  it('长标题截断不压到 ⋯（round 16；task-66 行尾改固定槽）：文本 truncate + 时间/动作槽不挪标题', () => {
     renderList()
 
     const title = screen.getByTestId('session-item-t-a').querySelector('[class*="truncate"]')
     expect(title).not.toBeNull()
+    // task-66：会话行行尾是**固定宽度槽**（min-w-[76px]），时间/三枚动作在其内切换；
+    // 动作层绝对定位叠在槽上（不参与布局 → 出现/消失不挪标题）。
+    const tail = screen.getByTestId('session-tail-t-a')
+    expect(tail.className).toContain('min-w-[76px]')
+    expect(tail.className).toContain('shrink-0')
     const more = screen.getByTestId('session-more-t-a').parentElement
-    expect(more?.className ?? '').toContain('w-7')
-    expect(more?.className ?? '').toContain('shrink-0')
-    expect(more?.className ?? '').not.toContain('absolute')
+    expect(more?.className ?? '').toContain('absolute')
 
     // 项目行的 ⋯ 同样让位
     const projectMore = screen.getByTestId('project-more-p1').parentElement

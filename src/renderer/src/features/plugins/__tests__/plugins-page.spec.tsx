@@ -191,8 +191,11 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('plugins-tab-skills-count')).toHaveTextContent('0')
 
     // 插件区：市场与插件的空态；新增入口是「添加插件市场」（mcp-add 不出现）
+    // task-67：空态一句话 = 衬线标题声部（章程 §9.6）
     expect(await screen.findByTestId('marketplace-empty')).toHaveTextContent('还没有插件市场')
+    expect(screen.getByTestId('marketplace-empty')).toHaveClass('font-serif')
     expect(screen.getByTestId('plugin-empty')).toHaveTextContent('添加市场后')
+    expect(screen.getByTestId('plugin-empty')).toHaveClass('font-serif')
     expect(screen.getByTestId('plugins-add')).toHaveTextContent('新增')
     expect(screen.queryByTestId('mcp-add')).not.toBeInTheDocument()
 

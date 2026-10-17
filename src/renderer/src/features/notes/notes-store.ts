@@ -40,11 +40,20 @@ export interface NotesState {
 
   notice: string | null
 
+  /**
+   * 「新建并直接打开」的焦点请求序号（task-89）：`create()` 成功后 +1；
+   * NoteEditor 看到新的序号就把焦点放进标题并 `clearTitleFocus()` 归零。
+   * 用序号而不是 boolean：连续新建两次也各触发一次。
+   */
+  titleFocusSeq: number
+
   init: (narrow: boolean) => Promise<void>
   refresh: () => Promise<void>
   select: (id: string) => Promise<void>
   closeNote: () => void
   create: () => Promise<void>
+  /** NoteEditor 消费掉焦点请求后归零（task-89） */
+  clearTitleFocus: () => void
   remove: (id: string) => Promise<void>
   setTitle: (value: string) => void
   setBody: (value: string) => void
@@ -176,6 +185,9 @@ export const useNotesStore = create<NotesState>()((set, get) => {
     searchHits: null,
     searching: false,
     notice: null,
+    titleFocusSeq: 0,
+
+    clearTitleFocus: () => set({ titleFocusSeq: 0 }),
 
     init: async (narrow) => {
       if (get().initialized) return
@@ -249,7 +261,9 @@ export const useNotesStore = create<NotesState>()((set, get) => {
           mode: 'edit',
           saveState: 'idle',
           savedAt: note.updatedAt,
-          saveError: null
+          saveError: null,
+          // task-89：新建成功后请求把焦点放进标题（NoteEditor 消费后归零）
+          titleFocusSeq: get().titleFocusSeq + 1
         })
       } catch (error) {
         set({ listLoading: false, listError: messageOf(error) })
@@ -381,6 +395,7 @@ export function resetNotesStore(): void {
     query: '',
     searchHits: null,
     searching: false,
-    notice: null
+    notice: null,
+    titleFocusSeq: 0
   })
 }

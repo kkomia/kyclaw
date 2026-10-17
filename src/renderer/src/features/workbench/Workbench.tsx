@@ -162,7 +162,7 @@ export function Workbench(): React.JSX.Element {
 
   return (
     <div data-testid="workbench" className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hairline pr-2 pl-1">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-(--seam-line) pr-2 pl-1">
         <div
           role="tablist"
           aria-label="工作台标签页"

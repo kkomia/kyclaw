@@ -248,7 +248,7 @@ export function PluginsMcpPanel({ revision = 0 }: PluginsMcpPanelProps): React.J
   return (
     <div data-testid="mcp-settings" className="flex flex-col gap-3">
       {servers.length === 0 ? (
-        <p data-testid="mcp-empty" className="text-b2 text-ink-secondary">
+        <p data-testid="mcp-empty" className="font-serif text-b2 text-ink-secondary">
           {loaded ? '还没有 MCP 服务：点右上角「新增」把服务接进来。' : '正在读取…'}
         </p>
       ) : (

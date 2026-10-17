@@ -149,6 +149,8 @@ describe('列表 / 选中 / 空态', () => {
     await waitFor(() => expect(bridge.notes.create).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.getByTestId(`note-row-${created.id}`)).toBeInTheDocument())
     expect(screen.getByTestId('note-title')).toHaveValue('未命名笔记')
+    // task-89：新建并直接打开后，焦点进标题（不是停在列表/菜单）
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('note-title')))
   })
 })
 
@@ -307,5 +309,25 @@ describe('预览 / 删除 / 搜索 / 置顶 / 窄窗', () => {
     fireEvent.click(screen.getByTestId('notes-back'))
     expect(await screen.findByTestId(`note-row-${NOTE_A.id}`)).toBeInTheDocument()
     expect(screen.queryByTestId('note-title')).not.toBeInTheDocument()
+  })
+})
+
+describe('字体声部（task-64 字体一致性）', () => {
+  it('编辑正文 = prose（与预览/主 chat 同声部）；标题 = 衬线；列表时间 tabular', () => {
+    seedStore()
+    render(<NotesPage />)
+
+    const body = screen.getByTestId('note-body')
+    expect(body).toHaveClass('font-prose')
+    expect(body).not.toHaveClass('font-sans')
+    expect(screen.getByTestId('note-title')).toHaveClass('font-serif')
+
+    // 切预览：仍是 chat 那条 markdown 管线（.markdown-body = prose 声部）
+    fireEvent.click(screen.getByTestId('notes-mode-preview'))
+    expect(screen.getByTestId('note-preview').querySelector('.markdown-body')).not.toBeNull()
+
+    // 列表次行时间用 tabular（数字不跳宽）
+    const row = screen.getByTestId(`note-row-${NOTE_A.id}`)
+    expect(row.querySelector('.tabular-nums')).not.toBeNull()
   })
 })

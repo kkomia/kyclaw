@@ -238,17 +238,19 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('work-panel')).toHaveClass('is-open')
   })
 
-  it('T5 装配：侧栏 = 新建会话 + 会话列表 + 底部单一入口；右栏 = 工作台（四工具 tab 栏）', () => {
+  it('T5 装配：侧栏 = 新建会话 + 会话列表（task-73：底部不再有第二个设置入口）；右栏 = 工作台', () => {
     renderShell()
 
     const sidebar = screen.getByTestId('sidebar')
     expect(screen.getByTestId('new-session')).toBeInTheDocument()
     expect(screen.getByTestId('session-list')).toBeInTheDocument()
-    // 单一入口（雷点 3：首页只放精简菜单，设置/记忆/用量收进二级菜单）
-    expect(screen.getByTestId('sidebar-footer')).toBeInTheDocument()
-    expect(sidebar).toContainElement(screen.getByTestId('sidebar-footer'))
     expect(sidebar).toContainElement(screen.getByTestId('new-session'))
+    // 用户反馈：会话侧栏底部 ⚙ 与最左 rail 底部齿轮重复 → 侧栏里不再有设置入口；
+    // 唯一入口 = rail 的 primary-nav-settings（本文件另有「rail 设置可点」用例）
+    expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
     expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
+    expect(screen.getByTestId('primary-nav-settings')).toBeInTheDocument()
+    expect(sidebar).not.toContainElement(screen.getByTestId('primary-nav-settings'))
 
     expect(screen.getByTestId('work-panel')).toContainElement(screen.getByTestId('workbench'))
   })
@@ -261,7 +263,30 @@ describe('AppShell 三栏骨架', () => {
     expect(screen.getByTestId('settings-nav')).toHaveClass('scrollbar-auto-hide')
     expect(screen.getByTestId('settings-back')).toBeInTheDocument()
     expect(screen.queryByTestId('session-list')).not.toBeInTheDocument()
+    // 侧栏里任何「设置」入口都不该有（唯一入口在 rail）
     expect(screen.queryByTestId('sidebar-footer')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
+  })
+
+  it('rail 底部设置是唯一入口：可点并进入 /settings（侧栏不出现第二个）', () => {
+    function Probe(): React.JSX.Element {
+      return <div data-testid="location-probe">{useLocation().pathname}</div>
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <AppShell />
+        <Probe />
+      </MemoryRouter>
+    )
+
+    const railSettings = screen.getByTestId('primary-nav-settings')
+    expect(railSettings).toHaveAccessibleName('设置')
+    fireEvent.click(railSettings)
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/settings')
+    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+    expect(screen.queryByTestId('nav-settings')).not.toBeInTheDocument()
   })
 
   it('内容区（R2 D2/D4；round 3 四角圆角卡；2026-10-17 侧栏进卡）：一整块面 + 右/底留缝 + 内部分界细线', () => {
@@ -281,14 +306,18 @@ describe('AppShell 三栏骨架', () => {
     expect(region).toContainElement(screen.getByTestId('sidebar'))
     expect(region).toContainElement(screen.getByTestId('main-column'))
     expect(region).toContainElement(screen.getByTestId('work-panel'))
-    // 侧栏底色跟卡一致（--bg-surface），与主对话之间只留一条 1px hairline 竖线
-    expect(screen.getByTestId('sidebar')).toHaveClass('bg-surface', 'border-r', 'border-hairline')
+    // 侧栏底色跟卡一致（--bg-surface），与主对话之间只留一条 1px 接缝线（task-85：调灰一档）
+    expect(screen.getByTestId('sidebar')).toHaveClass(
+      'bg-surface',
+      'border-r',
+      'border-(--seam-line)'
+    )
     expect(screen.getByTestId('sidebar')).not.toHaveClass('bg-canvas')
     // 覆盖层时代的缺口角（shell-notch / shell-notch-bottom）已删除
     expect(screen.queryByTestId('shell-notch')).not.toBeInTheDocument()
     expect(screen.queryByTestId('shell-notch-bottom')).not.toBeInTheDocument()
-    // 右栏自己不再铺画布底（跟随内容区），只留分隔线
-    expect(screen.getByTestId('work-panel')).toHaveClass('border-hairline')
+    // 右栏自己不再铺画布底（跟随内容区），只留接缝线（task-85：调灰一档）
+    expect(screen.getByTestId('work-panel')).toHaveClass('border-(--seam-line)')
     expect(screen.getByTestId('work-panel')).not.toHaveClass('bg-canvas')
   })
 

@@ -58,7 +58,7 @@ function UsageReport({ data }: { data: UsageResponse }): React.JSX.Element {
       </section>
 
       {data.byModel.length === 0 ? (
-        <p data-testid="usage-empty" className="text-b2 text-ink-secondary">
+        <p data-testid="usage-empty" className="font-serif text-b2 text-ink-secondary">
           这段时间还没有用量记录。
         </p>
       ) : (

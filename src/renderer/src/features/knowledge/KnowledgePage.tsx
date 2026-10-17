@@ -60,9 +60,12 @@ export function KnowledgePage(): React.JSX.Element {
     <section data-testid="knowledge-page" className="flex min-h-0 flex-1 flex-col">
       <header
         data-testid="knowledge-page-band"
-        className="flex shrink-0 items-center justify-between gap-4 px-6 pt-5 pb-4"
+        className="flex shrink-0 items-center justify-between gap-4 px-(--page-gutter) pt-5 pb-4"
       >
-        <h1 data-testid="knowledge-page-title" className="text-t1 font-medium text-ink">
+        <h1
+          data-testid="knowledge-page-title"
+          className="font-serif text-t1 font-semibold text-ink"
+        >
           知识库
         </h1>
         <Button
@@ -80,7 +83,7 @@ export function KnowledgePage(): React.JSX.Element {
         <div
           data-testid="knowledge-error"
           role="alert"
-          className="mx-6 mb-3 flex shrink-0 items-center justify-between gap-3 rounded-panel bg-warning-bg px-3 py-2 text-c1 text-warning"
+          className="mx-(--page-gutter) mb-3 flex shrink-0 items-center justify-between gap-3 rounded-panel bg-warning-bg px-3 py-2 text-c1 text-warning"
         >
           <span>{error}</span>
           <IconButton
@@ -96,7 +99,7 @@ export function KnowledgePage(): React.JSX.Element {
       {skipped.length === 0 ? null : (
         <div
           data-testid="knowledge-skipped"
-          className="mx-6 mb-3 flex shrink-0 items-start justify-between gap-3 rounded-panel bg-secondary px-3 py-2 text-c1 text-ink-secondary"
+          className="mx-(--page-gutter) mb-3 flex shrink-0 items-start justify-between gap-3 rounded-panel bg-secondary px-3 py-2 text-c1 text-ink-secondary"
         >
           <div className="flex min-w-0 flex-col gap-1">
             <span>有 {skipped.length} 个文件没有收进知识库：</span>
@@ -123,7 +126,7 @@ export function KnowledgePage(): React.JSX.Element {
         <aside
           data-testid="knowledge-list-aside"
           hidden={!showList}
-          className="flex w-[300px] shrink-0 flex-col border-r border-hairline bg-(--bg-sidebar)"
+          className="flex w-(--sidebar-width) shrink-0 flex-col border-r border-(--seam-line) bg-(--bg-sidebar)"
         >
           <KnowledgeList />
         </aside>

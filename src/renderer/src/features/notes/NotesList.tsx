@@ -30,7 +30,7 @@ export function NotesList(): React.JSX.Element {
   return (
     <aside
       data-testid="notes-list-column"
-      className="flex w-[300px] shrink-0 flex-col border-r border-hairline bg-(--bg-sidebar)"
+      className="flex w-(--sidebar-width) shrink-0 flex-col border-r border-(--seam-line) bg-(--bg-sidebar)"
     >
       <div className="shrink-0 px-2 pt-2 pb-1">
         <div className="group flex h-9 items-center gap-1.5 rounded-control px-2 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover focus-within:bg-hover">
@@ -104,7 +104,7 @@ export function NotesList(): React.JSX.Element {
                   )}
                 >
                   <span className="w-full truncate text-b2 font-medium text-ink">{note.title}</span>
-                  <span className="w-full truncate text-c1 text-ink-tertiary">
+                  <span className="w-full truncate text-c1 text-ink-tertiary tabular-nums">
                     {rowMetaText(note.excerpt, note.updatedAt)}
                   </span>
                 </button>

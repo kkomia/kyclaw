@@ -125,7 +125,13 @@ export function ProjectList({
     <div data-testid="project-section" className="flex flex-col gap-0.5 px-2 pt-2">
       {/* 组头（round 64）：与「任务」组同构——整行点开合 + 行首 chevron + aria-expanded；
           外观穿在行容器上（对齐项目行的口径：hover 底要盖住行尾那个图标按钮）。 */}
-      <div data-testid="project-section-head" className={cn(navItemClass(), 'group/section pe-1')}>
+      <div
+        data-testid="project-section-head"
+        className={cn(
+          navItemClass(),
+          'group/section pe-1 text-[11px] font-medium text-ink-tertiary hover:text-ink-secondary'
+        )}
+      >
         <button
           type="button"
           data-testid="project-section-toggle"
@@ -306,7 +312,9 @@ export function ProjectList({
                         />
                       ) : null}
                       <Tooltip label={project.path} side="bottom" align="start">
-                        <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
+                        <span className="min-w-0 flex-1 truncate text-left text-[11px] font-medium text-ink-tertiary">
+                          {project.name}
+                        </span>
                       </Tooltip>
                     </button>
                     {/* 行尾操作（hover/聚焦出现；round 27 起整行底已盖住这一块——按钮自身不铺底，

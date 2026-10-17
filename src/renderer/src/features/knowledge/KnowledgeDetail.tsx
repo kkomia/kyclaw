@@ -21,13 +21,13 @@ const MarkdownBody = lazy(async () => ({
     .DshMarkdownBody
 }))
 
-/** 纯文本：按空行分段，段内保留换行（不解析 markdown/html） */
+/** 纯文本：按空行分段，段内保留换行（不解析 markdown/html）；声部与 .md/主 chat 一致 = prose */
 function PlainTextBody({ text }: { text: string }): React.JSX.Element {
   const paragraphs = text.split(/\n{2,}/).filter((part) => part.trim() !== '')
   return (
     <div data-testid="knowledge-plain-text" className="flex flex-col gap-3">
       {paragraphs.map((paragraph, index) => (
-        <p key={index} className="whitespace-pre-wrap text-b1 text-ink">
+        <p key={index} className="whitespace-pre-wrap font-prose text-b1 text-ink">
           {paragraph}
         </p>
       ))}
@@ -95,15 +95,15 @@ export function KnowledgeDetail({ onBack }: { onBack?: () => void }): React.JSX.
           type="button"
           data-testid="knowledge-back"
           onClick={onBack}
-          className="mx-6 mt-4 flex shrink-0 items-center gap-1 self-start rounded-control px-1.5 py-1 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink"
+          className="mx-(--page-gutter) mt-4 flex shrink-0 items-center gap-1 self-start rounded-control px-1.5 py-1 text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink"
         >
           <ChevronLeft aria-hidden="true" className="size-4" />
           返回列表
         </button>
       )}
 
-      <div className="shrink-0 px-10 pt-6">
-        <div className="mx-auto flex w-full max-w-[720px] items-start justify-between gap-4">
+      <div className="shrink-0 px-(--page-gutter) pt-6">
+        <div className="mx-auto flex w-full max-w-(--content-max-width) items-start justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-1">
             {renaming ? (
               <input
@@ -120,21 +120,23 @@ export function KnowledgeDetail({ onBack }: { onBack?: () => void }): React.JSX.
                   }
                 }}
                 aria-label="资料标题"
-                className="w-full min-w-0 border-0 bg-transparent p-0 text-t1 font-medium text-ink outline-none"
+                className="w-full min-w-0 border-0 bg-transparent p-0 font-serif text-t1 font-semibold text-ink outline-none"
               />
             ) : (
               <h2
                 data-testid="knowledge-detail-title"
-                className="truncate text-t1 font-medium text-ink"
+                className="truncate font-serif text-t1 font-semibold text-ink"
                 title={doc.title}
                 onDoubleClick={beginRename}
               >
                 {doc.title}
               </h2>
             )}
-            <p className="text-c1 text-ink-tertiary">
-              {formatBytes(doc.size)} · {doc.charCount.toLocaleString('zh-CN')} 字 · 加入于{' '}
-              {formatDateTime(doc.addedAt)}
+            {/* meta：标签 sans、数字/大小/时间走 code 声部 + tabular（读数不跳宽） */}
+            <p data-testid="knowledge-meta" className="text-c1 text-ink-tertiary tabular-nums">
+              <span className="font-mono">{formatBytes(doc.size)}</span> ·{' '}
+              <span className="font-mono">{doc.charCount.toLocaleString('zh-CN')}</span> 字 · 加入于{' '}
+              <span className="font-mono">{formatDateTime(doc.addedAt)}</span>
             </p>
             <p
               data-testid="knowledge-source-path"
@@ -169,8 +171,8 @@ export function KnowledgeDetail({ onBack }: { onBack?: () => void }): React.JSX.
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 py-6">
-        <div className="mx-auto w-full max-w-[720px]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-(--page-gutter) py-6">
+        <div className="mx-auto w-full max-w-(--content-max-width)">
           {textLoading ? (
             <div data-testid="knowledge-text-loading" className="flex flex-col gap-3">
               <Skeleton className="h-4 w-full" />
