@@ -20,6 +20,13 @@ import { create } from 'zustand'
  *     一个字节都不动。
  *   - 判断与落点用纯函数（`isWorkPanelSpaceConstrained` / `canRestoreSplitLayout` /
  *     `restoredPanelWidth`），所以口径可单测、不依赖 jsdom 的布局。
+ *
+ * W7 增补（D4=A 窄窗自动降级侧栏，2026-10-17 用户拍板）：
+ *   - `sidebarAutoCollapsed`：**布局事实**——"内容卡可用宽 − 侧栏标称宽 < 中列最小可读宽"时，
+ *     会话二级栏被自动收成 0（判据见 `shouldAutoCollapseSidebar`）。它不是用户偏好：
+ *     `sidebarCollapsed` 一个字节都不动，窗口变宽后按用户原本的偏好恢复。
+ *   - 优先级：用户手动收起（`sidebarCollapsed`）时 auto 不再生效（调用方直接判 false）；
+ *     用户手动展开但空间不足时 auto 折叠仍然生效 —— auto 只由实测宽度决定，所以没有来回抖的可能。
  */
 
 /** 默认宽 = 语义 token --work-panel-width 的值（新装/未拖过时就是它） */
@@ -87,6 +94,30 @@ export function isWorkPanelSpaceConstrained(fit: WorkbenchFit | null): boolean {
 /** 并排回落点留的余量（px）：贴边落点（中列正好 480）会被亚像素/取整推回"放不下"，留一格再落 */
 const SPLIT_RESTORE_MARGIN = 8
 
+/**
+ * 会话二级栏窄窗自动降级（W7 / D4=A）的输入。
+ * 侧栏宽要用**标称宽**（--sidebar-width = 240），不是"当前实际占宽 0/240"：
+ * 判据不依赖它自己的结果，收起之后不会因为"空间又够了"翻回展开 → 不会自激抖动。
+ */
+export interface SidebarSpaceFit {
+  /** 内容卡实测宽（壳行宽 − 右缘留缝） */
+  contentWidth: number
+  /** 侧栏标称宽（--sidebar-width） */
+  sidebarWidth: number
+  /** 中列最小可读宽（--chat-min-readable-width） */
+  minChatWidth: number
+}
+
+/**
+ * 可用宽不足 ⇒ 会话二级栏自动收成 0（布局事实，不改用户偏好）：
+ * `内容卡宽 − 侧栏标称宽 < 中列最小可读宽(480)`。
+ * 720 最小窗（内容卡 658）算出来 418 < 480 ⇒ 收；1280 窗（1218）算出来 978 ≥ 480 ⇒ 不收。
+ * 用户手动收起的优先级由调用方处理（手动收起时不再调用本判据）。
+ */
+export function shouldAutoCollapseSidebar(fit: SidebarSpaceFit): boolean {
+  return fit.contentWidth - fit.sidebarWidth < fit.minChatWidth
+}
+
 /** docked 还想让中列守住最小可读宽时，面板最大能有多宽（贴边值，可能小于面板下限） */
 export function maxPanelWidthForSplit(fit: WorkbenchFit): number {
   return Math.max(0, fit.contentWidth - fit.safeLeft - fit.minChatWidth)
@@ -121,6 +152,11 @@ function sameFit(left: WorkbenchFit | null, right: WorkbenchFit | null): boolean
 
 export interface ShellState {
   sidebarCollapsed: boolean
+  /**
+   * 窄窗自动降级（W7 / D4=A）：会话二级栏因可用宽不足被自动收成 0 —— **布局事实，不是偏好**。
+   * 只有 AppShell 按实测宽度写它；窗口变宽 / 用户手动收起后自动回 false。
+   */
+  sidebarAutoCollapsed: boolean
   workPanelOpen: boolean
   /** 工作台宽度（px；拖动时改，双击把手回默认） */
   workPanelWidth: number
@@ -129,6 +165,8 @@ export interface ShellState {
   /** 壳的实测布局事实（AppShell 量；面板关着 / 量不到 = null）。空间判定与恢复落点都读它 */
   workPanelFit: WorkbenchFit | null
   toggleSidebar: () => void
+  /** 只有 AppShell 写它（量到卡宽之后）；值没变不通知，避免 resize 期间空转 */
+  setSidebarAutoCollapsed: (collapsed: boolean) => void
   toggleWorkPanel: () => void
   setWorkPanelOpen: (open: boolean) => void
   /** containerWidth = 内容区实测宽（拖动时传，用来算 70% 上限） */
@@ -142,11 +180,17 @@ export interface ShellState {
 
 export const useShellStore = create<ShellState>()((set, get) => ({
   sidebarCollapsed: false,
+  sidebarAutoCollapsed: false,
   workPanelOpen: false,
   workPanelWidth: WORK_PANEL_DEFAULT_WIDTH,
   workPanelFullscreen: false,
   workPanelFit: null,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+  // 实测宽度决定它，值没变就别通知（resize 期间反复量到同一结论不该引起重渲染）
+  setSidebarAutoCollapsed: (collapsed) =>
+    set((state) =>
+      state.sidebarAutoCollapsed === collapsed ? state : { sidebarAutoCollapsed: collapsed }
+    ),
   toggleWorkPanel: () =>
     set((state) =>
       state.workPanelOpen

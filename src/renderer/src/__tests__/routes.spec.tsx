@@ -12,6 +12,10 @@ import { AppRoutes } from '@renderer/App'
  *
  * 本轮（设置页重组）：单独「约束」栏撤掉、并进「记忆」栏（左列不再有那一项）——
  * 老深链 /settings/rules 走 sections.ts 的别名仍落到「记忆」栏（E2E 也在用这个地址）。
+ *
+ * W7（2026-10-17）：设置 / 插件 / 记忆 / 用量四条路由挪进 ModuleHost —— 切过去时常驻 ChatPage
+ * 只 hidden+inert、不卸载（草稿/滚动保活）。所以"进设置后 chat-page 还在 DOM 里"是新口径；
+ * 直接深链进这四条时主对话不预挂（chatMounted 初始 false，与 /notes 同口径）。
  */
 function renderAt(path: string): void {
   render(
@@ -51,7 +55,10 @@ describe('路由与页面骨架', () => {
 
     openSettings()
     expect(screen.getByTestId('settings-page')).toBeInTheDocument()
-    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+    // W7：主对话常驻（不卸载），只是 hidden+inert —— 草稿/滚动因此保住
+    expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-chat')).toHaveAttribute('inert')
 
     // 设置左列切「记忆」→ 真实记忆面板（round 5：不再是占位）
     fireEvent.click(screen.getByTestId('settings-nav-memory'))
@@ -63,21 +70,28 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('settings-group-usage')).toBeInTheDocument()
     expect(screen.queryByTestId('settings-group-memory')).not.toBeInTheDocument()
 
-    // 「返回」回会话视图
+    // 「返回」回会话视图（同一挂 ChatPage 重新可见）
     fireEvent.click(screen.getByTestId('settings-back'))
     expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-chat')).not.toHaveClass('hidden')
   })
 
   it('侧栏「插件」入口：切到 /plugins，选中态联动；返回会话后取消选中', () => {
     renderAt('/chat')
+    const chat = screen.getByTestId('chat-page')
 
     fireEvent.click(screen.getByTestId('nav-plugins'))
     expect(screen.getByTestId('plugins-page')).toBeInTheDocument()
     expect(screen.getByTestId('nav-plugins')).toHaveAttribute('aria-current', 'page')
-    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+    // W7：插件页也在 ModuleHost 里 —— 主对话常驻隐藏，不卸载
+    expect(screen.getByTestId('chat-page')).toBe(chat)
+    expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
 
     fireEvent.click(screen.getByTestId('new-session'))
+    // 新建会话会让 ChatPage 按会话重挂（既有口径"换会话 = 换一挂"），所以这里不比节点身份，
+    // 只验主对话回到可见、插件选中态解除
     expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    expect(screen.getByTestId('module-chat')).not.toHaveClass('hidden')
     expect(screen.getByTestId('nav-plugins')).not.toHaveAttribute('aria-current')
   })
 
@@ -110,6 +124,8 @@ describe('路由与页面骨架', () => {
     expect(screen.getByTestId('memory-page')).toBeInTheDocument()
     // 侧栏里没有指向它的菜单项（只有设置一项 + 插件入口）
     expect(screen.queryByTestId('nav-memory')).not.toBeInTheDocument()
+    // W7：深链进旧页面不预挂聊天（与 /notes 同口径；进过对话后才常驻）
+    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
   })
 
   it('二级菜单只有「设置」一项（round 5 去重：无重复入口）', () => {
@@ -125,6 +141,9 @@ describe('路由与页面骨架', () => {
   it('设置页按栏目切内容：左列设置菜单 + /settings/:section 深链', () => {
     renderAt('/settings')
 
+    // W7：设置深链不预挂聊天（chatMounted 初始 false）；页面由 ModuleHost 的 Outlet 渲染
+    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
     expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
     expect(screen.getByTestId('settings-nav-appearance')).toHaveAttribute('aria-current', 'page')
     expect(screen.getByTestId('settings-group-appearance')).toBeInTheDocument()

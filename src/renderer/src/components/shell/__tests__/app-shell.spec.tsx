@@ -8,6 +8,7 @@ import { AppShell } from '../AppShell'
 beforeEach(() => {
   useShellStore.setState({
     sidebarCollapsed: false,
+    sidebarAutoCollapsed: false,
     workPanelOpen: false,
     workPanelWidth: 400,
     workPanelFullscreen: false,
@@ -438,6 +439,133 @@ describe('AppShell 三栏骨架', () => {
     fireEvent.click(screen.getByTestId('sidebar-toggle'))
 
     expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+  })
+})
+
+/**
+ * W7（D4=A）：窄窗自动降级**会话**二级栏。
+ * 判据：内容卡宽 − 侧栏标称宽(240) < --chat-min-readable-width(480) ⇒ auto 收成 0（布局事实）；
+ * 窗口变宽按用户偏好恢复。阈值换算：窗口宽 782 时内容卡 776 − 240 = 536，所以 < 782 才会触发；
+ * 单测直接把行宽喂给壳行的 ResizeObserver（jsdom 没有布局）。
+ */
+describe('AppShell · W7（D4=A 窄窗自动降级会话二级栏）', () => {
+  it('窄窗：自动收成 0（布局事实），用户偏好保持展开；窗口变宽自动恢复', () => {
+    const ro = stubResizeObserver()
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    // 700 行宽 → 内容卡 694；694 − 240 = 454 < 480 ⇒ 自动收起
+    ro.fire(row, 700)
+
+    const sidebar = screen.getByTestId('sidebar')
+    expect(sidebar).toHaveClass('is-collapsed', 'w-0')
+    expect(sidebar).not.toHaveClass('border-r')
+    expect(sidebar).toHaveAttribute('inert')
+    expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+    // 开合钮显示真实布局态（自动收起 → "展开侧栏"）
+    expect(screen.getByTestId('sidebar-toggle')).toHaveAccessibleName('展开侧栏')
+    // 关键：这是布局事实，不是偏好 —— store 里的用户偏好仍是"展开"
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(true)
+    expect(useShellStore.getState().sidebarCollapsed).toBe(false)
+
+    // 1280 行宽 → 内容卡 1274；1274 − 240 = 1034 ≥ 480 ⇒ 解除自动收起，按偏好展开
+    ro.fire(row, 1280)
+
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+    expect(screen.getByTestId('sidebar')).toHaveClass('w-(--sidebar-width)')
+    expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'expanded')
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+    expect(useShellStore.getState().sidebarCollapsed).toBe(false)
+  })
+
+  it('阈值是实测的：720 触发、1280 不触发；刚好等于最小可读宽也不收（严格小于）', () => {
+    const ro = stubResizeObserver()
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    // 726 行宽 → 卡 720；720 − 240 = 480 = 最小可读宽 ⇒ 不收（严格小于才收）
+    ro.fire(row, 726)
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+
+    // 725 → 卡 719；479 < 480 ⇒ 收
+    ro.fire(row, 725)
+    expect(screen.getByTestId('sidebar')).toHaveClass('is-collapsed')
+
+    ro.fire(row, 1280)
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+  })
+
+  it('手动态优先：用户手动收起后 auto 不再生效，宽窗也不会把侧栏自动展开', () => {
+    const ro = stubResizeObserver()
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    fireEvent.click(screen.getByTestId('sidebar-toggle'))
+    expect(useShellStore.getState().sidebarCollapsed).toBe(true)
+    // 用户手动收起后，窄窗 auto 不置位（优先级：手动收起 > auto）
+    ro.fire(row, 700)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+
+    // 放宽：保持用户手动收起的状态（不自动展开）
+    ro.fire(row, 1280)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+    expect(screen.getByTestId('sidebar')).toHaveClass('is-collapsed')
+  })
+
+  it('用户手动展开但空间不足：auto 折叠生效（auto 只压"手动展开"，不改偏好）', () => {
+    const ro = stubResizeObserver()
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    // 先在宽窗确认展开，再缩窄 → auto 折叠；偏好仍是展开
+    ro.fire(row, 1280)
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+
+    ro.fire(row, 700)
+    expect(useShellStore.getState().sidebarCollapsed).toBe(false)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(true)
+    expect(screen.getByTestId('sidebar')).toHaveClass('is-collapsed')
+
+    // 再放宽 → 按偏好自动回来（不闪跳：判据只用标称侧栏宽，不读自己收起后的实际占宽）
+    ro.fire(row, 1280)
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+  })
+
+  it('设置页的栏目菜单不降级（它是操作入口，不是会话侧栏），窄窗仍可用', () => {
+    const ro = stubResizeObserver()
+    renderShell('/settings')
+
+    ro.fire(screen.getByTestId('shell-row'), 700)
+
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+    expect(screen.getByTestId('sidebar')).not.toHaveClass('is-collapsed')
+    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+  })
+
+  it('无二级栏模块不受影响：/notes 窄窗没有侧栏可收，auto 不置位', () => {
+    const ro = stubResizeObserver()
+    renderShell('/notes')
+
+    ro.fire(screen.getByTestId('shell-row'), 700)
+
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument()
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+    expect(screen.getByTestId('app-root')).toHaveAttribute('data-sidebar', 'collapsed')
+  })
+
+  it('与工作台空间判定不打架：自动收起释放的 240 计入 fit.safeLeft，放宽后恢复', () => {
+    const ro = stubResizeObserver()
+    useShellStore.setState({ workPanelOpen: true })
+    renderShell()
+    const row = screen.getByTestId('shell-row')
+
+    ro.fire(row, 700)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(true)
+    expect(useShellStore.getState().workPanelFit?.safeLeft).toBe(0)
+
+    ro.fire(row, 1280)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+    expect(useShellStore.getState().workPanelFit?.safeLeft).toBe(240)
   })
 })
 

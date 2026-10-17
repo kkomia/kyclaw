@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { Link, MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRoutes } from '@renderer/App'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
@@ -69,6 +69,7 @@ beforeEach(() => {
   resetWorkbenchStore()
   useShellStore.setState({
     sidebarCollapsed: false,
+    sidebarAutoCollapsed: false,
     workPanelOpen: false,
     workPanelWidth: 400,
     workPanelFullscreen: false,
@@ -189,5 +190,94 @@ describe('ModuleHost 模块宿主', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-title')).toHaveTextContent('新会话')
     })
+  })
+})
+
+/**
+ * W7（设置往返丢草稿的根因修复）：`/settings/:section?`、`/plugins`、`/memory`、`/usage`
+ * 原来挂在 ModuleHost **之外**，切过去会连宿主带常驻 ChatPage 一起卸载，输入草稿随之丢失。
+ * 现在这四条也进 ModuleHost：页面由宿主的 Outlet 渲染，主对话只 hidden+inert。
+ */
+describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => {
+  it('主对话写草稿 → 打开设置 → 回主对话：同一挂 ChatPage，草稿还在', async () => {
+    renderAt('/chat')
+    await waitForChatReady()
+
+    const chat = screen.getByTestId('chat-page')
+    const input = screen.getByTestId('composer-input')
+    fireEvent.change(input, { target: { value: '去设置前写的草稿' } })
+
+    fireEvent.click(screen.getByTestId('primary-nav-settings'))
+
+    // 设置页出来了，但主对话只是 hidden+inert：同一节点、没有第二个聊天
+    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-page')).toBe(chat)
+    expect(screen.getAllByTestId('chat-page')).toHaveLength(1)
+    expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
+    expect(screen.getByTestId('module-chat')).toHaveAttribute('inert')
+    // 设置二级栏仍由 AppShell 的 inSettings 分支给（布局口径不变）
+    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('primary-nav-chat'))
+
+    expect(screen.getByTestId('chat-page')).toBe(chat)
+    expect(screen.getByTestId('composer-input')).toBe(input)
+    expect(input).toHaveValue('去设置前写的草稿')
+    expect(screen.getByTestId('module-chat')).not.toHaveClass('hidden')
+    expect(screen.getByTestId('module-chat')).not.toHaveAttribute('inert')
+  })
+
+  it('设置深链不预挂聊天（与 /notes 同口径）：chat-page 不在 DOM；首次进对话才挂上', async () => {
+    renderAt('/settings')
+
+    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('primary-nav-chat'))
+
+    await waitForChatReady()
+    expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+  })
+
+  it('旧深链 /plugins /memory /usage 往返：同一个 ChatPage 节点与草稿都保住', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <AppRoutes />
+        <Link to="/plugins" data-testid="go-plugins">
+          插件
+        </Link>
+        <Link to="/memory" data-testid="go-memory">
+          记忆
+        </Link>
+        <Link to="/usage" data-testid="go-usage">
+          用量
+        </Link>
+        <Link to="/chat" data-testid="go-chat">
+          对话
+        </Link>
+      </MemoryRouter>
+    )
+    await waitForChatReady()
+
+    const chat = screen.getByTestId('chat-page')
+    const input = screen.getByTestId('composer-input')
+    fireEvent.change(input, { target: { value: '旧深链往返的草稿' } })
+
+    const stops = [
+      ['go-plugins', 'plugins-page'],
+      ['go-memory', 'memory-page'],
+      ['go-usage', 'usage-page']
+    ] as const
+    for (const [link, page] of stops) {
+      fireEvent.click(screen.getByTestId(link))
+      expect(screen.getByTestId(page)).toBeInTheDocument()
+      expect(screen.getByTestId('chat-page')).toBe(chat)
+      expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
+    }
+
+    fireEvent.click(screen.getByTestId('go-chat'))
+    expect(screen.getByTestId('chat-page')).toBe(chat)
+    expect(screen.getByTestId('composer-input')).toBe(input)
+    expect(input).toHaveValue('旧深链往返的草稿')
   })
 })

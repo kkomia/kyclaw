@@ -9,12 +9,16 @@ import { primaryModuleOf } from '@renderer/lib/primary-modules'
  *
  * 为什么主对话要常驻：输入草稿、附件、滚动位置、对话/轨迹页签都挂在 ChatPage 的组件树里，
  * 按路由换挂会把它们一起丢掉。**第一次进入主对话之后**，ChatPage 就一直占着同一格，切到别的
- * 模块只换可见性（`hidden + inert`；display:none 不会清掉滚动位置，inert 也把它从键盘/读屏里摘掉）。
+ * 页面只换可见性（`hidden + inert`；display:none 不会清掉滚动位置，inert 也把它从键盘/读屏里摘掉）。
  * 直接深链进 /notes 时不预先挂一整屏聊天（只初始化会话列表），避免后台白跑一轮端点与历史回灌。
  *
- * 非聊天模块走 Outlet：笔记/知识库/Office 目前是占位页，互相切换时卸载重挂没有状态可丢；
- * 主对话是唯一需要跨模块保活的页面。**这里永远只有一个 ChatPage 实例**——`/chat` 路由本身
+ * 非聊天页面走 Outlet：笔记/知识库/Office 目前是占位页，互相切换时卸载重挂没有状态可丢；
+ * 主对话是唯一需要跨页面保活的页面。**这里永远只有一个 ChatPage 实例**——`/chat` 路由本身
  * 不渲染页面（element = null），由宿主统一挂载，避免出现第二个聊天。
+ *
+ * W7（2026-10-17）：设置 / 插件 / 记忆 / 用量也挪进本宿主（见 App.tsx）。它们不是一级模块，
+ * `primaryModuleOf` 返回 null ⇒ chatActive=false ⇒ ChatPage 保持 hidden+inert、页面由 Outlet 渲染；
+ * 这样"主对话输入草稿 → 打开设置 → 回主对话"草稿还在（此前路由在宿主之外，一进设置宿主被卸载）。
  *
  * sessions-store 的初始化也提到宿主上：直接深链进 /notes 时，二级栏与对话页都还没被用户打开，
  * 但主对话的 activeId 必须先落位（会话动作、Ctrl+K、返回主对话都依赖它）。

@@ -21,6 +21,11 @@ import { UsagePage } from './features/usage/UsagePage'
  * 一级模块共用 ModuleHost：宿主自己挂常驻的 ChatPage，`/chat` 路由只是匹配用的空元素
  * （不能在这里再挂一个 ChatPage，否则会出现第二个聊天实例）。笔记 / 知识库 / Office 的
  * 页面元素由宿主里的 <Outlet/> 渲染。
+ *
+ * W7（设置往返丢草稿的根因修复）：设置 / 插件 / 记忆 / 用量四条路由原来挂在 ModuleHost **之外**，
+ * 一进设置宿主（连同常驻 ChatPage）就被卸载，输入草稿/滚动/页签全丢。现在它们也进 ModuleHost：
+ * 切过去时 ChatPage 只 hidden+inert，页面由宿主的 <Outlet/> 渲染。这四条不是一级模块
+ * （primaryModuleOf 返回 null ⇒ chatActive=false），所以宿主不会把聊天当"当前页"显示。
  */
 export function AppRoutes(): React.JSX.Element {
   return (
@@ -32,11 +37,11 @@ export function AppRoutes(): React.JSX.Element {
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/office" element={<OfficePage />} />
+          <Route path="/settings/:section?" element={<SettingsPage />} />
+          <Route path="/plugins" element={<PluginsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/usage" element={<UsagePage />} />
         </Route>
-        <Route path="/settings/:section?" element={<SettingsPage />} />
-        <Route path="/plugins" element={<PluginsPage />} />
-        <Route path="/memory" element={<MemoryPage />} />
-        <Route path="/usage" element={<UsagePage />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
     </Routes>

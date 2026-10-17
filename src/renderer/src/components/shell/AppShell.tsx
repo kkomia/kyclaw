@@ -1,7 +1,11 @@
 import { PanelRightOpen } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { Outlet, useLocation } from 'react-router'
-import { isWorkPanelSpaceConstrained, useShellStore } from '@renderer/lib/shell-store'
+import {
+  isWorkPanelSpaceConstrained,
+  shouldAutoCollapseSidebar,
+  useShellStore
+} from '@renderer/lib/shell-store'
 import { startupMark } from '@renderer/lib/startup-timing'
 import { SettingsNav } from '@renderer/features/settings/SettingsNav'
 import { SessionsController } from '@renderer/features/sessions/SessionsController'
@@ -66,11 +70,21 @@ function readLengthToken(name: string, fallback: number): number {
  * round 64（用户口径）：全局快捷键 Ctrl+K / Cmd+K = 新建会话，挂在**壳**上
  * （useNewSessionShortcut）——它按路由无关，所以设置页/插件页按也生效，
  * 与侧栏顶部那个「新建会话」按钮同一个动作。
+ *
+ * W7（D4=A，2026-10-17 用户拍板）：窄窗自动降级会话二级栏。判据与 `workPanelFit` 同一套实测法：
+ * 内容卡宽 − 侧栏标称宽 < --chat-min-readable-width(480) ⇒ 会话二级栏自动收成 0（布局事实，
+ * 见 store 的 `sidebarAutoCollapsed` / `shouldAutoCollapseSidebar`），窗口变宽后按用户偏好恢复。
+ * 720 最小窗（内容卡 658，658−240=418）会收，1280 窗（1218−240=978）不收。设置页的栏目菜单不降级。
+ *
+ * W7（设置往返丢草稿）：`/settings`、`/plugins`、`/memory`、`/usage` 已挪进 ModuleHost（见 App.tsx），
+ * 切这些页面时 ChatPage 只 hidden+inert、不卸载 —— 草稿/滚动/页签都留着（此前它们挂在宿主之外，
+ * 一进设置宿主连同聊天一起卸载，草稿随之丢失）。
  */
 export function AppShell(): React.JSX.Element {
   // 全局快捷键（Ctrl+K / Cmd+K）：等价于点侧栏的「新建会话」——壳常驻，任何路由都收得到
   useNewSessionShortcut()
   const sidebarCollapsed = useShellStore((state) => state.sidebarCollapsed)
+  const sidebarAutoCollapsed = useShellStore((state) => state.sidebarAutoCollapsed)
   const workPanelOpen = useShellStore((state) => state.workPanelOpen)
   const workPanelWidth = useShellStore((state) => state.workPanelWidth)
   const workPanelFullscreen = useShellStore((state) => state.workPanelFullscreen)
@@ -80,6 +94,7 @@ export function AppShell(): React.JSX.Element {
   const setWorkPanelOpen = useShellStore((state) => state.setWorkPanelOpen)
   const setWorkPanelWidth = useShellStore((state) => state.setWorkPanelWidth)
   const setWorkPanelFit = useShellStore((state) => state.setWorkPanelFit)
+  const setSidebarAutoCollapsed = useShellStore((state) => state.setSidebarAutoCollapsed)
   const pathname = useLocation().pathname
   const inSettings = pathname.startsWith('/settings')
   // round 17（用户实拍）：工作台开关属于**对话区**，只在对话路由出现（设置/插件等页面右上角不再有它）
@@ -92,68 +107,102 @@ export function AppShell(): React.JSX.Element {
     pathname.startsWith('/plugins') ||
     pathname.startsWith('/memory') ||
     pathname.startsWith('/usage')
-  // data-sidebar 是**布局事实**（这张卡里有没有 240 的二级栏），不是用户偏好：
-  // 没有二级栏的模块里一律 collapsed。2026-10-17 起侧栏在卡内 flow，CSS 不再按它推 safe-left；
-  // 这个属性留着给 E2E/探针读布局事实（以及单测断言），不再驱动样式。
-  const sidebarEffectiveCollapsed = !showSidebar || sidebarCollapsed
+  // 侧栏的**真实布局态** = 没有二级栏 || 用户手动收起 || 窄窗自动降级（W7 / D4=A）。
+  // `data-sidebar` 与 TitleBar 开合钮的图标都跟它走（布局事实）；用户偏好 `sidebarCollapsed`
+  // 不因自动降级被改写 —— 窗口变宽后按偏好恢复。
+  // 2026-10-17 起侧栏在卡内 flow，CSS 不再按 data-sidebar 推 safe-left；这个属性留给 E2E/探针
+  // 与单测读布局事实。
+  const sidebarEffectiveCollapsed = !showSidebar || sidebarCollapsed || sidebarAutoCollapsed
   const rowRef = useRef<HTMLDivElement>(null)
   const spaceConstrained = isWorkPanelSpaceConstrained(workPanelFit)
   // 面板此刻是否铺满内容区：用户偏好 or 空间不足的临时形态（两者对布局完全同构）
   const effectiveFullscreen = workPanelFullscreen || spaceConstrained
 
   /**
-   * 量一次壳宽 → 写一份布局事实（空间判定与"恢复并排"的落点都从它读，不必二次量 DOM）。
+   * 量一次壳宽 → 写两份布局事实（侧栏窄窗自动降级 + 工作台空间判定），共用同一套 token 与实测宽。
    *
    * 几何口径（2026-10-17 侧栏进卡后重算，结论与覆盖层时代同形）：
    *   - row 是一级导航右侧的整条可用区，**不含**一级导航（它是 row 的 flow 兄弟，见 render）；
    *   - 内容卡的宽 = row 宽 − 右缘留缝 --shell-edge-gap（左缘不留缝）；
    *   - 卡内三列是 flex 兄弟：二级栏（展开 240 / 收起 0）+ 主列 + 工作台（workPanelWidth）。
-   *   所以"docked 时聊天还剩多少" = 内容卡宽 − 侧栏占宽 − 面板宽，与旧公式逐项一致
-   *   （旧公式里 safeLeft 是覆盖层遮挡宽，现在它是卡内 flow 的占宽 —— 名字沿用，语义见 store）。
-   *   jsdom 是 0，那就维持现状 —— 单测里不该因为"量不出布局"把中列藏了。
+   *
+   * W7 增补（D4=A 窄窗自动降级侧栏）：
+   *   - 只降级**会话**二级栏（chat / plugins / memory / usage 的会话视图）；设置页的左列是栏目菜单
+   *     （操作入口），窄窗也保留；
+   *   - 判据用侧栏**标称宽**（--sidebar-width）而不是当前实际占宽 —— 收起后不会因为"空间又够了"
+   *     翻回展开，所以不会收/展来回抖；
+   *   - 优先级：用户手动收起（sidebarCollapsed）时 auto 直接不生效；用户手动展开但空间不足时
+   *     auto 折叠（auto 只压"手动展开"，不改偏好）。
+   *
+   * 工作台部分不变：面板没开就不占宽，顺手把上一次的事实收掉；量不到宽（jsdom / 隐藏态）时
+   * 维持现状 —— 单测里不该因为"量不出布局"把中列藏了、把侧栏收了。
    */
-  const measureSpace = useCallback(
+  const measureLayout = useCallback(
     (observedWidth: number): void => {
       const row = rowRef.current
       if (row === null) return
-      if (!workPanelOpen) {
-        // 面板没开就不占宽 —— 顺手把上一次的事实收掉（关面板 = 回聊天）
-        setWorkPanelFit(null)
+      const rowWidth = observedWidth > 0 ? observedWidth : row.clientWidth
+      if (rowWidth <= 0) {
+        // 量不到宽（jsdom / 隐藏态）：维持已有布局事实；但"面板已关"这种与宽度无关的事要收掉
+        if (!workPanelOpen) setWorkPanelFit(null)
         return
       }
-      const rowWidth = observedWidth > 0 ? observedWidth : row.clientWidth
-      if (rowWidth <= 0) return
       const edgeGap = readLengthToken('--shell-edge-gap', SHELL_EDGE_GAP_FALLBACK)
       const sidebarWidth = readLengthToken('--sidebar-width', SIDEBAR_WIDTH_FALLBACK)
       const minChatWidth = readLengthToken('--chat-min-readable-width', CHAT_MIN_READABLE_FALLBACK)
+      const contentWidth = Math.max(0, rowWidth - edgeGap)
+
+      // 1) 会话二级栏窄窗自动降级（布局事实；不动 sidebarCollapsed 偏好）
+      const autoCollapsed =
+        showSidebar &&
+        !inSettings &&
+        !sidebarCollapsed &&
+        shouldAutoCollapseSidebar({ contentWidth, sidebarWidth, minChatWidth })
+      setSidebarAutoCollapsed(autoCollapsed)
+
+      // 2) 工作台空间判定（判据里的侧栏占宽 = 卡内实际还有没有那 240）
+      if (!workPanelOpen) {
+        setWorkPanelFit(null)
+        return
+      }
+      const sidebarShown = showSidebar && !sidebarCollapsed && !autoCollapsed
       setWorkPanelFit({
-        contentWidth: Math.max(0, rowWidth - edgeGap),
-        // 卡内 flow 的侧栏占宽：展开 = --sidebar-width，收起 / 无二级栏 = 0
-        safeLeft: sidebarEffectiveCollapsed ? 0 : sidebarWidth,
+        contentWidth,
+        // 卡内 flow 的侧栏占宽：展开 = --sidebar-width，收起 / 自动收起 / 无二级栏 = 0
+        safeLeft: sidebarShown ? sidebarWidth : 0,
         panelWidth: workPanelWidth,
         minChatWidth
       })
     },
-    [sidebarEffectiveCollapsed, setWorkPanelFit, workPanelOpen, workPanelWidth]
+    [
+      inSettings,
+      setSidebarAutoCollapsed,
+      setWorkPanelFit,
+      showSidebar,
+      sidebarCollapsed,
+      workPanelOpen,
+      workPanelWidth
+    ]
   )
 
-  // useLayoutEffect（不是 useEffect）：面板刚打开 / 侧栏刚收起时，这一量必须在**这一帧画出来之前**
-  // 落地 —— 否则窄窗里会先闪一帧"面板 400 + 聊天被挤扁"的构图，下一帧才铺满。
-  // 依赖里带上侧栏 / 面板态 / 面板宽：这几件任一变化都要重判（行本身不变宽时 ResizeObserver 不响）
+  // useLayoutEffect（不是 useEffect）：面板刚打开 / 侧栏刚收起 / 窗口刚变窄时，这一量必须在
+  // **这一帧画出来之前**落地 —— 否则会先闪一帧"侧栏还占着 / 面板 400 + 聊天被挤扁"的构图。
+  // 依赖里带上侧栏 / 面板态 / 面板宽 / 当前页面有没有二级栏：这几件任一变化都要重判
+  // （行本身不变宽时 ResizeObserver 不响）。
   useLayoutEffect(() => {
     const row = rowRef.current
     if (row === null) return
-    measureSpace(row.clientWidth)
+    measureLayout(row.clientWidth)
     if (typeof ResizeObserver === 'undefined') return
 
     const observer = new ResizeObserver((entries) => {
-      measureSpace(entries[0]?.contentRect.width ?? 0)
+      measureLayout(entries[0]?.contentRect.width ?? 0)
     })
     observer.observe(row)
     return () => {
       observer.disconnect()
     }
-  }, [measureSpace])
+  }, [measureLayout])
 
   // round 48（用户口径）：工作台面板属于对话区——切到对话以外的页面（设置/插件/记忆等）一律收起；
   // 面板状态与标签保留，回到对话由用户再自己展开。
@@ -172,17 +221,24 @@ export function AppShell(): React.JSX.Element {
       data-sidebar={sidebarEffectiveCollapsed ? 'collapsed' : 'expanded'}
       className="flex h-full flex-col overflow-hidden bg-canvas text-ink"
     >
-      <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+      {/* 开合钮显示**真实布局态**（自动降级时也是"已收起"的样子）。窄窗 auto 收起时点它改的仍是
+          用户偏好（sidebarCollapsed），布局在空间恢复前保持自动收起 —— auto 只由实测宽度决定，
+          不读点击结果，所以两者不会来回打架/闪跳。 */}
+      <TitleBar
+        sidebarCollapsed={sidebarCollapsed || sidebarAutoCollapsed}
+        onToggleSidebar={toggleSidebar}
+      />
       <div className="flex min-h-0 flex-1">
-        {/* 一级导航是 flow：它占的宽度直接从内容区扣，不需要在 measureSpace 里二次折算 */}
+        {/* 一级导航是 flow：它占的宽度直接从内容区扣，不需要在 measureLayout 里二次折算 */}
         <PrimaryNav />
         {/* shell-row 只包住内容卡：宽度 = 一级导航右缘到窗口右缘。
             二级栏已经挪进卡内（ContentRegion 的 flex 子列），行本身不再需要为覆盖层做裁剪。 */}
         <div ref={rowRef} data-testid="shell-row" className="flex min-h-0 min-w-0 flex-1">
           <ContentRegion>
-            {/* 会话二级栏：卡内左列（设置页换设置菜单；无二级栏的模块整列不渲染） */}
+            {/* 会话二级栏：卡内左列（设置页换设置菜单；无二级栏的模块整列不渲染）。
+                collapsed 传**真实布局态**（手动态 / 窄窗自动降级都算），用户偏好只由 store 保存。 */}
             {showSidebar ? (
-              <Sidebar collapsed={sidebarCollapsed}>
+              <Sidebar collapsed={sidebarEffectiveCollapsed}>
                 {inSettings ? (
                   <SettingsNav />
                 ) : (

@@ -6,6 +6,7 @@ import {
   isWorkPanelSpaceConstrained,
   maxPanelWidthForSplit,
   restoredPanelWidth,
+  shouldAutoCollapseSidebar,
   useShellStore,
   type WorkbenchFit
 } from '../shell-store'
@@ -22,6 +23,7 @@ beforeEach(() => {
   // store 是模块级单例：每个用例前回到默认态
   useShellStore.setState({
     sidebarCollapsed: false,
+    sidebarAutoCollapsed: false,
     workPanelOpen: false,
     workPanelWidth: 400,
     workPanelFullscreen: false,
@@ -229,5 +231,47 @@ describe('"恢复并排布局"（round 78）', () => {
     useShellStore.setState({ workPanelFit: null })
     expect(useShellStore.getState().restoreSideBySideLayout()).toBe(false)
     expect(useShellStore.getState().workPanelWidth).toBe(400)
+  })
+})
+
+/**
+ * W7（D4=A，2026-10-17 用户拍板）：窄窗自动降级会话二级栏。
+ * 判据 = 内容卡宽 − 侧栏**标称**宽(240) < 中列最小可读宽(480)；用标称宽是防自激（见函数注释）。
+ */
+describe('会话侧栏窄窗自动降级（W7 / D4=A）', () => {
+  it('判据：内容卡 1218（1280 窗）不收、658（720 窗）收；正好等于最小可读宽也不收', () => {
+    expect(
+      shouldAutoCollapseSidebar({ contentWidth: 1218, sidebarWidth: 240, minChatWidth: 480 })
+    ).toBe(false)
+    expect(
+      shouldAutoCollapseSidebar({ contentWidth: 658, sidebarWidth: 240, minChatWidth: 480 })
+    ).toBe(true)
+    // 720 − 240 = 480 = 最小可读宽：不够收的条件（严格小于）
+    expect(
+      shouldAutoCollapseSidebar({ contentWidth: 720, sidebarWidth: 240, minChatWidth: 480 })
+    ).toBe(false)
+    expect(
+      shouldAutoCollapseSidebar({ contentWidth: 719, sidebarWidth: 240, minChatWidth: 480 })
+    ).toBe(true)
+  })
+
+  it('默认不是自动收起；setSidebarAutoCollapsed 只写布局事实、不动用户偏好', () => {
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+
+    useShellStore.getState().setSidebarAutoCollapsed(true)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(true)
+    // 用户偏好（是否手动收起）一个字节都没动 —— 窗口变宽后要按它恢复
+    expect(useShellStore.getState().sidebarCollapsed).toBe(false)
+
+    useShellStore.getState().setSidebarAutoCollapsed(false)
+    expect(useShellStore.getState().sidebarAutoCollapsed).toBe(false)
+  })
+
+  it('同值不通知（resize 期间反复量到同一结论不该引起重渲染）', () => {
+    useShellStore.getState().setSidebarAutoCollapsed(true)
+    const before = useShellStore.getState()
+
+    useShellStore.getState().setSidebarAutoCollapsed(true)
+    expect(useShellStore.getState()).toBe(before)
   })
 })
