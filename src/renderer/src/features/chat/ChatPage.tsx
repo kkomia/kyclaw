@@ -1486,7 +1486,7 @@ function ActiveChat({
             {turnNotice}
           </p>
         )}
-        <div className="shrink-0 px-4 pt-4 pb-6">
+        <div className="shrink-0 px-4 pt-4 pb-2">
           {/* 停靠区（输入卡正上方那一格）的夹高从这里给。round 82（用户口径）：
               **有提问时不再用固定的 45vh 夹它** —— 45vh 会在正常窗口里就把提问卡裁成"卡里滚一层"，
               当前题（含选项 / 其它输入框 + 主操作）因此要滚才点得到。现在有提问时这一格只受

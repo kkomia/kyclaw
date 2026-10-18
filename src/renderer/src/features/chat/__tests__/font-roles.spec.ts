@@ -79,15 +79,15 @@ describe('工具/读数 = 书生气正文 + 技术声部（task-51）', () => {
 
 describe('Composer = UI 声部 + 规章 §9.2#6', () => {
   it('输入卡 16 圆角 + composer 阴影；输入/镜像层显式 font-sans b1', () => {
-    expect(composerTsx).toContain('rounded-[18px]')
+    expect(composerTsx).toContain('rounded-[14px]')
     expect(composerTsx).toContain('shadow-(--shadow-composer)')
     expect(composerTsx).not.toContain('shadow-(--shadow-input)')
-    expect(composerTsx).toMatch(/font-sans[^"']*text-b2|text-b2[^"']*font-sans/)
+    expect(composerTsx).toMatch(/font-sans[^"']*text-\[14px\]|text-\[14px\][^"']*font-sans/)
   })
 
   it('placeholder 用可读三级档；发送键 32 实心陶土橙，禁用 quaternary/opacity', () => {
     expect(composerTsx).toContain('placeholder:text-(--text-tertiary-readable)')
-    expect(composerTsx).toContain('h-7')
+    expect(composerTsx).toContain('h-[26px]')
     expect(composerTsx).toContain('hover:bg-hover')
     expect(composerTsx).toContain('text-(--text-tertiary-readable)')
     expect(composerTsx).toContain('border-surface-border')
@@ -97,7 +97,7 @@ describe('Composer = UI 声部 + 规章 §9.2#6', () => {
 
   it('模型/上下文 chip 是技术读数：mono 12', () => {
     const controls = read('../ComposerControls.tsx')
-    expect(controls).toMatch(/data-testid="composer-model"[\s\S]{0,400}font-mono text-c1/)
+    expect(controls).toMatch(/data-testid="composer-model"[\s\S]{0,400}font-sans text-\[13px\]/)
   })
 })
 

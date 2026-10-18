@@ -855,7 +855,7 @@ export function Composer({
       <div
         data-testid="composer"
         className={cn(
-          'composer-focus-surface focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-[18px] border border-surface-border bg-(--field-bg) font-sans text-[15px] shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+          'composer-focus-surface focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-[14px] border border-surface-border bg-(--field-bg) font-sans text-[15px] shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
           // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
           dragging && 'border-(--accent)'
         )}
@@ -967,7 +967,7 @@ export function Composer({
             <span
               data-testid="composer-placeholder"
               aria-hidden="true"
-              className="pointer-events-none absolute inset-x-4 top-2 z-0 truncate font-sans text-b2 leading-6 text-(--text-tertiary-readable)"
+              className="pointer-events-none absolute top-[7px] right-9 left-[14px] z-0 truncate font-sans text-[14px] leading-6 text-(--text-tertiary-readable)"
             >
               输入你的问题
             </span>
@@ -1059,11 +1059,9 @@ export function Composer({
               submit()
             }}
             className={cn(
-              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent py-2 pr-10 pl-4 font-sans text-b2 leading-6 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
+              'composer-caret-input relative z-10 field-sizing-content block max-h-[180px] w-full resize-none overflow-y-auto bg-transparent py-[7px] pr-9 pl-[14px] font-sans text-[14px] leading-6 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
               // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
-              hero
-                ? 'min-h-(--composer-input-min-height-hero)'
-                : 'min-h-[calc(40px*var(--ui-scale,1))]'
+              hero ? 'min-h-[38px]' : 'min-h-[38px]'
             )}
           />
           {/* P1b：自绘 caret（原生 caret 由 .composer-caret-input[data-caret='custom'] 隐藏；
@@ -1082,34 +1080,16 @@ export function Composer({
             />
           ) : null}
 
-          <div className="absolute right-2 bottom-2 z-30">
+          <div className="absolute right-2 bottom-[6px] z-30">
             {busy ? (
               <button
                 type="button"
                 data-testid="composer-stop"
                 aria-label="停止生成"
                 onClick={onStop}
-                className="composer-send inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] font-mono text-[13px] text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover focus-visible:outline-none motion-reduce:transition-none"
+                className="composer-send inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[6px] font-mono text-[13px] text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover focus-visible:outline-none motion-reduce:transition-none"
               >
                 <svg viewBox="0 0 18 18" className="composer-send-mark size-5" aria-hidden="true">
-                  <g
-                    className="send-bracket send-bracket--l"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M4.8 3.6H3.4v10.8h1.4" />
-                  </g>
-                  <g
-                    className="send-bracket send-bracket--r"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M13.2 3.6h1.4v10.8h-1.4" />
-                  </g>
                   <rect
                     className="send-enter"
                     x="6.4"
@@ -1129,31 +1109,13 @@ export function Composer({
                 disabled={!sendable}
                 onClick={submit}
                 className={cn(
-                  'composer-send inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] font-mono text-[13px] transition-colors duration-(--motion-fast) ease-main focus-visible:outline-none motion-reduce:transition-none',
+                  'composer-send inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[6px] font-mono text-[13px] transition-colors duration-(--motion-fast) ease-main focus-visible:outline-none motion-reduce:transition-none',
                   sendable
                     ? 'border border-transparent text-ink hover:bg-hover'
                     : 'cursor-not-allowed border border-surface-border bg-transparent text-(--text-tertiary-readable)'
                 )}
               >
                 <svg viewBox="0 0 18 18" className="composer-send-mark size-5" aria-hidden="true">
-                  <g
-                    className="send-bracket send-bracket--l"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M4.8 3.6H3.4v10.8h1.4" />
-                  </g>
-                  <g
-                    className="send-bracket send-bracket--r"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <path d="M13.2 3.6h1.4v10.8h-1.4" />
-                  </g>
                   <g
                     className="send-enter"
                     fill="none"
@@ -1162,8 +1124,8 @@ export function Composer({
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   >
-                    <path d="M12.2 6.2v3.4H6.2" />
-                    <path d="M8.4 7.3 6.2 9.6l2.2 2.3" />
+                    <path d="M9 14V5" />
+                    <path d="M5.2 8.4 9 4.6l3.8 3.8" />
                   </g>
                 </svg>
               </button>
@@ -1202,7 +1164,7 @@ export function Composer({
       {/* task-131：footer 整行放回输入卡外、卡下方（同宽同 left、6px 间距、无边框/无卡面底） */}
       <div
         data-testid="composer-footer-outer"
-        className="mx-auto mt-1.5 flex w-full max-w-(--chat-input-max-width) items-center px-1"
+        className="mx-auto mt-1 flex w-full max-w-(--chat-input-max-width) items-center px-1"
       >
         <div
           data-testid="composer-footer"

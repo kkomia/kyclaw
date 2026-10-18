@@ -703,7 +703,10 @@ export function ContextChip({
       <span data-testid="context-ring" className="inline-flex shrink-0">
         <ContextMeterGlyph percent={stats.usedPct} warning={stats.overThreshold} />
       </span>
-      <span data-testid="context-percent" className="font-mono text-c1 leading-none tabular-nums">
+      <span
+        data-testid="context-percent"
+        className="font-sans text-[13px] leading-none tabular-nums"
+      >
         {stats.usedPct}%
       </span>
     </button>
@@ -939,7 +942,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
             type="button"
             data-testid="composer-model"
             disabled={pending}
-            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 font-mono text-c1 leading-none text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 font-sans text-[13px] leading-none text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
           >
             <span className="truncate">{triggerLabel}</span>
           </button>

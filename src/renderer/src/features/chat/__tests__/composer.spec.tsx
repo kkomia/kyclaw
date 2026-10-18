@@ -78,19 +78,19 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
 
     expect(screen.getByTestId('composer')).toHaveClass(
       'max-w-(--chat-input-max-width)',
-      'rounded-[18px]',
+      'rounded-[14px]',
       'border-surface-border',
       'font-sans',
       'shadow-(--shadow-composer)'
     )
     expect(screen.getByTestId('composer-input')).toHaveClass(
       'field-sizing-content',
-      'min-h-[calc(40px*var(--ui-scale,1))]',
-      'max-h-(--composer-input-max-height)',
+      'min-h-[38px]',
+      'max-h-[180px]',
       'overflow-y-auto'
     )
     expect(screen.getByTestId('composer-footer')).toHaveClass('h-(--composer-toolbar-height)')
-    expect(screen.getByTestId('composer-send')).toHaveClass('h-7', 'font-mono')
+    expect(screen.getByTestId('composer-send')).toHaveClass('h-[26px]')
     expect(screen.getByTestId('composer')).toContainElement(screen.getByTestId('composer-send'))
     expect(screen.getByTestId('composer-send')).not.toHaveClass('rounded-pill')
   })
@@ -241,7 +241,7 @@ describe('输入卡流式态', () => {
 
     expect(screen.queryByTestId('composer-send')).not.toBeInTheDocument()
     const stop = screen.getByTestId('composer-stop')
-    expect(stop).toHaveClass('h-7', 'font-mono')
+    expect(stop).toHaveClass('h-[26px]')
 
     fireEvent.click(stop)
     expect(onStop).toHaveBeenCalledTimes(1)
@@ -1048,9 +1048,14 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     const model = screen.getByTestId('composer-model')
     const effort = screen.getByTestId('composer-effort')
     for (const trigger of [model, effort]) {
-      expect(trigger).toHaveClass('h-8', 'rounded-control', 'font-mono', 'text-c1', 'items-center')
+      expect(trigger).toHaveClass(
+        'h-8',
+        'rounded-control',
+        'font-sans',
+        'text-[13px]',
+        'items-center'
+      )
       // 同版式：不允许一个 13/500、一个 12/mono（之前就是这里不齐）
-      expect(trigger).not.toHaveClass('text-[13px]')
       expect(trigger).not.toHaveClass('font-medium')
     }
 
@@ -1072,7 +1077,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(card).not.toContainElement(outer)
     expect(card).not.toContainElement(screen.getByTestId('composer-footer'))
     expect(screen.getByTestId('composer-anchor')).toContainElement(outer)
-    expect(outer).toHaveClass('mt-1.5', 'mx-auto', 'w-full', 'max-w-(--chat-input-max-width)')
+    expect(outer).toHaveClass('mt-1', 'mx-auto', 'w-full', 'max-w-(--chat-input-max-width)')
     expect(screen.queryByTestId('composer-footer-tray')).not.toBeInTheDocument()
     expect(screen.getByTestId('composer-send')).toBeInTheDocument()
   })
@@ -1083,11 +1088,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     const send = screen.getByTestId('composer-send')
     expect(card).toContainElement(send)
     expect(screen.getByTestId('composer-footer')).not.toContainElement(send)
-    expect(screen.getByTestId('composer-input')).toHaveClass(
-      'py-2',
-      'min-h-[calc(40px*var(--ui-scale,1))]'
-    )
-    expect(send).toHaveClass('font-mono', 'h-7')
+    expect(screen.getByTestId('composer-input')).toHaveClass('py-[7px]', 'min-h-[38px]')
+    expect(send).toHaveClass('font-mono', 'h-[26px]', 'w-[26px]')
     expect(send).not.toHaveClass('rounded-pill')
     expect(send).not.toHaveClass('bg-(--button-primary-bg)')
     expect(send.querySelector('svg')).not.toBeNull()
@@ -1194,7 +1196,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     await waitFor(() => expect(pie).toHaveAttribute('data-warning', 'true'))
     const percent = screen.getByTestId('context-percent')
     expect(percent).toHaveTextContent('100%')
-    expect(percent).toHaveClass('font-mono', 'tabular-nums')
+    expect(percent).toHaveClass('font-sans', 'text-[13px]', 'tabular-nums')
   })
 
   it('task-107：hover 打开磨砂浮窗 = 头行 / 分段条 / 图例 / 会话统计 / Token 用量（真实读数）', async () => {
@@ -1822,7 +1824,7 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
 
       const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
       expect(input.value).toBe('')
-      expect(input).toHaveClass('min-h-[calc(40px*var(--ui-scale,1))]')
+      expect(input).toHaveClass('min-h-[38px]')
 
       const card = screen.getByTestId('composer-quote-card')
       expect(card).toHaveAttribute('data-quote', 'true')
@@ -2093,33 +2095,25 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
   }
   const SEMANTIC_CSS = readSource('../../../styles/tokens/semantic.css')
-
-  function pxTokenOf(name: string): number {
-    const match = new RegExp(`--${name}:\\s*(\\d+)px`).exec(SEMANTIC_CSS)
-    if (match === null) throw new Error(`语义层没有 ${name}`)
-    return Number(match[1])
-  }
+  void SEMANTIC_CSS
 
   it('常态最小高走 --composer-input-min-height，且比原来那档（48）更高', () => {
     setup()
 
     const input = screen.getByTestId('composer-input')
-    expect(input).toHaveClass('min-h-[calc(40px*var(--ui-scale,1))]')
+    expect(input).toHaveClass('min-h-[38px]')
     expect(input).not.toHaveClass('min-h-(--composer-input-min-height-hero)')
-    expect(input).toHaveClass('py-2')
+    expect(input).toHaveClass('py-[7px]')
   })
 
   it('初始页（hero）：同样单行 36px；换档有过渡（不硬切）', () => {
     setup({ hero: true })
 
     const input = screen.getByTestId('composer-input')
-    expect(input).toHaveClass('min-h-(--composer-input-min-height-hero)')
+    // DSH inline：hero 与常态同 38px 单行
+    expect(input).toHaveClass('min-h-[38px]')
     expect(input).toHaveClass('transition-[min-height]')
-    // task-118：hero 不再高一档
-    expect(pxTokenOf('composer-input-min-height-hero')).toBe(36)
-    expect(pxTokenOf('composer-input-min-height')).toBe(36)
-    // 封顶没变：长内容照旧到 max 之后内部滚动
-    expect(input).toHaveClass('max-h-(--composer-input-max-height)')
+    expect(input).toHaveClass('max-h-[180px]')
     expect(input).toHaveClass('overflow-y-auto')
   })
 
@@ -2127,8 +2121,8 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     const source = readSource('../Composer.tsx')
 
     expect(source).not.toMatch(/minHeight:\s*['"]?\d+px/)
-    expect(source).toContain('min-h-[calc(40px*var(--ui-scale,1))]')
-    expect(source).toContain('min-h-(--composer-input-min-height-hero)')
+    expect(source).toContain('min-h-[38px]')
+    expect(source).toContain('max-h-[180px]')
   })
 })
 
