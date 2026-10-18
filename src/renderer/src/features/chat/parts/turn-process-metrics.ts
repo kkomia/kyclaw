@@ -10,7 +10,7 @@
 export const TURN_PROCESS_MAX_ROWS = 200
 
 /** 用户离底部多少 px 内算"停在底部"（跟随时不被 1–2px 抖动打断） */
-export const TURN_PROCESS_STICKY_DISTANCE = 32
+export const TURN_PROCESS_STICKY_DISTANCE = 40
 
 /** 用时文案：X 秒 / X 分 Y 秒（1 分钟以内只给秒，避免「0 分 5 秒」） */
 export function formatTurnDuration(ms: number): string {

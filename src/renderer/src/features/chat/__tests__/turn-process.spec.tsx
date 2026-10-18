@@ -292,7 +292,9 @@ describe('task-82 · 汇总行固定顶部 + hairline 分隔', () => {
     const header = screen.getByTestId('turn-process-header')
     expect(header).toHaveAttribute('data-has-divider', 'true')
     expect(header).toHaveClass('turn-process-header--divider')
-    expect(TURN_PROCESS_CSS).toMatch(/\.turn-process-header--divider\s*\{[^}]*border-bottom:\s*var\(--hairline-width\)\s*solid\s*var\(--border-hairline\)/)
+    expect(TURN_PROCESS_CSS).toMatch(
+      /\.turn-process-header--divider\s*\{[^}]*border-bottom:\s*var\(--hairline-width\)\s*solid\s*var\(--border-hairline\)/
+    )
     // reduced 不引入动画
     expect(TURN_PROCESS_CSS).not.toMatch(/\.turn-process-header[^}]*animation:/)
   })
@@ -302,5 +304,45 @@ describe('task-82 · 汇总行固定顶部 + hairline 分隔', () => {
     const header = screen.getByTestId('turn-process-header')
     expect(header).not.toHaveClass('turn-process-header--divider')
     expect(header).not.toHaveAttribute('data-has-divider')
+  })
+})
+
+describe('task-104/105 · 内滚跟随 + 折叠态汇总行', () => {
+  it('运行中内容高度增长：仍贴底则跟随到底（不只认 entries.length）', () => {
+    const { rerender } = render(<TurnProcess entries={[toolEntry(0)]} running />)
+    const body = screen.getByTestId('turn-process-body')
+    fakeScrollGeometry(body, { scrollHeight: 800, clientHeight: 400 })
+    body.scrollTop = 400
+    body.dispatchEvent(new Event('scroll', { bubbles: true }))
+
+    rerender(<TurnProcess entries={[toolEntry(0)]} running />)
+    fakeScrollGeometry(body, { scrollHeight: 1400, clientHeight: 400 })
+    rerender(<TurnProcess entries={[toolEntry(0)]} running />)
+    expect(body.scrollTop).toBe(1400)
+  })
+
+  it('用户上滚后内容增长：暂停跟随（scrollTop 不被拉回）', () => {
+    const { rerender } = render(<TurnProcess entries={[toolEntry(0), toolEntry(1)]} running />)
+    const body = screen.getByTestId('turn-process-body')
+    fakeScrollGeometry(body, { scrollHeight: 800, clientHeight: 400 })
+    body.scrollTop = 0
+    body.dispatchEvent(new Event('scroll', { bubbles: true }))
+    rerender(<TurnProcess entries={[toolEntry(0), toolEntry(1), toolEntry(2)]} running />)
+    expect(body.scrollTop).toBeLessThan(100)
+  })
+
+  it('完成/折叠态：有正文时汇总行与正文之间仍有 1px hairline；汇总行 b2 14', () => {
+    render(<TurnProcess entries={[toolEntry(0)]} running={false} hasAnswer />)
+    const header = screen.getByTestId('turn-process-header')
+    expect(header).toHaveAttribute('data-has-divider', 'true')
+    expect(header).toHaveClass('turn-process-header--divider')
+    expect(screen.getByTestId('trace-toggle')).toHaveClass('text-b2')
+  })
+
+  it('折叠态但无正文/无条目：不出线', () => {
+    render(<TurnProcess entries={[]} running={false} hasAnswer={false} />)
+    expect(screen.getByTestId('turn-process-header')).not.toHaveClass(
+      'turn-process-header--divider'
+    )
   })
 })

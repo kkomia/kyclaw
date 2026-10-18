@@ -51,6 +51,8 @@ export interface TurnProcessProps {
   entries: TurnProcessEntry[]
   /** 这一轮还在流式（进行中 → 默认展开；跑完自动收起） */
   running: boolean
+  /** 折叠态下方是否还有正文（有正文才画「汇总行↔正文」hairline；无条目/无正文不出线） */
+  hasAnswer?: boolean
   /**
    * 块内思考行的**手动开合表**（键 = reasoning 序号）：由 `Message` 持有。
    * 消息从"纯思考"换成"思考 + 工具"时整棵子树会重挂，本地 state 会丢，
@@ -66,6 +68,7 @@ export interface TurnProcessProps {
 export function TurnProcess({
   entries,
   running,
+  hasAnswer = false,
   overrides,
   reasoningOrdinals,
   onReasoningToggle
@@ -82,6 +85,9 @@ export function TurnProcess({
   const [frozenMs, setFrozenMs] = useState<number | null>(null)
   const [backToBottomVisible, setBackToBottomVisible] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
+  const runningRef = useRef(running)
   /** 是否贴在底部（ref：滚动事件高频，不进渲染） */
   const pinnedRef = useRef(true)
   /** 开始时刻（只在 effect 里读时钟；渲染期不碰 impure 函数/ref） */
@@ -101,12 +107,51 @@ export function TurnProcess({
   // 跑完的这一帧把用时冻住（render 期按 props 调整 state，React 文档认可的写法；用 elapsedMs 不读时钟）
   if (!running && frozenMs === null && elapsedMs > 0) setFrozenMs(elapsedMs)
 
-  // 新增行若停在底部 → 跟到底；用 layout effect 在绘制前定位（不产生逐帧平滑滚动开销）
-  useLayoutEffect(() => {
+  /** 贴底跟随：过程区内滚（ResizeObserver 合并，只读一次 scrollHeight；用户上滚时 pinned=false 不抢） */
+  const followBottomNow = (): void => {
     const body = bodyRef.current
     if (body === null || !pinnedRef.current) return
     body.scrollTop = body.scrollHeight
-  }, [entries.length])
+  }
+  const scheduleFollowBottom = (): void => {
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      followBottomNow()
+    })
+  }
+
+  // 新增行/流式内容变化若停在底部 → 跟到底；layout effect 先同步定位，再 rAF 补一帧（等折叠/字体落定）
+  useLayoutEffect(() => {
+    const wasRunning = runningRef.current
+    runningRef.current = running
+    // 新的一轮开始：重置贴底（换消息/重跑不走这里：组件按消息 key 重挂）
+    if (running && !wasRunning) {
+      pinnedRef.current = true
+      setBackToBottomVisible(false)
+    }
+    followBottomNow()
+    scheduleFollowBottom()
+  }, [entries, running])
+
+  // 内容高度在 stream 中间增长（思考文字/工具输出/状态行）不会改变 entries.length：
+  // 用 ResizeObserver 监听内容层，运行中且用户仍贴底就继续跟随。
+  useLayoutEffect(() => {
+    if (!running) return undefined
+    const content = contentRef.current
+    if (content === null || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => scheduleFollowBottom())
+    observer.observe(content)
+    scheduleFollowBottom()
+    return () => observer.disconnect()
+  }, [running])
+
+  useEffect(
+    () => () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
+    },
+    []
+  )
 
   const reasoningCount = entries.filter((entry) => entry.part.type === 'reasoning').length
   const toolCount = entries.filter((entry) => isToolPart(entry.part)).length
@@ -173,10 +218,10 @@ export function TurnProcess({
       >
         <div
           data-testid="turn-process-header"
-          data-has-divider={open && entries.length > 0 ? 'true' : undefined}
+          data-has-divider={entries.length > 0 && (open || hasAnswer) ? 'true' : undefined}
           className={cn(
             'turn-process-header',
-            open && entries.length > 0 && 'turn-process-header--divider'
+            entries.length > 0 && (open || hasAnswer) && 'turn-process-header--divider'
           )}
         >
           <button
@@ -185,7 +230,7 @@ export function TurnProcess({
             data-running={running ? 'true' : undefined}
             aria-expanded={open}
             onClick={() => setOverride(!open)}
-            className="group/row flex min-h-6 w-full cursor-pointer items-center gap-2 text-left text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
+            className="group/row flex min-h-7 w-full cursor-pointer items-center gap-2 text-left text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
           >
             <span
               data-testid="turn-process-summary"
@@ -217,7 +262,7 @@ export function TurnProcess({
               className="turn-process-body"
               onScroll={handleScroll}
             >
-              <div className="turn-process-rows">
+              <div ref={contentRef} className="turn-process-rows">
                 {overflow === 0 ? null : (
                   <p data-testid="turn-process-more" className="text-c1 text-ink-tertiary">
                     更早的 {overflow} 行已折叠（只保留最近 {TURN_PROCESS_MAX_ROWS} 行）

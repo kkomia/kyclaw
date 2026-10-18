@@ -60,9 +60,9 @@ describe('聊天区滚动弹簧（doc §2.1 参数）', () => {
     expect(Math.abs(huge.velocity)).toBeLessThanOrEqual(CHAT_FOLLOW.maxSpeed + 1)
   })
 
-  it('贴底 25px 判定（普通容器）', () => {
-    expect(isNearBottom(975, 2000, 1000)).toBe(true) // 距离 25
-    expect(isNearBottom(974, 2000, 1000)).toBe(false) // 距离 26
+  it('贴底 40px 判定（普通容器，task-104 回底恢复阈值）', () => {
+    expect(isNearBottom(960, 2000, 1000)).toBe(true) // 距离 40
+    expect(isNearBottom(959, 2000, 1000)).toBe(false) // 距离 41
     expect(isNearBottom(0, 1000, 1000)).toBe(true)
   })
 })

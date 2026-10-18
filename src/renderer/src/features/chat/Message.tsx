@@ -851,6 +851,7 @@ export function Message({
     (chunk) => chunk.index > lastProcessIndex && chunk.part.text.trim() !== ''
   )
   const processRunning = streaming && !answerStarted
+  const hasTurnAnswer = textChunks.some((chunk) => chunk.part.text.trim() !== '')
 
   return (
     <>
@@ -897,6 +898,7 @@ export function Message({
                 key="turn-process"
                 entries={processEntries}
                 running={processRunning}
+                hasAnswer={hasTurnAnswer}
                 overrides={reasoningOverrides}
                 reasoningOrdinals={reasoningOrdinals}
                 onReasoningToggle={rememberReasoningChoice}

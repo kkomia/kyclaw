@@ -16,7 +16,7 @@ export const CHAT_FOLLOW = {
   maxAccel: 24_000,
   maxSpeed: 2_400,
   lead: 1_200,
-  stickPx: 25,
+  stickPx: 40,
   settlePx: 0.5,
   settleVelocity: 10,
   dtMinMs: 16.7,
@@ -95,11 +95,16 @@ export function isNearBottom(
 export function useChatFollow({
   viewRef,
   tail,
-  enabled
+  enabled,
+  running = true,
+  resetKey
 }: {
   viewRef: RefObject<HTMLDivElement | null>
   tail: string
   enabled: boolean
+  running?: boolean
+  /** 换会话/新发送：立刻重置贴底（忽略用户之前的上滚） */
+  resetKey?: string
 }): { onScroll: () => void } {
   const stickyRef = useRef(true)
   const stateRef = useRef<FollowState>({ position: 0, velocity: 0 })
@@ -158,17 +163,62 @@ export function useChatFollow({
     return () => cancel()
   }, [tail, enabled, viewRef])
 
+  // 换会话 / 新发送：重置贴底（覆盖用户之前的上滚意图）
+  useEffect(() => {
+    if (resetKey === undefined) return
+    stickyRef.current = true
+    stateRef.current = { position: 0, velocity: 0 }
+    const view = viewRef.current
+    if (view === null) return
+    cancel()
+    view.scrollTop = view.scrollHeight
+    lastWrittenRef.current = view.scrollTop
+  }, [resetKey, viewRef])
+
+  // 运行中内容高度变化（不只 tail 签名）→ 贴底；用 ResizeObserver 合并，避免每帧强制 layout。
+  // 完成（running=false）后不再强制滚，保留用户位置。
+  useEffect(() => {
+    if (!enabled || !running) return undefined
+    const view = viewRef.current
+    if (view === null || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => {
+      if (!stickyRef.current) return
+      cancel()
+      const card = viewRef.current
+      if (card === null) return
+      card.scrollTop = card.scrollHeight
+      lastWrittenRef.current = card.scrollTop
+    })
+    observer.observe(view)
+    if (view.firstElementChild !== null) observer.observe(view.firstElementChild)
+    // 文本节点在同一个 Markdown 元素内增长时 ResizeObserver 不一定触发；MutationObserver 兜住
+    const mutations = new MutationObserver(() => {
+      if (!stickyRef.current) return
+      cancel()
+      const card = viewRef.current
+      if (card === null) return
+      card.scrollTop = card.scrollHeight
+      lastWrittenRef.current = card.scrollTop
+    })
+    mutations.observe(view, { childList: true, subtree: true, characterData: true })
+    return () => {
+      observer.disconnect()
+      mutations.disconnect()
+    }
+  }, [enabled, running, viewRef])
+
   useEffect(() => cancel, [])
 
   const onScroll = (): void => {
     const view = viewRef.current
     if (view === null) return
-    const nearBottom = isNearBottom(view.scrollTop, view.scrollHeight, view.clientHeight)
-    // 动画自己写的 scrollTop：不算用户滚动（差值 ≤1.5px 让位）
+    // 动画自己写的 scrollTop：不算用户滚动（差值 ≤1.5px 让位）。
+    // 关键：**不能**拿弹簧中间帧的距离反推 sticky——大内容目标 >1 屏时，
+    // 中间帧离底会 >40px；旧实现会把自己写的中间帧当成"用户上滚"而取消跟随，
+    // 真机表现为大内容流式跟随停在半路（task-104 复现：outerDistance 86px）。
     const userScrolled = Math.abs(view.scrollTop - lastWrittenRef.current) > 1.5
-    if (userScrolled && frameRef.current !== null) {
-      cancel()
-    }
+    if (!userScrolled) return
+    const nearBottom = isNearBottom(view.scrollTop, view.scrollHeight, view.clientHeight)
     stickyRef.current = nearBottom
     if (!nearBottom) cancel()
   }

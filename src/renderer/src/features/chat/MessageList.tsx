@@ -189,9 +189,16 @@ export function MessageList({
 
   const viewRef = useRef<HTMLDivElement>(null)
   const tail = tailSignature(messages)
+  /** 换会话 / 本轮新发送 → 外层消息流重置贴底 */
+  const followResetKey = `${messages.find((message) => message.role === 'user')?.id ?? ''}:${String(messages.filter((message) => message.role === 'user').length)}`
   const motion = useEffectiveMotion()
   /** 动效 B：聊天区滚动跟随（弹簧/限速/贴底/大跳追赶；关/reduced 回 P1b 瞬时） */
-  const follow = useChatFollow({ viewRef, tail, enabled: motion.chatScroll })
+  const follow = useChatFollow({
+    viewRef,
+    tail,
+    enabled: motion.chatScroll,
+    resetKey: followResetKey
+  })
 
   /** round 59：分界线插在第几条消息之前（null = 不画）。
    *  压缩进行中画在"现在"（列表末尾）——正在发生的事就在时间轴的最新一点；压完按上层的锚点
