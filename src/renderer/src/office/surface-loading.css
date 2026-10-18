@@ -41,6 +41,25 @@
   opacity: 1;
 }
 
+/* E8：解析失败的可视错误条（调试条里的 surface-error 在非 debug 下不可见） */
+.office-surface-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--danger);
+}
+
+.office-surface-error button {
+  flex: none;
+  padding: 2px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  background: var(--surface-3);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
 [data-motion='reduced'] .office-editor-settle {
   transition-duration: var(--motion-reduced) !important;
 }

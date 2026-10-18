@@ -113,6 +113,8 @@ export function SurfaceBoot(): React.JSX.Element {
   const [pptxFontsRetry, setPptxFontsRetry] = useState(0)
   const [editorState, setEditorState] = useState<EditorState>('idle')
   const [editorReadyMs, setEditorReadyMs] = useState<number | null>(null)
+  /** E8：解析失败后「重试」用——换 key 重新挂编辑器（同一份字节重新尝试） */
+  const [editorRetry, setEditorRetry] = useState(0)
   const [revision, setRevision] = useState(0)
   const [error, setError] = useState('')
   const [saveStats, setSaveStats] = useState<{ count: number; bytes: number }>({
@@ -397,6 +399,8 @@ export function SurfaceBoot(): React.JSX.Element {
         setEditorState('loading')
         setEditorReadyMs(null)
         setError('')
+        // E8：换文档时重置编辑器重试计数（错误条上的「重试」用）
+        setEditorRetry(0)
         revisionRef.current = 0
         setRevision(0)
         // A4.5：换文档 = 保存态归零（不继承上一篇的 saving/dirty/错误）
@@ -760,7 +764,7 @@ export function SurfaceBoot(): React.JSX.Element {
           >
             {doc.kind === 'xlsx' ? (
             <XlsxEditorPane
-              key={doc.documentId}
+              key={`${doc.documentId}:${editorRetry}`}
               ref={editorPaneRef}
               documentId={doc.documentId}
               name={doc.name}
@@ -776,7 +780,7 @@ export function SurfaceBoot(): React.JSX.Element {
           ) : doc.kind === 'pptx' ? (
             // M4-P：PptxEditorPane 由 office-engineer 提供；字体 ready 后才走到这里
             <PptxEditorPane
-              key={doc.documentId}
+              key={`${doc.documentId}:${editorRetry}`}
               ref={editorPaneRef}
               documentId={doc.documentId}
               name={doc.name}
@@ -792,7 +796,7 @@ export function SurfaceBoot(): React.JSX.Element {
             />
           ) : (
             <DocxEditorPane
-              key={doc.documentId}
+              key={`${doc.documentId}:${editorRetry}`}
               ref={editorPaneRef}
               documentId={doc.documentId}
               name={doc.name}
@@ -817,6 +821,28 @@ export function SurfaceBoot(): React.JSX.Element {
             testId={doc === null ? 'surface-editor-empty' : 'surface-fonts-loading'}
             leaving={loadingStage === 4}
           />
+        ) : null}
+        {/* E8：解析/编辑器失败的可视错误条（调试条里的 surface-error 在非 debug 下不可见）——
+            骨架已撤，错误条 + 重试必须在画布上可见 */}
+        {doc !== null && editorState === 'error' && error !== '' ? (
+          <div
+            className="office-surface-loading office-surface-error"
+            data-testid="surface-editor-error"
+            role="alert"
+          >
+            <span>{error}</span>
+            <button
+              type="button"
+              data-testid="surface-editor-error-retry"
+              onClick={() => {
+                setError('')
+                setEditorState('loading')
+                setEditorRetry((current) => current + 1)
+              }}
+            >
+              重试
+            </button>
+          </div>
         ) : null}
       </div>
     </main>

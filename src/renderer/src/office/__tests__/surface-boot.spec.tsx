@@ -897,7 +897,16 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
       expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
     )
     expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'error')
-    // 报错消息已经转给壳（错误条由壳渲染）
+    // 报错消息已经转给壳
     expect(sentMessages(postMessage).some((message) => message.type === 'doc:error')).toBe(true)
+    // 画布上的可视错误条 + 重试（调试条里的 surface-error 在非 debug 下不可见）
+    const errorBar = screen.getByTestId('surface-editor-error')
+    expect(errorBar).toBeInTheDocument()
+    expect(errorBar).toHaveTextContent('bad zip')
+    expect(screen.getByTestId('surface-editor-error-retry')).toBeInTheDocument()
+    // 点重试 → 清错误、编辑器重新挂载（同一份字节再试一次）
+    act(() => screen.getByTestId('surface-editor-error-retry').click())
+    expect(screen.queryByTestId('surface-editor-error')).not.toBeInTheDocument()
+    expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'loading')
   })
 })
