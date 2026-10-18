@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   applyPrewarmDataset,
   buildFontPrewarmUrl,
   isOfficeUsed,
   markOfficeUsed,
-  OFFICE_USED_STORAGE_KEY
+  OFFICE_USED_STORAGE_KEY,
+  scheduleOfficeFontPrewarm
 } from '../office-font-prewarm'
 import { isSurfaceFontsReady } from '../../../office/font-prewarm-protocol'
 
@@ -162,19 +163,51 @@ describe('P0-2 / P0-5：升格面定位不再 rAF 空转 + 字体预热门控', 
     expect(officeSurfaceTsx).toContain("document.addEventListener('visibilitychange'")
   })
 
-  it('PB-017：取消 12s 门控——启动首帧后就预热，office-used 只留观测语义', () => {
+  it('PB-017：取消 12s 门控——启动就排队预热，office-used 只留观测语义', () => {
     // 12s 门控与延后调度已删除（源码契约，防回潮）
     expect(prewarmTs).not.toContain('NEVER_USED_PREWARM_DELAY_MS')
     expect(prewarmTs).not.toContain('prewarmDelayMs')
     expect(prewarmTs).not.toContain('officeFontPrewarmDeferred')
     expect(prewarmTs).not.toContain('deferredTimer')
-    // 仍然「首帧后」起：rAF 等 paint 记录 → setTimeout(0)
-    expect(prewarmTs).toContain('waitPaint')
-    expect(prewarmTs).toContain('performance.getEntriesByType')
-    // office-used 标记保留（观测/兜底），但 schedule 不再读它做门控
+    // CR-09：watcher 只记「用过」，不再同步 start（/office 深链也必须走统一调度）
+    expect(prewarmTs).not.toContain('if (!started) startOfficeFontPrewarm()')
+    // CR-10：rAF 之外有固定 500ms 定时器兜底（隐藏窗口 rAF 不跑也能起）
+    expect(prewarmTs).toContain('setTimeout(run, 500)')
+    // CR-11：失败有界重试 1 次（2s 退避）
+    expect(prewarmTs).toContain('retried')
+    expect(prewarmTs).toContain('2_000')
+    // office-used 标记保留（观测/深链标记），但 schedule 不再读它做门控
     expect(prewarmTs).toContain(OFFICE_USED_STORAGE_KEY)
     expect(prewarmTs).toContain('installOfficeUsedWatcher')
     expect(prewarmTs).toContain('hashchange')
+  })
+
+  it('CR-09/10：启动即深链 /office 不绕过调度；rAF 不跑时 500ms 定时器兜底起预热', async () => {
+    window.location.hash = '#/office'
+    const originalRaf = window.requestAnimationFrame
+    // 模拟隐藏/后台窗口：rAF 永不回调
+    window.requestAnimationFrame = (() => 0) as typeof window.requestAnimationFrame
+    try {
+      scheduleOfficeFontPrewarm()
+      // CR-09：watcher 在 install 时同步跑，但只记标记——此刻不得出现预热面
+      expect(document.querySelector('[data-testid="office-font-prewarm-host"]')).toBeNull()
+      expect(window.localStorage.getItem(OFFICE_USED_STORAGE_KEY)).toBe('1')
+      // CR-10：500ms 定时器兜底（不依赖 rAF/paint）
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[data-testid="office-font-prewarm-host"]')
+          ).not.toBeNull()
+        },
+        { timeout: 2_000 }
+      )
+    } finally {
+      window.requestAnimationFrame = originalRaf
+      document
+        .querySelectorAll('[data-testid="office-font-prewarm-host"]')
+        .forEach((node) => node.remove())
+      window.location.hash = ''
+    }
   })
 
   it('P0-5：markOfficeUsed / isOfficeUsed 持久化（localStorage）', () => {

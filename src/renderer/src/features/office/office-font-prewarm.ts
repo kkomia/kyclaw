@@ -52,7 +52,11 @@ function writeLocalFlag(key: string): void {
   }
 }
 
-/** 是否用过 Office（打开过 Office 文档/进入过 Office 模块）。 */
+/**
+ * 是否用过 Office（打开过 Office 文档/进入过 Office 模块）。
+ * CR-12：**观测/诊断接口**——产品逻辑已不再消费它做预热门控（PB-017），保留给探针/测试与
+ * 后续「是否展示 Office 引导」之类的界面判断。
+ */
 export function isOfficeUsed(): boolean {
   if (typeof window === 'undefined') return false
   return readLocalFlag(OFFICE_USED_STORAGE_KEY)
@@ -66,9 +70,10 @@ export function markOfficeUsed(): void {
 }
 
 /**
- * 进 Office 模块就补一次预热（HashRouter：`#/office`）。
- * PB-017 起预热本来就在启动后开始，这里只是兜底：若启动调度还没跑（例如极早期路由跳转），
- * 进面时立刻起。监听在 window 上、无 IPC/权限变更，模块卸载（页面关闭）自然结束。
+ * 进 Office 模块就补一次「用过」标记（HashRouter：`#/office`）。
+ * CR-09：这里**只记标记、不启动预热**——预热统一由 `scheduleOfficeFontPrewarm` 在启动时排队，
+ * 避免「启动即深链 /office」绕过首帧调度直接同步起（与调度注释矛盾）。
+ * 监听在 window 上、无 IPC/权限变更，模块卸载（页面关闭）自然结束。
  */
 function installOfficeUsedWatcher(): void {
   if (typeof window === 'undefined' || officeUsedWatcherInstalled) return
@@ -76,10 +81,9 @@ function installOfficeUsedWatcher(): void {
   const onRouteChange = (): void => {
     if (!window.location.hash.includes('/office')) return
     markOfficeUsed()
-    if (!started) startOfficeFontPrewarm()
   }
   window.addEventListener('hashchange', onRouteChange)
-  // 启动时可能已经在 Office 路由（刷新/深链）
+  // 启动时可能已经在 Office 路由（刷新/深链）——只记标记，不起预热
   onRouteChange()
 }
 
@@ -87,6 +91,8 @@ type PrewarmState = 'idle' | 'loading' | 'ready' | 'error' | 'skipped'
 
 let started = false
 let state: PrewarmState = 'idle'
+/** CR-11：预热超时/失败后只允许一次有界重试（2s 退避），避免慢盘一次性失败就永久放弃 */
+let retried = false
 /** task-101：可升格复用（首个文档面直接拿走）的预热 iframe 与其 host */
 let prewarmHost: HTMLDivElement | null = null
 let prewarmFrame: HTMLIFrameElement | null = null
@@ -249,6 +255,13 @@ export function startOfficeFontPrewarm(): void {
     if (state !== 'loading') return
     finish('error')
     dispose()
+    // CR-11：慢盘/一次坏启动不应永久放弃——最多重试 1 次，2s 退避；之后维持 error 不再重试。
+    if (!retried) {
+      retried = true
+      started = false
+      state = 'idle'
+      window.setTimeout(() => startOfficeFontPrewarm(), 2_000)
+    }
   }, PREWARM_TIMEOUT_MS)
 }
 
@@ -332,38 +345,33 @@ export function releasePrewarmedSurface(): void {
   }, 60_000)
 }
 /** 启动期调度（task-100；PB-017 起不再按「是否用过 Office」延后）。
- *  - **首帧画完后**立刻起（rAF 轮询等 paint 记录 → `setTimeout(0)`）：27MB 字体读取/注册不与首次绘制抢；
+ *  - **首帧让位**：优先在头两帧之后起（约 1–2 个 rAF），让 splash/首屏先出；
  *    用户拍板「启动就预热，宁可首屏慢一点」——不再有 12s 门控。
- *  - 前台窗口 1-2 帧内就有 paint；后台/jsdom 没有 paint 记录时 rAF 轮询有限次后退化为 setTimeout(0)
- *    （上限约 10s），不会永远不起来。
+ *  - **CR-10**：rAF 在隐藏/后台窗口可能完全不跑（原「10s rAF 兜底」实际永不触发）——
+ *    这里同时挂一个固定 500ms 定时器兜底：无论 paint 记录/rAF 是否可用，预热都会在 500ms 内起。
  *  - 建的是 hidden iframe，加载/注册都在后台跑；与设置读盘 / React 首屏并行。 */
 export function scheduleOfficeFontPrewarm(): void {
   if (typeof window === 'undefined') return
-  // 兜底：若启动调度还没跑，进 Office 路由/打开文档时也能立刻起（预热本身已不限「用过」）
+  // CR-09：watcher 只记「用过」标记，不在这里起预热
   installOfficeUsedWatcher()
-  const run = (): void => startOfficeFontPrewarm()
+  let fired = false
+  const run = (): void => {
+    if (fired) return
+    fired = true
+    startOfficeFontPrewarm()
+  }
   const raf =
     typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
       : null
-  if (raf === null) {
-    window.setTimeout(run, 0)
-    return
+  if (raf !== null) {
+    // 两帧之后起：第一帧画 splash，第二帧画首屏骨架；拿不到 rAF 也由下面的定时器兜底。
+    raf(() => raf(run))
   }
-  const startedAt = performance.now()
-  const waitPaint = (): void => {
-    const painted =
-      performance.getEntriesByType('paint').length > 0 || performance.now() - startedAt > 10_000
-    if (painted) {
-      window.setTimeout(run, 0)
-      return
-    }
-    raf(waitPaint)
-  }
-  raf(waitPaint)
+  window.setTimeout(run, 500)
 }
 
-/** 只读状态（报告/调试用） */
+/** 只读状态（报告/调试/探针用；CR-12：产品逻辑不消费，保留为诊断接口） */
 export function officeFontPrewarmState(): PrewarmState {
   return state
 }
