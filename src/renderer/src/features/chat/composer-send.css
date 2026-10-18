@@ -1,0 +1,73 @@
+/* task-117：发送按钮 hover 动效（括号外扩 1px + 回车下压 1px，120–180ms；reduced 仅换色） */
+.composer-send .send-bracket {
+  transition: transform 140ms var(--motion-ease-settle);
+}
+.composer-send .send-enter {
+  transition: transform 140ms var(--motion-ease-settle);
+}
+.composer-send:hover,
+.composer-send:focus-visible {
+  color: var(--accent);
+}
+.composer-send:hover .send-bracket--l {
+  transform: translateX(-1px);
+}
+.composer-send:hover .send-bracket--r {
+  transform: translateX(1px);
+}
+.composer-send:hover .send-enter {
+  transform: translateY(1px);
+}
+.composer-send:active {
+  transform: scale(0.96);
+}
+.composer-send {
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    transform 120ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-send,
+  .composer-send .send-bracket,
+  .composer-send .send-enter {
+    transition: none !important;
+  }
+  .composer-send:hover .send-bracket--l,
+  .composer-send:hover .send-bracket--r,
+  .composer-send:hover .send-enter,
+  .composer-send:active {
+    transform: none !important;
+  }
+}
+:root[data-motion='reduced'] .composer-send,
+:root[data-motion='reduced'] .composer-send .send-bracket,
+:root[data-motion='reduced'] .composer-send .send-enter {
+  transition: none !important;
+}
+:root[data-motion='reduced'] .composer-send:hover .send-bracket--l,
+:root[data-motion='reduced'] .composer-send:hover .send-bracket--r,
+:root[data-motion='reduced'] .composer-send:hover .send-enter,
+:root[data-motion='reduced'] .composer-send:active {
+  transform: none !important;
+}
+
+/* task-130：field 焦点（hairline + 1px halo + 深投影；accent 不用于 focus）；tray 同 hairline */
+.composer-focus-surface:focus-within {
+  border-color: color-mix(in srgb, var(--text-primary) 34%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-primary) 28%, transparent),
+    var(--shadow-composer);
+}
+
+/* DSH seat fade：composer 上方 40px 渐隐带（无过渡；reduced 同样静态） */
+.composer-anchor::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 40px;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--bg-primary), transparent);
+}

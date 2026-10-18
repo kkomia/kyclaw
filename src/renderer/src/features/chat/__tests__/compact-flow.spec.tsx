@@ -46,15 +46,30 @@ vi.mock('@renderer/lib/threads-api', () => ({
 
 vi.mock('@renderer/lib/usage-api', () => ({
   fetchUsage: vi.fn(),
-  fetchThreadContext: vi.fn(async () => ({
+  fetchThreadContext: vi.fn(async () => emptyUsageContext())
+}))
+
+/** task-107：回包契约加了 totals / composition（这里用空会话） */
+function emptyUsageContext(): import('@shared/usage').UsageThreadContext {
+  return {
     threadId: 'thread-1',
     lastInput: null,
     lastCachedInput: null,
     baselineInput: null,
     todayInput: 0,
-    todayCachedInput: 0
-  }))
-}))
+    todayCachedInput: 0,
+    totals: {
+      rounds: 0,
+      modelCalls: 0,
+      input: 0,
+      cachedInput: 0,
+      uncachedInput: 0,
+      output: 0,
+      hitRate: null
+    },
+    composition: null
+  }
+}
 
 const THREAD_ID = 'thread-1'
 /** 阈值 = deepseek-v4-flash 128K × 100% */
@@ -95,21 +110,24 @@ function storedHistory(): UIMessage[] {
   return [messageOf('h0', 'user', '压之前聊过一句', AT - 60_000)]
 }
 
-function contextOf(lastInput: number | null): {
-  threadId: string
-  lastInput: number | null
-  lastCachedInput: number | null
-  baselineInput: number | null
-  todayInput: number
-  todayCachedInput: number
-} {
+function contextOf(lastInput: number | null): import('@shared/usage').UsageThreadContext {
   return {
     threadId: THREAD_ID,
     lastInput,
     lastCachedInput: null,
     baselineInput: 1,
     todayInput: 0,
-    todayCachedInput: 0
+    todayCachedInput: 0,
+    totals: {
+      rounds: 1,
+      modelCalls: 1,
+      input: lastInput ?? 0,
+      cachedInput: 0,
+      uncachedInput: lastInput ?? 0,
+      output: 0,
+      hitRate: lastInput === null || lastInput === 0 ? null : 0
+    },
+    composition: null
   }
 }
 

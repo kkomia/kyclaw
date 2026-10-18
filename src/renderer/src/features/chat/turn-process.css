@@ -193,3 +193,27 @@
 [data-testid='turn-answer'] .markdown-body > blockquote {
   max-width: none;
 }
+
+/* task-114：汇总行数字变化滚位（时长由组件内联 style 提供；reduced 由 motion-reduce:animate-none 直接落位） */
+@keyframes process-summary-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes identity-spark {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: rotate(8deg) scale(1.12);
+    opacity: 1;
+  }
+}

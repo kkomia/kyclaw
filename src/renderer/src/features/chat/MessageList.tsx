@@ -224,7 +224,7 @@ export function MessageList({
         className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onScroll={follow.onScroll}
       >
-        <div className="flex w-full flex-col gap-6 py-6 pr-14 pl-4">
+        <div className="chat-content mx-auto flex w-full max-w-[calc(var(--chat-content-width)+32px)] flex-col gap-6 px-4 py-6">
           {messages.map((message, index) => (
             <Fragment key={message.id}>
               {index === markerIndex ? (
@@ -264,7 +264,7 @@ export function MessageList({
             <div
               data-testid="waiting-lane"
               data-font-role="reading"
-              className="flex max-w-[calc(var(--prose-measure)+18px)] border-l border-(--hairline-soft) pl-[18px]"
+              className="flex max-w-[calc(var(--chat-content-width)+18px)] border-l border-(--hairline-soft) pl-[18px]"
             >
               <WaitingLine status={status} messages={messages} />
             </div>

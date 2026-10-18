@@ -1,0 +1,40 @@
+/**
+ * 对话内容宽度（task-?，2026-10-18）——照抄 DSH 宿主的公式：
+ *
+ *   --dsh-chat-content-width:
+ *     var(--dsh-chat-user-width, clamp(680px, calc(var(--dsh-conversation-column-width, 0px) * .64), 920px));
+ *   --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 32px);
+ *   .userStack { max-width: min(calc(var(--dsh-chat-content-width) * .702), 82%) }
+ *
+ * 落到 kyclaw：
+ *   - 「对话列宽」= 内容区卡（ContentRegion，含会话侧栏、不含左侧一级导航）的宽度；
+ *     ContentRegion 上已有 `container-type: inline-size`，这里用 64cqi 直接量它。
+ *   - --chat-content-width = clamp(680px, 64cqi, 920px)：消息列正文宽（不含列内 72px 内边距）。
+ *   - --chat-input-max-width = clamp(712px, 内容宽 + 32px, 952px)：composer 卡（DSH 同口径；
+ *     min/max 即公式在 680/920 两端的落点）。
+ *   - 消息列：`MessageList` 内容包裹层 max-width = 内容宽 + 32（左右各 16px 内边距，抵消后正文宽 = 内容宽），
+ *     居中；composer 卡同样 max-width = 内容宽 + 32 居中，所以两者**共享中心线**、composer 比正文列左右各宽 16px
+ *     （DSH 同口径：--dsh-composer-card-max-width = 内容宽 + 32）。
+ *   - 用户气泡：min(内容宽 × .702, 82%)；AI 正文不再套 44em（下面覆盖 markdown 叙事块），
+ *     右缘仍与用户气泡对齐；表格/代码块等既有宽元素不动。
+ *
+ * 只作用在 chat 页；notes/knowledge/office 仍走全局 .content-column（800）与 44em。
+ */
+[data-testid='chat-page'] {
+  --chat-content-width: clamp(680px, 64cqi, 920px);
+  --chat-input-max-width: clamp(712px, calc(var(--chat-content-width) + 32px), 952px);
+}
+
+/* 正文铺满内容列：只放宽 markdown 的「叙事块」限宽；pre/table/图片不在原限制内，保持原状。 */
+[data-testid='chat-page'] .markdown-body > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote) {
+  max-width: var(--chat-content-width);
+}
+
+/* 右侧走廊（round 14 原意保留）：消息导览轨贴 chat 区右缘 8px、自身约 43px 宽。
+   宽窗内容列居中，离轨很远；窄窗（窗口 < 1080）内容列已贴右缘，给回 56px 右内边距，
+   正文不会钻到轨道下面。宽窗保持左右各 16px 的对称居中（composer 与内容列共享中心线）。 */
+@media (max-width: 1080px) {
+  .chat-content {
+    padding-right: 56px;
+  }
+}

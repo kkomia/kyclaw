@@ -153,8 +153,8 @@
   --spinner-stroke: 1.5px; /* §5.3 唯一的 1.5px（.overflow-spinner） */
 
   /* ── 输入卡内部两段（§4.5 / round 64：最小高 48 → 56；初始页 hero 72） ── */
-  --composer-input-min-height: 56px;
-  --composer-input-min-height-hero: 72px;
+  --composer-input-min-height: 36px;
+  --composer-input-min-height-hero: 86px;
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 
@@ -199,6 +199,8 @@
   --content-max-width: 800px;
   /* ── 页面外层几何（task-85：四个内容页统一规则） ──
      - 内容列 = content-column（min(100%, 800)，居中）；
+     - 对话页另走 chat 专用的 DSH 宽度公式（见 features/chat/chat-width.css）：
+       内容宽 = clamp(680px, 64cqi, 920px)（cqi = 内容区卡宽），输入卡 = 内容宽 + 32（夹 712/952）。
      - 页面 gutter = 16（标题/正文左右同一条线；原先 chat/notes 16、knowledge 24、settings 20）；
      - 页面侧栏宽 = --sidebar-width(240)：会话侧栏 / 笔记列表 / 知识库列表同宽（原先 240 / 300 / 300）；
      - 接缝线 = 面与面之间的 1px 分界（比组件边框 --border-hairline 再弱一档：
@@ -207,8 +209,11 @@
   --seam-line: color-mix(in srgb, var(--border-hairline) 60%, transparent);
   /* 覆盖层时代的"可见左缘"安全线已退休，值恒 0（ChatPage 还有两处引用，清掉后可删） */
   --content-safe-left: 0px;
-  /* 对话输入卡（T7）：UI 参考 §4.6 实测输入框宽 768.3 */
-  --chat-input-max-width: 768px;
+  /* 对话内容宽：chat 页由 features/chat/chat-width.css 用 64cqi 覆盖；这里是全局兜底（DSH 下限 680） */
+  --chat-content-width: 680px;
+  /* 对话输入卡（T7）：DSH 公式 = 内容宽 + 32px，夹在 712–952（见 features/chat/chat-width.css；
+     chat 页内由 --chat-content-width 驱动；这里给不在 chat 页时的兜底：680+32=712） */
+  --chat-input-max-width: clamp(712px, calc(var(--chat-content-width, 680px) + 32px), 952px);
 
   /* ── 按钮（章程 §3.5/§3.7/D-07）：主按钮 = 陶土橙实心 + #faf9f5 字（全产品唯一实心按钮）；
      次按钮/ghost 走透明底 + hairline；危险按钮用 danger 档 ── */

@@ -217,7 +217,7 @@ describe('分块与总名', () => {
       />
     )
 
-    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('执行 1 次思考 · 调用 2 次工具')
+    expect(screen.getByTestId('trace-toggle')).toHaveTextContent('执行 1 次思考，调用 2 次工具')
   })
 
   it('过程 entries 合并成一个过程块；正文独立在 turn-answer（task-77）', () => {
@@ -242,14 +242,16 @@ describe('分块与总名', () => {
     expect(screen.getByTestId('turn-answer')).toHaveTextContent('读完了。')
     // 不做信封头（Agent Team 专用），这一轮只有过程区 + 正文 + 底部最新步骤
     expect(screen.queryByText('收到任务消息')).not.toBeInTheDocument()
-    // task-52：头部摘要仍是「执行 N 次思考 · 调用 M 次工具」
+    // task-52：头部摘要仍是「执行 N 次思考，调用 M 次工具」
     expect(screen.getByTestId('turn-process-summary')).toHaveTextContent('调用 2 次工具')
   })
 
   it('只有思考、没有工具：不出现过程块，思考块直接出', () => {
     render(<Message message={assistantMessage([{ type: 'reasoning', text: '只想不做' }])} />)
 
-    expect(screen.queryByTestId('trace-block')).not.toBeInTheDocument()
+    // task-114：纯思考轮也走 TurnProcess 汇总标题；思考内容作为展开体
+    expect(screen.getByTestId('trace-block')).toBeInTheDocument()
+    expect(screen.getByTestId('turn-process-summary')).toHaveTextContent('执行 1 次思考')
     expect(screen.getByTestId('reasoning-part')).toBeInTheDocument()
   })
 

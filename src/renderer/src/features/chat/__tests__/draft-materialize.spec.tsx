@@ -55,7 +55,17 @@ vi.mock('@renderer/lib/usage-api', () => ({
     lastCachedInput: null,
     baselineInput: null,
     todayInput: 0,
-    todayCachedInput: 0
+    todayCachedInput: 0,
+    totals: {
+      rounds: 0,
+      modelCalls: 0,
+      input: 0,
+      cachedInput: 0,
+      uncachedInput: 0,
+      output: 0,
+      hitRate: null
+    },
+    composition: null
   }))
 }))
 

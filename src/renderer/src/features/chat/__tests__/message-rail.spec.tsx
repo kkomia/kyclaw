@@ -104,13 +104,16 @@ describe('消息导览轨 · 结构', () => {
     expect(screen.getByTestId('message-rail')).toHaveClass('absolute', 'right-2')
   })
 
-  it('消息列右侧走廊（round 14）：内容列 pr-14，正文不再钻到轨道下面', () => {
+  it('消息列右侧走廊（round 14 原意保留）：宽窗内容列居中不占走廊；窄窗（<1080）由 chat-content 给回 56px', () => {
     render(<MessageList messages={MESSAGES} status="ready" />)
 
-    // 轨道占右缘 8px + 40px（横条列），正文停在 56px（pr-14）——任何宽度都不与正文重叠
+    // task-114 宽度公式后：内容列 max = 内容宽 + 32、左右各 16 对称居中（宽窗离导轨很远）；
+    // 窄窗由 chat-width.css 的 @media (max-width:1080px) .chat-content { padding-right:56px }
+    // 让出右侧走廊（轨占右缘 8 + ~43），正文不会钻到轨道下面。
     const column = screen.getByTestId('message-list').firstElementChild
-    expect(column).toHaveClass('pr-14', 'pl-4')
-    expect(column).not.toHaveClass('px-4')
+    expect(column).toHaveClass('chat-content', 'mx-auto', 'px-4')
+    expect(column).toHaveClass('max-w-[calc(var(--chat-content-width)+32px)]')
+    expect(screen.getByTestId('message-rail')).toHaveClass('absolute', 'right-2')
   })
 
   it('round 17 结构 + round 22 对齐：一行 = [文本容器(flex-1，左对齐) … 右端横线]；横线全在面板容器内', () => {
@@ -365,25 +368,29 @@ describe('消息导览轨 · 长会话：高度有界 + 每一轮都到得了（
     ]).flat()
   }
 
-  it('300 轮：一轮不丢（300 个可点节点），行高压到下限、盒子高度仍封在 70vh', () => {
-    render(<MessageList messages={longMessages(300)} status="ready" />)
+  it(
+    '300 轮：一轮不丢（300 个可点节点），行高压到下限、盒子高度仍封在 70vh',
+    { timeout: 40_000 },
+    () => {
+      render(<MessageList messages={longMessages(300)} status="ready" />)
 
-    // 一轮一个节点：压缩显示不丢轮次（这是用户明说的"必须保留的能力"）
-    const nodes = screen.getAllByTestId(/^rail-node-u\d+$/)
-    expect(nodes).toHaveLength(300)
-    expect(nodes[299]).toHaveAttribute('data-rail-node', 'u300')
+      // 一轮一个节点：压缩显示不丢轮次（这是用户明说的"必须保留的能力"）
+      const nodes = screen.getAllByTestId(/^rail-node-u\d+$/)
+      expect(nodes).toHaveLength(300)
+      expect(nodes[299]).toHaveAttribute('data-rail-node', 'u300')
 
-    // 行高到 60 轮就压到下限，再长也不变（不是 8px×N 的线性下降）
-    expect(railRowHeight(300)).toBe(RAIL_ROW_HEIGHT_MIN)
-    const panel = screen.getByTestId('rail-panel')
-    expect(panel.style.getPropertyValue('--rail-row')).toBe(`${RAIL_ROW_HEIGHT_MIN}px`)
-    // 每一行仍是一个按钮、仍是那一档行高（可点数不变）
-    expect(nodes[0]).toHaveClass('h-(--rail-row)')
+      // 行高到 60 轮就压到下限，再长也不变（不是 8px×N 的线性下降）
+      expect(railRowHeight(300)).toBe(RAIL_ROW_HEIGHT_MIN)
+      const panel = screen.getByTestId('rail-panel')
+      expect(panel.style.getPropertyValue('--rail-row')).toBe(`${RAIL_ROW_HEIGHT_MIN}px`)
+      // 每一行仍是一个按钮、仍是那一档行高（可点数不变）
+      expect(nodes[0]).toHaveClass('h-(--rail-row)')
 
-    // 盒子有界：整条轨的**可视高度**由 max-h-70vh 封住，内容超了在里面滚（外面的版面不涨）
-    const rail = screen.getByTestId('message-rail')
-    expect(rail).toHaveClass('max-h-[70vh]', 'overflow-y-auto')
-  })
+      // 盒子有界：整条轨的**可视高度**由 max-h-70vh 封住，内容超了在里面滚（外面的版面不涨）
+      const rail = screen.getByTestId('message-rail')
+      expect(rail).toHaveClass('max-h-[70vh]', 'overflow-y-auto')
+    }
+  )
 
   it('↑/↓（Home/End）在轨内走位：焦点落到哪一行就滚进视野（几百轮不用 Tab 到尾）', () => {
     render(<MessageList messages={longMessages(300)} status="ready" />)

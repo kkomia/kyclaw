@@ -18,13 +18,16 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { Dialog } from '@renderer/components/ui/dialog'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
-import { Skeleton } from '@renderer/components/ui/skeleton'
-import { Tooltip } from '@renderer/components/ui/tooltip'
+import { Popover } from '@renderer/components/ui/popover'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { COMPACT_CHIP_PCT } from '@renderer/lib/compact'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { PendingImageTile } from './PendingImageTile'
 import { ThinkingEffort } from './ThinkingEffort'
+import './composer-context-bar.css'
+import { ContextMeterGlyph } from './parts/ContextMeterGlyph'
+import { ContextUsagePanel } from './parts/ContextUsagePanel'
+import { computeContextUsage, type ContextUsageData } from './parts/context-usage-model'
 import {
   contextTokensFor,
   contextWindowOf,
@@ -77,6 +80,13 @@ const ICON_TRIGGER_CLASS =
 
 /** 视觉模型在模型菜单里的小标记（模块 2：自绘、不解释后端——它只是"这个模型能看图"的事实标记） */
 const VISION_MARK = '看图'
+
+/**
+ * 上下文浮窗的磨砂玻璃（task-107）：只留宽度/内边距；玻璃材质走 `contentStyle` + 语义 token
+ * （`--ctx-surface` / `--ctx-border` / `--ctx-blur`，见 parts/context-usage.css；浅深自动切换，
+ * 不硬编码深色、不写死色值）。
+ */
+const CONTEXT_POPOVER_CLASS = 'ctx-panel w-[340px] p-0'
 
 export interface PlusMenuProps {
   onAddFile: () => void
@@ -416,141 +426,11 @@ export interface ModelChipProps {
   onNotice: (notice: ComposerNotice | null) => void
 }
 
-/** 上下文环（round 18，图3）：16px 小环；超过阈值时整环转警示色（round 42 起是独立组件 ContextChip 的图标） */
-function ContextRing({
-  percent,
-  warning
-}: {
-  percent: number
-  warning: boolean
-}): React.JSX.Element {
-  const radius = 6.5
-  const circumference = 2 * Math.PI * radius
-  const filled = (Math.min(100, Math.max(0, percent)) / 100) * circumference
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      data-warning={warning ? 'true' : undefined}
-      className="size-4 shrink-0 -rotate-90"
-    >
-      <circle
-        cx="8"
-        cy="8"
-        r={radius}
-        fill="none"
-        strokeWidth="2"
-        className="stroke-(--fill-active)"
-      />
-      <circle
-        cx="8"
-        cy="8"
-        r={radius}
-        fill="none"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={`${filled} ${circumference}`}
-        className={warning ? 'stroke-warning' : 'stroke-ink-secondary'}
-      />
-    </svg>
-  )
-}
-
 /**
- * 上下文明细的取数口径（一处算、两处用：环 hover 的明细卡与环点开后的明细卡同源）：
- * 百分比与进度条跟上下文环同源（四舍五入、封顶 100），分解 = 已用 − 基线，
- * 缓存命中率 = 缓存输入 / 输入。**禁止**两处各算一套或各写一份文案。
+ * 上下文指示器（task-107，替代原来的 16px 环）：**饼图 + 百分比文本**，hover/焦点/点击开
+ * Claude style 磨砂玻璃浮窗。真正的绘制与读数在 `./parts/`（ContextMeterGlyph / ContextUsagePanel /
+ * context-usage-model）；这里只负责取数、hover 意图与触发按钮，模型区一律不碰。
  */
-interface ContextStats {
-  /** 已用百分比（环 / 卡 / 弹层同一口径） */
-  usedPct: number
-  /** 最近一轮输入 token（null = 没有这条会话的数据） */
-  usedInput: number | null
-  /** 当前对话长度档位换算出的阈值 token（≈ 总量） */
-  windowTokens: number
-  /** 已用 ≥ 阈值（整环 / 进度条 / 阈值行一起转警示） */
-  overThreshold: boolean
-  /** 系统提示词 + 工具定义的基线（null = 没有数据） */
-  baseline: number | null
-  /** 对话消息部分（= 已用 − 基线） */
-  messageTokens: number | null
-  /** 最近一轮缓存命中率 %（null = 没有数据） */
-  lastHitRate: number | null
-  /** 今日缓存命中率 %（null = 没有数据） */
-  todayHitRate: number | null
-  /** 压缩阈值（= 当前对话长度档位 %） */
-  thresholdPct: number
-}
-
-/**
- * 上下文明细卡的正文（round 41）：环 hover 的卡与环点开后的卡共用同一份布局与文案（口径只此一份）。
- * 数据没到时给骨架占位——不闪一个假的 0% 出来（有过渡不硬切）。
- */
-function ContextCardBody({
-  stats,
-  loading
-}: {
-  stats: ContextStats
-  loading: boolean
-}): React.JSX.Element {
-  if (loading) {
-    return (
-      <div data-testid="context-loading" className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <Skeleton className="h-4 w-28" />
-          <Skeleton className="h-4 w-20" />
-        </div>
-        <Skeleton className="h-1 w-full rounded-pill" />
-        <Skeleton className="h-3 w-full" />
-        <Skeleton className="h-3 w-2/3" />
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-b2">上下文已用 {stats.usedPct}%</span>
-        <span className="text-c1 opacity-70 tabular-nums">
-          ~{formatTokens(stats.usedInput ?? 0)} / {formatTokens(stats.windowTokens)}
-        </span>
-      </div>
-      <div className="h-1 w-full overflow-hidden rounded-pill bg-(--fill-active)">
-        <div
-          className={cn(
-            'h-full transition-[width] duration-(--motion-main) ease-main motion-reduce:transition-none',
-            stats.overThreshold ? 'bg-warning' : 'bg-(--accent-text)'
-          )}
-          style={{ width: `${stats.usedPct}%` }}
-        />
-      </div>
-      <div className="flex flex-col gap-0.5 text-c1 opacity-80">
-        <span className="flex justify-between gap-3">
-          <span>系统提示词 / 工具定义</span>
-          <span className="tabular-nums">
-            {stats.baseline === null ? '—' : `~${formatTokens(stats.baseline)}`}
-          </span>
-        </span>
-        <span className="flex justify-between gap-3">
-          <span>对话消息</span>
-          <span className="tabular-nums">
-            {stats.messageTokens === null ? '—' : `~${formatTokens(stats.messageTokens)}`}
-          </span>
-        </span>
-      </div>
-      <div className="flex justify-between gap-3 text-c1 opacity-80">
-        <span>缓存命中率</span>
-        <span className="tabular-nums">
-          最近一轮 {stats.lastHitRate === null ? '—' : `${stats.lastHitRate}%`} · 今日{' '}
-          {stats.todayHitRate === null ? '—' : `${stats.todayHitRate}%`}
-        </span>
-      </div>
-      <div className="text-c1 opacity-60">
-        阈值 {stats.thresholdPct}%{stats.overThreshold ? '（已超过）' : ''}
-      </div>
-    </div>
-  )
-}
 
 /** 对话长度滑块（二级浮层里的自定义条目）：拖动时只改草稿，松手（或键盘抬手）才落盘 */
 function ContextSlider({
@@ -576,34 +456,84 @@ function ContextSlider({
     setDraft(pct)
   }
   const window = contextWindowOf(model, probed, override)
+  const STARS = 48
+  const litCount = Math.round(((draft - 10) / 90) * STARS)
   return (
-    <div data-testid="model-context-slider" className="flex w-56 flex-col gap-2">
+    <div data-testid="model-context-slider" className="flex w-full flex-col gap-1.5 px-2 pb-2">
       <div className="flex items-baseline justify-between text-c1">
-        <span data-testid="model-context-pct" className="text-ink">
-          {draft}%
-        </span>
-        <span className="text-ink-tertiary tabular-nums">
-          ≈ {formatTokens(contextTokensFor(model, draft, probed, override))} /{' '}
-          {formatTokens(window)}
+        <span className="text-ink-secondary">对话长度</span>
+        <span className="flex items-baseline gap-2">
+          <span data-testid="model-context-pct" className="font-mono text-ink tabular-nums">
+            {draft}%
+          </span>
+          <span className="font-mono text-ink-tertiary tabular-nums">
+            ≈ {formatTokens(contextTokensFor(model, draft, probed, override))} /{' '}
+            {formatTokens(window)}
+          </span>
         </span>
       </div>
-      <input
-        type="range"
-        min={10}
-        max={100}
-        step={5}
-        value={draft}
-        aria-label="对话长度"
-        data-testid="model-context-range"
-        onChange={(event) => setDraft(Number(event.target.value))}
-        onPointerUp={() => onCommit(draft)}
-        onKeyUp={(event) => {
-          if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') {
-            onCommit(draft)
-          }
-        }}
-        className="h-1 w-full cursor-pointer accent-(--accent)"
-      />
+      {/* 记忆长条：值越大左侧亮起星屑越多；前沿细亮线；减小方向时星点散开淡出 */}
+      <div className="relative h-5 w-full select-none" data-testid="model-context-bar">
+        <div className="absolute inset-x-0 top-1/2 h-4 -translate-y-1/2 overflow-hidden rounded-pill border-(length:--hairline-width) border-hairline bg-secondary">
+          <div
+            data-testid="model-context-fill"
+            className="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_16%,transparent)] transition-[width] duration-(--motion-fast) ease-main motion-reduce:transition-none"
+            style={{ width: `${draft}%` }}
+          />
+          {Array.from({ length: STARS }, (_, index) => {
+            const lit = index < litCount
+            const left = 2 + (index * 96) / STARS + (index % 3) * 0.6
+            const top = 20 + ((index * 37) % 61)
+            const size = 2 + (index % 3)
+            return (
+              <span
+                key={index}
+                data-testid="model-context-star"
+                data-lit={lit ? 'true' : 'false'}
+                aria-hidden="true"
+                className={cn(
+                  'context-star absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-(--accent) transition-[opacity,transform] duration-(--motion-main) ease-main motion-reduce:transition-none motion-reduce:animate-none',
+                  lit ? 'opacity-90' : 'scale-75 opacity-15'
+                )}
+                style={{
+                  left: `${left}%`,
+                  top: `${top}%`,
+                  width: size,
+                  height: size,
+                  boxShadow: lit
+                    ? `0 0 ${size + 2}px color-mix(in srgb, var(--accent) 65%, transparent)`
+                    : 'none'
+                }}
+              />
+            )
+          })}
+          <span
+            data-testid="model-context-front"
+            aria-hidden="true"
+            className="context-front absolute inset-y-0 w-[2px] rounded-pill bg-(--accent) shadow-[0_0_9px_2px_color-mix(in_srgb,var(--accent)_70%,transparent)] transition-[left,box-shadow] duration-(--motion-fast) ease-main motion-reduce:transition-none"
+            style={{ left: `calc(${draft}% - 1px)` }}
+          />
+        </div>
+        <input
+          type="range"
+          min={10}
+          max={100}
+          step={5}
+          value={draft}
+          aria-label="对话长度"
+          aria-valuetext={`${draft}%，约 ${formatTokens(contextTokensFor(model, draft, probed, override))} / ${formatTokens(window)} tokens`}
+          data-testid="model-context-range"
+          onChange={(event) => setDraft(Number(event.target.value))}
+          onPointerUp={() => onCommit(draft)}
+          onBlur={() => onCommit(draft)}
+          onKeyUp={(event) => {
+            if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') {
+              onCommit(draft)
+            }
+          }}
+          className="absolute inset-0 h-4 w-full cursor-pointer appearance-none opacity-0"
+        />
+      </div>
     </div>
   )
 }
@@ -620,7 +550,7 @@ function useContextStats(
   threadId: string | null,
   usageVersion = 0
 ): {
-  stats: ContextStats
+  stats: ContextUsageData
   pending: boolean
   refresh: () => void
 } {
@@ -666,36 +596,11 @@ function useContextStats(
 
   // 只认"这条会话自己"的数据（换会话后旧数据立即失效，不闪现到新会话上）
   const threadContext = context !== null && context.threadId === threadId ? context : null
-  const usedInput = threadContext?.lastInput ?? null
-  const usedPct =
-    usedInput === null ? 0 : Math.min(100, Math.round((usedInput / windowTokens) * 100))
-  const overThreshold = usedInput !== null && usedInput >= windowTokens
-  const baseline = threadContext?.baselineInput ?? null
-  const messageTokens = usedInput === null ? null : Math.max(0, usedInput - (baseline ?? 0))
-  const lastHitRate =
-    threadContext?.lastCachedInput === null ||
-    threadContext?.lastCachedInput === undefined ||
-    usedInput === null ||
-    usedInput === 0
-      ? null
-      : Math.round((threadContext.lastCachedInput / usedInput) * 100)
-  const todayHitRate =
-    threadContext === null || threadContext.todayInput === 0
-      ? null
-      : Math.round((threadContext.todayCachedInput / threadContext.todayInput) * 100)
+  // 口径只有一处：computeContextUsage（饼图、百分比、浮层、分段条、统计共用同一份，task-107）
+  const stats = computeContextUsage(threadContext, windowTokens, pct)
 
   return {
-    stats: {
-      usedPct,
-      usedInput,
-      windowTokens,
-      overThreshold,
-      baseline,
-      messageTokens,
-      lastHitRate,
-      todayHitRate,
-      thresholdPct: pct
-    },
+    stats,
     /** 数据还没到（刚打开 / 刚换会话 / 上一次还没回）：给骨架，不闪假 0% */
     pending:
       threadId !== null && threadId !== '' && threadContext === null && failedThreadId !== threadId,
@@ -720,16 +625,17 @@ export interface ContextChipProps {
 }
 
 /**
- * 上下文环（round 42 二轮，用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。
+ * 上下文指示器（task-107，用户口径："上下文进度的团改饼图，配百分比；hover 浮窗抄 Claude style，
+ * 背景板是磨砂玻璃；数值延迟显示"）。
  *
- * 环自己是**独立的目标**：点击 → 弹出明细卡（复用 menu.tsx 的顶层 custom：只读区块，不装 menuitem）；
- * hover → 同一张卡（Tooltip）。它和模型名只是**相邻**：不共用按钮、不互相嵌套在对方弹层里，
- * 也不在一个按钮里（模型名那侧是 ModelChip，见下）。
+ *   - 触发 = **16px 饼图 + N% 文本**（mono tabular c2），仍是独立组件：与模型名只是相邻，
+ *     不共用按钮、不互相嵌套；
+ *   - hover 有 ~110ms 意图延迟才开；指针可移进浮窗（移出不立刻关）；focus / ↑↓ / 点击也开；
+ *     Esc / 移出关闭（Radix Popover 管 Esc 与焦点归还）；
+ *   - 浮窗内容在 `./parts/ContextUsagePanel`（磨砂玻璃 + 数字 150ms 错峰淡入），
+ *     读数口径只有 `./parts/context-usage-model` 一处（环/浮窗/分段条共用）。
  *
- * round 57：「压缩上下文」胶囊是环**左边**的兄弟节点（同层、不嵌套；环仍然只干"看用量"这一件事）——
- * 用量够高时出现，点一下就走压缩，不用在输入框里打 `/`（对齐 Kimi Code 桌面版的那枚 chip）。
- * 出现走既有入场过渡（animate-fade-in），消失随条件渲染收起；没有用量数据（取数失败 / 还没记录）
- * 时按 0% 处理 → 不出现。
+ * round 57：「压缩上下文」胶囊是饼图**左边**的兄弟节点（同层、不嵌套），用量够高时出现。
  */
 export function ContextChip({
   threadId = null,
@@ -741,6 +647,67 @@ export function ContextChip({
   const { stats, pending, refresh } = useContextStats(threadId, usageVersion)
   // 没数据 / 还在取数时不出按钮（不闪一个假的"该压缩了"出来）
   const showCompact = onCompact !== undefined && !pending && stats.usedPct >= COMPACT_CHIP_PCT
+
+  // hover 意图：进入 110ms 才开，移出 140ms 才关（指针可从容移进浮窗）
+  const [open, setOpen] = useState(false)
+  const hoverTimer = useRef<number | null>(null)
+  const clearHoverTimer = useCallback((): void => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }, [])
+  useEffect(() => clearHoverTimer, [clearHoverTimer])
+  const openSoon = useCallback(
+    (delay: number): void => {
+      clearHoverTimer()
+      hoverTimer.current = window.setTimeout(() => {
+        hoverTimer.current = null
+        setOpen(true)
+        refresh()
+      }, delay)
+    },
+    [clearHoverTimer, refresh]
+  )
+  const closeSoon = useCallback(
+    (delay: number): void => {
+      clearHoverTimer()
+      hoverTimer.current = window.setTimeout(() => {
+        hoverTimer.current = null
+        setOpen(false)
+      }, delay)
+    },
+    [clearHoverTimer]
+  )
+
+  const trigger = (
+    <button
+      type="button"
+      data-testid="composer-context"
+      aria-label={`上下文已用 ${stats.usedPct}%`}
+      className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-1.5 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+      onPointerEnter={() => openSoon(110)}
+      onPointerLeave={() => closeSoon(140)}
+      onFocus={() => {
+        setOpen(true)
+        refresh()
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          setOpen(true)
+          refresh()
+        }
+      }}
+    >
+      <span data-testid="context-ring" className="inline-flex shrink-0">
+        <ContextMeterGlyph percent={stats.usedPct} warning={stats.overThreshold} />
+      </span>
+      <span data-testid="context-percent" className="font-mono text-c1 leading-none tabular-nums">
+        {stats.usedPct}%
+      </span>
+    </button>
+  )
 
   return (
     <>
@@ -756,49 +723,33 @@ export function ContextChip({
           {compactBusy ? '压缩中…' : '压缩上下文'}
         </button>
       ) : null}
-      <Menu
-        trigger={
-          // 32px 圆形 hover 底（与 ＋ / 权限 chip 同一档）；图标本身就是上下文环
-          <button
-            type="button"
-            data-testid="composer-context"
-            aria-label="上下文"
-            className={ICON_TRIGGER_CLASS}
-          >
-            <Tooltip
-              side="top"
-              align="start"
-              className="w-72 p-3"
-              label={
-                <div data-testid="context-card" className="text-left">
-                  <ContextCardBody stats={stats} loading={pending} />
-                </div>
-              }
-            >
-              <span data-testid="context-ring" className="inline-flex shrink-0" tabIndex={-1}>
-                <ContextRing percent={stats.usedPct} warning={stats.overThreshold} />
-              </span>
-            </Tooltip>
-          </button>
-        }
-        items={[
-          {
-            id: 'context-usage',
-            type: 'custom',
-            content: (
-              <div data-testid="context-menu-card" className="w-72">
-                <ContextCardBody stats={stats} loading={pending} />
-              </div>
-            )
-          }
-        ]}
-        side="top"
-        align="start"
-        onOpenChange={(open) => {
-          // 点开就重取一次（上一次可能是很久以前；取不到也照常画 0%，不挡弹层）
-          if (open) refresh()
+      <Popover
+        trigger={trigger}
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next)
+          if (next) refresh()
         }}
-      />
+        side="top"
+        align="end"
+        sideOffset={8}
+        className={CONTEXT_POPOVER_CLASS}
+        contentStyle={{
+          background: 'var(--ctx-surface)',
+          backdropFilter: 'var(--ctx-blur)',
+          WebkitBackdropFilter: 'var(--ctx-blur)',
+          border: '1px solid var(--ctx-border)',
+          boxShadow: 'var(--shadow-overlay)'
+        }}
+      >
+        <div
+          data-testid="context-panel-wrap"
+          onPointerEnter={clearHoverTimer}
+          onPointerLeave={() => closeSoon(140)}
+        >
+          <ContextUsagePanel stats={stats} loading={pending} />
+        </div>
+      </Popover>
     </>
   )
 }
@@ -945,28 +896,19 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
   const items: MenuEntry[] = [
     ...modelItemsByProvider,
     { id: 'split', type: 'separator' },
+    // task-110：对话长度改一级入口（不再二级子菜单）；直接是一条可拖的记忆长条
     {
-      id: 'context',
-      type: 'submenu',
-      label: '对话长度',
-      icon: <TextQuote />,
-      testId: 'model-context',
-      trailing: `${pct}%`,
-      items: [
-        {
-          id: 'slider',
-          type: 'custom',
-          content: (
-            <ContextSlider
-              model={current?.model ?? ''}
-              probed={probed}
-              override={currentOverride}
-              pct={pct}
-              onCommit={(nextPct) => savePrefs({ contextPct: nextPct })}
-            />
-          )
-        }
-      ]
+      id: 'context-slider',
+      type: 'custom',
+      content: (
+        <ContextSlider
+          model={current?.model ?? ''}
+          probed={probed}
+          override={currentOverride}
+          pct={pct}
+          onCommit={(nextPct) => savePrefs({ contextPct: nextPct })}
+        />
+      )
     }
     // round 42 二轮：这里**不再**拼上下文明细区块——那是隔壁 ContextChip 的弹层内容
     // （用户口径："上下文环 和 模型选择是两个组件，不要放在一起"）。menu.tsx 的顶层 custom 保留。
@@ -985,7 +927,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
     // 组内 gap-1（4px，落在要求的 4–6px），组与左侧 ＋/权限、右侧发送保持原父级间距层次。
     <span
       data-testid="composer-model-effort-group"
-      className="inline-flex min-w-0 shrink-0 items-center gap-1.5"
+      className="inline-flex min-w-0 shrink-0 items-center gap-2"
     >
       <Menu
         trigger={
@@ -997,7 +939,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
             type="button"
             data-testid="composer-model"
             disabled={pending}
-            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 font-mono text-c1 leading-none text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
           >
             <span className="truncate">{triggerLabel}</span>
           </button>

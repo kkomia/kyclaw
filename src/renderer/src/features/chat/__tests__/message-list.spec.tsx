@@ -254,7 +254,7 @@ describe('消息声部（P1a）', () => {
     expect(text).not.toHaveClass('font-serif')
   })
 
-  it('用户消息：右侧便条（UI 声部、气泡底、12/4 圆角、65% 上限），不带阅读页边线', () => {
+  it('用户消息：右侧便条（UI 声部、气泡底、12/4 圆角、DSH 70.2%/82% 上限），不带阅读页边线', () => {
     render(
       <MessageList
         messages={[{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '重复一遍' }] }]}
@@ -270,7 +270,7 @@ describe('消息声部（P1a）', () => {
       'text-b2',
       'rounded-[12px]',
       'rounded-br-[4px]',
-      'max-w-[65%]'
+      'max-w-[min(calc(var(--chat-content-width)*0.702),82%)]'
     )
     expect(screen.queryByTestId('message-reading-lane')).not.toBeInTheDocument()
   })

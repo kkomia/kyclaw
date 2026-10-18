@@ -74,14 +74,19 @@ describe('task-85 · 页面外层几何统一（token + 用例）', () => {
     expect(knowledgePage).not.toContain('px-6')
   })
 
-  it('主对话正文阅读宽保持：content-column + 输入卡 768 + 44em 不变', () => {
+  it('主对话宽度改走 DSH 公式：内容列 chat-column + 输入卡 = 内容宽 + 32；其它页仍 800/44em', () => {
     const chat = read('src/renderer/src/features/chat/ChatPage.tsx')
-    expect(chat).toContain('content-column')
+    expect(chat).toContain('chat-column')
+    expect(chat).toContain("'./chat-width.css'")
     const composer = read('src/renderer/src/features/chat/Composer.tsx')
     expect(composer).toContain('max-w-(--chat-input-max-width)')
     const semantic = read('src/renderer/src/styles/tokens/semantic.css')
-    expect(semantic).toContain('--chat-input-max-width: 768px;')
+    expect(semantic).toContain(
+      '--chat-input-max-width: clamp(712px, calc(var(--chat-content-width, 680px) + 32px), 952px);'
+    )
+    // 非 chat 页的阅读宽/内容列口径不动
     expect(semantic).toContain('--prose-measure: 44em;')
+    expect(semantic).toContain('--content-max-width: 800px;')
   })
 })
 

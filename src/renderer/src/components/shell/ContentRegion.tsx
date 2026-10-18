@@ -24,7 +24,7 @@ export function ContentRegion({ children }: ContentRegionProps): React.JSX.Eleme
   return (
     <div
       data-testid="content-region"
-      className="relative mr-(--shell-edge-gap) mb-(--shell-edge-gap) flex min-w-0 flex-1 overflow-hidden rounded-overlay bg-surface"
+      className="relative mr-(--shell-edge-gap) mb-(--shell-edge-gap) flex min-w-0 flex-1 overflow-hidden rounded-overlay bg-surface [container-type:inline-size]"
     >
       {children}
     </div>

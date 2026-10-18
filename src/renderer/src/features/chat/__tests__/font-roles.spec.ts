@@ -45,12 +45,12 @@ describe('AI 回复 = 阅读声部', () => {
     expect(reasoningPartTsx).not.toMatch(/data-testid="reasoning-toggle"[^>]*font-prose/)
   })
 
-  it('用户消息 = 右侧便条：UI 声部 14、气泡底、12/4 圆角、65% 上限', () => {
+  it('用户消息 = 右侧便条：UI 声部 14、气泡底、12/4 圆角、DSH 70.2%/82% 上限', () => {
     expect(messageTsx).toContain('bg-(--bg-bubble)')
     expect(messageTsx).toMatch(/font-sans text-b2/)
     expect(messageTsx).toContain('rounded-[12px]')
     expect(messageTsx).toContain('rounded-br-[4px]')
-    expect(messageTsx).toContain('max-w-[65%]')
+    expect(messageTsx).toContain('max-w-[min(calc(var(--chat-content-width)*0.702),82%)]')
     expect(messageTsx).toContain('data-font-role="ui"')
   })
 })
@@ -79,18 +79,18 @@ describe('工具/读数 = 书生气正文 + 技术声部（task-51）', () => {
 
 describe('Composer = UI 声部 + 规章 §9.2#6', () => {
   it('输入卡 16 圆角 + composer 阴影；输入/镜像层显式 font-sans b1', () => {
-    expect(composerTsx).toContain('rounded-input')
+    expect(composerTsx).toContain('rounded-[18px]')
     expect(composerTsx).toContain('shadow-(--shadow-composer)')
     expect(composerTsx).not.toContain('shadow-(--shadow-input)')
-    expect(composerTsx).toMatch(/font-sans[^"']*text-b1|text-b1[^"']*font-sans/)
+    expect(composerTsx).toMatch(/font-sans[^"']*text-b2|text-b2[^"']*font-sans/)
   })
 
   it('placeholder 用可读三级档；发送键 32 实心陶土橙，禁用 quaternary/opacity', () => {
     expect(composerTsx).toContain('placeholder:text-(--text-tertiary-readable)')
-    expect(composerTsx).toContain('size-8')
-    expect(composerTsx).toContain('bg-(--button-primary-bg)')
-    expect(composerTsx).toContain('text-(--text-quaternary)')
-    expect(composerTsx).toContain('opacity-60')
+    expect(composerTsx).toContain('h-7')
+    expect(composerTsx).toContain('hover:bg-hover')
+    expect(composerTsx).toContain('text-(--text-tertiary-readable)')
+    expect(composerTsx).toContain('border-surface-border')
     // 旧尺寸/旧阴影不许再回来
     expect(composerTsx).not.toContain('shadow-(--shadow-input)')
   })

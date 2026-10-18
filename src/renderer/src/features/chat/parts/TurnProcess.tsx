@@ -9,6 +9,7 @@ import { ReasoningPart } from './ReasoningPart'
 import { ToolCard } from './ToolCard'
 import { isToolPart, toToolCardPart, toolStateRunning } from './tool-part'
 import { TraceFold } from './TraceFold'
+import { processSummaryOf } from './process-summary'
 import {
   TURN_PROCESS_MAX_ROWS,
   TURN_PROCESS_STICKY_DISTANCE,
@@ -166,19 +167,37 @@ export function TurnProcess({
 
   /** 还有等审批的调用：默认展开（让用户看得见卡在哪一步；点一下照样能收） */
   const pending = entries.some((entry) => approvalRequestOf(entry.part) !== null)
+  // DSH 语义：过程组运行中自动展开、这一段结束即收起（读者手动 override 优先）
   const open = override ?? (running || pending)
+  // 纯思考轮完成收起，但内容保留在 DOM（DSH 收起语义 + 既有选文/测试契约）
+  const mountProcessContent = toolCount === 0
 
-  const summaryParts: string[] = []
-  if (reasoningCount > 0) summaryParts.push(`执行 ${String(reasoningCount)} 次思考`)
-  if (toolCount > 0) summaryParts.push(`调用 ${String(toolCount)} 次工具`)
-  const summary = summaryParts.join(' · ')
+  const summary = processSummaryOf({ thinking: reasoningCount, tool: toolCount })
+  /** 宽度实测：full 放不下一行就用 compact（隐藏 fit span 同字体量；ResizeObserver 重算） */
+  const [compact, setCompact] = useState(false)
+  const summaryMeasureRef = useRef<HTMLSpanElement | null>(null)
+  useLayoutEffect(() => {
+    const measure = summaryMeasureRef.current
+    const row = measure?.parentElement
+    if (measure === null || !row) return
+    const fit = (): void => {
+      const available = Math.max(0, row.clientWidth - 96) // 右侧 status/chevron/间距预留
+      setCompact(measure.getBoundingClientRect().width > available)
+    }
+    fit()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(fit)
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [summary.full])
 
   const shownMs = running ? elapsedMs : (frozenMs ?? 0)
+  // task-115：正常完成不再写「已完成」（只保留用时）；历史无用时则整块 meta 不渲染
   const statusText = running
     ? '进行中'
-    : frozenMs === null
-      ? '已完成'
-      : `已完成 · 用时 ${formatTurnDuration(shownMs)}`
+    : frozenMs === null || frozenMs <= 0
+      ? null
+      : `用时 ${formatTurnDuration(shownMs)}`
 
   const overflow = Math.max(0, entries.length - TURN_PROCESS_MAX_ROWS)
   const visibleEntries = overflow === 0 ? entries : entries.slice(overflow)
@@ -229,21 +248,54 @@ export function TurnProcess({
             data-testid="trace-toggle"
             data-running={running ? 'true' : undefined}
             aria-expanded={open}
+            aria-label={summary.full}
             onClick={() => setOverride(!open)}
             className="group/row flex min-h-7 w-full cursor-pointer items-center gap-2 text-left text-b2 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:text-ink motion-reduce:transition-none"
           >
             <span
-              data-testid="turn-process-summary"
-              className={cn('shrink-0', running && livePaint)}
+              data-testid="ai-identity-spark"
+              aria-hidden="true"
+              className={cn(
+                'inline-flex size-3.5 shrink-0 items-center justify-center text-(--accent)',
+                running &&
+                  'animate-[identity-spark_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
+              )}
             >
-              {summary}
+              <svg viewBox="0 0 14 14" className="size-3.5" fill="none" aria-hidden="true">
+                <path
+                  d="M7 1.2 8.2 5.7 12.8 7 8.2 8.3 7 12.8 5.8 8.3 1.2 7l4.6-1.3Z"
+                  fill="currentColor"
+                />
+              </svg>
             </span>
             <span
-              data-testid="turn-process-status"
-              className="shrink-0 text-ink-tertiary tabular-nums"
+              ref={summaryMeasureRef}
+              aria-hidden="true"
+              className="pointer-events-none invisible absolute max-w-none whitespace-nowrap text-b2"
             >
-              {statusText}
+              {summary.full}
             </span>
+            <span
+              data-testid="turn-process-summary"
+              className={cn('shrink-0 whitespace-nowrap', running && livePaint)}
+            >
+              <span
+                key={summary.full}
+                data-rolling="true"
+                className="inline-block motion-safe:animate-[process-summary-in_var(--motion-ease-settle)] motion-reduce:animate-none"
+                style={{ animationDuration: '160ms' }}
+              >
+                {compact ? summary.compact : summary.full}
+              </span>
+            </span>
+            {statusText === null ? null : (
+              <span
+                data-testid="turn-process-status"
+                className="shrink-0 text-ink-tertiary tabular-nums"
+              >
+                {statusText}
+              </span>
+            )}
             <ChevronRight
               aria-hidden="true"
               className={cn(
@@ -254,7 +306,7 @@ export function TurnProcess({
           </button>
         </div>
 
-        <TraceFold open={open}>
+        <TraceFold open={open} mountContent={mountProcessContent}>
           <div className="relative pt-3">
             <div
               ref={bodyRef}

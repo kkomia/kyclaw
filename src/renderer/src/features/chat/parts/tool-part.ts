@@ -47,6 +47,50 @@ export const TONE_CLASS: Record<ToolTone, string> = {
   error: 'text-danger'
 }
 
+/** 从工具输出/错误文本解析命令退出码（bash/git 尾部 `[退出码 N]`；`[退出码 未知]` 也认）。 */
+export function toolExitCodeOf(text: unknown): number | 'unknown' | null {
+  if (typeof text !== 'string') return null
+  const match = /\[退出码\s*([^\]]+)\]/.exec(text)
+  if (match === null) return null
+  const raw = (match[1] ?? '').trim()
+  if (raw === '' || raw === '未知') return 'unknown'
+  const code = Number(raw)
+  return Number.isFinite(code) ? code : 'unknown'
+}
+
+export interface ToolStatusLabel {
+  label: string
+  tone: ToolTone
+  show: boolean
+}
+
+/**
+ * task-115：成功完成不显示状态签；进行中/等待态照旧；失败（output-error/denied，或
+ * output-available 但退出码非 0/未知）才显示危险色签，优先用「退出码 N」。
+ */
+export function toolStatusLabelOf(part: {
+  state: string
+  output?: unknown
+  errorText?: string
+}): ToolStatusLabel {
+  const state = part.state
+  if (state === 'output-denied') return { label: '已拒绝', tone: 'error', show: true }
+  if (state === 'output-error') {
+    const code = toolExitCodeOf(part.errorText) ?? toolExitCodeOf(part.output)
+    return code === null
+      ? { label: '出错', tone: 'error', show: true }
+      : { label: `退出码 ${String(code)}`, tone: 'error', show: true }
+  }
+  if (state === 'output-available') {
+    const code = toolExitCodeOf(part.output)
+    if (code !== null && code !== 0) {
+      return { label: `退出码 ${String(code)}`, tone: 'error', show: true }
+    }
+    return { label: '', tone: 'pending', show: false }
+  }
+  return { label: STATE_LABELS[state] ?? state, tone: STATE_TONES[state] ?? 'pending', show: true }
+}
+
 type MessagePart = {
   type?: unknown
   toolName?: unknown

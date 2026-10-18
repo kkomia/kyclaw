@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Square, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
+import './composer-send.css'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { fetchPluginsOverview } from '@renderer/lib/plugins-api'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
@@ -854,7 +855,7 @@ export function Composer({
       <div
         data-testid="composer"
         className={cn(
-          'focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-input border-(length:--hairline-width) border-surface-border bg-(--field-bg) font-sans shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+          'composer-focus-surface focus-ring-container relative mx-auto w-full max-w-(--chat-input-max-width) rounded-[18px] border border-surface-border bg-(--field-bg) font-sans text-[15px] shadow-(--shadow-composer) transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
           // 拖拽悬停：描边换品牌色（只提示"松手就收"，不解释）
           dragging && 'border-(--accent)'
         )}
@@ -961,6 +962,16 @@ export function Composer({
               )}
             </div>
           </div>
+          {/* DSH placeholder：absolute 顶部、24 行高、14px、caption、nowrap ellipsis；有内容即消失 */}
+          {draft === '' ? (
+            <span
+              data-testid="composer-placeholder"
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-4 top-2 z-0 truncate font-sans text-b2 leading-6 text-(--text-tertiary-readable)"
+            >
+              输入你的问题
+            </span>
+          ) : null}
           <textarea
             ref={attachTextarea}
             data-testid="composer-input"
@@ -1047,13 +1058,12 @@ export function Composer({
               event.preventDefault()
               submit()
             }}
-            placeholder="输入你的问题"
             className={cn(
-              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent px-4 py-3 font-sans text-b1 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
+              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent py-2 pr-4 pl-4 font-sans text-b2 leading-6 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
               // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
               hero
                 ? 'min-h-(--composer-input-min-height-hero)'
-                : 'min-h-(--composer-input-min-height)'
+                : 'min-h-[calc(40px*var(--ui-scale,1))]'
             )}
           />
           {/* P1b：自绘 caret（原生 caret 由 .composer-caret-input[data-caret='custom'] 隐藏；
@@ -1101,91 +1111,145 @@ export function Composer({
           }}
         />
 
-        {/* 工具条：左起 ＋菜单 / 权限 chip；中间留给状态（排队条数）；右端模型 chip + 发送 / 停止
-          （round 8：模型 chip 按用户实拍移到右侧组，且在发送钮之前） */}
+        {/* DSH tray（task-124）：footer 在卡内底行，与输入区之间 1px hairline；权限/模型/强度/上下文/发送同排 */}
         <div
-          data-testid="composer-footer"
-          className="flex h-(--composer-toolbar-height) items-center gap-2 px-3"
+          data-testid="composer-footer-tray"
+          className="mt-0 flex w-full items-center border-t border-hairline px-3 pt-1.5 pb-1.5"
         >
-          <PlusMenu
-            onAddFile={() => fileInputRef.current?.click()}
-            onReference={addReference}
-            contextLabel={contextLabel}
-            plugins={enabledPlugins}
-            skills={installedSkills}
-            onOpenMenu={refreshSkills}
-            mode={mode}
-          />
-          {/* 权限入口**永远在**（用户实报"聊天页面里 composer 的权限模式选择按钮不见了"）：
-            判得出工作区 = 两档 chip（每次询问 / 完全访问）；判不出（没授权 / 多个并列且没指认
-            默认 / 项目的文件夹不在列表里）也保留**同一枚下拉** —— 菜单里说明为什么切不了 +
-            一条去设置的实动作。原来那一档把入口整块换成另一个链接，观感就是"下拉没了"。 */}
-          <PermissionChip
-            workspace={rootWorkspace}
-            reason={permissionReason}
-            onNotice={setNotice}
-          />
+          <div
+            data-testid="composer-footer"
+            className="flex h-(--composer-toolbar-height) w-full items-center gap-2"
+          >
+            <PlusMenu
+              onAddFile={() => fileInputRef.current?.click()}
+              onReference={addReference}
+              contextLabel={contextLabel}
+              plugins={enabledPlugins}
+              skills={installedSkills}
+              onOpenMenu={refreshSkills}
+              mode={mode}
+            />
+            <PermissionChip
+              workspace={rootWorkspace}
+              reason={permissionReason}
+              onNotice={setNotice}
+            />
 
-          <span className="min-w-0 flex-1 truncate">
-            {/* round 76：实例没就绪时这一格先说"为什么按不动"（就在发送钮左边）；就绪后照旧显示排队条数 */}
-            {blocked && pending.label !== null ? (
-              <span
-                data-testid="composer-pending"
-                role="status"
-                className="text-c1 text-ink-tertiary"
+            <span className="min-w-0 flex-1 truncate">
+              {blocked && pending.label !== null ? (
+                <span
+                  data-testid="composer-pending"
+                  role="status"
+                  className="text-c1 text-ink-tertiary"
+                >
+                  {pending.label}
+                </span>
+              ) : queuedCount > 0 ? (
+                <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
+                  已排队 {queuedCount} 条，当前回复结束后自动发出
+                </span>
+              ) : null}
+            </span>
+
+            {settings.providers.length === 0 ? null : (
+              <>
+                <ModelChip onNotice={setNotice} />
+                <ContextChip
+                  threadId={threadId}
+                  onCompact={onCompact}
+                  compactBusy={compactBusy}
+                  compactDisabled={compactDisabled}
+                  usageVersion={usageVersion}
+                />
+              </>
+            )}
+
+            {busy ? (
+              <button
+                type="button"
+                data-testid="composer-stop"
+                aria-label="停止生成"
+                onClick={onStop}
+                className="composer-send inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] font-mono text-[13px] text-ink transition-colors duration-(--motion-fast) ease-main hover:bg-hover focus-visible:outline-none motion-reduce:transition-none"
               >
-                {pending.label}
-              </span>
-            ) : queuedCount > 0 ? (
-              <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
-                已排队 {queuedCount} 条，当前回复结束后自动发出
-              </span>
-            ) : null}
-          </span>
-
-          {/* round 42 二轮：上下文环与模型选择是**两个组件**（两个目标），只是相邻着放；
-            round 57：环左边那枚「压缩上下文」胶囊由 ContextChip 自己按用量决定出不出（同层兄弟） */}
-          {settings.providers.length === 0 ? null : (
-            <>
-              <ContextChip
-                threadId={threadId}
-                onCompact={onCompact}
-                compactBusy={compactBusy}
-                compactDisabled={compactDisabled}
-                usageVersion={usageVersion}
-              />
-              <ModelChip onNotice={setNotice} />
-            </>
-          )}
-
-          {busy ? (
-            <button
-              type="button"
-              data-testid="composer-stop"
-              aria-label="停止生成"
-              onClick={onStop}
-              className="flex size-8 items-center justify-center rounded-pill bg-(--button-primary-bg) text-(--button-primary-fg) transition-colors duration-(--motion-fast) ease-main hover:bg-(--button-primary-bg-hover) motion-reduce:transition-none"
-            >
-              <Square aria-hidden="true" className="size-4 fill-current" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              data-testid="composer-send"
-              aria-label="发送"
-              disabled={!sendable}
-              onClick={submit}
-              className={cn(
-                'flex size-8 items-center justify-center rounded-pill transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
-                sendable
-                  ? 'bg-(--button-primary-bg) text-(--button-primary-fg) hover:bg-(--button-primary-bg-hover)'
-                  : // 章程 §9.2#6 / P1a：禁用态用 quaternary/opacity（不用旧的三级墨），可辨但明确不可点
-                    'bg-(--fill-disabled) text-(--text-quaternary) opacity-60'
-              )}
-            >
-              <ArrowUp aria-hidden="true" className="size-5" strokeWidth={2.4} />
-            </button>
-          )}
+                <svg viewBox="0 0 18 18" className="composer-send-mark size-5" aria-hidden="true">
+                  <g
+                    className="send-bracket send-bracket--l"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M4.8 3.6H3.4v10.8h1.4" />
+                  </g>
+                  <g
+                    className="send-bracket send-bracket--r"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M13.2 3.6h1.4v10.8h-1.4" />
+                  </g>
+                  <rect
+                    className="send-enter"
+                    x="6.4"
+                    y="6.4"
+                    width="5.2"
+                    height="5.2"
+                    rx="0.6"
+                    fill="currentColor"
+                  />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="composer-send"
+                aria-label="发送"
+                disabled={!sendable}
+                onClick={submit}
+                className={cn(
+                  'composer-send inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px] font-mono text-[13px] transition-colors duration-(--motion-fast) ease-main focus-visible:outline-none motion-reduce:transition-none',
+                  sendable
+                    ? 'border border-transparent text-ink hover:bg-hover'
+                    : 'cursor-not-allowed border border-surface-border bg-transparent text-(--text-tertiary-readable)'
+                )}
+              >
+                <svg viewBox="0 0 18 18" className="composer-send-mark size-5" aria-hidden="true">
+                  <g
+                    className="send-bracket send-bracket--l"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M4.8 3.6H3.4v10.8h1.4" />
+                  </g>
+                  <g
+                    className="send-bracket send-bracket--r"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M13.2 3.6h1.4v10.8h-1.4" />
+                  </g>
+                  <g
+                    className="send-enter"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12.2 6.2v3.4H6.2" />
+                    <path d="M8.4 7.3 6.2 9.6l2.2 2.3" />
+                  </g>
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

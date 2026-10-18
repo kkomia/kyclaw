@@ -493,7 +493,7 @@
    reduced 由组件 `paused`（useEffectiveMotion 折算）停帧。 */
 .composer-otter {
   position: absolute;
-  top: -14px;
+  bottom: calc(100% + 4px);
   right: 10px;
   z-index: 1;
   pointer-events: none;

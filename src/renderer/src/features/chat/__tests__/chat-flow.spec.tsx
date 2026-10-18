@@ -127,13 +127,13 @@ describe('线程上下文', () => {
 })
 
 describe('活动会话落在限宽内容列（P0 回归）', () => {
-  it('message-list / composer 都在 chat-page 里的限宽列（chat-column）里', async () => {
+  it('message-list / composer 都在 chat-page 里的内容列（chat-column，DSH 宽度公式）里', async () => {
     const control = createMockTransport()
     await renderSession(control, makeRuntime(control).runtime)
 
     const frame = screen.getByTestId('chat-page')
     const column = within(frame).getByTestId('chat-column')
-    expect(column).toHaveClass('content-column')
+    expect(column).toHaveClass('chat-column')
     expect(within(column).getByTestId('message-list')).toBeInTheDocument()
     expect(within(column).getByTestId('composer')).toBeInTheDocument()
   })
@@ -189,10 +189,10 @@ describe('活动会话落在限宽内容列（P0 回归）', () => {
 
     const rail = screen.getByTestId('message-rail')
     expect(rail.closest('.relative')).toBe(screen.getByTestId('chat-page'))
-    // chat 页根是整幅（不套 content-column）；限宽列是它的子层
+    // chat 页根是整幅（不套限宽列）；限宽列是它的子层（task-114：chat-column 走 DSH 宽度公式）
     const page = screen.getByTestId('chat-page')
     expect(page).not.toHaveClass('content-column')
-    expect(within(page).getByTestId('chat-column')).toHaveClass('content-column')
+    expect(within(page).getByTestId('chat-column')).toHaveClass('chat-column')
   })
 })
 

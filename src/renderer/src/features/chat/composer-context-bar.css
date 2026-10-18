@@ -1,0 +1,51 @@
+/* task-116：上下文记忆条星屑动效（CSS 变量/错峰；reduced 全静态） */
+@keyframes context-star-breathe {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translate(-50%, -50%) scale(1.25);
+  }
+}
+@keyframes context-star-burst {
+  0% {
+    opacity: 0.2;
+    transform: translate(-50%, -50%) scale(1.7);
+  }
+  100% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes context-star-fall {
+  0% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.4);
+  }
+}
+.context-star[data-lit='true'] {
+  animation-name: context-star-breathe;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-star {
+    animation: none !important;
+  }
+  .context-front {
+    animation: none !important;
+  }
+}
+:root[data-motion='reduced'] .context-star {
+  animation: none !important;
+}
+:root[data-motion='reduced'] .context-front {
+  animation: none !important;
+}

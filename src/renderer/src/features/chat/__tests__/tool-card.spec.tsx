@@ -73,7 +73,8 @@ describe('ToolCard 行与折叠体', () => {
       />
     )
 
-    expect(screen.getByTestId('tool-state')).toHaveTextContent('已完成')
+    // task-115：成功完成不再显示状态签
+    expect(screen.queryByTestId('tool-state')).not.toBeInTheDocument()
     expect(screen.getByTestId('tool-card')).toHaveAttribute('data-tone', 'pending')
     // 行详情（入参里的 path）直接印在行上
     expect(screen.getByTestId('tool-detail')).toHaveTextContent('a.txt')
@@ -181,7 +182,7 @@ describe('助手消息里的工具 part（过程块包装）', () => {
     fireEvent.click(screen.getByTestId('trace-toggle'))
     const card = screen.getByTestId('tool-card')
     expect(card).toHaveAttribute('data-tool', 'read')
-    expect(card).toHaveTextContent('已完成')
+    expect(card).not.toHaveTextContent('已完成')
   })
 
   it('approval-requested 的 part（round 29）：只读工具行 —— 默认展开、没有审批按钮（决策在输入框上方的审批条）', () => {
@@ -414,15 +415,15 @@ describe('P1b · 工具行动效', () => {
       <ToolCard
         part={{
           toolName: 'read',
-          state: 'output-available',
+          state: 'output-error',
           input: { path: 'a.txt' },
-          output: 'ok'
+          output: 'boom'
         }}
       />
     )
     const state = screen.getByTestId('tool-state')
     expect(state.querySelector('.chat-swap')).not.toBeNull()
-    expect(state).toHaveTextContent('已完成')
+    expect(state).toHaveTextContent('出错')
     first.unmount()
 
     // 运行中不套 swap（扫光在 trace-live 上，避免两层动画打架）

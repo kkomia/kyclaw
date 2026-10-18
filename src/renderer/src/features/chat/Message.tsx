@@ -45,11 +45,8 @@ import {
   verifySegmentDigests
 } from './message-context'
 import type { ContextEntry, VerificationMaterial } from './message-context'
-import { ReasoningPart } from './parts/ReasoningPart'
 import {
-  lookupReasoningChoice,
   reasoningOrdinalsOf,
-  reasoningTextOf,
   withReasoningChoice,
   type ReasoningOverrides
 } from './reasoning-overrides'
@@ -470,13 +467,6 @@ export function Message({
    */
   if (sources.length === 0 && sourcesOpen) setSourcesOpen(false)
 
-  /** 某一段思考的手动选择（没选过 = undefined → 思考块自己按自动档走） */
-  const reasoningOverrideAt = useCallback(
-    (ordinal: number, text: string): boolean | null | undefined =>
-      lookupReasoningChoice(reasoningOverrides, ordinal, text)?.open,
-    [reasoningOverrides]
-  )
-
   /** 记一段思考的手动开合（顺手清掉已经换了一段的旧记录，见 withReasoningChoice） */
   const rememberReasoningChoice = useCallback(
     (ordinal: number, text: string, open: boolean): void => {
@@ -595,7 +585,7 @@ export function Message({
             ref={bubbleRef}
             data-testid="message-bubble"
             data-font-role="ui"
-            className="max-w-[65%] rounded-[12px] rounded-br-[4px] bg-(--bg-bubble) px-4 py-2 font-sans text-b2 break-words whitespace-pre-wrap text-ink"
+            className="max-w-[min(calc(var(--chat-content-width)*0.702),82%)] rounded-[12px] rounded-br-[4px] bg-(--bg-bubble) px-4 py-2 font-sans text-b2 break-words whitespace-pre-wrap text-ink"
           >
             {/* 引用标记画成内联 chip（round 14 起；round 21 换图3 观感：细描边圆角 + 图标，
                 `【引用】` 前缀不进可见层）。底层消息文本不变——编辑重发仍是原文；
@@ -843,7 +833,6 @@ export function Message({
   const textChunks = chunks.filter(
     (chunk): chunk is Extract<RenderChunk, { kind: 'text' }> => chunk.kind === 'text'
   )
-  const turnToolCount = processEntries.filter((entry) => isToolPart(entry.part)).length
   const hasTurnProcess = processEntries.length > 0
   // task-83：最终正文开始流式（过程之后已有非空文本）→ 过程完成，自动折叠；底部最新步骤收起
   const lastProcessIndex = processEntries.reduce((max, entry) => Math.max(max, entry.index), -1)
@@ -876,34 +865,15 @@ export function Message({
           className="flex w-full flex-col gap-2 pl-[18px]"
         >
           {hasTurnProcess ? (
-            turnToolCount === 0 ? (
-              processEntries.map((entry) => {
-                const reasoning = reasoningTextOf(entry.part)
-                const ordinal = reasoningOrdinals.get(entry.index)
-                if (reasoning === null || ordinal === undefined) return null
-                return (
-                  <ReasoningPart
-                    key={`reasoning-${entry.index}`}
-                    text={reasoning}
-                    streaming={entry.streaming}
-                    live={streaming}
-                    settled={entry.settled}
-                    override={reasoningOverrideAt(ordinal, reasoning)}
-                    onToggle={(nextOpen) => rememberReasoningChoice(ordinal, reasoning, nextOpen)}
-                  />
-                )
-              })
-            ) : (
-              <TurnProcess
-                key="turn-process"
-                entries={processEntries}
-                running={processRunning}
-                hasAnswer={hasTurnAnswer}
-                overrides={reasoningOverrides}
-                reasoningOrdinals={reasoningOrdinals}
-                onReasoningToggle={rememberReasoningChoice}
-              />
-            )
+            <TurnProcess
+              key="turn-process"
+              entries={processEntries}
+              running={processRunning}
+              hasAnswer={hasTurnAnswer}
+              overrides={reasoningOverrides}
+              reasoningOrdinals={reasoningOrdinals}
+              onReasoningToggle={rememberReasoningChoice}
+            />
           ) : null}
           {/* 正文独立流式区（DSH：中间区域输出该轮正文，不塞进过程块） */}
           <div data-testid="turn-answer" className="flex flex-col gap-2">

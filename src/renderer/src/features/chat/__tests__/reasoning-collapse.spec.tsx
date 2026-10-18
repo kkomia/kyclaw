@@ -392,7 +392,8 @@ describe('自动折叠之后重新展开 → 后续工具到达不许再压回�
     )
     // 新的一段按自己的自动档走（后面有正文 → 收起）；旧选择没跟过来
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByTestId('trace-fold')).toHaveAttribute('data-open', 'false')
+    // task-114/DSH：完成即收起；旧选择不跟过来
+    expect(screen.getAllByTestId('trace-fold')[0]).toHaveAttribute('data-open', 'false')
   })
 
   it('换了消息 id（同一实例复用）：手动展开不跟到另一条消息上', () => {

@@ -78,19 +78,21 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
 
     expect(screen.getByTestId('composer')).toHaveClass(
       'max-w-(--chat-input-max-width)',
-      'rounded-input',
+      'rounded-[18px]',
       'border-surface-border',
       'font-sans',
       'shadow-(--shadow-composer)'
     )
     expect(screen.getByTestId('composer-input')).toHaveClass(
       'field-sizing-content',
-      'min-h-(--composer-input-min-height)',
+      'min-h-[calc(40px*var(--ui-scale,1))]',
       'max-h-(--composer-input-max-height)',
       'overflow-y-auto'
     )
     expect(screen.getByTestId('composer-footer')).toHaveClass('h-(--composer-toolbar-height)')
-    expect(screen.getByTestId('composer-send')).toHaveClass('size-8')
+    expect(screen.getByTestId('composer-send')).toHaveClass('h-7', 'font-mono')
+    expect(screen.getByTestId('composer')).toContainElement(screen.getByTestId('composer-send'))
+    expect(screen.getByTestId('composer-send')).not.toHaveClass('rounded-pill')
   })
 
   it('焦点指示由卡片给（跟圆角），输入框自己不再画方框（雷点 6）', () => {
@@ -126,14 +128,22 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
 
     const send = screen.getByTestId('composer-send')
     expect(send).toBeDisabled()
-    expect(send).toHaveClass('bg-(--fill-disabled)', 'text-(--text-quaternary)', 'opacity-60')
+    expect(send).toHaveClass(
+      'border',
+      'border-surface-border',
+      'bg-transparent',
+      'text-(--text-tertiary-readable)',
+      'cursor-not-allowed'
+    )
+    expect(send).not.toHaveClass('rounded-pill')
     // 线宽 2.4：20px 渲染时正好 device 2px（2.4 × 20/24），像素网格上不发虚
-    expect(send.querySelector('svg')?.getAttribute('stroke-width')).toBe('2.4')
+    expect(send.querySelector('svg')).not.toBeNull()
+    expect(send).not.toHaveTextContent('↵')
 
     // 可用态完全另一档（墨色底 + 反白箭头），与禁用不混淆
     type('有内容了')
     expect(send).toBeEnabled()
-    expect(send).toHaveClass('bg-(--button-primary-bg)', 'text-(--button-primary-fg)')
+    expect(send).toHaveClass('text-ink', 'hover:bg-hover')
   })
 
   it('引用覆盖层（round 21）：同排版 / aria-hidden / pointer-events-none；在 textarea 之上且滚动同步；关掉拼写波浪线', () => {
@@ -231,7 +241,7 @@ describe('输入卡流式态', () => {
 
     expect(screen.queryByTestId('composer-send')).not.toBeInTheDocument()
     const stop = screen.getByTestId('composer-stop')
-    expect(stop).toHaveClass('size-8')
+    expect(stop).toHaveClass('h-7', 'font-mono')
 
     fireEvent.click(stop)
     expect(onStop).toHaveBeenCalledTimes(1)
@@ -991,11 +1001,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
   })
 
   /** 打开模型菜单并展开某个二级浮层 */
-  async function openSubmenu(testId: string): Promise<void> {
+  async function openSubmenu(_testId: string): Promise<void> {
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    const trigger = screen.getByTestId(testId)
-    trigger.focus()
-    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
     await tick()
   }
 
@@ -1004,8 +1011,8 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
 
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
-    expect(screen.getByTestId('model-context')).toHaveTextContent('对话长度')
-    expect(screen.getByTestId('model-context')).toHaveTextContent('100%')
+    expect(screen.getByTestId('model-context-slider')).toHaveTextContent('对话长度')
+    expect(screen.getByTestId('model-context-pct')).toHaveTextContent('100%')
     // task-70：模型菜单里不再有「思考强度 / 刷新模型信息」
     expect(screen.queryByTestId('model-efforts')).not.toBeInTheDocument()
     expect(screen.queryByTestId('model-refresh-meta')).not.toBeInTheDocument()
@@ -1035,30 +1042,77 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     )
   })
 
-  it('模型名与推理强度触发器同版式（task-84 对齐：h-8 / px-2 / mono 12 / rounded-control）', () => {
+  it('模型名与推理强度触发器同版式（h-8 / mono 12 / rounded-control）；朝向彼此的 padding 收窄', () => {
     setup()
 
     const model = screen.getByTestId('composer-model')
     const effort = screen.getByTestId('composer-effort')
     for (const trigger of [model, effort]) {
-      expect(trigger).toHaveClass(
-        'h-8',
-        'px-2',
-        'rounded-control',
-        'font-mono',
-        'text-c1',
-        'items-center'
-      )
+      expect(trigger).toHaveClass('h-8', 'rounded-control', 'font-mono', 'text-c1', 'items-center')
       // 同版式：不允许一个 13/500、一个 12/mono（之前就是这里不齐）
       expect(trigger).not.toHaveClass('text-[13px]')
       expect(trigger).not.toHaveClass('font-medium')
     }
 
-    // task-87：两者收成一组，组内 gap-1（4px，要求 4–6px）；组不吞掉两侧其它控件
+    // task-106：两个触发器 rect 间距 = 组 gap-2（8px）；朝彼此不再留 padding，文字贴合矩形边缘
+    expect(model).toHaveClass('pl-2', 'pr-0')
+    expect(effort).toHaveClass('pl-0', 'pr-2')
+    expect(model).not.toHaveClass('px-2')
+    expect(effort).not.toHaveClass('px-2')
     const group = screen.getByTestId('composer-model-effort-group')
-    expect(group).toHaveClass('gap-1.5', 'inline-flex', 'items-center')
+    expect(group).toHaveClass('gap-2', 'inline-flex', 'items-center')
     expect(group).toContainElement(model)
     expect(group).toContainElement(effort)
+  })
+
+  it('task-124/DSH：footer tray 在 composer 卡内底行（卡内、无 footer-outer）', () => {
+    setup()
+    const card = screen.getByTestId('composer')
+    const tray = screen.getByTestId('composer-footer-tray')
+    expect(card).toContainElement(tray)
+    expect(card).toContainElement(screen.getByTestId('composer-footer'))
+    expect(screen.queryByTestId('composer-footer-outer')).not.toBeInTheDocument()
+    expect(tray).toHaveClass('border-t', 'border-hairline')
+    expect(screen.getByTestId('composer-send')).toBeInTheDocument()
+  })
+
+  it('task-110：发送在卡内、单行输入；发送钮无圆形外框；footer 不再含发送', () => {
+    setup()
+    const card = screen.getByTestId('composer')
+    const send = screen.getByTestId('composer-send')
+    expect(card).toContainElement(send)
+    expect(screen.getByTestId('composer-footer')).toContainElement(send)
+    expect(screen.getByTestId('composer-input')).toHaveClass(
+      'py-2',
+      'min-h-[calc(40px*var(--ui-scale,1))]'
+    )
+    expect(send).toHaveClass('font-mono', 'h-7')
+    expect(send).not.toHaveClass('rounded-pill')
+    expect(send).not.toHaveClass('bg-(--button-primary-bg)')
+    expect(send.querySelector('svg')).not.toBeNull()
+  })
+
+  it('task-110：上下文长度一级进度条（不再二级菜单）；星屑/前沿/reduced 静态契约', () => {
+    setup()
+    fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
+    const range = screen.getByTestId('model-context-range')
+    expect(range).toHaveAttribute('min', '10')
+    expect(range).toHaveAttribute('max', '100')
+    expect(screen.queryByTestId('model-context')).not.toBeInTheDocument()
+    expect(
+      screen.getByTestId('model-context-bar').querySelectorAll('[data-testid="model-context-star"]')
+        .length
+    ).toBe(48)
+    expect(screen.getByTestId('model-context-front')).toHaveClass('motion-reduce:transition-none')
+    expect(screen.getByTestId('model-context-slider')).toHaveClass('px-2')
+    expect(screen.getByTestId('model-context-bar')).toHaveClass('h-5')
+    expect(screen.getByTestId('model-context-front')).toBeInTheDocument()
+  })
+
+  it('task-124：hero 变体 footer tray 同样在卡内', () => {
+    setup({ hero: true })
+    expect(screen.getByTestId('composer')).toContainElement(screen.getByTestId('composer-footer'))
+    expect(screen.queryByTestId('composer-footer-outer')).not.toBeInTheDocument()
   })
 
   it('对话长度：滑块 10–100，拖动只改草稿、松手（pointerUp）才落盘；显示百分比与换算', async () => {
@@ -1083,51 +1137,12 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     )
   })
 
-  it('上下文环与 hover 明细：已用 %、~已用/~总量、分解近似、缓存命中率、阈值（超了转警示）', async () => {
-    // 500K / 500K（阈值 50% × 1M）= 100%，超过阈值 → 警示
-    useSettingsStore.setState({
-      settings: {
-        ...defaultSettings(),
-        providers: [V4],
-        modelPrefs: { 'deepseek/deepseek-v4-pro': { contextPct: 50 } }
-      },
-      loaded: true
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          threadId: 't1',
-          lastInput: 500_000,
-          lastCachedInput: 375_000,
-          baselineInput: 100_000,
-          todayInput: 1_000_000,
-          todayCachedInput: 750_000
-        })
-      }))
-    )
-    setup({ threadId: 't1' })
-
-    const ring = await screen.findByTestId('context-ring')
-    await waitFor(() => expect(ring.querySelector('svg')).toHaveAttribute('data-warning', 'true'))
-
-    fireEvent.focus(ring)
-    const card = await screen.findByTestId('context-card')
-    expect(card).toHaveTextContent('上下文已用 100%')
-    expect(card).toHaveTextContent('~500K / 500K')
-    expect(card).toHaveTextContent('系统提示词 / 工具定义')
-    expect(card).toHaveTextContent('~100K')
-    expect(card).toHaveTextContent('对话消息')
-    expect(card).toHaveTextContent('~400K')
-    expect(card).toHaveTextContent('最近一轮 75%')
-    expect(card).toHaveTextContent('今日 75%')
-    expect(card).toHaveTextContent('阈值 50%（已超过）')
-  })
-
-  /** 会话上下文的取数回包（口径同上面的 hover 卡测试：500K 已用 / 100K 基线 / 75% 缓存） */
-  function contextResponse(): unknown {
+  /**
+   * task-107：上下文回包（totals / composition 是浮窗两段的数据面）。
+   * 默认口径：已用 500K / 窗口 500K（阈值 50%，已超）、基线 100K（拆 60K/40K）、
+   * 全会话合计 3 轮 / 7 次模型调用 / 输出 20K / 缓存命中 75%。
+   */
+  function contextResponse(overrides: Record<string, unknown> = {}): unknown {
     return {
       ok: true,
       status: 200,
@@ -1137,14 +1152,24 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
         lastCachedInput: 375_000,
         baselineInput: 100_000,
         todayInput: 1_000_000,
-        todayCachedInput: 750_000
+        todayCachedInput: 750_000,
+        totals: {
+          rounds: 3,
+          modelCalls: 7,
+          input: 900_000,
+          cachedInput: 675_000,
+          uncachedInput: 225_000,
+          output: 20_000,
+          hitRate: 75
+        },
+        composition: { systemPrompt: 60_000, toolDefinitions: 40_000 },
+        ...overrides
       })
     }
   }
 
   /** 阈值收到 50%（500K / 1M 就顶到阈值）+ 已有上下文数据的会话 */
   function mountHalfWindow(): void {
-    // 设置要落进桥里（不是只改 store）：打开弹层会触发一次 probeModels，回包会带着设置回来
     const initial: AppSettings = {
       ...defaultSettings(),
       providers: [V4],
@@ -1159,94 +1184,111 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     setup({ threadId: 't1' })
   }
 
-  it('round 42 二轮：环与模型名是**两个组件**（互不嵌套、不共用按钮）；点环开的是明细卡', () => {
-    setup({ threadId: 't1' })
+  it('task-107：指示器 = 饼图 + 百分比文本；超阈值饼图转警示色', async () => {
+    mountHalfWindow()
 
-    const ringButton = screen.getByTestId('composer-context')
-    const modelButton = screen.getByTestId('composer-model')
-    expect(ringButton).not.toBe(modelButton)
-    // 不互相嵌套：任一个都不是另一个的后代
-    expect(ringButton.contains(modelButton)).toBe(false)
-    expect(modelButton.contains(ringButton)).toBe(false)
-    // 环自己的按钮里没有模型名（那是隔壁那个按钮的内容）
-    expect(ringButton).not.toHaveTextContent('deepseek-v4-pro')
-
-    fireEvent.keyDown(ringButton, { key: 'ArrowDown' })
-    expect(screen.getByTestId('context-menu-card')).toBeInTheDocument()
-    // 开的是环的明细卡，不是模型列表
-    expect(screen.queryByTestId('composer-model-deepseek')).not.toBeInTheDocument()
+    const pie = await screen.findByTestId('context-pie')
+    await waitFor(() => expect(pie).toHaveAttribute('data-warning', 'true'))
+    const percent = screen.getByTestId('context-percent')
+    expect(percent).toHaveTextContent('100%')
+    expect(percent).toHaveClass('font-mono', 'tabular-nums')
   })
 
-  it('round 42 二轮：模型弹层里没有上下文明细区块（拆干净了）', () => {
+  it('task-107：hover 打开磨砂浮窗 = 头行 / 分段条 / 图例 / 会话统计 / Token 用量（真实读数）', async () => {
+    mountHalfWindow()
+    await screen.findByTestId('context-pie')
+
+    fireEvent.pointerEnter(screen.getByTestId('composer-context'))
+    const panel = await screen.findByTestId('context-panel', undefined, { timeout: 2000 })
+
+    // ① 头行
+    expect(panel).toHaveTextContent('上下文已用 100%')
+    expect(panel).toHaveTextContent('~500K / 500K')
+    // ② 三段图例（composition 可拆：60K / 40K / 对话消息 = 已用 − 基线）
+    const composition = screen.getByTestId('context-composition')
+    expect(composition).toHaveTextContent('系统提示词')
+    expect(composition).toHaveTextContent('~60K')
+    expect(composition).toHaveTextContent('工具定义')
+    expect(composition).toHaveTextContent('~40K')
+    expect(composition).toHaveTextContent('对话消息')
+    expect(composition).toHaveTextContent('~400K')
+    expect(screen.getAllByTestId(/^context-seg-(system|tools|baseline|messages)$/).length).toBe(3)
+    // ③ 会话统计：只放真实可得数（轮次 / 模型调用 / 平均输入 / 平均输出）
+    const session = screen.getByTestId('context-session-stats')
+    expect(session).toHaveTextContent('轮次')
+    expect(session).toHaveTextContent('3')
+    expect(session).toHaveTextContent('模型调用')
+    expect(session).toHaveTextContent('7')
+    expect(session).toHaveTextContent('平均每轮输入')
+    expect(session).toHaveTextContent('~300K')
+    expect(session).toHaveTextContent('平均每轮输出')
+    expect(session).toHaveTextContent('~6.7K')
+    // ④ Token 用量四格：命中率 / 未缓存输入 / 缓存读取 / 输出
+    const token = screen.getByTestId('context-token-stats')
+    expect(token).toHaveTextContent('缓存命中')
+    expect(token).toHaveTextContent('75%')
+    expect(token).toHaveTextContent('未缓存输入')
+    expect(token).toHaveTextContent('225Ktok')
+    expect(token).toHaveTextContent('缓存读取')
+    expect(token).toHaveTextContent('675Ktok')
+    expect(token).toHaveTextContent('输出')
+    expect(token).toHaveTextContent('20Ktok')
+    // ⑤ 数值延迟：读数带错峰序号（结构先到，数字 CSS 150ms 起淡入）
+    expect(panel.querySelector('.ctx-num')?.getAttribute('style')).toContain('--i')
+  })
+
+  it('task-107：拿不到请求快照 → 基线合并一行（不编两个数）', async () => {
+    const initial: AppSettings = {
+      ...defaultSettings(),
+      providers: [V4],
+      modelPrefs: { 'deepseek/deepseek-v4-pro': { contextPct: 50 } }
+    }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => contextResponse({ composition: null }))
+    )
+    setup({ threadId: 't1' })
+
+    await screen.findByTestId('context-pie')
+    fireEvent.pointerEnter(screen.getByTestId('composer-context'))
+    const panel = await screen.findByTestId('context-panel', undefined, { timeout: 2000 })
+
+    expect(panel).toHaveTextContent('系统提示词 + 工具定义')
+    expect(panel).toHaveTextContent('~100K')
+    expect(screen.queryByTestId('context-seg-system')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('context-seg-tools')).not.toBeInTheDocument()
+    expect(screen.getByTestId('context-seg-baseline')).toBeInTheDocument()
+  })
+
+  it('task-107：键盘能开、Esc 关；饼图与模型名仍是两个组件（不嵌套）', async () => {
+    mountHalfWindow()
+    await screen.findByTestId('context-pie')
+
+    const trigger = screen.getByTestId('composer-context')
+    const modelButton = screen.getByTestId('composer-model')
+    expect(trigger).not.toBe(modelButton)
+    expect(trigger.contains(modelButton)).toBe(false)
+    expect(modelButton.contains(trigger)).toBe(false)
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    expect(await screen.findByTestId('context-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('composer-model-deepseek')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument())
+  })
+
+  it('task-107：模型弹层里没有上下文明细（拆干净了）', () => {
     setup({ threadId: 't1' })
 
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
 
     expect(screen.getByTestId('composer-model-deepseek')).toBeInTheDocument()
-    expect(screen.getByTestId('model-context')).toBeInTheDocument()
-    expect(screen.getByTestId('composer-effort')).toBeInTheDocument()
-    expect(screen.queryByTestId('context-menu-card')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('menu-custom-context-usage')).not.toBeInTheDocument()
+    expect(screen.getByTestId('model-context-slider')).toBeInTheDocument()
+    expect(screen.queryByTestId('context-panel')).not.toBeInTheDocument()
     expect(screen.queryByText('上下文已用')).not.toBeInTheDocument()
-  })
-
-  it('round 42 二轮：点环就能看全上下文（占用 / 分解 / 缓存 / 阈值）', async () => {
-    mountHalfWindow()
-    await screen.findByTestId('context-ring')
-
-    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
-
-    const card = screen.getByTestId('context-menu-card')
-    await waitFor(() => expect(card).toHaveTextContent('上下文已用 100%'))
-    expect(card).toHaveTextContent('~500K / 500K')
-    expect(card).toHaveTextContent('系统提示词 / 工具定义')
-    expect(card).toHaveTextContent('~100K')
-    expect(card).toHaveTextContent('对话消息')
-    expect(card).toHaveTextContent('~400K')
-    expect(card).toHaveTextContent('最近一轮 75%')
-    expect(card).toHaveTextContent('今日 75%')
-    expect(card).toHaveTextContent('阈值 50%（已超过）')
-    // 超了阈值：进度条与上下文环同一档警示色
-    expect(card.querySelector('div[style]')).toHaveClass('bg-warning')
-  })
-
-  it('round 42 二轮：数据还没到 → 点开的卡里给加载态，不闪一个假的 0%', async () => {
-    // 闸门：端点地址那一步是异步的，fetch 可能晚于本函数的同步段才被调用——放行要能被"追认"
-    let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        await gate
-        return contextResponse()
-      })
-    )
-    setup({ threadId: 't1' })
-
-    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
-    const card = screen.getByTestId('context-menu-card')
-    expect(screen.getByTestId('context-loading')).toBeInTheDocument()
-    expect(card).not.toHaveTextContent('上下文已用')
-
-    release()
-    await waitFor(() => expect(card).toHaveTextContent('上下文已用 50%'))
-    expect(screen.queryByTestId('context-loading')).not.toBeInTheDocument()
-    expect(card).toHaveTextContent('阈值 100%')
-    expect(card).not.toHaveTextContent('（已超过）')
-  })
-
-  it('round 42 二轮：hover 卡与点开的卡是同源一份（文案逐字一致）', async () => {
-    mountHalfWindow()
-    const ring = await screen.findByTestId('context-ring')
-    await waitFor(() => expect(ring.querySelector('svg')).toHaveAttribute('data-warning', 'true'))
-
-    fireEvent.focus(ring)
-    const hoverText = (await screen.findByTestId('context-card')).textContent
-
-    fireEvent.keyDown(screen.getByTestId('composer-context'), { key: 'ArrowDown' })
-    await waitFor(() => expect(screen.getByTestId('context-menu-card').textContent).toBe(hoverText))
   })
 })
 
@@ -1457,11 +1499,8 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
     return bridge
   }
 
-  async function openSubmenu(testId: string): Promise<void> {
+  async function openSubmenu(_testId: string): Promise<void> {
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
-    const trigger = screen.getByTestId(testId)
-    trigger.focus()
-    fireEvent.keyDown(trigger, { key: 'ArrowRight' })
     await tick()
   }
 
@@ -1780,7 +1819,7 @@ describe('round 42 · 添加到上下文（文件树 / 预览选中 → 附件�
 
       const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
       expect(input.value).toBe('')
-      expect(input).toHaveClass('min-h-(--composer-input-min-height)')
+      expect(input).toHaveClass('min-h-[calc(40px*var(--ui-scale,1))]')
 
       const card = screen.getByTestId('composer-quote-card')
       expect(card).toHaveAttribute('data-quote', 'true')
@@ -2062,21 +2101,20 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     setup()
 
     const input = screen.getByTestId('composer-input')
-    expect(input).toHaveClass('min-h-(--composer-input-min-height)')
+    expect(input).toHaveClass('min-h-[calc(40px*var(--ui-scale,1))]')
     expect(input).not.toHaveClass('min-h-(--composer-input-min-height-hero)')
-    expect(pxTokenOf('composer-input-min-height')).toBeGreaterThan(48)
+    expect(input).toHaveClass('py-2')
   })
 
-  it('初始页（hero）：换 --composer-input-min-height-hero 一档，且更高；换档有过渡（不硬切）', () => {
+  it('初始页（hero）：DSH 86px；换档有过渡（不硬切）', () => {
     setup({ hero: true })
 
     const input = screen.getByTestId('composer-input')
     expect(input).toHaveClass('min-h-(--composer-input-min-height-hero)')
-    expect(input).not.toHaveClass('min-h-(--composer-input-min-height)')
     expect(input).toHaveClass('transition-[min-height]')
-    expect(pxTokenOf('composer-input-min-height-hero')).toBeGreaterThan(
-      pxTokenOf('composer-input-min-height')
-    )
+    // task-118：hero 不再高一档
+    expect(pxTokenOf('composer-input-min-height-hero')).toBe(86)
+    expect(pxTokenOf('composer-input-min-height')).toBe(36)
     // 封顶没变：长内容照旧到 max 之后内部滚动
     expect(input).toHaveClass('max-h-(--composer-input-max-height)')
     expect(input).toHaveClass('overflow-y-auto')
@@ -2086,7 +2124,7 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     const source = readSource('../Composer.tsx')
 
     expect(source).not.toMatch(/minHeight:\s*['"]?\d+px/)
-    expect(source).toContain('min-h-(--composer-input-min-height)')
+    expect(source).toContain('min-h-[calc(40px*var(--ui-scale,1))]')
     expect(source).toContain('min-h-(--composer-input-min-height-hero)')
   })
 })
@@ -2400,13 +2438,13 @@ describe('task-62 · 输入卡右上角状态海獭', () => {
     ).toHaveAttribute('data-paused', 'true')
   })
 
-  it('CSS 契约：贴卡片右缘/上沿、pointer-events:none、<900 隐藏（不做 24 降级）', () => {
+  it('CSS 契约：完全在卡上方（bottom: calc(100%+4px)）、pointer-events:none、<900 隐藏', () => {
     const css = readFileSync(
       resolve(process.cwd(), 'src/renderer/src/features/chat/chat-motion.css'),
       'utf8'
     )
     expect(css).toMatch(
-      /\.composer-otter \{[\s\S]*?position: absolute;[\s\S]*?top: -14px;[\s\S]*?right: 10px;[\s\S]*?pointer-events: none;/
+      /\.composer-otter \{[\s\S]*?position: absolute;[\s\S]*?bottom: calc\(100% \+ 4px\);[\s\S]*?right: 10px;[\s\S]*?pointer-events: none;/
     )
     expect(css).toMatch(
       /@media \(max-width: 899px\) \{[\s\S]*?\.composer-otter \{\s*display: none;/

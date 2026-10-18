@@ -56,8 +56,10 @@ import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { MessageList } from './MessageList'
+import { WelcomeHeatmap } from './parts/WelcomeHeatmap'
 import { ProjectChip } from './ProjectChip'
 import { usePptTemplatesStore } from './ppt-templates-store'
+import './chat-width.css'
 import { WelcomeHero } from './WelcomeHero'
 import { TrajectoryView } from '@renderer/features/trajectory/TrajectoryView'
 
@@ -128,9 +130,10 @@ function syncErrorOf(pendingSync: PendingSync): Error {
  *  `header` = **对话顶部栏**（round 27 用户口径：标题贴面板最左，脱离限宽列）——横跨主列整幅，
  *  用 `ml-(--content-safe-left)` 让到"内容卡可见左缘"（侧栏是覆盖层，卡片可见部分从 safe-left 起）；
  *  配合 header 自身 pl-2 + 标题按钮 px-2 → 标题左缘 = 内容卡左缘 + 16px（不再被居中列推开）。
- *  内层 = **限宽内容列**（.content-column，P0 回归口径不变：消息区 + 发送框都挂在它里面，
+ *  内层 = **限宽内容列**（.chat-column；task-114 宽度照 DSH 公式，见 chat-width.css：
+ *  内容宽 = clamp(680px, 64cqi, 920px)，输入卡 = 内容宽 + 32；消息区 + 发送框都挂在它里面，
  *  否则会横向铺满主列被覆盖层侧栏裁掉；routes.spec / chat-flow.spec 认的也是它）。
- *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 限宽列。
+ *  testid：`chat-page` = 外层整幅（相对定位与"聊天区右缘"的量距基准），`chat-column` = 内容列容器。
  *
  *  轨迹层（本轮）：`overlay` 是挂在**限宽列之外**的覆盖层（同层、同级）。为什么不让轨迹也进
  *  限宽列：时间轴 + 步骤列表 + 明细面板三件并排，800px 的对话列放不下；轨迹是"看数据"的视图，
@@ -164,7 +167,7 @@ function ChatFrame({
             消息导览轨按 `closest('.relative')` 认"整幅 chat 页根"（round 21 的既定口径），
             多一个带这个类的祖先会把轨道的基准缩到"顶部栏以下"，轨道会整体上移半条栏高。
             要改这层：先看 chat-flow.spec 里那条"定位基准是 chat 页根"的用例。 */}
-        <div data-testid="chat-column" className="content-column flex min-h-0 flex-1 flex-col">
+        <div data-testid="chat-column" className="chat-column flex min-h-0 flex-1 flex-col">
           {children}
         </div>
         {overlay}
@@ -1626,6 +1629,16 @@ function ActiveChat({
               改成常挂 + 收合（见 CollapsibleRow）：淡出 + 高度收到 0（含外边距），主档时长。
               2026-10-18：卡片下方那排能力/PPT 胶囊已按用户口径整行移除 —— 上方这一行是初始页
               现在唯一的卡外行（将来会收进卡片，见下面 welcome-spacer 注释里的恢复值）。 */}
+          {/* task-118 预留的容器；task-127 起 hero 时里面挂真实日历热力图（占位容器/宽度公式不变，
+              高度由热力图内容自然撑开：footer 长高 → 消息区让位、输入卡仍贴底）。
+              非 hero（进对话）时容器保持 h-0 且清空。 */}
+          <div
+            aria-hidden={hero ? undefined : true}
+            data-testid="welcome-heatmap-placeholder"
+            className={cn('shrink-0', hero ? 'min-h-0 flex-1' : 'h-0')}
+          >
+            {hero ? <WelcomeHeatmap /> : null}
+          </div>
           <CollapsibleRow
             active={hero}
             testId="composer-project-row"
@@ -1692,7 +1705,7 @@ function ActiveChat({
         data-testid="welcome-spacer"
         className={cn(
           'h-0 basis-0 transition-[flex-grow,margin-top] duration-(--motion-main) ease-main motion-reduce:transition-none',
-          hero ? 'grow mt-12' : 'grow-0'
+          'grow-0'
         )}
       />
     </div>

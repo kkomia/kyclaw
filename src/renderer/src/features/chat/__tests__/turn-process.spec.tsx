@@ -10,7 +10,7 @@ import { formatTurnDuration, TURN_PROCESS_MAX_ROWS } from '../parts/turn-process
 /**
  * 工具过程统一大容器（task-52：用户原话「工具调用过程 现在通过统一大的内容约束到里面滚动输出…
  * 大滚动固定长度」）：
- *   - 一轮里连续的思考 + 工具调用收进**一个容器**（头部摘要「执行 N 次思考 · 调用 M 次工具」+ 状态）；
+ *   - 一轮里连续的思考 + 工具调用收进**一个容器**（头部摘要「执行 N 次思考，调用 M 次工具」+ 状态）；
  *   - 正文 = 固定上限高度的内部滚动区（`--turn-process-max-height`，默认 360px），容器总高不随输出增长；
  *   - 流式新行自动跟到底、用户上滚后不抢（给「回到底部」）；
  *   - 进行中默认展开、跑完自动收起、用户手动开合优先；
@@ -81,7 +81,7 @@ describe('结构与分组：思考 + 工具收进一个容器', () => {
     const container = screen.getByTestId('turn-process')
     expect(screen.getAllByTestId('turn-process')).toHaveLength(1)
     expect(within(container).getByTestId('turn-process-summary')).toHaveTextContent(
-      '执行 1 次思考 · 调用 1 次工具'
+      '执行 1 次思考，调用 1 次工具'
     )
     expect(within(container).getByTestId('turn-process-status')).toHaveTextContent('进行中')
     // 兼容旧契约：trace-block / trace-toggle 仍在（data-open 语义不变）
@@ -237,7 +237,7 @@ describe('开合策略：进行中展开 / 完成收起 / 手动优先', () => {
 })
 
 describe('用时：进行中计时、完成冻结（X 分 Y 秒）', () => {
-  it('61 秒后完成：显示「已完成 · 用时 1 分 1 秒」', () => {
+  it('61 秒后完成：显示「用时 1 分 1 秒」', () => {
     vi.useFakeTimers()
     const entries = [toolEntry(0)]
     const { rerender } = render(<TurnProcess entries={entries} running />)
@@ -245,13 +245,13 @@ describe('用时：进行中计时、完成冻结（X 分 Y 秒）', () => {
       vi.advanceTimersByTime(61_000)
     })
     rerender(<TurnProcess entries={entries} running={false} />)
-    expect(screen.getByTestId('turn-process-status')).toHaveTextContent('已完成 · 用时 1 分 1 秒')
+    expect(screen.getByTestId('turn-process-status')).toHaveTextContent('用时 1 分 1 秒')
   })
 
-  it('历史消息（挂载即已完成、没走进行中）：只显示「已完成」不带用时', () => {
+  it('历史消息（挂载即已完成、没走进行中）：无用时 → 不渲染 meta', () => {
     render(<TurnProcess entries={[toolEntry(0)]} running={false} />)
-    expect(screen.getByTestId('turn-process-status')).toHaveTextContent('已完成')
-    expect(screen.getByTestId('turn-process-status')).not.toHaveTextContent('用时')
+    // task-115：正常完成不再写「已完成」；没有用时就不占位
+    expect(screen.queryByTestId('turn-process-status')).not.toBeInTheDocument()
   })
 
   it('formatTurnDuration 口径：<60 秒只给秒，≥60 秒给分', () => {

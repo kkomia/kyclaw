@@ -254,7 +254,7 @@ export function ThinkingEffort({
           data-testid="composer-effort"
           aria-label={`${EFFORT_LABEL_TEXT}: ${displayLabel}`}
           className={cn(
-            'inline-flex h-8 shrink-0 items-center rounded-control px-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
+            'inline-flex h-8 shrink-0 items-center rounded-control pl-0 pr-2 font-mono text-c1 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
             !motion.reduced && 'thinking-effort-trigger--lit'
           )}
         >

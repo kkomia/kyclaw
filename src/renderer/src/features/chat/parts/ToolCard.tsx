@@ -24,12 +24,12 @@ import { TraceFold } from './TraceFold'
 import { askUserResultLabel } from '../ask-user'
 import {
   STATE_LABELS,
-  STATE_TONES,
   TONE_CLASS,
   formatValue,
   previewOutput,
   toolDetailOf,
-  toolStateRunning
+  toolStateRunning,
+  toolStatusLabelOf
 } from './tool-part'
 import type { ToolCardPart } from './tool-part'
 
@@ -178,7 +178,8 @@ export function ToolCard({
   const hasBody = part.input !== undefined || hasOutput
   // 单步默认折着（文档 §1.3：单步没有自动展开档）；点过听用户的
   const open = override ?? false
-  const tone = STATE_TONES[part.state] ?? 'pending'
+  const status = toolStatusLabelOf(part)
+  const tone = status.tone
   const detail = toolDetailOf(part.input) ?? extraDetailOf(part.toolName, part.input)
   /** 行详情只改**显示**：根内 → 工作区相对路径，根外 / 判不出根 → 原样（见 display-path） */
   const shownDetail = detail === null ? null : displayPath(detail, rootPath)
@@ -189,7 +190,9 @@ export function ToolCard({
         (part.state === 'input-available' ? '等待回答' : (STATE_LABELS[part.state] ?? part.state)))
       : part.state === 'input-available' && !running
         ? '已调用'
-        : (STATE_LABELS[part.state] ?? part.state)
+        : status.label
+  // task-115：成功（exit 0/无退出码）不占位；进行中/等待/错误才出现签
+  const showState = status.show || part.toolName === 'ask_user'
 
   const row = (
     <>
@@ -216,25 +219,27 @@ export function ToolCard({
           {shownDetail}
         </span>
       )}
-      <span
-        data-testid="tool-state"
-        data-font-role="ui"
-        className={cn(
-          'ml-auto shrink-0 text-c1',
-          live ? livePaint : TONE_CLASS[tone],
-          // "已调用"不是告警腔：中性色（等审批/出错那几档才吃语气色）
-          !live && part.state === 'input-available' && 'text-ink-tertiary'
-        )}
-      >
-        {live ? (
-          stateLabel
-        ) : (
-          // P1b 配方 5：完成/等审批等状态换词（150ms + 晚 50ms + 4px + blur2，与 office 同配方）
-          <span key={stateLabel} className="chat-swap">
-            {stateLabel}
-          </span>
-        )}
-      </span>
+      {showState ? (
+        <span
+          data-testid="tool-state"
+          data-font-role="ui"
+          className={cn(
+            'ml-auto shrink-0 text-c1',
+            live ? livePaint : TONE_CLASS[tone],
+            // "已调用"不是告警腔：中性色（等审批/出错那几档才吃语气色）
+            !live && part.state === 'input-available' && 'text-ink-tertiary'
+          )}
+        >
+          {live ? (
+            stateLabel
+          ) : (
+            // P1b 配方 5：完成/等审批等状态换词（150ms + 晚 50ms + 4px + blur2，与 office 同配方）
+            <span key={stateLabel} className="chat-swap">
+              {stateLabel}
+            </span>
+          )}
+        </span>
+      ) : null}
       {hasBody ? (
         <ChevronRight
           aria-hidden="true"
