@@ -53,6 +53,15 @@ files:
   # 实测 `pnpm package` 出来的 app.asar 里塞了 4.3GB 的旧构建产物（dist-r63 的 asar 又把 dist-alt
   # 整个卷进去，层层套娃）。安装包因此能到 GB 级。
   - '!dist*/**'
+  # PB-016（减包）三样白占 asar 的东西（量的口径见 .superpowers/pb016/asar-before.json）：
+  #   · `**/*.map`（140.66 MiB / 5,136 个，全在 node_modules 里）：sourcemap 只在"从报错栈回源码"时
+  #     有用，用户装的正式包既没有源码也没有 Source Map 面板；Vite 产物自己也没带 map。
+  #   · `website/**`（0.57 MiB / 9 个）：本地建站材料，未跟踪目录，builder 把它当普通目录收进包了。
+  #   · `**/*.tsbuildinfo`（0.49 MiB / 1 个，tsconfig.node.tsbuildinfo）：tsc 的增量编译缓存。
+  #     上面已排 `tsconfig*.json`，但 builder 的这条规则不覆盖 tsbuildinfo 这个产物后缀。
+  - '!**/*.map'
+  - '!website/**'
+  - '!**/*.tsbuildinfo'
 # 本机嵌入引擎（模块 3B）：`pnpm fetch:llama` 下到 resources/llama/ 的裁剪后运行时（42MB），
 # 原样拷到安装目录的 resources/llama/（主进程按 process.resourcesPath/llama 找它）。
 # .cache 是本地的压缩包缓存（获取脚本用），不进包。

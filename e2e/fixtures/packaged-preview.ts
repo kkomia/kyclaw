@@ -232,12 +232,18 @@ export function packagedResourceProblems(layout: PackagedLayout, version: string
       if (officeHtml === undefined) {
         problems.push('app.asar 里没有 out/renderer/office.html（Office 隔离面没进包）')
       }
-      const wasmCount = asarEntries.filter((path) => path.endsWith('.wasm')).length
-      // M4-P 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm + 1 个 PPTX wasm = 6
+      // M4-P 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm + 1 个 PPTX wasm = 6。
+      // **只数 `out/renderer/**`（Office 隔离面的 Vite 产物）**：asar 里另有 5 个与 Office 无关的
+      // 依赖自带 wasm —— pdfjs-dist 的 4 个（quickjs-eval / openjpeg / jbig2 / qcms，PDF 解码用）
+      // 和 xxhash-wasm 的 xxhash.wasm；按"全 asar"数会被它们顶成 11（PB-016 实测），闸门就永远红。
+      // 闸门语义不变：这一面的 6 个 Office wasm 不许漏打、也不许多打。
+      const officeWasmEntries = asarEntries.filter(
+        (path) => path.startsWith('out/renderer/') && path.endsWith('.wasm')
+      )
       const expectedWasm = 6
-      if (wasmCount !== expectedWasm) {
+      if (officeWasmEntries.length !== expectedWasm) {
         problems.push(
-          `app.asar 里的 wasm 数量是 ${String(wasmCount)}，期望 ${String(expectedWasm)}（Office 面资源被漏打/多打？）`
+          `app.asar 的 out/renderer 里 wasm 数量是 ${String(officeWasmEntries.length)}，期望 ${String(expectedWasm)}（Office 面资源被漏打/多打？）`
         )
       }
       const bundledBetterOffice = asarEntries.filter((path) =>
