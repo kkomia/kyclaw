@@ -33,6 +33,13 @@ import {
 } from '@betteroffice/xlsx-react'
 import zhCN from '@betteroffice/xlsx-i18n/zh-CN'
 import type { SurfaceTheme } from './bridge-protocol'
+import {
+  OFFICE_CAPABILITY_NOTE,
+  markCapabilityNoteSeen,
+  shouldShowCapabilityNote
+} from './capability-note'
+// PB-020 A 类：chrome 覆盖（!important 压包内 inline style；升级复核见 CSS 头注释）
+import './office-chrome-xlsx.css'
 
 export interface XlsxEditorPaneHandle {
   /** 保存三阶段的 generate：flush（version）→ save()；失败回 null（错误已回调） */
@@ -115,7 +122,10 @@ function xlsxToolbar(): ReactNode {
           <ToolbarCommandSelect id="textWrapping" />
           <ToolbarCommandSelect id="merge" />
         </ToolbarGroup>
-        <ToolbarGroup label="显示">
+        <ToolbarGroup label="查找">
+          <ToolbarCommandButton id="searchMenus" />
+        </ToolbarGroup>
+        <ToolbarGroup label="视图">
           <ToolbarCommandSelect id="zoom" />
         </ToolbarGroup>
       </EditorToolbar.Toolbar>
@@ -139,7 +149,9 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
     /** 重载 = 新 file + 新 key（xlsx-react 没有 loadBuffer） */
     const [file, setFile] = useState<Uint8Array>(props.bytes)
     const [generation, setGeneration] = useState(0)
-    const [capabilityNoteVisible, setCapabilityNoteVisible] = useState(true)
+    const [capabilityNoteVisible, setCapabilityNoteVisible] = useState(() =>
+      shouldShowCapabilityNote('xlsx')
+    )
 
     useEffect(() => {
       setFile(props.bytes)
@@ -249,6 +261,7 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
           <p
             data-testid="office-format-note"
             role="note"
+            title={OFFICE_CAPABILITY_NOTE.xlsx}
             style={{
               margin: 0,
               padding: '3px 10px',
@@ -257,10 +270,33 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
               color: 'var(--text-tertiary)',
               fontSize: 'var(--font-size-c1, 11px)',
               lineHeight: 1.4,
-              flex: '0 0 auto'
+              flex: '0 0 auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
             }}
           >
-            当前版本支持编辑并保存回原文件；打印、导出与演示在此沙箱内不可用。
+            <span style={{ minWidth: 0, flex: 1 }}>{OFFICE_CAPABILITY_NOTE.xlsx}</span>
+            <button
+              type="button"
+              data-testid="office-format-note-dismiss"
+              onClick={() => {
+                markCapabilityNoteSeen('xlsx')
+                setCapabilityNoteVisible(false)
+              }}
+              style={{
+                flex: 'none',
+                border: '1px solid var(--border-hairline)',
+                borderRadius: 6,
+                background: 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                padding: '1px 6px',
+                cursor: 'pointer'
+              }}
+            >
+              知道了
+            </button>
           </p>
         ) : null}
         <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>

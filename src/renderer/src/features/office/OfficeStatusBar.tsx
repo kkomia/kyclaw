@@ -13,6 +13,7 @@
  *
  * 布局：由 `OfficeWorkspace` 作为 workspace 的最后一个 flex 子项渲染 → 横跨「画布 + AI 面板」整行下方。
  */
+import { useState } from 'react'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL } from './office-kinds'
 import type { OfficeTabKind } from './office-tabs-store'
 import { cn } from '@renderer/components/ui/cn'
@@ -26,6 +27,10 @@ export interface OfficeStatusBarProps {
   kind: OfficeTabKind
   /** 面 `doc:loaded` 回传的总页数；0 = 还没拿到 */
   pageCount: number
+  /** PB-020 E1：页数不适用时的补充信息（如 xlsx 文件大小「12 KB · 本地」） */
+  detail?: string
+  /** PB-020 R1：能力说明（状态栏入口的内容；缺省时入口不出现） */
+  capabilityNote?: string
   dirty: boolean
   /** 保存状态机的真实 writing 信号（不是乐观推断） */
   saving: boolean
@@ -57,6 +62,8 @@ export function OfficeStatusBar({
   documentName,
   kind,
   pageCount,
+  detail,
+  capabilityNote,
   dirty,
   saving,
   readOnly
@@ -64,6 +71,7 @@ export function OfficeStatusBar({
   const Icon = OFFICE_KIND_ICON[kind]
   const state = saveStateOf({ documentName, kind, pageCount, dirty, saving, readOnly })
   const label = SAVE_LABEL[state]
+  const [noteOpen, setNoteOpen] = useState(false)
 
   return (
     <footer
@@ -74,7 +82,7 @@ export function OfficeStatusBar({
       data-readonly={readOnly ? 'true' : 'false'}
       data-save-state={state}
       aria-label="文档状态栏"
-      className="flex h-(--office-status-height) shrink-0 items-center gap-3 border-t border-hairline bg-surface px-3 text-c1 text-ink-tertiary-readable select-none"
+      className="relative flex h-(--office-status-height) shrink-0 items-center gap-3 border-t border-hairline bg-surface px-3 text-c1 text-ink-tertiary-readable select-none"
     >
       {/* 左：文档名 + 类型（类型是技术标签 → mono + tabular-nums） */}
       <span className="flex min-w-0 items-center gap-2">
@@ -100,13 +108,26 @@ export function OfficeStatusBar({
 
       {/* 右：页数 / 只读标记 / 保存态 */}
       <span className="ml-auto flex shrink-0 items-center gap-3">
+        {capabilityNote === undefined ? null : (
+          <button
+            type="button"
+            data-testid="office-capability-help"
+            aria-expanded={noteOpen}
+            aria-controls="office-capability-note"
+            onClick={() => setNoteOpen((open) => !open)}
+            className="rounded-badge border-(length:--hairline-width) border-hairline px-1.5 py-0.5 text-c2 text-ink-tertiary transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink"
+            title="能力说明"
+          >
+            能力说明
+          </button>
+        )}
         <span
           data-testid="office-status-pages"
           data-pages={pageCount > 0 ? String(pageCount) : '0'}
           className="font-mono tabular-nums"
-          title="总页数（来自 doc:loaded）"
+          title={pageCount > 0 ? '总页数（来自 doc:loaded）' : (detail ?? '暂无页数信息')}
         >
-          {pageCount > 0 ? `共 ${pageCount} 页` : '—'}
+          {pageCount > 0 ? `共 ${pageCount} 页` : (detail ?? '—')}
         </span>
         {readOnly ? (
           <span
@@ -132,6 +153,17 @@ export function OfficeStatusBar({
           </span>
         </span>
       </span>
+      {/* PB-020 R1：能力说明浮层（状态栏入口；首次提示的同一份文案） */}
+      {noteOpen && capabilityNote !== undefined ? (
+        <div
+          id="office-capability-note"
+          data-testid="office-capability-note"
+          role="note"
+          className="absolute right-3 bottom-(--office-status-height) z-20 mb-2 max-w-80 rounded-panel border-(length:--hairline-width) border-hairline bg-(--bg-primary) px-3 py-2 text-c1 leading-relaxed text-ink-secondary shadow-(--doc-page-shadow)"
+        >
+          {capabilityNote}
+        </div>
+      ) : null}
     </footer>
   )
 }

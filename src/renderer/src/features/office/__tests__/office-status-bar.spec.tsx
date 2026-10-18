@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { OfficeStatusBar, type OfficeStatusBarProps } from '../OfficeStatusBar'
 
@@ -92,5 +92,24 @@ describe('OfficeStatusBar：字段与壳真值', () => {
     render(<OfficeStatusBar {...props({ kind: 'xlsx', documentName: '预算.xlsx' })} />)
     expect(screen.getByTestId('office-statusbar')).toHaveAttribute('data-kind', 'xlsx')
     expect(screen.getByText('xlsx')).toHaveAttribute('title', 'Excel 表格')
+  })
+
+  it('PB-020 E1：无页数时显示 detail（xlsx 文件大小）而不是「—」', () => {
+    render(
+      <OfficeStatusBar {...props({ kind: 'xlsx', pageCount: 0, detail: '12 KB · 本地' })} />
+    )
+    const pages = screen.getByTestId('office-status-pages')
+    expect(pages).toHaveTextContent('12 KB · 本地')
+    expect(pages).toHaveAttribute('data-pages', '0')
+  })
+
+  it('PB-020 R1：能力说明入口 → 点开浮层显示同一份文案', () => {
+    render(<OfficeStatusBar {...props({ kind: 'pptx', capabilityNote: 'PPT 能力说明文案' })} />)
+    expect(screen.queryByTestId('office-capability-note')).not.toBeInTheDocument()
+    const help = screen.getByTestId('office-capability-help')
+    expect(help).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(help)
+    expect(help).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('office-capability-note')).toHaveTextContent('PPT 能力说明文案')
   })
 })

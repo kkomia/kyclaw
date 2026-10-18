@@ -792,6 +792,8 @@ export function SurfaceBoot(): React.JSX.Element {
               onChanged={handleChanged}
               onSaveRequest={requestSave}
               onLoaded={() => handleLoaded(0)}
+              // PB-020 E1：幻灯片总数 → 状态栏「共 N 页」（首次打开与插删页后都上报）
+              onPageCount={(count) => handleLoaded(count)}
               onError={handleEditorError}
             />
           ) : (

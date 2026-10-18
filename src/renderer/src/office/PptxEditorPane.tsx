@@ -34,7 +34,14 @@ import {
 } from '@betteroffice/pptx-react'
 import zhCN from '@betteroffice/pptx-i18n/zh-CN'
 import type { PptxFontFaceInput } from './fonts'
+import {
+  OFFICE_CAPABILITY_NOTE,
+  markCapabilityNoteSeen,
+  shouldShowCapabilityNote
+} from './capability-note'
 import type { SurfaceTheme } from './bridge-protocol'
+// PB-020 A 类：chrome 覆盖（!important 压包内 inline style；升级复核见 CSS 头注释）
+import './office-chrome-pptx.css'
 
 export interface PptxEditorPaneHandle {
   /** 保存三阶段的 generate：flushPendingInput → save()；失败回 null（错误已回调） */
@@ -59,8 +66,10 @@ export interface PptxEditorPaneProps {
   onChanged(): void
   /** 编辑器内置保存 / 面内 Ctrl+S → 壳的统一保存状态机 */
   onSaveRequest(): void
-  /** 首次挂载完成（pptx 没有页数概念，回 0；壳只用于 editor-ready 门） */
+  /** 首次挂载完成（壳用于 editor-ready 门） */
   onLoaded(): void
+  /** PB-020 E1：幻灯片总数（onReady 的 snapshot + 每次 onChange 变化时上报，供状态栏「共 N 页」） */
+  onPageCount?(count: number): void
   onError(phase: PptxErrorPhase, message: string): void
 }
 
@@ -92,7 +101,7 @@ function pptxToolbar(): ReactNode {
           <ToolbarCommandButton id="undo" />
           <ToolbarCommandButton id="redo" />
         </ToolbarGroup>
-        <ToolbarGroup label="文字">
+        <ToolbarGroup label="字体">
           <ToolbarCommandSelect id="fontFamily" />
           <ToolbarCommandSelect id="fontSize" />
           <ToolbarCommandButton id="bold" />
@@ -119,9 +128,8 @@ function pptxToolbar(): ReactNode {
   )
 }
 
-/** 能力说明（常驻；D16 sandbox 能力收口，不提供假入口） */
-const CAPABILITY_NOTE =
-  'PPTX 预览 + 轻量编辑：文字 / 形状 / 备注可改；表格仅单元格文字；图表、母版、动画只读；演示、导出、打印在此沙箱内不可用。'
+/** 能力说明（首次打开一次性提示；之后可从状态栏「能力说明」查看） */
+const CAPABILITY_NOTE = OFFICE_CAPABILITY_NOTE.pptx
 
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
@@ -138,6 +146,18 @@ export const PptxEditorPane = forwardRef<PptxEditorPaneHandle, PptxEditorPanePro
     /** 重载 = 新 file + 新 key（pptx-react 没有 loadBuffer） */
     const [file, setFile] = useState<Uint8Array>(props.bytes)
     const [generation, setGeneration] = useState(0)
+    /** PB-020 R1：能力说明只在首次打开时出现（之后从状态栏入口看） */
+    const [capabilityNoteVisible, setCapabilityNoteVisible] = useState(() =>
+      shouldShowCapabilityNote('pptx')
+    )
+    /** PB-020 E1：最近一次上报的幻灯片总数（只在变化时上报，避免刷屏） */
+    const lastPageCountRef = useRef<number | null>(null)
+    const reportPageCount = useCallback((count: number) => {
+      if (!Number.isFinite(count) || count <= 0) return
+      if (lastPageCountRef.current === count) return
+      lastPageCountRef.current = count
+      propsRef.current.onPageCount?.(count)
+    }, [])
     /** 同一 tick 内 onSave 与 onSaveRequest 都触发时只通知宿主一次 */
     const saveNotifyRef = useRef(false)
 
@@ -286,8 +306,20 @@ export const PptxEditorPane = forwardRef<PptxEditorPaneHandle, PptxEditorPanePro
           }
         }
       }
-      propsRef.current.onLoaded()
-    }, [])
+      // PB-020 E1：打开即上报总页数（snapshot 是同步 API）；拿不到就回落到 onLoaded()
+      let reported = false
+      try {
+        const snapshot = api.handle.snapshot() as { slides?: readonly unknown[] }
+        const count = snapshot.slides?.length ?? 0
+        if (count > 0) {
+          reportPageCount(count)
+          reported = true
+        }
+      } catch {
+        // 拿不到就保持「—」，不影响编辑
+      }
+      if (!reported) propsRef.current.onLoaded()
+    }, [reportPageCount])
 
     // 探针面随 pane 卸载消失（生产不设即不存在）
     useEffect(
@@ -321,9 +353,15 @@ export const PptxEditorPane = forwardRef<PptxEditorPaneHandle, PptxEditorPanePro
       []
     )
 
-    const handleChange = useCallback(() => {
-      propsRef.current.onChanged()
-    }, [])
+    const handleChange = useCallback(
+      (snapshot: { slides?: readonly unknown[] }) => {
+        propsRef.current.onChanged()
+        // PB-020 E1：插入/删除幻灯片后总数变化 → 状态栏跟着更新
+        const count = snapshot?.slides?.length
+        if (typeof count === 'number') reportPageCount(count)
+      },
+      [reportPageCount]
+    )
 
     const handleEditorError = useCallback((error: Error) => {
       propsRef.current.onError('runtime', messageOf(error))
@@ -338,22 +376,48 @@ export const PptxEditorPane = forwardRef<PptxEditorPaneHandle, PptxEditorPanePro
         data-theme={props.theme}
         style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
       >
-        <p
-          data-testid="office-format-note"
-          role="note"
-          style={{
-            margin: 0,
-            padding: '3px 10px',
-            borderBottom: '1px solid var(--border-hairline)',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-tertiary)',
-            fontSize: 'var(--font-size-c1, 11px)',
-            lineHeight: 1.4,
-            flex: '0 0 auto'
-          }}
-        >
-          {CAPABILITY_NOTE}
-        </p>
+        {capabilityNoteVisible ? (
+          <p
+            data-testid="office-format-note"
+            role="note"
+            title={CAPABILITY_NOTE}
+            style={{
+              margin: 0,
+              padding: '3px 10px',
+              borderBottom: '1px solid var(--border-hairline)',
+              background: 'var(--bg-primary)',
+              color: 'var(--text-tertiary)',
+              fontSize: 'var(--font-size-c1, 11px)',
+              lineHeight: 1.4,
+              flex: '0 0 auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
+            }}
+          >
+            <span style={{ minWidth: 0, flex: 1 }}>{CAPABILITY_NOTE}</span>
+            <button
+              type="button"
+              data-testid="office-format-note-dismiss"
+              onClick={() => {
+                markCapabilityNoteSeen('pptx')
+                setCapabilityNoteVisible(false)
+              }}
+              style={{
+                flex: 'none',
+                border: '1px solid var(--border-hairline)',
+                borderRadius: 6,
+                background: 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                padding: '1px 6px',
+                cursor: 'pointer'
+              }}
+            >
+              知道了
+            </button>
+          </p>
+        ) : null}
         <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
           <PptxEditor
             key={`${props.documentId}:${String(generation)}`}

@@ -1,13 +1,11 @@
-import { PanelRightClose, Send, Sparkles } from 'lucide-react'
+import { PanelRightClose, Sparkles } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 
 /**
  * Office 右侧 AI 面板 v1（A3，`office-ui-redesign-spec` §6.1/§7-A3）。
  *
- * **诚实占位**：真实 AI 编辑能力还没接（等后续专门任务），所以这里只做结构与文案，
- * 不做任何假动作——3 个建议 chip、composer、发送按钮全部 disabled；不发送请求、不写文档、
- * 不产生"假装在思考"的动效。面板只在 shell 侧（iframe 右边），不新增任何 postMessage 协议；
- * 面内 ribbon 的 AI 按钮仍是 A2 的禁用占位（跨面没有通道，A3 不动它）。
+ * **诚实空态**（PB-020 E4）：真实 AI 编辑能力还没接，不渲染任何假按钮（没有 disabled chip /
+ * 输入框 / 发送键），只说明「尚未接入、不会读改文档」。入口开合与收起把手保留。
  *
  * 开合归 shell：面板自己渲染收起按钮；收起后由 OfficePage 在画布右缘给一个窄「AI」把手。
  * 宽度走 `--office-ai-panel-width`（320），开合只动 width/opacity（`--motion-main` 300ms
@@ -21,9 +19,6 @@ export interface OfficeAiPanelProps {
   /** 用户点「收起」（只翻 store 的手动偏好；自动收起状态不受影响） */
   onCollapse: () => void
 }
-
-/** 三个建议 chip 的示例文案（disabled；不产生任何动作/回调） */
-const AI_SUGGESTIONS = ['总结这份文档', '润色选中的段落', '检查错别字'] as const
 
 export function OfficeAiPanel({
   open,
@@ -75,65 +70,17 @@ export function OfficeAiPanel({
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
-          {/*
-            诚实说明：占位面板不读内容、不产生修改。
-            P3（章程 §9.7-6）：唯一允许 accent 的装饰面 —— 左侧 2px 陶土橙线；其余 chrome 不引 accent。
-          */}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-y-auto px-6 py-4 text-center">
+          {/* PB-020 E4：诚实空态——能力未接入就不给假按钮（不给 disabled chip / 输入框） */}
           <div
             data-testid="office-ai-placeholder"
-            className="flex flex-col gap-2 border-l-2 border-l-(--accent) pl-3"
+            className="flex flex-col items-center gap-2"
           >
-            <p className="text-b2 text-ink-secondary">
-              AI 编辑能力将在后续版本接入。当前可以先用主对话处理文档内容。
+            <Sparkles aria-hidden="true" className="size-5 text-ink-tertiary" />
+            <p className="text-b2 text-ink-secondary">AI 编辑能力尚未接入</p>
+            <p className="max-w-56 text-c1 leading-relaxed text-ink-tertiary">
+              当前版本不会读取文档内容，也不会产生任何修改。接入后这里会提供总结、润色与校对。
             </p>
-            <p className="text-c1 text-ink-tertiary">
-              此面板是占位：不会读取文档内容，也不会产生任何修改。
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {/* 装饰眉题按章程改为正常大小写 11/500 三级灰（中文不做全大写、也不额外拉字距） */}
-            <p className="text-[11px] font-medium text-ink-tertiary">试试这些</p>
-            <div className="flex flex-col items-stretch gap-2">
-              {AI_SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  data-testid="office-ai-chip"
-                  disabled
-                  title="AI 编辑能力接入后可用"
-                  className="flex items-center gap-2 rounded-control border-(length:--hairline-width) border-hairline px-3 py-2 text-left text-b2 text-ink-tertiary transition-colors duration-(--motion-feedback) ease-main disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Sparkles aria-hidden="true" className="size-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">{suggestion}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* composer：disabled 占位（输入框 + 发送都不接任何动作） */}
-        <div className="flex shrink-0 flex-col gap-2 border-t border-hairline p-3">
-          <div className="flex items-end gap-2 rounded-control border-(length:--hairline-width) border-hairline bg-(--bg-secondary) px-2 py-1.5">
-            <textarea
-              data-testid="office-ai-composer"
-              rows={2}
-              disabled
-              aria-label="AI 指令（即将接入）"
-              placeholder="AI 编辑能力接入后可用"
-              className="min-h-0 w-full resize-none bg-transparent text-b2 text-ink placeholder:text-ink-tertiary disabled:cursor-not-allowed"
-            />
-            <button
-              type="button"
-              data-testid="office-ai-send"
-              disabled
-              aria-label="发送（即将接入）"
-              title="AI 编辑能力接入后可用"
-              className="flex size-7 shrink-0 items-center justify-center rounded-badge bg-(--fill-disabled) text-ink-tertiary disabled:cursor-not-allowed"
-            >
-              <Send aria-hidden="true" className="size-3.5" />
-            </button>
           </div>
         </div>
       </div>

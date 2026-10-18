@@ -74,7 +74,7 @@ describe('office-ui-store：AI 面板开合的纯逻辑', () => {
 })
 
 describe('OfficeAiPanel：320px 诚实占位组件', () => {
-  it('展开：header（AI 助手 + 即将接入 + 收起）、诚实说明、3 个 disabled chip、composer 与发送 disabled', () => {
+  it('展开：header（AI 助手 + 即将接入 + 收起）、诚实空态（无假按钮）', () => {
     const onCollapse = vi.fn()
     render(<OfficeAiPanel open onCollapse={onCollapse} />)
 
@@ -89,25 +89,13 @@ describe('OfficeAiPanel：320px 诚实占位组件', () => {
     expect(screen.getByText('即将接入')).toBeInTheDocument()
     expect(screen.getByTestId('office-ai-collapse')).toHaveAccessibleName('收起 AI 助手')
 
+    // PB-020 E4：诚实空态——说明未接入，且不渲染 disabled chip / composer / 发送键
     const placeholder = screen.getByTestId('office-ai-placeholder')
-    expect(placeholder).toHaveTextContent('AI 编辑能力将在后续版本接入')
+    expect(placeholder).toHaveTextContent('AI 编辑能力尚未接入')
     expect(placeholder).toHaveTextContent('不会读取文档内容')
-    // P3（章程 §9.7-6）：AI 面板空态左侧 2px 陶土橙线（全产品唯一允许 accent 的装饰面）
-    expect(placeholder).toHaveClass('border-l-2', 'border-l-(--accent)', 'pl-3')
-
-    const chips = screen.getAllByTestId('office-ai-chip')
-    expect(chips).toHaveLength(3)
-    for (const chip of chips) {
-      // disabled 语义 + 文案可断言；点击不产生假动作（没有回调可被调用）
-      expect(chip).toBeDisabled()
-      expect(chip).toHaveAttribute('title', 'AI 编辑能力接入后可用')
-      fireEvent.click(chip)
-    }
-
-    const composer = screen.getByTestId('office-ai-composer')
-    expect(composer).toBeDisabled()
-    expect(composer).toHaveAttribute('placeholder', 'AI 编辑能力接入后可用')
-    expect(screen.getByTestId('office-ai-send')).toBeDisabled()
+    expect(screen.queryByTestId('office-ai-chip')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('office-ai-composer')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('office-ai-send')).not.toBeInTheDocument()
 
     // 收起按钮是唯一可用动作：只回调，不自己改状态（状态归 store / 父级）
     fireEvent.click(screen.getByTestId('office-ai-collapse'))
@@ -123,9 +111,8 @@ describe('OfficeAiPanel：320px 诚实占位组件', () => {
     expect(panel).toHaveAttribute('aria-hidden', 'true')
     expect(panel).toHaveAttribute('inert')
     expect(panel).toHaveStyle({ width: '0px' })
-    // 仍是同一棵 DOM（只是宽度裁掉/透明），占位文案与 chip 都还在
+    // 仍是同一棵 DOM（只是宽度裁掉/透明），空态文案还在
     expect(screen.getByTestId('office-ai-placeholder')).toBeInTheDocument()
-    expect(screen.getAllByTestId('office-ai-chip')).toHaveLength(3)
   })
 
   it('自动收起时透传 data-auto-collapsed（供 OfficePage 把手/文案与截图断言）', () => {

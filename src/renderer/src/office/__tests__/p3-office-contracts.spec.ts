@@ -169,11 +169,14 @@ describe('P2 字体小规格（task-67 字体统一收口）', () => {
     expect(blockOf(chromeCss, '.ofr-doc-title')).toContain('font-size: 14px;')
   })
 
-  it('AI 面板装饰眉题：正常大小写 + 11/500 三级灰，不再 uppercase/拉字距', () => {
+  it('AI 面板诚实空态：无装饰眉题/大写拉字距，也不再有 disabled chip 假按钮', () => {
     const panelSource = readSource('../../features/office/OfficeAiPanel.tsx')
     expect(panelSource).not.toContain('uppercase')
     expect(panelSource).not.toContain('tracking-wide')
-    expect(panelSource).toContain('text-[11px] font-medium text-ink-tertiary')
+    // PB-020 E4：占位面板不再给 disabled chip / composer（无假入口）
+    expect(panelSource).not.toContain('office-ai-chip')
+    expect(panelSource).not.toContain('office-ai-composer')
+    expect(panelSource).toContain('AI 编辑能力尚未接入')
   })
 })
 

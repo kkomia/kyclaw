@@ -15,6 +15,7 @@ import {
 } from './office-actions'
 import { OfficeAiPanel } from './OfficeAiPanel'
 import { OfficeStatusBar } from './OfficeStatusBar'
+import { OFFICE_CAPABILITY_NOTE } from '@renderer/office/capability-note'
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
@@ -890,6 +891,18 @@ function OfficeWorkspace({
         documentName={loaded?.info.displayName ?? tab.title}
         kind={tab.kind}
         pageCount={pageCount}
+        detail={
+          tab.kind === 'xlsx' && loaded !== null
+            ? `${Math.max(1, Math.round(loaded.info.size / 1024))} KB · 本地`
+            : undefined
+        }
+        capabilityNote={
+          tab.kind === 'xlsx'
+            ? OFFICE_CAPABILITY_NOTE.xlsx
+            : tab.kind === 'pptx'
+              ? OFFICE_CAPABILITY_NOTE.pptx
+              : undefined
+        }
         dirty={tab.dirty}
         saving={saving}
         readOnly={tab.readOnly}
