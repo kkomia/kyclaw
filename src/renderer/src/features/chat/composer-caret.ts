@@ -66,12 +66,16 @@ export function caretRectAtOffset(container: Node, offset: number): DOMRect | nu
     if (typeof element.getBoundingClientRect !== 'function') return null
     const rect = element.getBoundingClientRect()
     if (rect.width === 0 && rect.height === 0) return null
-    // 空值时要落在**内容盒**左上角（镜像层有 px-4 py-3），不能取 border-box 左上角，
+    // 空值时要落在**内容盒**左上角（镜像层内层有 padding），不能取 border-box 左上角，
     // 否则 caret 会画到输入卡左边缘外（dev 实拍：卡片左侧一条红线）。
     const style = getComputedStyle(element)
     const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
     const paddingTop = Number.parseFloat(style.paddingTop) || 0
-    return new DOMRect(rect.left + paddingLeft, rect.top + paddingTop, 0, rect.height)
+    // PB-014：空输入兜底的高度必须是**行盒**（line-height），不是容器内容盒高。
+    // 用容器高（单行 14px 高）会让调用方算出的 half-leading 把 caret 往上顶 5px。
+    const lineHeight = Number.parseFloat(style.lineHeight)
+    const height = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : rect.height
+    return new DOMRect(rect.left + paddingLeft, rect.top + paddingTop, 0, height)
   }
   if ((container.textContent ?? '') === '') {
     // 空容器：真机优先用**内容盒 + padding** 兜底（Range 在空元素起点常贴 border-box 左缘，

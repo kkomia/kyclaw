@@ -346,15 +346,42 @@ export function Composer({
       setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
       return
     }
-    const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight)
+    const style = getComputedStyle(textarea)
+    const lineHeight = Number.parseFloat(style.lineHeight)
+    const caretHeight = Number.isFinite(lineHeight) ? lineHeight : rect.height
+    const padTop = Number.parseFloat(style.paddingTop) || 0
+    const padBottom = Number.parseFloat(style.paddingBottom) || 0
+    // PB-014：Range 的 rect 是**字形盒**（比行盒矮），直接用它的 top 会把 caret 画低半个 leading
+    // （实测 +3px）。行盒 = 字形盒上下各补 (lineHeight − 字形高)/2，caret 才与文字行盒垂直居中。
+    const halfLeading = Math.max(0, (caretHeight - rect.height) / 2)
+    const textareaRect = textarea.getBoundingClientRect()
+    // PB-014 滚动：镜像层的 scrollTop 与 textarea 同步（onScroll 里写），Range rect 已是**可视坐标**，
+    // 这里**不能再减 scrollTop**（双重扣减会把行钳到 0 = 画进 padding）。
+    const rawTop = rect.top - halfLeading - textareaRect.top
+    // jsdom/无布局（clientHeight=0）没有视口概念：跳过「滚出即隐藏/钳制」，单元测试仍能断言 caret 存在。
+    if (textarea.clientHeight > 0) {
+      // 与原生 textarea 一致：行完全滚出视口 → 不画；部分可见 → 钳进内容盒（绝不进 padding 区）。
+      const contentBottom = textarea.clientHeight - padBottom
+      if (rawTop + caretHeight <= padTop || rawTop >= contentBottom) {
+        setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
+        return
+      }
+      const clampedTop = Math.min(
+        Math.max(rawTop, padTop),
+        Math.max(padTop, contentBottom - caretHeight)
+      )
+      const placement = caretPlacementFromRects(
+        { left: rect.left, top: clampedTop + textareaRect.top, height: caretHeight },
+        textareaRect,
+        0
+      )
+      setCaretPlacement({ ...placement, visible: true })
+      return
+    }
     const placement = caretPlacementFromRects(
-      {
-        left: rect.left,
-        top: rect.top,
-        height: Number.isFinite(lineHeight) ? lineHeight : rect.height
-      },
-      textarea.getBoundingClientRect(),
-      textarea.scrollTop
+      { left: rect.left, top: rect.top - halfLeading, height: caretHeight },
+      textareaRect,
+      0
     )
     setCaretPlacement({ ...placement, visible: true })
   }, [caretCustom])
@@ -928,7 +955,10 @@ export function Composer({
             data-testid="composer-mirror"
             className="pointer-events-none absolute inset-0 z-20 overflow-hidden text-transparent"
           >
-            <div className="w-full px-4 py-3 font-sans text-b1 break-words whitespace-pre-wrap">
+            {/* PB-014：镜像层是 caret 的**测量基准**——padding / font-size / line-height / 右内距
+                必须与 textarea（下方 composer-caret-input）逐项一致，差一项就会偏：
+                padding-top 差 → 垂直不居中；font-size 差 → 字宽与折行点不同 → 横向不跟字。 */}
+            <div className="w-full py-[7px] pl-[14px] pr-9 font-sans text-[14px] leading-6 break-words whitespace-pre-wrap">
               {parseReferenceMarkers(draft).map((segment, index) =>
                 segment.kind === 'text' ? (
                   <span key={index}>{segment.text}</span>

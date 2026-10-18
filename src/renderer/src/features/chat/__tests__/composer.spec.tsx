@@ -153,7 +153,23 @@ describe('输入卡结构与尺寸（UI 参考 §4.6 + 实况页 a84af355）', (
     expect(mirror).toHaveAttribute('aria-hidden', 'true')
     expect(mirror).toHaveClass('pointer-events-none', 'text-transparent', 'absolute', 'z-20')
     const layer = mirror.firstElementChild
-    expect(layer).toHaveClass('px-4', 'py-3', 'text-b1', 'whitespace-pre-wrap', 'break-words')
+    // PB-014：覆盖层是 caret 的测量基准，排版必须与 textarea 逐项一致（14px/24 + 7/14/36 内距）
+    expect(layer).toHaveClass(
+      'py-[7px]',
+      'pl-[14px]',
+      'pr-9',
+      'text-[14px]',
+      'leading-6',
+      'whitespace-pre-wrap',
+      'break-words'
+    )
+    expect(screen.getByTestId('composer-input')).toHaveClass(
+      'py-[7px]',
+      'pl-[14px]',
+      'pr-9',
+      'text-[14px]',
+      'leading-6'
+    )
     // 覆盖层在 textarea 之上（chip 要盖住底层字形）；textarea 本体仍在文档流里可交互
     expect(screen.getByTestId('composer-input')).toHaveClass('relative', 'z-10')
     // 图1 的红波浪：输入框关掉原生拼写检查
@@ -2305,6 +2321,24 @@ describe('P1b · Composer 自绘 caret', () => {
 
   afterEach(() => {
     Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
+  })
+
+  it('PB-014：镜像层与 textarea 同排版（caret 的垂直/横向都靠这份测量）', () => {
+    setup()
+    const mirror = screen.getByTestId('composer-mirror')
+    const measured = mirror.firstElementChild as HTMLElement
+    const input = screen.getByTestId('composer-input')
+
+    // 镜像层负责量 caret 的位置：字体/行高/内距必须与 textarea 逐项一致。
+    // 差一项就会偏：padding-top 差 → 垂直不居中；font-size/pr 差 → 字宽与折行点不同 → 横向不跟字。
+    for (const cls of ['py-[7px]', 'pl-[14px]', 'pr-9', 'text-[14px]', 'leading-6', 'font-sans']) {
+      expect(input).toHaveClass(cls)
+      expect(measured).toHaveClass(cls)
+    }
+    // 旧的漂移值不许回来（46a40df 改 textarea 后镜像层留下的 15px / 12px 内距）
+    expect(measured).not.toHaveClass('px-4')
+    expect(measured).not.toHaveClass('py-3')
+    expect(measured).not.toHaveClass('text-b1')
   })
 
   it('聚焦 + 有内容 → 自绘 caret，原生 caret 走 custom 档', async () => {
