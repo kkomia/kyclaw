@@ -5,9 +5,7 @@ import {
   buildFontPrewarmUrl,
   isOfficeUsed,
   markOfficeUsed,
-  NEVER_USED_PREWARM_DELAY_MS,
-  OFFICE_USED_STORAGE_KEY,
-  prewarmDelayMs
+  OFFICE_USED_STORAGE_KEY
 } from '../office-font-prewarm'
 import { isSurfaceFontsReady } from '../../../office/font-prewarm-protocol'
 
@@ -164,18 +162,19 @@ describe('P0-2 / P0-5：升格面定位不再 rAF 空转 + 字体预热门控', 
     expect(officeSurfaceTsx).toContain("document.addEventListener('visibilitychange'")
   })
 
-  it('P0-5：未用过 Office → 预热延后 12s；用过 → 首帧后立即', () => {
-    expect(prewarmDelayMs(true)).toBe(0)
-    expect(prewarmDelayMs(false)).toBe(NEVER_USED_PREWARM_DELAY_MS)
-    expect(NEVER_USED_PREWARM_DELAY_MS).toBe(12_000)
-    // 标记持久在 localStorage（随 userData），并驱动 schedule 门控
+  it('PB-017：取消 12s 门控——启动首帧后就预热，office-used 只留观测语义', () => {
+    // 12s 门控与延后调度已删除（源码契约，防回潮）
+    expect(prewarmTs).not.toContain('NEVER_USED_PREWARM_DELAY_MS')
+    expect(prewarmTs).not.toContain('prewarmDelayMs')
+    expect(prewarmTs).not.toContain('officeFontPrewarmDeferred')
+    expect(prewarmTs).not.toContain('deferredTimer')
+    // 仍然「首帧后」起：rAF 等 paint 记录 → setTimeout(0)
+    expect(prewarmTs).toContain('waitPaint')
+    expect(prewarmTs).toContain('performance.getEntriesByType')
+    // office-used 标记保留（观测/兜底），但 schedule 不再读它做门控
     expect(prewarmTs).toContain(OFFICE_USED_STORAGE_KEY)
-    expect(prewarmTs).toContain('hashchange')
-    expect(prewarmTs).toContain('officeFontPrewarmDeferred')
     expect(prewarmTs).toContain('installOfficeUsedWatcher')
-    // 用户提前用 Office 时取消挂起的延后预热（避免同一会话白付 27MB）
-    expect(prewarmTs).toContain('deferredTimer')
-    expect(prewarmTs).toContain('prewarmDelayMs(used)')
+    expect(prewarmTs).toContain('hashchange')
   })
 
   it('P0-5：markOfficeUsed / isOfficeUsed 持久化（localStorage）', () => {
