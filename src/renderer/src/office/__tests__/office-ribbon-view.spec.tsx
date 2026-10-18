@@ -285,3 +285,65 @@ describe('OfficeRibbonView：无障碍与只读', () => {
     expect(screen.getByTestId('office-ribbon-bold')).toBeDisabled()
   })
 })
+
+/**
+ * task-99：三枚下拉（正文/字体/字号）加宽 + 面板 min-width 跟触发器（宽度由 CSS container query
+ * 分档；jsdom 不算样式，这里钉 DOM 顺序 + 面板宽度契约）。CSS 分档数值契约见
+ * `office-ribbon-widths.spec.ts`。
+ */
+describe('OfficeRibbonView：三枚下拉加宽（task-99）', () => {
+  it('开始 tab 前三枚 select 顺序 = 正文 / 字体 / 字号（task-99 加宽对象）', () => {
+    renderView()
+    const ribbon = screen.getByTestId('office-ribbon')
+    const selects = Array.from(ribbon.querySelectorAll<HTMLElement>('.ofr-select'))
+    expect(selects.slice(0, 3).map((element) => element.dataset.testid)).toEqual([
+      'office-ribbon-style',
+      'office-ribbon-font-family',
+      'office-ribbon-font-size'
+    ])
+    for (const select of selects.slice(0, 3)) {
+      expect(select.tagName).toBe('BUTTON')
+      expect(select).toHaveAttribute('role', 'combobox')
+    }
+  })
+
+  it('下拉面板 min-width 跟随触发器宽度（长字体名不被触发器截断）', () => {
+    const { adapter } = renderView()
+    act(() =>
+      adapter.setState('fontFamily', {
+        value: 'Calibri',
+        options: [
+          { label: 'Calibri', args: { family: 'Calibri' } },
+          { label: 'Calibri Light', args: { family: 'Calibri Light' } },
+          { label: '微软雅黑', args: { family: 'Microsoft YaHei' } }
+        ]
+      })
+    )
+    const trigger = screen.getByTestId('office-ribbon-font-family')
+    // jsdom 没有布局：模拟加宽后的触发器 140px，打开菜单看 min-width
+    Object.defineProperty(trigger, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 120,
+        y: 40,
+        left: 120,
+        top: 40,
+        right: 260,
+        bottom: 64,
+        width: 140,
+        height: 24,
+        toJSON: () => ({})
+      })
+    })
+    fireEvent.click(trigger)
+    const menu = screen.getByTestId('office-ribbon-font-family-menu')
+    expect(menu.style.minWidth).toBe('140px')
+    // matchTriggerWidth=false：不用固定 width，长选项可自然放宽；CSS 里另有 max-content/max-width
+    expect(menu.style.width).toBe('')
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Calibri',
+      'Calibri Light',
+      '微软雅黑'
+    ])
+  })
+})

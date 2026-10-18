@@ -369,7 +369,9 @@ function RibbonSelect({
   const panel = useAnchoredPanel(open, triggerRef, menuRef, close, {
     minWidth: 56,
     maxHeight: 240,
-    flipThreshold: 120
+    flipThreshold: 120,
+    // task-99：面板至少跟触发器同宽；窄档下允许按长字体名自然放宽，避免 ellipsis
+    matchTriggerWidth: false
   })
 
   const openMenu = (): void => {

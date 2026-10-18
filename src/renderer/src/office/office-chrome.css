@@ -34,6 +34,9 @@
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  /* task-99：ribbon 自身是宽度查询容器，三枚下拉按「工具带可用宽度」分档加宽（见下方 @container）。 */
+  container-type: inline-size;
+  container-name: ofr-ribbon;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--ofr-font-sans);
@@ -415,6 +418,61 @@
   cursor: default;
 }
 
+/*
+ * task-99（用户 2026-10-18 09:1x）：「提升『正文』『字体』『字号』的下拉框栏宽度，现在这么窄，
+ * 本来顶层工具栏也没有用完」。三枚按 ribbon 可用宽度分三档（container query，避免 1280 窗口
+ * AI 面板展开时把其它组挤掉/横滚）：
+ *   - 窄档（ribbon < 1020px，例如 1280 窗口 + AI 面板 320 时 band ≈ 898）：76 / 72 / 62
+ *   - 标准档（>= 1020px，例如 1100/1440 窗口 band ≈ 1038/1058）：120 / 140 / 72
+ *   - 宽档（>= 1100px，窗口更大/无 AI 面板）：150 / 176 / 86
+ * 触发器宽度是**上限**：面板用 min-width 跟触发器（matchTriggerWidth=false），选项更长时自然放宽。
+ */
+.ofr-select[data-testid='office-ribbon-style'] {
+  width: 76px;
+  min-width: 0;
+  max-width: none;
+}
+
+.ofr-select[data-testid='office-ribbon-font-family'] {
+  width: 72px;
+  min-width: 0;
+  max-width: none;
+}
+
+.ofr-select[data-testid='office-ribbon-font-size'] {
+  width: 62px;
+  min-width: 0;
+  max-width: none;
+}
+
+@container ofr-ribbon (min-width: 1020px) {
+  .ofr-select[data-testid='office-ribbon-style'] {
+    width: 120px;
+  }
+
+  .ofr-select[data-testid='office-ribbon-font-family'] {
+    width: 140px;
+  }
+
+  .ofr-select[data-testid='office-ribbon-font-size'] {
+    width: 72px;
+  }
+}
+
+@container ofr-ribbon (min-width: 1100px) {
+  .ofr-select[data-testid='office-ribbon-style'] {
+    width: 150px;
+  }
+
+  .ofr-select[data-testid='office-ribbon-font-family'] {
+    width: 176px;
+  }
+
+  .ofr-select[data-testid='office-ribbon-font-size'] {
+    width: 86px;
+  }
+}
+
 /* 自绘下拉浮层：portal 到 body、position:fixed（内联 style 来自 useAnchoredPanel）。
    颜色全部读 semantic token → 切浅/深主题（html[data-theme]）时立即重绘，不残留旧色；
    这也是修「下拉框没有重绘」的根因：原生 popup 由 OS 绘制，CSS/token 根本进不去。 */
@@ -424,6 +482,10 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* task-99：宽度以触发器为 min-width（内联 style），内容更长时按 max-content 放宽，
+     避免「微软雅黑 / Calibri Light」被触发器宽度 ellipsis。 */
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
   padding: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;

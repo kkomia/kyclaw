@@ -31,6 +31,12 @@ export interface AnchoredPanelOptions {
   maxHeight?: number
   /** 向上展开所需的「下方最小空间」判断阈值（px） */
   flipThreshold?: number
+  /**
+   * 浮层宽度是否严格等于触发器宽度（默认 true；色板用）。
+   * false = 以触发器宽度为 **min-width**、按内容自然放宽（ribbon select：窄档下触发器可压窄，
+   * 但「微软雅黑 / Calibri Light」等长选项要完整显示，不被触发器宽度截断）。
+   */
+  matchTriggerWidth?: boolean
 }
 
 export interface AnchoredPanel {
@@ -52,7 +58,13 @@ export function useAnchoredPanel(
   onDismiss: () => void,
   options: AnchoredPanelOptions = {}
 ): AnchoredPanel {
-  const { gap = 4, minWidth, maxHeight = DEFAULT_MAX_HEIGHT, flipThreshold = 96 } = options
+  const {
+    gap = 4,
+    minWidth,
+    maxHeight = DEFAULT_MAX_HEIGHT,
+    flipThreshold = 96,
+    matchTriggerWidth = true
+  } = options
   const [rect, setRect] = useState<{ top: number; left: number; width: number; up: boolean }>({
     top: 0,
     left: 0,
@@ -118,7 +130,9 @@ export function useAnchoredPanel(
   const style: CSSProperties = {
     position: 'fixed',
     left: rect.left,
-    width: rect.width > 0 ? rect.width : undefined,
+    width: matchTriggerWidth && rect.width > 0 ? rect.width : undefined,
+    minWidth: matchTriggerWidth ? undefined : rect.width > 0 ? rect.width : undefined,
+    maxWidth: matchTriggerWidth ? undefined : 'min(360px, calc(100vw - 16px))',
     maxHeight: Math.min(maxHeight, (window.innerHeight || 768) - VIEWPORT_MARGIN * 2),
     ...(rect.up
       ? { bottom: Math.max(VIEWPORT_MARGIN, (window.innerHeight || 768) - rect.top + gap) }
