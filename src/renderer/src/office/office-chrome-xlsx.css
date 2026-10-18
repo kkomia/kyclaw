@@ -1,0 +1,199 @@
+/*
+ * PB-020 A 类：Excel 编辑面 chrome 覆盖（A-01 去胶囊 / A-02 按钮 / A-03 深色 chrome / A-04 公式栏 / A-05 能力说明行）
+ *
+ * 来源包：**@betteroffice/xlsx-react@0.3.0**（`node_modules/@betteroffice/xlsx-react/dist/index.js`）。
+ *   该包的 chrome 全部是 **React inline style**，没有可 import 的 CSS 文件 —— 所以这里只能用
+ *   `!important` 覆盖；普通声明会输给 inline style。
+ *
+ * **升级复核清单（包升级时必须逐条重核，否则会静默回到 Google 皮肤）**：
+ *   1. `[data-testid=xlsx-toolbar]`：`padding: "4px 0 5px" / background #ffffff / borderBottom 1px #e2e8f0`
+ *   2. `[data-testid=xlsx-formatting-toolbar]`：`minHeight 36 / margin "0 8px 5px" / padding "4px 7px" /
+ *      borderRadius 18 / background #edf2fa / color #3c4043`
+ *   3. 工具条按钮：`minWidth 28 / height 28 / padding "0 5px" / borderRadius 4 / font "500 13px"`；
+ *      hover 内联 `#e2e7ef`、active 内联 `#d3e3fd`（包内用 onMouseEnter 改 inline，仍可被 `:hover !important` 压住）
+ *   4. 分隔：`1×24 / margin "0 5px" / background #c7cacf`
+ *   5. name box：`64×28 / border #e2e8f0 / radius 6 / background #f8fafc / font "600 12px ui-monospace" /
+ *      outlineColor #2563eb`；`fx`：`italic 700 12px Georgia / color #64748b`；formula input：`height 28 / radius 6`
+ *   6. sheet tabs：`gap 2 / padding "4px 6px" / borderTop 1px #e0e0e0 / background #fafafa`；
+ *      tab `padding "4px 12px" / borderBottom 2px 选中 / background 选中 #ffffff`
+ *
+ * 只覆盖这些白名单属性（不会破坏包内布局）：`border-radius / margin / padding / background* / border* /
+ * color / width / height / min-width / min-height / font / font-size / line-height / outline* / box-shadow`。
+ * 颜色一律走语义 token（`--bg-primary` / `--field-bg` / `--border-hairline` / `--text-*` / `--fill-*`），
+ * 深色由 identity.css 的 `[data-theme='dark']` 整段重写 token 自动生效 —— 本文件**不写第二套深色色值**。
+ * 文档内容（网格画布 / 单元格底色）保持 Excel 原色（Word-faithful 红线，A-03 明确不动 canvas）。
+ */
+
+/* ── A-01 去胶囊：外壳与工具条容器 ─────────────────────────────────────────── */
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-toolbar'] {
+  /* 包内 shell：padding 4px 0 5px / bg #fff / border-bottom #e2e8f0 */
+  padding: 4px 0 0 !important;
+  background: var(--bg-primary) !important;
+  border-bottom: none !important;
+  color: var(--text-secondary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] {
+  /* 包内胶囊：minHeight 36 / margin 0 8px 5px / padding 4px 7px / radius 18 / bg #edf2fa */
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 4px 8px !important;
+  border-radius: 0 !important;
+  background: var(--bg-primary) !important;
+  border-bottom: 1px solid var(--border-hairline) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* 公式栏紧跟工具条之下：底与 chrome 一致（原来继承 shell 的 #fff） */
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-editor-toolbar'] {
+  background: var(--bg-primary) !important;
+}
+
+/* ── A-02 按钮 26×26 / r6 / 12px / hover·active 走 token ─────────────────── */
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] button {
+  min-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 5px !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font: 500 12px var(--font-ui) !important;
+  line-height: 1 !important;
+  transition: background-color 120ms ease-main, color 120ms ease-main !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] button:not(:disabled):hover {
+  background: var(--fill-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] button:not(:disabled):active,
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] button[aria-pressed='true'] {
+  background: var(--fill-selected) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] button:disabled {
+  color: var(--text-disabled) !important;
+  opacity: 0.55 !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formatting-toolbar'] [role='separator'] {
+  width: 1px !important;
+  height: 20px !important;
+  margin: 0 3px !important;
+  background: var(--border-hairline) !important;
+}
+
+/* ── A-04 名称框 / fx / 公式输入：28 / r8 / field token / mono 12 / 暖灰焦点 ── */
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-name-box'] {
+  height: 28px !important;
+  border: 1px solid var(--border-field) !important;
+  border-radius: 8px !important;
+  background: var(--field-bg) !important;
+  color: var(--text-primary) !important;
+  font: 500 12px/18px var(--font-code) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-name-box']:focus {
+  /* 去包内 #2563eb 蓝：暖灰 inset 环 */
+  box-shadow: var(--focus-ring) !important;
+}
+
+/* fx 标记：包内是 italic 700 Georgia / #64748b → mono 12 */
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-name-box'] ~ span[aria-hidden='true'] {
+  width: 20px !important;
+  height: 28px !important;
+  color: var(--text-secondary) !important;
+  font: 500 12px var(--font-code) !important;
+  font-style: normal !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formula-input'] {
+  height: 28px !important;
+  border: 1px solid var(--border-field) !important;
+  border-radius: 8px !important;
+  background: var(--field-bg) !important;
+  color: var(--text-primary) !important;
+  font: 400 12px/18px var(--font-code) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formula-input']:focus {
+  box-shadow: var(--focus-ring) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-formula-input']::placeholder {
+  color: var(--text-tertiary-readable) !important;
+}
+
+/* ── A-03 深色 chrome：工作区底 / 表标签条（token 化，深浅自动翻档）─────────── */
+[data-testid='surface-xlsx-editor'] {
+  background: var(--bg-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* 包内 app 根：color #202124 / background #ffffff（不覆盖会在深色下露出白底） */
+.office-xlsx-editor {
+  background: var(--bg-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-workspace'] {
+  background: var(--bg-primary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-sheet-tabs'] {
+  /* 包内：gap 2 / padding 4px 6px / borderTop 1px #e0e0e0 / bg #fafafa */
+  gap: 4px !important;
+  padding: 4px 8px !important;
+  border-top: 1px solid var(--border-hairline) !important;
+  background: var(--bg-secondary) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-sheet-tabs'] button {
+  /* 包内：padding 4px 12px / borderBottom 2px / 选中 bg #ffffff */
+  padding: 4px 10px !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font: 500 12px var(--font-ui) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-sheet-tabs'] button:not(:disabled):hover {
+  background: var(--fill-hover) !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='xlsx-sheet-tabs'] button[aria-selected='true'] {
+  /* Office 的「选中 = 墨色下划线」，不用品牌蓝 */
+  color: var(--text-primary) !important;
+  background: transparent !important;
+  border-bottom: 2px solid var(--text-primary) !important;
+}
+
+/* ── A-05 能力说明行：12/18 · tertiary-readable · 单行 ellipsis（title 在 TSX 上）── */
+[data-testid='surface-xlsx-editor'] [data-testid='office-format-note'] {
+  margin: 0 !important;
+  padding: 4px 12px !important;
+  border-bottom: 1px solid var(--border-hairline) !important;
+  background: var(--bg-primary) !important;
+  color: var(--text-tertiary-readable) !important;
+  font-size: 12px !important;
+  line-height: 18px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+}
+
+[data-testid='surface-xlsx-editor'] [data-testid='office-format-note'] > span:first-child {
+  display: block !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}

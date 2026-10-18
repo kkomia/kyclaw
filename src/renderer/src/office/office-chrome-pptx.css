@@ -1,0 +1,176 @@
+/*
+ * PB-020 A 类：PowerPoint 编辑面 chrome 覆盖（A-01 去胶囊 / A-02 按钮 / A-03 深色 chrome / A-05 能力说明行）
+ *
+ * 来源包：**@betteroffice/pptx-react@0.2.0**（`node_modules/@betteroffice/pptx-react/dist/index.js`）。
+ *   与 xlsx 同源：chrome 全是 React inline style，无 CSS 可 import，故只能用 `!important` 覆盖。
+ *
+ * **升级复核清单（包升级时必须逐条重核）**：
+ *   1. `[data-testid=pptx-formatting-toolbar]`：`minHeight 36 / margin "0 8px 5px" / padding "4px 7px" /
+ *      borderRadius 18 / background #edf2fa`（与 xlsx 共用同一套调色板 q.*）
+ *   2. 工具条按钮：`minWidth 28 / height 28 / borderRadius 4 / font "500 13px"`；hover #e2e7ef / active #d3e3fd
+ *   3. 备注面板：`notesPanel` padding "8px 14px 10px" / background #ffffff / borderTop 1px #e2e8f0；
+ *      label `11 / 650 / #647087 / uppercase`；textarea `height 64 / resize vertical / border #d8dee9 /
+ *      radius 6 / font 13px / color #172033`
+ *   4. 缩略图轨 `slideStrip`：`width 184 / padding "14px 10px" / background #eef1f5 / borderRight 1px #d8dee9`；
+ *      单张缩略图 `lf(selected)`：`border 2px solid #325ee6`（选中）/ `transparent`（未选中）
+ *   5. 根容器 `re.root`：`background #f3f5f8 / color #172033`；幻灯片画布 `re.canvas` background #fff（**保持白纸**）
+ *
+ * 覆盖白名单：`border-radius / margin / padding / background* / border* / color / width / height /
+ * min-width / min-height / font / font-size / line-height / outline* / box-shadow`。
+ * 颜色只用语义 token（深色自动翻档）；**画布/幻灯片本体保持原色**（Word-faithful）。
+ *
+ * ⚠ 升级风险最高的两条（用的不是 testid）：
+ *   - 缩略图轨：靠 `[style*="width: 184px"]` 命中 `slideStrip`；
+ *   - 缩略图选中态：靠 `[style*="rgb(50, 94, 230)"]` 命中 `#325ee6`。
+ *   两条都写进升级复核清单；若升级后失配，应先跑「缩略图轨是否还是 184px / 选中色是否还是 #325ee6」。
+ */
+
+/* ── A-01 去胶囊：外壳与工具条容器 ─────────────────────────────────────────── */
+[data-testid='surface-pptx-editor'] [data-testid='pptx-editor-toolbar'] {
+  padding: 4px 0 0 !important;
+  background: var(--bg-primary) !important;
+  border-bottom: none !important;
+  color: var(--text-secondary) !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] {
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 4px 8px !important;
+  border-radius: 0 !important;
+  background: var(--bg-primary) !important;
+  border-bottom: 1px solid var(--border-hairline) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── A-02 按钮 26×26 / r6 / 12px / hover·active 走 token ─────────────────── */
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button {
+  min-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 5px !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+  font: 500 12px var(--font-ui) !important;
+  line-height: 1 !important;
+  transition: background-color 120ms ease-main, color 120ms ease-main !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button:not(:disabled):hover {
+  background: var(--fill-hover) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button:not(:disabled):active,
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button[aria-pressed='true'] {
+  background: var(--fill-selected) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button:disabled {
+  color: var(--text-disabled) !important;
+  opacity: 0.55 !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] [role='separator'] {
+  width: 1px !important;
+  height: 20px !important;
+  margin: 0 3px !important;
+  background: var(--border-hairline) !important;
+}
+
+/* ── A-03 深色 chrome：根/工作区/缩略图轨（token 化；画布仍白纸）──────────── */
+[data-testid='surface-pptx-editor'] {
+  background: var(--bg-primary) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* 包内 app 根：background #f3f5f8 / color #172033 */
+.office-pptx-editor {
+  background: var(--bg-secondary) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* 缩略图轨 slideStrip（包内 width:184px 是唯一锚点；升级复核见文件头） */
+[data-testid='surface-pptx-editor'] div[style*='width: 184px'] {
+  padding: 12px 8px !important;
+  background: var(--bg-secondary) !important;
+  border-right: 1px solid var(--border-hairline) !important;
+}
+
+/* 缩略图序号：包内 11 / #647087 */
+[data-testid='surface-pptx-editor'] div[style*='width: 184px'] span {
+  color: var(--text-tertiary-readable) !important;
+  font: 500 11px var(--font-code) !important;
+}
+
+/* 缩略图选中态：包内 border 2px solid #325ee6（rgb(50, 94, 230)）→ 墨色（A-08；脆弱选择器，已列升级清单） */
+[data-testid='surface-pptx-editor'] button[style*='rgb(50, 94, 230)'] {
+  border-color: var(--text-primary) !important;
+  background: var(--bg-primary) !important;
+}
+
+[data-testid='surface-pptx-editor'] button[style*='solid transparent']:hover {
+  background: var(--fill-hover) !important;
+}
+
+/* 备注面板容器：包内 notesPanel（padding 8/14/10 · #fff · borderTop #e2e8f0）；无 testid，用 :has 定位 */
+[data-testid='surface-pptx-editor'] div:has(> [data-testid='pptx-notes-textarea']) {
+  padding: 8px 12px 10px !important;
+  background: var(--bg-primary) !important;
+  border-top: 1px solid var(--border-hairline) !important;
+}
+
+/* 备注 label：包内 11 / 650 / uppercase / #647087 → 12/18 · 500 · 非大写 */
+[data-testid='surface-pptx-editor'] div:has(> [data-testid='pptx-notes-textarea']) > span {
+  font-size: 12px !important;
+  line-height: 18px !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary) !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+/* 备注 textarea：64 / r8 / field token / 13-20 / 去 resize handle */
+[data-testid='surface-pptx-editor'] [data-testid='pptx-notes-textarea'] {
+  height: 64px !important;
+  resize: none !important;
+  padding: 6px 8px !important;
+  border: 1px solid var(--border-field) !important;
+  border-radius: 8px !important;
+  background: var(--field-bg) !important;
+  color: var(--text-primary) !important;
+  font: 400 13px/20px var(--font-ui) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-notes-textarea']:focus {
+  box-shadow: var(--focus-ring) !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='pptx-notes-textarea']::placeholder {
+  color: var(--text-tertiary-readable) !important;
+}
+
+/* ── A-05 能力说明行：12/18 · tertiary-readable · 单行 ellipsis（title 在 TSX 上）── */
+[data-testid='surface-pptx-editor'] [data-testid='office-format-note'] {
+  margin: 0 !important;
+  padding: 4px 12px !important;
+  border-bottom: 1px solid var(--border-hairline) !important;
+  background: var(--bg-primary) !important;
+  color: var(--text-tertiary-readable) !important;
+  font-size: 12px !important;
+  line-height: 18px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+}
+
+[data-testid='surface-pptx-editor'] [data-testid='office-format-note'] > span:first-child {
+  display: block !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
