@@ -5,6 +5,7 @@ import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/components/ui/cn'
 import { EmptyState, PageTitle } from '@renderer/components/ui/page-chrome'
 import { openBlockReason, planMounts, shouldReloadSurface } from './office-capacity'
+import { INVALID_OFFICE_FILE_MESSAGE, hasZipMagic } from './office-bytes'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, officePanelIdOf } from './office-kinds'
 import {
   closeOfficeTab,
@@ -456,6 +457,12 @@ function OfficeWorkspace({
       .then((result) => {
         if (!alive) return
         if (result.ok) {
+          // PB-023：打开前先验 ZIP 魔数——坏文件在这一步就给人话错误，不等上游引擎静默挂起
+          if (!hasZipMagic(result.bytes)) {
+            setLoaded(null)
+            setDocError(INVALID_OFFICE_FILE_MESSAGE)
+            return
+          }
           // 读盘成功 = 这个面复用了一次（首开/整面重载后的重读都算）
           reuseCountRef.current += 1
           setLoaded({ info: result.document, bytes: result.bytes })
@@ -470,6 +477,16 @@ function OfficeWorkspace({
       alive = false
     }
   }, [isEditor, tab.documentId, reloadGeneration])
+
+  /**
+   * PB-023：进入文档后 10s 仍未 doc:loaded 且无错误 → 超时错误（三格式通用兜底，
+   * 防上游引擎在损坏文件上静默挂起；用户可点重试）。
+   */
+  useEffect(() => {
+    if (loaded === null || editorReady || docError !== '') return
+    const timer = window.setTimeout(() => setDocError('打开超时，可重试'), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [loaded, editorReady, docError])
 
   /** M3-S5-3：激活一次 = 复用一次（ref 计数，不触发渲染） */
   useEffect(() => {

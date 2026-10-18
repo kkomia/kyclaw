@@ -23,13 +23,21 @@ afterEach(() => {
   document.documentElement.removeAttribute('data-theme')
 })
 
+/** PB-023：Office 文档是 ZIP 容器；测试字节补上 ZIP 魔数（真实读取路径会先校验） */
+function withZipMagic(bytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(4 + bytes.length)
+  out.set([0x50, 0x4b, 0x03, 0x04])
+  out.set(bytes, 4)
+  return out
+}
+
 /** 装桥 + 让 office:read 默认回一份可显示文档（标签打开后 workspace 才有内容） */
 function installOfficeBridge(
   document = officeDocumentFixture(),
   bytes = new Uint8Array([1, 2, 3])
 ): KyclawBridgeStubs {
   const bridge = installKyclawBridge()
-  bridge.office.read.mockResolvedValue({ ok: true, document, bytes })
+  bridge.office.read.mockResolvedValue({ ok: true, document, bytes: withZipMagic(bytes) })
   return bridge
 }
 
@@ -952,5 +960,53 @@ describe('PB-023：打开错误与保存错误分开（错误横幅 + 重试/关
     await screen.findByTestId('office-doc-error')
     fireEvent.click(screen.getByTestId('office-doc-error-close'))
     await waitFor(() => expect(screen.getByTestId('office-empty')).toBeInTheDocument())
+  })
+
+  it('PB-023 返工：非 ZIP 字节（坏文件）→ 立即文档错误，不进加载', async () => {
+    const document = officeDocumentFixture({ documentId: 'doc-bad-zip', displayName: '坏.xlsx' })
+    const bridge = installKyclawBridge()
+    bridge.office.read.mockResolvedValue({
+      ok: true,
+      document,
+      // 16B 坏 zip 的典型：不是 PK 开头
+      bytes: new Uint8Array([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])
+    })
+    bridge.office.openDialog.mockResolvedValue({ ok: true, document, alreadyOpen: false })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+
+    const banner = await screen.findByTestId('office-doc-error')
+    expect(banner).toHaveTextContent('不是有效的 Office 文档')
+    expect(screen.getByTestId('office-doc-error-retry')).toBeInTheDocument()
+    expect(screen.getByTestId('office-doc-error-close')).toBeInTheDocument()
+    // 文档没有进入「已加载」态（错误来自读盘前的 ZIP 校验，不等引擎）
+    expect(screen.getByTestId('office-workspace')).toHaveAttribute(
+      'data-document-state',
+      'error'
+    )
+  })
+
+  it('PB-023 返工：进入文档后 10s 未 doc:loaded → 打开超时错误（三格式兜底）', async () => {
+    const timerSpy = vi.spyOn(window, 'setTimeout')
+    const document = officeDocumentFixture({ documentId: 'doc-slow', displayName: '慢.docx' })
+    installOfficeBridge(document)
+    useOfficeTabsStore.getState().openDocument(document)
+    render(<OfficePage />)
+
+    // 等读盘落定（loaded 后才会排 10s 看门狗）
+    await waitFor(() =>
+      expect(screen.getByTestId('office-workspace')).toHaveAttribute(
+        'data-document-state',
+        'loaded'
+      )
+    )
+    const watchdog = timerSpy.mock.calls.find((call) => call[1] === 10_000)
+    expect(watchdog).toBeDefined()
+    act(() => {
+      ;(watchdog?.[0] as () => void)()
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('office-doc-error')).toHaveTextContent('打开超时')
+    )
   })
 })
