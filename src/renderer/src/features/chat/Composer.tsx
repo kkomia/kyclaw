@@ -341,6 +341,12 @@ export function Composer({
       setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
       return
     }
+    // CR-01：textarea 出现纵向滚动条时 clientWidth 会少 6px（全局 ::-webkit-scrollbar 宽 6px，
+    // tailwind.css/semantic.css），而镜像层 overflow-hidden 没有滚动条槽——宽度不跟 clientWidth
+    // 会让折行点差 6px，长文本的 caret 会整行漂。每次测量前把镜像内层宽度钉到 textarea.clientWidth。
+    if (mirror.style !== undefined && textarea.clientWidth > 0) {
+      mirror.style.width = `${textarea.clientWidth}px`
+    }
     const rect = caretRectAtOffset(mirror, textarea.selectionStart ?? 0)
     if (rect === null) {
       setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
@@ -387,6 +393,13 @@ export function Composer({
   }, [caretCustom])
 
   useEffect(() => {
+    // CR-01：镜像层同时承载引用 chip 的覆盖层——即使自绘 caret 关闭（caret=off）或 IME 中，
+    // 滚动条槽出现时也要把镜像宽度钉到 textarea.clientWidth，否则长文本 chip/量位都会漂 6px。
+    const textarea = textareaRef.current
+    const mirror = mirrorRef.current?.firstElementChild
+    if (textarea !== null && mirror !== null && mirror !== undefined && textarea.clientWidth > 0) {
+      mirror.style.width = `${textarea.clientWidth}px`
+    }
     if (!caretCustom) return
     const frame = requestAnimationFrame(() => syncComposerCaret())
     return () => cancelAnimationFrame(frame)

@@ -2424,6 +2424,83 @@ describe('P1b · Composer 自绘 caret', () => {
     expect(input).toHaveAttribute('data-caret', 'custom')
     expect(screen.getByTestId('composer-caret')).toHaveClass('composer-caret')
   })
+
+  /** CR-03/18：给 Range 换一组可控的几何（字形盒 top/height）——jsdom 没有布局，用 mock 驱动行为 */
+  const defineRangeRect = (rect: { top: number; height: number; left?: number }): void => {
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () =>
+        ({
+          x: rect.left ?? 16,
+          y: rect.top,
+          left: rect.left ?? 16,
+          top: rect.top,
+          right: rect.left ?? 16,
+          bottom: rect.top + rect.height,
+          width: 0,
+          height: rect.height,
+          toJSON: () => ({})
+        }) as DOMRect
+    })
+  }
+
+  const prepareLayout = (input: HTMLTextAreaElement, clientHeight = 0): void => {
+    Object.defineProperty(input, 'clientHeight', { configurable: true, value: clientHeight })
+    input.style.lineHeight = '24px'
+    input.style.paddingTop = '7px'
+    input.style.paddingBottom = '7px'
+  }
+
+  it('CR-03：caret 按行盒 half-leading 居中（Range 是字形盒，不是行盒）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    prepareLayout(input)
+    // 字形盒 top=12 / height=17，行盒 24 → half-leading = 3.5 → caret top = round(8.5) = 9
+    defineRangeRect({ top: 12, height: 17 })
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'x' } })
+
+    const caret = await screen.findByTestId('composer-caret')
+    await waitFor(() => expect(caret).toHaveStyle({ top: '9px' }))
+    expect(caret).toHaveStyle({ height: '24px' })
+  })
+
+  it('CR-18：行完全滚出视口 → 自绘 caret 隐藏（与原生 textarea 一致）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    prepareLayout(input, 180)
+    // 行在视口上方（rawTop < paddingTop）
+    defineRangeRect({ top: -200, height: 17 })
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'x' } })
+
+    await waitFor(() => expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument())
+  })
+
+  it('CR-18：行部分可见 → caret 钳进内容盒（绝不画进 padding 区）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    prepareLayout(input, 180)
+    // 字形盒 top=165 → 行盒 top≈161.5；内容盒 7..173，24 高放不下 → 钳到 173-24=149
+    defineRangeRect({ top: 165, height: 17 })
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'x' } })
+
+    const caret = await screen.findByTestId('composer-caret')
+    await waitFor(() => expect(caret).toHaveStyle({ top: '149px' }))
+  })
+
+  it('CR-01：镜像层宽度跟 textarea.clientWidth（滚动条槽 6px 不让折行点漂移）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    const layer = screen.getByTestId('composer-mirror').firstElementChild as HTMLElement
+    // 长文本触发滚动条后 clientWidth 变窄；镜像层必须跟它走，否则折行点差 6px
+    Object.defineProperty(input, 'clientWidth', { configurable: true, value: 300 })
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '长文本'.repeat(40) } })
+
+    await waitFor(() => expect(layer.style.width).toBe('300px'))
+  })
 })
 
 /** 动效 B §2.4：caret=off 时不自绘、走原生 caret（颜色已是 --accent）。 */
