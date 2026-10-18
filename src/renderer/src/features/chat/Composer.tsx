@@ -1059,7 +1059,7 @@ export function Composer({
               submit()
             }}
             className={cn(
-              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent py-2 pr-4 pl-4 font-sans text-b2 leading-6 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
+              'composer-caret-input relative z-10 field-sizing-content block max-h-(--composer-input-max-height) w-full resize-none overflow-y-auto bg-transparent py-2 pr-10 pl-4 font-sans text-b2 leading-6 text-ink outline-none transition-[min-height] duration-(--motion-main) ease-main placeholder:text-(--text-tertiary-readable) focus-visible:shadow-none motion-reduce:transition-none',
               // round 64：常态 56、初始页一档更高（见 ComposerProps.hero）；换档有过渡，不硬切
               hero
                 ? 'min-h-(--composer-input-min-height-hero)'
@@ -1081,89 +1081,8 @@ export function Composer({
               }}
             />
           ) : null}
-        </div>
 
-        {shownNotice === null ? null : (
-          <p
-            data-testid="composer-notice"
-            className={cn(
-              'px-3 pb-1 text-c1',
-              shownNotice.tone === 'danger'
-                ? 'text-danger'
-                : shownNotice.tone === 'success'
-                  ? 'text-ink-secondary'
-                  : 'text-warning'
-            )}
-          >
-            {shownNotice.text}
-          </p>
-        )}
-
-        <input
-          ref={fileInputRef}
-          data-testid="composer-file-input"
-          type="file"
-          multiple
-          hidden
-          onChange={(event) => {
-            void pickFiles(Array.from(event.target.files ?? []))
-            event.target.value = ''
-          }}
-        />
-
-        {/* DSH tray（task-124）：footer 在卡内底行，与输入区之间 1px hairline；权限/模型/强度/上下文/发送同排 */}
-        <div
-          data-testid="composer-footer-tray"
-          className="mt-0 flex w-full items-center border-t border-hairline px-3 pt-1.5 pb-1.5"
-        >
-          <div
-            data-testid="composer-footer"
-            className="flex h-(--composer-toolbar-height) w-full items-center gap-2"
-          >
-            <PlusMenu
-              onAddFile={() => fileInputRef.current?.click()}
-              onReference={addReference}
-              contextLabel={contextLabel}
-              plugins={enabledPlugins}
-              skills={installedSkills}
-              onOpenMenu={refreshSkills}
-              mode={mode}
-            />
-            <PermissionChip
-              workspace={rootWorkspace}
-              reason={permissionReason}
-              onNotice={setNotice}
-            />
-
-            <span className="min-w-0 flex-1 truncate">
-              {blocked && pending.label !== null ? (
-                <span
-                  data-testid="composer-pending"
-                  role="status"
-                  className="text-c1 text-ink-tertiary"
-                >
-                  {pending.label}
-                </span>
-              ) : queuedCount > 0 ? (
-                <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
-                  已排队 {queuedCount} 条，当前回复结束后自动发出
-                </span>
-              ) : null}
-            </span>
-
-            {settings.providers.length === 0 ? null : (
-              <>
-                <ModelChip onNotice={setNotice} />
-                <ContextChip
-                  threadId={threadId}
-                  onCompact={onCompact}
-                  compactBusy={compactBusy}
-                  compactDisabled={compactDisabled}
-                  usageVersion={usageVersion}
-                />
-              </>
-            )}
-
+          <div className="absolute right-2 bottom-2 z-30">
             {busy ? (
               <button
                 type="button"
@@ -1250,6 +1169,88 @@ export function Composer({
               </button>
             )}
           </div>
+        </div>
+
+        {shownNotice === null ? null : (
+          <p
+            data-testid="composer-notice"
+            className={cn(
+              'px-3 pb-1 text-c1',
+              shownNotice.tone === 'danger'
+                ? 'text-danger'
+                : shownNotice.tone === 'success'
+                  ? 'text-ink-secondary'
+                  : 'text-warning'
+            )}
+          >
+            {shownNotice.text}
+          </p>
+        )}
+
+        <input
+          ref={fileInputRef}
+          data-testid="composer-file-input"
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            void pickFiles(Array.from(event.target.files ?? []))
+            event.target.value = ''
+          }}
+        />
+      </div>
+      {/* task-131：footer 整行放回输入卡外、卡下方（同宽同 left、6px 间距、无边框/无卡面底） */}
+      <div
+        data-testid="composer-footer-outer"
+        className="mx-auto mt-1.5 flex w-full max-w-(--chat-input-max-width) items-center px-1"
+      >
+        <div
+          data-testid="composer-footer"
+          className="flex h-(--composer-toolbar-height) w-full items-center gap-2"
+        >
+          <PlusMenu
+            onAddFile={() => fileInputRef.current?.click()}
+            onReference={addReference}
+            contextLabel={contextLabel}
+            plugins={enabledPlugins}
+            skills={installedSkills}
+            onOpenMenu={refreshSkills}
+            mode={mode}
+          />
+          <PermissionChip
+            workspace={rootWorkspace}
+            reason={permissionReason}
+            onNotice={setNotice}
+          />
+
+          <span className="min-w-0 flex-1 truncate">
+            {blocked && pending.label !== null ? (
+              <span
+                data-testid="composer-pending"
+                role="status"
+                className="text-c1 text-ink-tertiary"
+              >
+                {pending.label}
+              </span>
+            ) : queuedCount > 0 ? (
+              <span data-testid="composer-queue" className="text-c1 text-ink-secondary">
+                已排队 {queuedCount} 条，当前回复结束后自动发出
+              </span>
+            ) : null}
+          </span>
+
+          {settings.providers.length === 0 ? null : (
+            <>
+              <ModelChip onNotice={setNotice} />
+              <ContextChip
+                threadId={threadId}
+                onCompact={onCompact}
+                compactBusy={compactBusy}
+                compactDisabled={compactDisabled}
+                usageVersion={usageVersion}
+              />
+            </>
+          )}
         </div>
       </div>
     </div>

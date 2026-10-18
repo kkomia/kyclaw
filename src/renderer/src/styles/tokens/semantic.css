@@ -154,7 +154,7 @@
 
   /* ── 输入卡内部两段（§4.5 / round 64：最小高 48 → 56；初始页 hero 72） ── */
   --composer-input-min-height: 36px;
-  --composer-input-min-height-hero: 86px;
+  --composer-input-min-height-hero: 36px;
   --composer-input-max-height: 170px;
   --composer-toolbar-height: 48px;
 

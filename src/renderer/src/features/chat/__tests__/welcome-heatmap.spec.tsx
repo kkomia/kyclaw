@@ -44,6 +44,23 @@ describe('task-127 欢迎页日历热力图', () => {
     expect(grid.querySelectorAll('[data-out="true"]')).toHaveLength(371 - 365)
   })
 
+  it('标题/副题整块删除；网格、统计、图例、年份切换仍在', async () => {
+    renderHeatmap(async (year) => calendar(year, [day('2026-03-04', 500, 100, 4, 6)]))
+    await waitFor(() => expect(screen.getByTestId('welcome-heatmap-stat')).toBeInTheDocument())
+
+    // 用户口径：首页热力图上方「本地活动」+「近一年 · 数据不出这台机器」整块删掉
+    expect(screen.queryByRole('heading', { name: '本地活动' })).not.toBeInTheDocument()
+    expect(screen.queryByText('本地活动')).not.toBeInTheDocument()
+    expect(screen.queryByText('近一年 · 数据不出这台机器')).not.toBeInTheDocument()
+
+    // 保留下来的读数
+    expect(screen.getByTestId('welcome-heatmap-grid')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-heatmap-stat')).toHaveTextContent('1 个活跃日')
+    expect(screen.getByTestId('welcome-heatmap-year-nav')).toBeInTheDocument()
+    expect(screen.getByTestId('welcome-heatmap-year')).toHaveTextContent('2026')
+    expect(document.querySelectorAll('.welcome-heatmap-legend i')).toHaveLength(5)
+  })
+
   it('色阶：有记录的天 level > 0、空天 0；图例 5 档；aria 汇总含活跃日/tokens', async () => {
     renderHeatmap(async (year) =>
       calendar(year, [
@@ -98,7 +115,9 @@ describe('task-127 欢迎页日历热力图', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('welcome-heatmap-inline')).not.toBeInTheDocument()
     )
-    expect(screen.getByText('近一年 · 数据不出这台机器')).toBeInTheDocument()
+    // 标题/副题已删；离开首行 hover 后只剩年份行
+    expect(screen.queryByText('近一年 · 数据不出这台机器')).not.toBeInTheDocument()
+    expect(screen.getByTestId('welcome-heatmap-year')).toBeInTheDocument()
   })
 
   it('hover 非首行：浮卡（portal）出现日期/tokens/轮次，移出消失', async () => {
@@ -191,10 +210,7 @@ describe('task-127 欢迎页日历热力图', () => {
     expect(css).toContain('--hm-gap: 3px')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('transform: none')
-    // 矮窗：760 以下收副题+底部统计，620 以下整块隐藏（输入卡不被挤）；620–759（含实测 660）同一压缩档
-    expect(css).toMatch(
-      /@media \(max-height: 759px\)[\s\S]*?\.welcome-heatmap-sub[\s\S]*?display: none/
-    )
+    // 矮窗：760 以下收底部统计/图例，620 以下整块隐藏（输入卡不被挤）；620–759（含实测 660）同一压缩档
     expect(css).toMatch(
       /@media \(max-height: 759px\)[\s\S]*?\.welcome-heatmap-foot[\s\S]*?display: none/
     )
@@ -202,6 +218,9 @@ describe('task-127 欢迎页日历热力图', () => {
       /@media \(max-height: 619px\)[\s\S]*?\.welcome-heatmap[\s\S]*?display: none/
     )
     expect(css).toContain('含实测 660')
+    // 标题/副题样式已随 DOM 一起删除（防回潮）
+    expect(css).not.toContain('.welcome-heatmap-sub')
+    expect(css).not.toContain('.welcome-heatmap-title')
     // 首行 hover 的轻量读数（不挡网格/图例）
     expect(css).toContain('.welcome-heatmap-inline')
     expect(css).toContain('text-overflow: ellipsis')

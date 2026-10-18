@@ -14,40 +14,29 @@
   --hm-l4: color-mix(in srgb, var(--accent-text) 88%, transparent);
   box-sizing: border-box;
   width: min(100%, calc(var(--chat-content-width, 880px) + 32px));
-  margin-inline: auto;
-  padding: 4px 16px 10px;
+  /* 标题/副题删除后：把整块上提 16px（tagline→year 由 ~48 收到 ~32），
+     不空一大块、也不贴住 tagline；矮窗规则不变。 */
+  margin: -16px auto 0;
+  padding: 0 16px 8px;
 }
 
 .welcome-heatmap-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-height: 20px;
 }
 
-.welcome-heatmap-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+.welcome-heatmap-head-spacer {
+  flex: 1;
   min-width: 0;
 }
 
-.welcome-heatmap-title h2 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--text-primary);
-}
-
-.welcome-heatmap-sub {
-  font-size: 11px;
-  color: var(--text-tertiary-readable);
-  white-space: nowrap;
-}
-
-/* 首行/靠上格子的轻量读数：写进标题行（替换副题），不遮网格/图例；宽度不够时省略号。 */
+/* 首行/靠上格子的轻量读数：临时占 year 行左侧（不遮网格/图例），不 hover 时是空 spacer；
+   宽度不够时省略号。 */
 .welcome-heatmap-inline {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -108,7 +97,7 @@
   grid-template-rows: 14px auto;
   column-gap: 8px;
   row-gap: 4px;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .welcome-heatmap-months {
@@ -344,18 +333,15 @@
   outline-offset: 1px;
 }
 
-/* 矮窗压缩策略（DESIGN §9）：760 以下收起副题与底部统计/图例，只留标题+网格；
-   620–759 之间（含实测 660）一致走压缩态，不出现布局跳动/溢出；
+/* 矮窗压缩策略（DESIGN §9，标题/副题已删后适配）：760 以下收起底部统计/图例，只留
+   年份行 + 网格；620–759 之间（含实测 660）一致走压缩态，不出现布局跳动/溢出；
    620 以下整块隐藏（hero 回到只有报头/输入卡的现状），保证输入卡在一屏内不被挤、无滚动条。 */
 @media (max-height: 759px) {
-  .welcome-heatmap-sub {
-    display: none;
-  }
   .welcome-heatmap-foot {
     display: none;
   }
   .welcome-heatmap-plot {
-    margin-top: 8px;
+    margin-top: 6px;
   }
 }
 

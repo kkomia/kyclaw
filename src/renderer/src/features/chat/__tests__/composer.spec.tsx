@@ -1065,23 +1065,24 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(group).toContainElement(effort)
   })
 
-  it('task-124/DSH：footer tray 在 composer 卡内底行（卡内、无 footer-outer）', () => {
+  it('task-131：footer 整行在卡外、卡下方（无 tray、无卡内 footer）', () => {
     setup()
     const card = screen.getByTestId('composer')
-    const tray = screen.getByTestId('composer-footer-tray')
-    expect(card).toContainElement(tray)
-    expect(card).toContainElement(screen.getByTestId('composer-footer'))
-    expect(screen.queryByTestId('composer-footer-outer')).not.toBeInTheDocument()
-    expect(tray).toHaveClass('border-t', 'border-hairline')
+    const outer = screen.getByTestId('composer-footer-outer')
+    expect(card).not.toContainElement(outer)
+    expect(card).not.toContainElement(screen.getByTestId('composer-footer'))
+    expect(screen.getByTestId('composer-anchor')).toContainElement(outer)
+    expect(outer).toHaveClass('mt-1.5', 'mx-auto', 'w-full', 'max-w-(--chat-input-max-width)')
+    expect(screen.queryByTestId('composer-footer-tray')).not.toBeInTheDocument()
     expect(screen.getByTestId('composer-send')).toBeInTheDocument()
   })
 
-  it('task-110：发送在卡内、单行输入；发送钮无圆形外框；footer 不再含发送', () => {
+  it('task-131：发送在卡内右端、单行输入；footer 不含发送；发送钮无圆形外框', () => {
     setup()
     const card = screen.getByTestId('composer')
     const send = screen.getByTestId('composer-send')
     expect(card).toContainElement(send)
-    expect(screen.getByTestId('composer-footer')).toContainElement(send)
+    expect(screen.getByTestId('composer-footer')).not.toContainElement(send)
     expect(screen.getByTestId('composer-input')).toHaveClass(
       'py-2',
       'min-h-[calc(40px*var(--ui-scale,1))]'
@@ -1109,10 +1110,12 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     expect(screen.getByTestId('model-context-front')).toBeInTheDocument()
   })
 
-  it('task-124：hero 变体 footer tray 同样在卡内', () => {
+  it('task-131：hero 变体 footer 同样在卡外', () => {
     setup({ hero: true })
-    expect(screen.getByTestId('composer')).toContainElement(screen.getByTestId('composer-footer'))
-    expect(screen.queryByTestId('composer-footer-outer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('composer')).not.toContainElement(
+      screen.getByTestId('composer-footer')
+    )
+    expect(screen.getByTestId('composer-footer-outer')).toBeInTheDocument()
   })
 
   it('对话长度：滑块 10–100，拖动只改草稿、松手（pointerUp）才落盘；显示百分比与换算', async () => {
@@ -2106,14 +2109,14 @@ describe('round 64 · 输入区默认高度（常态抬高 + 空态再高一档�
     expect(input).toHaveClass('py-2')
   })
 
-  it('初始页（hero）：DSH 86px；换档有过渡（不硬切）', () => {
+  it('初始页（hero）：同样单行 36px；换档有过渡（不硬切）', () => {
     setup({ hero: true })
 
     const input = screen.getByTestId('composer-input')
     expect(input).toHaveClass('min-h-(--composer-input-min-height-hero)')
     expect(input).toHaveClass('transition-[min-height]')
     // task-118：hero 不再高一档
-    expect(pxTokenOf('composer-input-min-height-hero')).toBe(86)
+    expect(pxTokenOf('composer-input-min-height-hero')).toBe(36)
     expect(pxTokenOf('composer-input-min-height')).toBe(36)
     // 封顶没变：长内容照旧到 max 之后内部滚动
     expect(input).toHaveClass('max-h-(--composer-input-max-height)')

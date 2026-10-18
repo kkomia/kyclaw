@@ -186,22 +186,20 @@ export function WelcomeHeatmap({
 
   return (
     <section className="welcome-heatmap" data-testid="welcome-heatmap" aria-label={summary}>
+      {/* 标题/副题已按用户口径整块删除；这一行只保留年份切换（及首行 hover 的轻量读数，不占常驻高度）。 */}
       <div className="welcome-heatmap-head">
-        <div className="welcome-heatmap-title">
-          <h2>本地活动</h2>
-          {compactHover !== null && compactHover.cell.day !== null ? (
-            <span
-              className="welcome-heatmap-inline font-mono"
-              data-testid="welcome-heatmap-inline"
-              title={monthDateLabel(compactHover.cell.date ?? '')}
-            >
-              {compactHover.cell.date?.slice(5)} · {formatTokens(compactHover.cell.tokens)} tokens ·{' '}
-              {compactHover.cell.day.runs} 轮
-            </span>
-          ) : (
-            <span className="welcome-heatmap-sub">近一年 · 数据不出这台机器</span>
-          )}
-        </div>
+        {compactHover !== null && compactHover.cell.day !== null ? (
+          <span
+            className="welcome-heatmap-inline font-mono"
+            data-testid="welcome-heatmap-inline"
+            title={monthDateLabel(compactHover.cell.date ?? '')}
+          >
+            {compactHover.cell.date?.slice(5)} · {formatTokens(compactHover.cell.tokens)} tokens ·{' '}
+            {compactHover.cell.day.runs} 轮
+          </span>
+        ) : (
+          <span className="welcome-heatmap-head-spacer" aria-hidden="true" />
+        )}
         <div
           className="welcome-heatmap-year"
           data-testid="welcome-heatmap-year-nav"
