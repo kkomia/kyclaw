@@ -63,11 +63,17 @@ function renderAt(path: string): void {
   )
 }
 
+/** 懒路由页面 chunk 在并行负载下可能 >1s 才落定：异步断言给足窗口，不降断言强度。 */
+const SUSPENSE_TIMEOUT = 8_000
+
 /** 等主对话这一挂的历史回灌收尾（测试结束前把请求清干净，别落到已摘掉的桥上） */
 async function waitForChatReady(title = '会话 A'): Promise<void> {
-  await waitFor(() => {
-    expect(screen.getByTestId('chat-title')).toHaveTextContent(title)
-  })
+  await waitFor(
+    () => {
+      expect(screen.getByTestId('chat-title')).toHaveTextContent(title)
+    },
+    { timeout: SUSPENSE_TIMEOUT }
+  )
 }
 
 beforeEach(() => {
@@ -280,27 +286,38 @@ describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => 
     fireEvent.click(screen.getByTestId('primary-nav-settings'))
 
     // 设置页出来了，但主对话只是 hidden+inert：同一节点、没有第二个聊天
-    expect(await screen.findByTestId('settings-page')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('settings-page', {}, { timeout: SUSPENSE_TIMEOUT })
+    ).toBeInTheDocument()
     expect(screen.getByTestId('chat-page')).toBe(chat)
     expect(screen.getAllByTestId('chat-page')).toHaveLength(1)
     expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
     expect(screen.getByTestId('module-chat')).toHaveAttribute('inert')
     // 设置二级栏仍由 AppShell 的 inSettings 分支给（布局口径不变）
-    expect(screen.getByTestId('settings-nav')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('settings-nav', {}, { timeout: SUSPENSE_TIMEOUT })
+    ).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('primary-nav-chat'))
 
-    expect(screen.getByTestId('chat-page')).toBe(chat)
-    expect(screen.getByTestId('composer-input')).toBe(input)
-    expect(input).toHaveValue('去设置前写的草稿')
-    expect(screen.getByTestId('module-chat')).not.toHaveClass('hidden')
-    expect(screen.getByTestId('module-chat')).not.toHaveAttribute('inert')
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('chat-page')).toBe(chat)
+        expect(screen.getByTestId('composer-input')).toBe(input)
+        expect(input).toHaveValue('去设置前写的草稿')
+        expect(screen.getByTestId('module-chat')).not.toHaveClass('hidden')
+        expect(screen.getByTestId('module-chat')).not.toHaveAttribute('inert')
+      },
+      { timeout: SUSPENSE_TIMEOUT }
+    )
   })
 
   it('设置深链不预挂聊天（与 /notes 同口径）：chat-page 不在 DOM；首次进对话才挂上', async () => {
     renderAt('/settings')
 
-    expect(await screen.findByTestId('settings-page')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('settings-page', {}, { timeout: SUSPENSE_TIMEOUT })
+    ).toBeInTheDocument()
     expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('primary-nav-chat'))
@@ -340,14 +357,24 @@ describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => 
     ] as const
     for (const [link, page] of stops) {
       fireEvent.click(screen.getByTestId(link))
-      expect(await screen.findByTestId(page)).toBeInTheDocument()
-      expect(screen.getByTestId('chat-page')).toBe(chat)
-      expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
+      expect(await screen.findByTestId(page, {}, { timeout: SUSPENSE_TIMEOUT })).toBeInTheDocument()
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('chat-page')).toBe(chat)
+          expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
+        },
+        { timeout: SUSPENSE_TIMEOUT }
+      )
     }
 
     fireEvent.click(screen.getByTestId('go-chat'))
-    expect(screen.getByTestId('chat-page')).toBe(chat)
-    expect(screen.getByTestId('composer-input')).toBe(input)
-    expect(input).toHaveValue('旧深链往返的草稿')
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('chat-page')).toBe(chat)
+        expect(screen.getByTestId('composer-input')).toBe(input)
+        expect(input).toHaveValue('旧深链往返的草稿')
+      },
+      { timeout: SUSPENSE_TIMEOUT }
+    )
   })
 })
