@@ -258,9 +258,15 @@ export function createOfficeProtocolHandler(
       return textResponse(404, 'not found')
     }
 
+    // task-100（用户反馈：Office 字体预注册没吃到）：
+    // 只有**内容哈希的构建资产**（/assets/ 下的 js/css/字体）允许进 Chromium HTTP cache；
+    // 之前整个协议一律 `no-store`，导致启动预热面白读 27MB —— 真实文档面再读一遍，
+    // 预热完全吃不到。HTML 入口仍 `no-store`（入口要每次校验，避免 dev/更新后拿旧页面）。
+    const pathname = new URL(request.url).pathname
+    const immutableAsset = pathname.startsWith('/assets/')
     const headers: Record<string, string> = {
       'content-type': asset.contentType,
-      'cache-control': 'no-store',
+      'cache-control': immutableAsset ? 'public, max-age=31536000, immutable' : 'no-store',
       'x-content-type-options': 'nosniff',
       'accept-ranges': 'bytes'
     }

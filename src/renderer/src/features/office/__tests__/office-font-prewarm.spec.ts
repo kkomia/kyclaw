@@ -18,8 +18,10 @@ function read(relativePath: string): string {
 
 const prewarmTs = read('../office-font-prewarm.ts')
 const protocolTs = read('../../../office/font-prewarm-protocol.ts')
+const bridgeProtocolTs = read('../../../office/bridge-protocol.ts')
 const surfaceBootTsx = read('../../../office/SurfaceBoot.tsx')
 const rendererMainTsx = read('../../../main.tsx')
+const officeSurfaceTsx = read('../OfficeSurface.tsx')
 
 describe('字体预注册：URL / dataset 纯函数', () => {
   it('预热面 URL = 正常 surface URL + officePrewarm=1（保留原 query）', () => {
@@ -71,27 +73,65 @@ describe('字体预注册：消息协议守卫', () => {
 })
 
 describe('字体预注册：启动接线与面侧行为（源码契约）', () => {
-  it('renderer 入口在首屏后排 idle 预热（不等 Office 打开）', () => {
+  it('renderer 入口在**启动阶段**预热（initTheme 后、不等 idle，与首屏并行；task-100）', () => {
     expect(rendererMainTsx).toContain(
       "import { scheduleOfficeFontPrewarm } from './features/office/office-font-prewarm'"
     )
     expect(rendererMainTsx).toContain('scheduleOfficeFontPrewarm()')
-    // 在 start() 之后（首屏提交后）调用
+    // 在 initTheme() 之后、start() 之前调度：启动阶段就并行，不再等「首屏提交后 idle」
     expect(rendererMainTsx.indexOf('scheduleOfficeFontPrewarm()')).toBeGreaterThan(
+      rendererMainTsx.indexOf('initTheme()')
+    )
+    expect(rendererMainTsx.indexOf('scheduleOfficeFontPrewarm()')).toBeLessThan(
       rendererMainTsx.indexOf('start()')
     )
-    expect(prewarmTs).toContain('requestIdleCallback')
-    expect(prewarmTs).toContain('PREWARM_DELAY_MS')
+    // 首帧让位（rAF 一次）后立刻开始：不再有 idle 长延迟
+    expect(prewarmTs).toContain('requestAnimationFrame')
+    expect(prewarmTs).not.toContain('requestIdleCallback')
+    expect(prewarmTs).not.toContain('PREWARM_DELAY_MS')
   })
 
-  it('预热面：hidden 1px / aria-hidden / pointer-events:none，不抢焦点不占布局', () => {
-    expect(prewarmTs).toContain('position:fixed;left:-10000px;top:-10000px;width:1px;height:1px')
-    expect(prewarmTs).toContain('opacity:0;pointer-events:none')
+  it('预热面：hidden host（off-screen + display:none）/ sandbox 同口径 / 升格前不被销毁', () => {
+    // task-101：iframe 挪进 off-screen hidden host（升格时期望被复用，不能 reparent）
+    expect(prewarmTs).toContain('office-font-prewarm-host')
+    expect(prewarmTs).toContain(
+      'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;display:none'
+    )
     expect(prewarmTs).toContain("setAttribute('aria-hidden', 'true')")
     expect(prewarmTs).toContain("setAttribute('tabindex', '-1')")
+    // 复用不降低隔离口径：预热 iframe 也带与真实文档面相同的 sandbox
+    expect(prewarmTs).toContain("setAttribute('sandbox', 'allow-scripts allow-same-origin')")
     expect(prewarmTs).toContain('office-font-prewarm-frame')
-    // 用完释放 iframe（HTTP cache 留 session），不让隐藏面常驻内存
-    expect(prewarmTs).toContain('frame.remove()')
+    // 升格 API：取走 / 归还；空闲 60s 才释放（给首个文档打开留窗口），被升格时不能被定时器删掉
+    expect(prewarmTs).toContain('takePrewarmedSurface')
+    expect(prewarmTs).toContain('releasePrewarmedSurface')
+    expect(prewarmTs).toContain('prewarmAdopted')
+    expect(prewarmTs).toContain('scheduleDispose(60_000)')
+  })
+
+  it('升格复用：预热面隐藏期完成握手、OfficeSurface 沿用 nonce（不再等 5s hello 窗口），iframe 覆盖内容区', () => {
+    expect(officeSurfaceTsx).toContain('takePrewarmedSurface()')
+    expect(officeSurfaceTsx).toContain('releasePrewarmedSurface()')
+    // 复用时不重设 src（重设 = 重载文档 = 白复用）
+    // 复用时不重设 src（重设 = 重载文档 = 白复用）；自建 iframe 用独立 ref，避免卸载时把升格面清掉
+    expect(officeSurfaceTsx).toContain('if (prewarmed === null) {')
+    expect(officeSurfaceTsx).toContain('ownIframeRef')
+    expect(officeSurfaceTsx).toContain("prewarmed.frame.dataset.testid = 'office-surface-iframe'")
+    expect(officeSurfaceTsx).toContain('prewarmed.nonce')
+    // 预热模块在隐藏期自己完成 hello→init，并把 nonce 交给升格方
+    expect(prewarmTs).toContain("type: 'surface:init'")
+    expect(prewarmTs).toContain('prewarmNonce')
+    expect(prewarmTs).toContain('nonce: prewarmNonce')
+    // 被升格过的预热面不能因其它真实面 ready 被提前销毁（否则归还后再复用失效）
+    expect(prewarmTs).toContain('prewarmEverAdopted')
+    // 观测点（dataset，不新增 IPC/权限）：升格/归还/释放 + 回退原因计数
+    expect(prewarmTs).toContain('officePrewarmSurface')
+    expect(prewarmTs).toContain('notePrewarmFallback')
+    expect(prewarmTs).toContain('fallback:${reason}')
+    expect(officeSurfaceTsx).toContain('notePrewarmFallback()')
+    // 面侧仍需处理 hello-request（壳在极端时序下重发 hello 的兜底通道保留）
+    expect(surfaceBootTsx).toContain('isSurfaceHelloRequest')
+    expect(bridgeProtocolTs).toContain("type: 'surface:hello-request'")
   })
 
   it('面侧：挂载即注册字体（不再等 doc:open），并回 surface:fonts-ready（含 prewarm 标记）', () => {

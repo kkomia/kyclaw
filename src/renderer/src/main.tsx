@@ -21,6 +21,12 @@ advanceStartupSplash('renderer-entry')
 
 // 先落默认外观（跟系统 + 默认字号 scale=1.000），再异步读落盘设置覆盖 —— 中间不留白屏/闪色/字号跳变
 initTheme()
+
+// task-100（用户反馈「本地字体注册要在系统加载时就预注册」）：把预热从「首屏后 idle + 800ms」
+// 前移到**启动阶段**——initTheme 之后立刻调度（内部等首帧 rAF 一次再建 hidden 面，不抢 splash 首帧），
+// 与设置读盘 / React 首屏并行。见 features/office/office-font-prewarm.ts。
+scheduleOfficeFontPrewarm()
+
 void useSettingsStore
   .getState()
   .load()
@@ -46,8 +52,3 @@ function start(): void {
 }
 
 start()
-
-// task-76：产品启动即预热 Office 字体（用户口径：不要等打开文档才注册）。
-// 排在首屏提交之后走 idle 时段（见 office-font-prewarm.ts）：建一个隐藏的
-// kyclaw-office://surface 面把 22 面/46 注册/27MB 注册进同一 session，首个文档面复用 HTTP cache。
-scheduleOfficeFontPrewarm()
