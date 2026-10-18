@@ -9,7 +9,7 @@
  * （本页 lazy 路由，进 /mindmap 才加载）；主题走 `--pele-*` → 现有 token 映射。
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { mount, type Mounted } from 'pele/core'
+import { mount, register, type Mounted } from 'pele/core'
 import mindmap from 'pele/diagrams/mindmap'
 import { OfficeAiPanel } from '@renderer/features/office/OfficeAiPanel'
 import {
@@ -21,13 +21,12 @@ import {
 } from './mindmap-text'
 import './mindmap.css'
 
-/** 只注册一次 mindmap（按需注册，避免把另外 32 种图打进包） */
+/** 只注册一次 mindmap（按需注册，避免把另外 32 种图打进包）；必须同步注册在 mount 之前 */
 let registered = false
 function ensureRegistered(): void {
   if (registered) return
   registered = true
-  // 动态 import 的默认导出是 Diagram；register 接受它
-  void import('pele/core').then((mod) => mod.register(mindmap))
+  register(mindmap)
 }
 
 const messageOf = (error: unknown): string =>

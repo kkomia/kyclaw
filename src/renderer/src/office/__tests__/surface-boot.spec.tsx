@@ -79,6 +79,7 @@ const xlsxMock = vi.hoisted(() => ({
     onChanged: () => void
     onSaveRequest: () => void
     onLoaded: () => void
+    onError: (phase: string, message: string) => void
   }
 }))
 
