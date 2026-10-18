@@ -854,3 +854,103 @@ describe('OfficePage：M3-S5-3 容量策略（dormant / 打开闸门 / 整面重
     })
   })
 })
+
+describe('PB-023：打开错误与保存错误分开（错误横幅 + 重试/关闭）', () => {
+  async function openAndBoot(documentId: string): Promise<{
+    bridge: KyclawBridgeStubs
+    frameWindow: Window
+  }> {
+    const bridge = installOfficeBridge(
+      officeDocumentFixture({ documentId, displayName: '坏文件.docx' }),
+      new Uint8Array([1, 2, 3])
+    )
+    bridge.office.openDialog.mockResolvedValue({
+      ok: true,
+      document: officeDocumentFixture({ documentId, displayName: '坏文件.docx' }),
+      alreadyOpen: false
+    })
+    render(<OfficePage />)
+    fireEvent.click(screen.getByTestId('office-open'))
+    await waitFor(() => expect(screen.getByTestId('office-workspace')).toBeInTheDocument())
+    return { bridge, frameWindow: await bootEditorSurface(documentId) }
+  }
+
+  it('open 错误 → 文档错误横幅（原始摘要 + 重试/关闭），不进保存错误条', async () => {
+    const { frameWindow } = await openAndBoot('doc-bad-open')
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:error',
+        nonce: 'n-1',
+        documentId: 'doc-bad-open',
+        phase: 'open',
+        message: 'bad zip: Could not find EOCD'
+      })
+    )
+
+    const banner = await screen.findByTestId('office-doc-error')
+    expect(banner).toHaveTextContent('bad zip: Could not find EOCD')
+    expect(screen.getByTestId('office-doc-error-retry')).toBeInTheDocument()
+    expect(screen.getByTestId('office-doc-error-close')).toBeInTheDocument()
+    // 打开错误不得混入保存错误条
+    expect(screen.queryByTestId('office-save-error')).not.toBeInTheDocument()
+  })
+
+  it('save 错误 → 保存错误条（重试/另存为），不进文档错误横幅', async () => {
+    const { frameWindow } = await openAndBoot('doc-bad-save')
+
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:error',
+        nonce: 'n-1',
+        documentId: 'doc-bad-save',
+        phase: 'save',
+        message: '写盘失败'
+      })
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId('office-save-error')).toHaveTextContent('写盘失败')
+    )
+    expect(screen.queryByTestId('office-doc-error')).not.toBeInTheDocument()
+  })
+
+  it('点「重试」→ 清文档错误并重挂隔离面（重新读盘）', async () => {
+    const { bridge, frameWindow } = await openAndBoot('doc-retry-open')
+    act(() =>
+      dispatchFromSurface(frameWindow, {
+        type: 'doc:error',
+        nonce: 'n-1',
+        documentId: 'doc-retry-open',
+        phase: 'open',
+        message: '坏 zip'
+      })
+    )
+    await screen.findByTestId('office-doc-error')
+
+    fireEvent.click(screen.getByTestId('office-doc-error-retry'))
+
+    await waitFor(() => expect(screen.queryByTestId('office-doc-error')).not.toBeInTheDocument())
+    // 面被卸掉后重新读盘（初次 1 次 + 重试 1 次）
+    await waitFor(() => expect(bridge.office.read.mock.calls.length).toBeGreaterThanOrEqual(2))
+  })
+
+  it('点「关闭」→ 标签关闭回到空态', async () => {
+    await openAndBoot('doc-close-on-error')
+    act(() =>
+      dispatchFromSurface(
+        (screen.getByTestId('office-surface-iframe') as HTMLIFrameElement).contentWindow as Window,
+        {
+          type: 'doc:error',
+          nonce: 'n-1',
+          documentId: 'doc-close-on-error',
+          phase: 'open',
+          message: '坏 zip'
+        }
+      )
+    )
+    await screen.findByTestId('office-doc-error')
+    fireEvent.click(screen.getByTestId('office-doc-error-close'))
+    await waitFor(() => expect(screen.getByTestId('office-empty')).toBeInTheDocument())
+  })
+})

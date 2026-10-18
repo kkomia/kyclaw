@@ -7,6 +7,7 @@ import { EmptyState, PageTitle } from '@renderer/components/ui/page-chrome'
 import { openBlockReason, planMounts, shouldReloadSurface } from './office-capacity'
 import { OFFICE_KIND_ICON, OFFICE_KIND_LABEL, officePanelIdOf } from './office-kinds'
 import {
+  closeOfficeTab,
   handleOfficeShortcut,
   registerOfficeRuntime,
   saveOfficeTab,
@@ -630,10 +631,21 @@ function OfficeWorkspace({
     })
   }
 
-  /** 面内错误：保存阶段进保存错误条，其余进文档错误条 */
+  /** 面内错误：保存阶段进保存错误条，其余（open/layout/runtime）进文档错误条 */
   const handleDocError = (phase: 'open' | 'layout' | 'save' | 'runtime', message: string): void => {
     if (phase === 'save') setSaveError(message)
     else setDocError(message)
+  }
+
+  /**
+   * PB-023：打开/解析错误的「重试」——把面卸掉重新读盘再挂（同一路径再试一次）。
+   * 不清 saveError（保存错误有独立错误条与自身重试）。
+   */
+  const retryDocOpen = (): void => {
+    setDocError('')
+    setEditorReady(false)
+    setLoaded(null)
+    setSurfaceAlive(false)
   }
 
   /**
@@ -795,13 +807,31 @@ function OfficeWorkspace({
               </button>
             ) : null}
             {docError === '' ? null : (
-              <p
+              <div
                 data-testid="office-doc-error"
                 role="alert"
-                className="absolute inset-x-0 bottom-0 border-t border-hairline bg-(--doc-page-bg) px-4 py-2 text-c1 text-warning"
+                className="absolute inset-x-0 bottom-0 flex shrink-0 items-center gap-3 border-t border-hairline bg-(--doc-page-bg) px-3 py-2 text-c1 text-warning"
               >
-                {docError}
-              </p>
+                <span className="min-w-0 flex-1 break-words" title={docError}>
+                  {docError}
+                </span>
+                <Button
+                  data-testid="office-doc-error-retry"
+                  variant="ghost"
+                  size="sm"
+                  onClick={retryDocOpen}
+                >
+                  重试
+                </Button>
+                <Button
+                  data-testid="office-doc-error-close"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void closeOfficeTab(tab)}
+                >
+                  关闭
+                </Button>
+              </div>
             )}
             {saveError === '' ? null : (
               <div
