@@ -60,6 +60,9 @@ export function NoteEditor(): React.JSX.Element {
   }
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
+    // task-113：切换笔记的读盘窗口里，界面还显示上一份正文（原子替换前）——此时不允许保存/快捷键，
+    // 否则会把旧内容写到新选中的笔记上
+    if (useNotesStore.getState().noteLoading) return
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
       onSave()
@@ -67,6 +70,7 @@ export function NoteEditor(): React.JSX.Element {
   }
 
   const onBodyKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (useNotesStore.getState().noteLoading) return
     onKeyDown(event)
     if (event.defaultPrevented || event.key !== 'Tab' || event.shiftKey) return
     // plan §4.2：Tab 在正文里插两个空格，不抢焦点
@@ -101,10 +105,25 @@ export function NoteEditor(): React.JSX.Element {
 
   // 稿纸读数：正文非空白字符数（真实值，不是占位）
   const wordCount = body.replace(/\s+/g, '').length
+  /**
+   * task-113（切换闪烁修复）：切换笔记时 store 会先置 noteLoading 保底，但**不清空**上一份 title/body；
+   * 这里据此区分两种加载：
+   *   - 首次打开（没有可显示的旧内容）→ 仍给骨架；
+   *   - 从 A 切到 B（有旧内容）→ 继续显示上一份正文，等新正文到位后由 store 一次 set 原子替换；
+   *     读盘窗口内只读（readOnly + Ctrl+S 忽略），避免把旧内容编辑/保存到新笔记上。
+   */
+  const hasDisplayedContent = title !== '' || body !== ''
+  const switching = noteLoading && hasDisplayedContent
 
   return (
-    <div data-testid="note-editor" className="np-sheet" onKeyDown={onKeyDown}>
-      {noteLoading ? (
+    <div
+      data-testid="note-editor"
+      className="np-sheet"
+      data-switching={switching ? 'true' : undefined}
+      aria-busy={switching || undefined}
+      onKeyDown={onKeyDown}
+    >
+      {noteLoading && !hasDisplayedContent ? (
         <div data-testid="note-editor-loading" className="np-editor-loading">
           <div className="np-loading-title" />
           <div className="np-loading-meta" />
@@ -120,7 +139,10 @@ export function NoteEditor(): React.JSX.Element {
               data-testid="note-title"
               aria-label="笔记标题"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              readOnly={switching}
+              onChange={(event) => {
+                if (!switching) setTitle(event.target.value)
+              }}
               placeholder="笔记标题"
               className="np-title font-serif"
             />
@@ -157,6 +179,7 @@ export function NoteEditor(): React.JSX.Element {
               label="删除笔记"
               data-testid="notes-delete"
               className="np-delete"
+              disabled={switching}
               icon={<Trash2 aria-hidden="true" />}
               onClick={() => setConfirmDelete(true)}
             />
@@ -210,7 +233,10 @@ export function NoteEditor(): React.JSX.Element {
                 data-testid="note-body"
                 aria-label="笔记正文"
                 value={body}
-                onChange={(event) => setBody(event.target.value)}
+                readOnly={switching}
+                onChange={(event) => {
+                  if (!switching) setBody(event.target.value)
+                }}
                 onKeyDown={onBodyKeyDown}
                 placeholder="开始写…（Markdown）"
                 spellCheck={false}

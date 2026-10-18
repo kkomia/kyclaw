@@ -129,6 +129,42 @@ describe('列表 / 选中 / 空态', () => {
     expect(screen.getByTestId('note-body')).toHaveValue('第二篇正文')
   })
 
+  it('task-113：切换读盘期间保留上一份正文（无空/骨架帧），新正文就绪后原子替换', async () => {
+    seedStore()
+    let resolveB: (value: { text: string }) => void = () => {}
+    bridge.notes.get.mockImplementation((id: string) =>
+      id === NOTE_B.id
+        ? new Promise<{ text: string }>((resolve) => {
+            resolveB = resolve
+          })
+        : Promise.resolve({ text: NOTE_A_BODY })
+    )
+    render(<NotesPage />)
+
+    fireEvent.click(screen.getByTestId(`note-row-${NOTE_B.id}`))
+
+    // 读盘窗口：仍在显示上一份内容（不是骨架、不是空），且切到只读，避免旧内容写进新笔记
+    await waitFor(() =>
+      expect(screen.getByTestId('note-editor')).toHaveAttribute('data-switching', 'true')
+    )
+    expect(screen.queryByTestId('note-editor-loading')).not.toBeInTheDocument()
+    expect(screen.getByTestId('note-title')).toHaveValue('周会纪要')
+    expect(screen.getByTestId('note-body')).toHaveValue(NOTE_A_BODY)
+    expect(screen.getByTestId('note-title')).toHaveAttribute('readonly')
+    expect(screen.getByTestId('note-body')).toHaveAttribute('readonly')
+    expect(screen.getByTestId('notes-delete')).toBeDisabled()
+    // 输入被忽略：即便有 change 事件也不会把旧正文写成新内容
+    fireEvent.change(screen.getByTestId('note-body'), { target: { value: '不该写进去' } })
+    expect(screen.getByTestId('note-body')).toHaveValue(NOTE_A_BODY)
+
+    // 新正文就绪：一次渲染内换标题/正文/选中态（原子替换）
+    resolveB({ text: '第二篇正文' })
+    await waitFor(() => expect(screen.getByTestId('note-title')).toHaveValue('资料整理'))
+    expect(screen.getByTestId('note-body')).toHaveValue('第二篇正文')
+    expect(screen.getByTestId('note-editor')).not.toHaveAttribute('data-switching')
+    expect(screen.queryByTestId('note-editor-loading')).not.toBeInTheDocument()
+  })
+
   it('新建笔记：create → 重新拉列表 → 选中新笔记', async () => {
     const created: NoteMeta = {
       id: '33333333-3333-4333-8333-333333333333',
