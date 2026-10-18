@@ -95,9 +95,18 @@ describe('Composer = UI 声部 + 规章 §9.2#6', () => {
     expect(composerTsx).not.toContain('shadow-(--shadow-input)')
   })
 
-  it('模型/上下文 chip 是技术读数：mono 12', () => {
+  it('模型/强度/上下文读数共用一套 UI metrics（PB-003：13px / 500 / 20px 行盒 / tabular）', () => {
     const controls = read('../ComposerControls.tsx')
-    expect(controls).toMatch(/data-testid="composer-model"[\s\S]{0,400}font-sans text-\[13px\]/)
+    const effort = read('../ThinkingEffort.tsx')
+    // 三处吃同一个常量（数值只许有一份），源文件里不再各写各的类
+    expect(controls).toMatch(/data-testid="composer-model"[\s\S]{0,400}COMPOSER_READOUT_CLASS/)
+    expect(controls).toMatch(
+      /data-testid="context-percent"[\s\S]{0,200}COMPOSER_READOUT_CLASS/
+    )
+    expect(effort).toMatch(/data-testid="composer-effort"[\s\S]{0,400}COMPOSER_READOUT_CLASS/)
+    expect(effort).toMatch(
+      /COMPOSER_READOUT_CLASS\s*=\s*'font-sans text-\[13px\] font-medium leading-\[20px\] text-ink-secondary tabular-nums'/
+    )
   })
 })
 

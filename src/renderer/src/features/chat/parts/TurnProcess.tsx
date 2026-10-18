@@ -169,6 +169,14 @@ export function TurnProcess({
   const pending = entries.some((entry) => approvalRequestOf(entry.part) !== null)
   // DSH 语义：过程组运行中自动展开、这一段结束即收起（读者手动 override 优先）
   const open = override ?? (running || pending)
+  /**
+   * PB-001：汇总行与下方内容之间的 1px hairline。
+   * 工具轮常见「本条只有工具调用、正文落在**下一条** assistant 消息」——只看本条 `hasAnswer`
+   * 会漏线（用户实报「执行完毕之后 执行工具汇总行没有横线与正文隔开」）。所以**结束态无条件出线**。
+   * 已知取舍（2026-10-18 用户拍板 A 方案）：整轮完全没有正文时，结束时也会有一条线；有意为之，勿当回归。
+   * 运行中不因本条规则出线（运行中的线来自展开态 open）；无条目不出线。
+   */
+  const showDivider = entries.length > 0 && (open || hasAnswer || !running)
   // 纯思考轮完成收起，但内容保留在 DOM（DSH 收起语义 + 既有选文/测试契约）
   const mountProcessContent = toolCount === 0
 
@@ -237,11 +245,8 @@ export function TurnProcess({
       >
         <div
           data-testid="turn-process-header"
-          data-has-divider={entries.length > 0 && (open || hasAnswer) ? 'true' : undefined}
-          className={cn(
-            'turn-process-header',
-            entries.length > 0 && (open || hasAnswer) && 'turn-process-header--divider'
-          )}
+          data-has-divider={showDivider ? 'true' : undefined}
+          className={cn('turn-process-header', showDivider && 'turn-process-header--divider')}
         >
           <button
             type="button"

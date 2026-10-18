@@ -34,6 +34,16 @@ export interface ThinkingEffortProps {
   onSelect: (effortId: string) => void
 }
 
+/**
+ * 输入区三处读数（modelid / 推理强度 / 上下文百分比）共用的一套 metrics（PB-003）：
+ * 照 dsh-claude-style `features/composer/inline-bar.css:163-173` 的「一行一种字」——
+ * UI sans / 13px / 500 / 20px 行盒 / 次级墨色 / 数字 tabular。
+ *
+ * 常量放在本文件而不是 ComposerControls：那边渲染本组件，反向 import 会成环。
+ */
+export const COMPOSER_READOUT_CLASS =
+  'font-sans text-[13px] font-medium leading-[20px] text-ink-secondary tabular-nums'
+
 /** 滑钮宽 16、高 30（照抄 dsh `.dsh-claude-effort-knob`）；fill 从滑钮中心起算 */
 const KNOB_WIDTH = 16
 /** 轨道可见高（不含左右 0 的内边距）；矩阵按它算列数 */
@@ -247,14 +257,15 @@ export function ThinkingEffort({
       align="end"
       side="top"
       trigger={
-        // 与 ComposerControls 的 ModelChip 触发器同版式（task-84：h-8 / px-2 / mono 12 / 同圆角），
-        // 两者同一行并排时 top/bottom/height 与文字基线一致；颜色态保持 c1（secondary）。
+        // 与 ComposerControls 的 ModelChip 触发器同版式（PB-003：共吃 COMPOSER_READOUT_CLASS，
+        // 13px / 500 / 20px 行盒）；两者并排时 top/bottom/height 与文字基线一致。
         <button
           type="button"
           data-testid="composer-effort"
           aria-label={`${EFFORT_LABEL_TEXT}: ${displayLabel}`}
           className={cn(
-            'inline-flex h-8 shrink-0 items-center rounded-control pl-0 pr-2 font-sans text-[13px] text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
+            'inline-flex h-8 shrink-0 items-center rounded-control pl-0 pr-2 transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
+            COMPOSER_READOUT_CLASS,
             !motion.reduced && 'thinking-effort-trigger--lit'
           )}
         >

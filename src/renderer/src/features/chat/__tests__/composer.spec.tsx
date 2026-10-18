@@ -1042,7 +1042,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     )
   })
 
-  it('模型名与推理强度触发器同版式（h-8 / mono 12 / rounded-control）；朝向彼此的 padding 收窄', () => {
+  it('模型名与推理强度触发器同版式（h-8 / 读数 13·500·20 / rounded-control）；朝向彼此的 padding 收窄', () => {
     setup()
 
     const model = screen.getByTestId('composer-model')
@@ -1053,10 +1053,14 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
         'rounded-control',
         'font-sans',
         'text-[13px]',
+        'font-medium',
+        'leading-[20px]',
+        'text-ink-secondary',
+        'tabular-nums',
         'items-center'
       )
-      // 同版式：不允许一个 13/500、一个 12/mono（之前就是这里不齐）
-      expect(trigger).not.toHaveClass('font-medium')
+      // PB-003：三处读数同一套 metrics——谁都不许再退回 400 / leading-none（无行盒）
+      expect(trigger).not.toHaveClass('leading-none')
     }
 
     // task-106：两个触发器 rect 间距 = 组 gap-2（8px）；朝彼此不再留 padding，文字贴合矩形边缘
@@ -1196,7 +1200,46 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     await waitFor(() => expect(pie).toHaveAttribute('data-warning', 'true'))
     const percent = screen.getByTestId('context-percent')
     expect(percent).toHaveTextContent('100%')
-    expect(percent).toHaveClass('font-sans', 'text-[13px]', 'tabular-nums')
+    expect(percent).toHaveClass(
+      'font-sans',
+      'text-[13px]',
+      'font-medium',
+      'leading-[20px]',
+      'text-ink-secondary',
+      'tabular-nums'
+    )
+  })
+
+  it('PB-003：model / 推理强度 / 百分比三处读数同一套 metrics（13px / 500 / 20px 行盒 / tabular）', async () => {
+    mountHalfWindow()
+    await screen.findByTestId('context-pie')
+
+    const readouts = [
+      screen.getByTestId('composer-model'),
+      screen.getByTestId('composer-effort'),
+      screen.getByTestId('context-percent')
+    ]
+    for (const readout of readouts) {
+      expect(readout).toHaveClass(
+        'font-sans',
+        'text-[13px]',
+        'font-medium',
+        'leading-[20px]',
+        'text-ink-secondary',
+        'tabular-nums'
+      )
+      // 行盒一致 = 三处基线一致（effort 之前继承 22px，是这里唯一的例外）
+      expect(readout).not.toHaveClass('leading-none')
+    }
+
+    // PB-011：容器本身也归位到同一套读数 metrics（否则它继承 composer 卡的 15px/400/22px）
+    expect(screen.getByTestId('composer-context')).toHaveClass(
+      'font-sans',
+      'text-[13px]',
+      'font-medium',
+      'leading-[20px]',
+      'tabular-nums'
+    )
   })
 
   it('task-107：hover 打开磨砂浮窗 = 头行 / 分段条 / 图例 / 会话统计 / Token 用量（真实读数）', async () => {

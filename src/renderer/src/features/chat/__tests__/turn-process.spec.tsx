@@ -346,3 +346,46 @@ describe('task-104/105 · 内滚跟随 + 折叠态汇总行', () => {
     )
   })
 })
+
+describe('PB-001 · 多消息轮：正文落在下一条 assistant 消息时，汇总行仍要出线', () => {
+  /**
+   * 用户实报的场景：工具轮常常「上一条 assistant 只有工具调用、正文在下一条 assistant 消息」。
+   * `hasAnswer` 只看本条消息 → 折叠态 border-bottom 0px（用户：「执行完毕之后 执行工具汇总行
+   * 没有横线与正文隔开」）。本用例按真实 DOM（两条 Message 同轮）钉住修复。
+   *
+   * 已知取舍（用户 2026-10-18 拍板 A 方案）：结束态无条件出线，所以「整轮完全没有正文」
+   * 时结束时也会有一条线——这是有意为之，不是回归。
+   */
+  it('上一条只有工具调用、下一条只有正文：上一条折叠态仍出 1px hairline', () => {
+    render(
+      <>
+        <Message
+          message={assistantMessage(
+            [
+              {
+                type: 'tool-read',
+                toolCallId: 'c1',
+                state: 'output-available',
+                input: { path: 'a.txt' },
+                output: '内容'
+              }
+            ],
+            'a1'
+          )}
+        />
+        <Message message={assistantMessage([{ type: 'text', text: '正文在下一轮消息里。' }], 'a2')} />
+      </>
+    )
+
+    const headers = screen.getAllByTestId('turn-process-header')
+    expect(headers).toHaveLength(1) // 正文那条消息没有过程块
+    expect(headers[0]).toHaveAttribute('data-has-divider', 'true')
+    expect(headers[0]).toHaveClass('turn-process-header--divider')
+  })
+
+  it('运行中手动收起：新规则不得越过运行中（仍不出线）', () => {
+    render(<TurnProcess entries={[toolEntry(0)]} running />)
+    fireEvent.click(screen.getByTestId('trace-toggle'))
+    expect(screen.getByTestId('turn-process-header')).not.toHaveAttribute('data-has-divider')
+  })
+})

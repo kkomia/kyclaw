@@ -23,7 +23,7 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { COMPACT_CHIP_PCT } from '@renderer/lib/compact'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { PendingImageTile } from './PendingImageTile'
-import { ThinkingEffort } from './ThinkingEffort'
+import { COMPOSER_READOUT_CLASS, ThinkingEffort } from './ThinkingEffort'
 import './composer-context-bar.css'
 import { ContextMeterGlyph } from './parts/ContextMeterGlyph'
 import { ContextUsagePanel } from './parts/ContextUsagePanel'
@@ -685,7 +685,12 @@ export function ContextChip({
       type="button"
       data-testid="composer-context"
       aria-label={`上下文已用 ${stats.usedPct}%`}
-      className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-1.5 text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none"
+      // PB-011：容器本身也吃读数共享 metrics（否则继承 composer 卡的 15px/400/22px）；
+      // 内部可见文字只有 context-percent（早已同 metrics），ring 是 SVG → 视觉零变化。
+      className={cn(
+        'inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-1.5 transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink motion-reduce:transition-none',
+        COMPOSER_READOUT_CLASS
+      )}
       onPointerEnter={() => openSoon(110)}
       onPointerLeave={() => closeSoon(140)}
       onFocus={() => {
@@ -703,10 +708,7 @@ export function ContextChip({
       <span data-testid="context-ring" className="inline-flex shrink-0">
         <ContextMeterGlyph percent={stats.usedPct} warning={stats.overThreshold} />
       </span>
-      <span
-        data-testid="context-percent"
-        className="font-sans text-[13px] leading-none tabular-nums"
-      >
+      <span data-testid="context-percent" className={COMPOSER_READOUT_CLASS}>
         {stats.usedPct}%
       </span>
     </button>
@@ -936,13 +938,15 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
         trigger={
           // 无描边的文字按钮（round 8 用户实拍：默认不要那个圆角框线；hover / 展开时才铺灰底）。
           // 尺寸与 ＋ 按钮同高（h-8 = 32px，进得了 48px 工具条）；data-state 由 Radix 的 asChild 落到这里。
-          // task-84：与旁边的 ThinkingEffort 触发器同版式（h-8 / px-2 / mono 12 / rounded-control），
-          // 两者并排时 top/bottom/height 与文字基线一致；模型名保持「技术读数 = mono」的字体口径。
+          // PB-003：与旁边的 ThinkingEffort 触发器共吃 COMPOSER_READOUT_CLASS（13px / 500 / 20px 行盒）。
           <button
             type="button"
             data-testid="composer-model"
             disabled={pending}
-            className="inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 font-sans text-[13px] leading-none text-ink-secondary transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none"
+            className={cn(
+              'inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
+              COMPOSER_READOUT_CLASS
+            )}
           >
             <span className="truncate">{triggerLabel}</span>
           </button>
