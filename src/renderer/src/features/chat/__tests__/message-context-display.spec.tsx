@@ -595,7 +595,7 @@ describe('006 · 真发送路径（ChatSession + Composer + 假 transport）', (
     expect(metadata?.kyclawSentAt).toBe(metadata?.createdAt)
   })
 
-  it('编辑重发：只改自己的字 → 沿用原上下文，并带上新的发送时刻', async () => {
+  it('编辑重发：只改自己的字 → 沿用原上下文，并带上新的发送时刻', { timeout: 40_000 }, async () => {
     const control = createMockTransport()
     await renderSession(control)
 

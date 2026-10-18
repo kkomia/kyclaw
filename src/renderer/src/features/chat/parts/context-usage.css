@@ -1,0 +1,292 @@
+/**
+ * 上下文用量浮窗（task-107）：Claude style 磨砂玻璃 + 数字延迟显示。
+ *
+ * 玻璃材质（浅/深自动，不硬编码深色）：
+ *   底 = color-mix(bg-primary 78%, transparent)，边 = color-mix(text-primary 10%, transparent)，
+ *   模糊 = blur(18px) saturate(1.5)，阴影 = --shadow-overlay。
+ * 这些 token 由 ComposerControls 通过 Popover contentStyle 引用（见 `--ctx-*`）。
+ * 本文件负责内部排版、段色、读数延迟动效与 reduced 降级。
+ */
+
+:root {
+  --ctx-surface: color-mix(in srgb, var(--bg-primary) 78%, transparent);
+  --ctx-border: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --ctx-blur: blur(18px) saturate(1.5);
+}
+
+.ctx-body {
+  display: flex;
+  width: 340px;
+  max-width: min(340px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 15px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+/* ── 头行 ─────────────────────────────────────────────────────────────── */
+.ctx-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ctx-head-title {
+  color: var(--text-primary);
+  font-size: var(--ui-B2-font-size);
+  line-height: var(--ui-B2-line-height);
+}
+
+.ctx-head-total {
+  color: var(--text-tertiary-readable);
+  font-size: var(--ui-C1-font-size);
+  line-height: var(--ui-C1-line-height);
+  white-space: nowrap;
+}
+
+.ctx-warning {
+  color: var(--warning);
+}
+
+/* ── 分段进度条：底槽 + 三段（比例按窗口总量，空槽留在右侧） ─────────── */
+.ctx-bar {
+  display: flex;
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fill-active);
+}
+
+.ctx-seg {
+  display: block;
+  height: 100%;
+}
+
+.ctx-bar-rest {
+  display: block;
+  height: 100%;
+  background: transparent;
+}
+
+.ctx-seg-system,
+.ctx-dot-system {
+  background: color-mix(in srgb, var(--text-tertiary) 80%, transparent);
+}
+
+.ctx-seg-tools,
+.ctx-dot-tools {
+  background: color-mix(in srgb, var(--accent) 58%, var(--text-secondary));
+}
+
+.ctx-seg-baseline,
+.ctx-dot-baseline {
+  background: color-mix(in srgb, var(--text-secondary) 68%, transparent);
+}
+
+.ctx-seg-messages,
+.ctx-dot-messages {
+  background: var(--accent-text);
+}
+
+/* ── 图例 ─────────────────────────────────────────────────────────────── */
+.ctx-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ctx-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--ui-C1-font-size);
+  line-height: var(--ui-C1-line-height);
+}
+
+.ctx-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px;
+}
+
+.ctx-legend-label {
+  min-width: 0;
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.ctx-legend-value {
+  flex: none;
+  color: var(--text-primary);
+  font-size: var(--ui-C1-font-size);
+  white-space: nowrap;
+}
+
+/* ── 分隔 + 分区 ──────────────────────────────────────────────────────── */
+.ctx-rule {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--hairline-soft);
+}
+
+.ctx-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ctx-section-title {
+  margin: 0;
+  color: var(--text-tertiary-readable);
+  font-size: var(--ui-C1-font-size);
+  font-weight: 500;
+  line-height: var(--ui-C1-line-height);
+}
+
+.ctx-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
+}
+
+.ctx-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ctx-cell-label {
+  overflow: hidden;
+  color: var(--text-tertiary-readable);
+  font-size: var(--ui-C1-font-size);
+  line-height: var(--ui-C1-line-height);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-cell-value {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--ui-B2-font-size);
+  font-weight: 500;
+  line-height: var(--ui-B2-line-height);
+  white-space: nowrap;
+}
+
+/* ── 数值延迟显示：结构先到，数字 150ms 起逐格淡入上浮（18ms/格） ────── */
+.ctx-num {
+  display: inline-block;
+  animation: ctx-num-in 200ms var(--motion-ease-glide) both;
+  animation-delay: calc(150ms + var(--i, 0) * 18ms);
+}
+
+@keyframes ctx-num-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* reduced：直接显示（保留终态可读帧） */
+@media (prefers-reduced-motion: reduce) {
+  .ctx-num {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .ctx-num {
+  animation: none;
+}
+
+/* ── 加载骨架：结构先到（不闪 0） ─────────────────────────────────────── */
+.ctx-skeleton-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ctx-skeleton {
+  display: block;
+  border-radius: 4px;
+  background: var(--fill-active);
+  animation: ctx-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.ctx-skeleton-title {
+  width: 104px;
+  height: 14px;
+}
+
+.ctx-skeleton-total {
+  width: 76px;
+  height: 12px;
+}
+
+.ctx-skeleton-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.ctx-skeleton-line {
+  width: 100%;
+  height: 12px;
+}
+
+.ctx-skeleton-short {
+  width: 64%;
+}
+
+.ctx-skeleton-label {
+  width: 48px;
+  height: 10px;
+}
+
+.ctx-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.ctx-skeleton-cell {
+  width: 100%;
+  height: 32px;
+  border-radius: 6px;
+}
+
+@keyframes ctx-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-skeleton {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .ctx-skeleton {
+  animation: none;
+}

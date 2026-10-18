@@ -1,8 +1,9 @@
 /**
  * 用量 API（T14；round 18 加会话上下文）——挂在 agent 服务（service.ts）上的 Hono 子路由：
  *
- * 三条（**只管 token，不管轨迹原料**）：
+ * 四条（**只管 token，不管轨迹原料**）：
  *   GET /api/usage?range=today|month    窗口内的 token（含按模型拆分）
+ *   GET /api/usage/calendar?year=YYYY  该**本地年**按日聚合（首页日历热力图的数据面；task-127）
  *   GET /api/usage/context?threadId=    该会话的"最近一轮 / 首轮基线 / 今日缓存合计"
  *                                       （上下文环与 hover 明细的数据面）
  *   GET /api/usage/thread?threadId=     该会话的**逐轮用量行**（时间升序）——轨迹视图的
@@ -20,12 +21,27 @@
  * 200 之外一定回 `{ error: 人话 }`，让上游（trajectory-api.ts）能把这句人话带出来。
  */
 import { Hono, type Context } from 'hono'
-import { usageRangeSchema, usageResponseSchema, usageThreadContextSchema } from '../../shared/usage'
+import {
+  usageCalendarSchema,
+  usageCalendarYearSchema,
+  usageRangeSchema,
+  usageResponseSchema,
+  usageThreadContextSchema
+} from '../../shared/usage'
 import { trajectoryThreadUsageResponseSchema } from '../../shared/trajectory'
-import { rangeStart, summarizeUsage, threadTokenReadout, type UsageStore } from '../usage'
+import {
+  rangeStart,
+  summarizeCalendar,
+  summarizeThreadUsage,
+  summarizeUsage,
+  type UsageStore
+} from '../usage'
+import type { RequestSnapshotStore } from '../request-log'
 
 export interface UsageRouterOptions {
   store: UsageStore
+  /** 请求快照（可选）：只用来把 baselineInput 按字符占比拆成系统提示词/工具定义；缺省则不拆 */
+  snapshots?: RequestSnapshotStore
   /** 测试注入"现在"；生产不传 = 真时间 */
   now?: () => Date
 }
@@ -66,18 +82,30 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
     })
   })
 
+  router.get('/calendar', async (context) => {
+    // 不传 year 走"当前本地年"；脏值（非整数/越界/空串）400，不静默回落
+    const raw = context.req.query('year')
+    const year = usageCalendarYearSchema.safeParse(raw ?? String(now().getFullYear()))
+    if (!year.success) return context.json(badRequest('year'), 400)
+
+    return read(context, async () => {
+      // 现有 listSince 就够：拉「本地年起点之后」的 usage_runs，按本地日聚合在纯函数里做；
+      // 不新增表、不造数（summarizeCalendar 只保留该年的行）。
+      const rows = await options.store.listSince(new Date(year.data, 0, 1))
+      return context.json(usageCalendarSchema.parse(summarizeCalendar(rows, year.data)))
+    })
+  })
+
   router.get('/context', async (context) => {
     const raw = context.req.query('threadId')
     const threadId = typeof raw === 'string' ? raw.trim() : ''
     if (threadId === '') return context.json(badRequest('threadId'), 400)
 
     return read(context, async () => {
-      // round 59：lastInput / baselineInput / lastCachedInput 统一走 usage.ts 的 threadTokenReadout
-      // （压缩记录的 tokensBefore 用的是同一口径，两处不能各算一套）
-      const { lastInput, lastCachedInput, baselineInput } = await threadTokenReadout(
-        options.store,
-        threadId
-      )
+      // round 59 / task-107：最近一轮、首轮基线与全会话合计都走 usage.ts 的 summarizeThreadUsage
+      // （同一份 rows、同一个口径；压缩记录的 tokensBefore 也走同一处，不能各算一套）
+      const summary = summarizeThreadUsage(await options.store.listByThread(threadId))
+      const { lastInput, lastCachedInput, baselineInput, totals } = summary
       const today = await options.store.listSince(rangeStart('today', now()))
 
       let todayInput = 0
@@ -94,7 +122,9 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
           lastCachedInput,
           baselineInput,
           todayInput,
-          todayCachedInput
+          todayCachedInput,
+          totals,
+          composition: await compositionOf(options.snapshots, threadId, baselineInput)
         })
       )
     })
@@ -157,6 +187,33 @@ interface UsageRunExtras {
   contextInput: number | null
   contextCachedInput: number | null
   stepCount: number | null
+}
+
+/**
+ * baselineInput 的 sys/tools 拆分（~估算）：首份请求快照的 system_chars / tools_chars 字符占比。
+ * 请求快照是**可选**数据面：读不到 / 老会话没有 → null（UI 合并一行，不编两个数）；
+ * 快照读失败也**不拖垮**用量路由（这条腿只做锦上添花）。
+ */
+async function compositionOf(
+  snapshots: RequestSnapshotStore | undefined,
+  threadId: string,
+  baselineInput: number | null
+): Promise<{ systemPrompt: number; toolDefinitions: number } | null> {
+  if (snapshots === undefined || baselineInput === null || baselineInput <= 0) return null
+  let rows
+  try {
+    rows = await snapshots.listByThread(threadId)
+  } catch {
+    return null
+  }
+  const first = rows.find((row) => (row.systemChars ?? 0) + (row.toolsChars ?? 0) > 0)
+  if (first === undefined) return null
+  const systemChars = Math.max(0, first.systemChars ?? 0)
+  const toolsChars = Math.max(0, first.toolsChars ?? 0)
+  const chars = systemChars + toolsChars
+  if (chars <= 0) return null
+  const systemPrompt = Math.round((baselineInput * systemChars) / chars)
+  return { systemPrompt, toolDefinitions: Math.max(0, baselineInput - systemPrompt) }
 }
 
 /** 计数类字段归一：不是非负有限数就是 null（不把 undefined 当 0） */

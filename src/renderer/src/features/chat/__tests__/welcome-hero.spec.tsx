@@ -214,11 +214,19 @@ describe('空会话的初始页', () => {
     // 分界线/消息区都还在（限宽列的既有口径不变），只是消息为空；下半格弹性占位撑着居中
     expect(screen.getByTestId('message-list')).toBeInTheDocument()
     const spacer = screen.getByTestId('welcome-spacer')
-    expect(spacer).toHaveClass('grow')
+    // task-118：hero 输入区沉底，不再等分居中
+    expect(spacer).toHaveClass('grow-0')
     // 2026-10-18 A · 信笺重定基线（task-50）：mock 卡片中心 ≈478，现状实拍 ≈445（mt-28/112 时），
     // 下移 ~33px ⇒ mt 减 ~66 ⇒ 112 − 66 = 46，取整到 16 的倍数 = mt-12（48px）
     // （A 版 hero 绝对定位、不占布局高度，换报头/字号不改 above/below；推导见 ChatPage 注释）
-    expect(spacer).toHaveClass('mt-12')
+    // task-118：输入区沉底，上方预留热力图位置（spacer 不再撑中，placeholder 撑开空白）
+    expect(spacer).toHaveClass('grow-0')
+    const placeholder = screen.getByTestId('welcome-heatmap-placeholder')
+    expect(placeholder).toHaveClass('flex-1')
+    // task-127：hero 时 placeholder 里挂真实日历热力图（有语义，不再 aria-hidden）；
+    // 非 hero（进对话）才是空容器 + aria-hidden（见 ChatPage 条件）。
+    expect(placeholder).not.toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByTestId('welcome-heatmap')).toBeInTheDocument()
     expect(spacer).not.toHaveClass('mt-28')
     expect(spacer).not.toHaveClass('mt-18')
     expect(spacer).not.toHaveClass('mt-8')

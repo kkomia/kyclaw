@@ -1,0 +1,354 @@
+/* chat 首页 · 日历热力图（task-127）
+ * 只消费既有语义 token（--accent-text / --text-* / --border-hairline / --bg-primary /
+ * --shadow-overlay / --font-*）；浅深自动，无硬编码色值。
+ */
+
+.welcome-heatmap {
+  --hm-gap: 3px;
+  --hm-radius: 2px;
+  --hm-label-size: 10px;
+  --hm-l0: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  --hm-l1: color-mix(in srgb, var(--accent-text) 22%, transparent);
+  --hm-l2: color-mix(in srgb, var(--accent-text) 40%, transparent);
+  --hm-l3: color-mix(in srgb, var(--accent-text) 62%, transparent);
+  --hm-l4: color-mix(in srgb, var(--accent-text) 88%, transparent);
+  box-sizing: border-box;
+  width: min(100%, calc(var(--chat-content-width, 880px) + 32px));
+  margin-inline: auto;
+  padding: 4px 16px 10px;
+}
+
+.welcome-heatmap-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.welcome-heatmap-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.welcome-heatmap-title h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+
+.welcome-heatmap-sub {
+  font-size: 11px;
+  color: var(--text-tertiary-readable);
+  white-space: nowrap;
+}
+
+.welcome-heatmap-year {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.welcome-heatmap-year button {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary-readable);
+  font: inherit;
+  cursor: pointer;
+}
+
+.welcome-heatmap-year button:hover:not(:disabled),
+.welcome-heatmap-year button:focus-visible {
+  background: var(--fill-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.welcome-heatmap-year button:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+.welcome-heatmap-year button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.welcome-heatmap-year span {
+  min-width: 42px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.welcome-heatmap-plot {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  grid-template-rows: 14px auto;
+  column-gap: 8px;
+  row-gap: 4px;
+  margin-top: 12px;
+}
+
+.welcome-heatmap-months {
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  gap: var(--hm-gap);
+  font-size: var(--hm-label-size);
+  color: var(--text-tertiary-readable);
+  white-space: nowrap;
+}
+
+.welcome-heatmap-months > span {
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  letter-spacing: 0.02em;
+}
+
+.welcome-heatmap-days {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: repeat(7, auto);
+  gap: var(--hm-gap);
+  font-size: var(--hm-label-size);
+  color: var(--text-tertiary-readable);
+  text-align: right;
+}
+
+.welcome-heatmap-days > span {
+  line-height: 1;
+  align-self: center;
+}
+
+.welcome-heatmap-grid {
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: repeat(7, auto);
+  gap: var(--hm-gap);
+}
+
+.welcome-heatmap-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--hm-radius);
+  background: var(--hm-l0);
+  transition: transform 90ms var(--motion-ease-glide, ease-out);
+}
+
+.welcome-heatmap-cell[data-level='1'] {
+  background: var(--hm-l1);
+}
+.welcome-heatmap-cell[data-level='2'] {
+  background: var(--hm-l2);
+}
+.welcome-heatmap-cell[data-level='3'] {
+  background: var(--hm-l3);
+}
+.welcome-heatmap-cell[data-level='4'] {
+  background: var(--hm-l4);
+}
+.welcome-heatmap-cell:hover {
+  transform: scale(1.18);
+}
+.welcome-heatmap-cell[data-out='true'] {
+  background: transparent;
+  transform: none;
+}
+.welcome-heatmap-grid[data-loading='true'] .welcome-heatmap-cell {
+  animation: welcome-heatmap-pulse 1.6s ease-in-out infinite;
+}
+
+.welcome-heatmap-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.welcome-heatmap-stat {
+  font-size: 11px;
+  color: var(--text-tertiary-readable);
+  font-variant-numeric: tabular-nums;
+}
+
+.welcome-heatmap-stat b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.welcome-heatmap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--hm-label-size);
+  color: var(--text-tertiary-readable);
+}
+
+.welcome-heatmap-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--hm-radius);
+  display: inline-block;
+}
+
+.welcome-heatmap-legend i[data-level='0'] {
+  background: var(--hm-l0);
+}
+.welcome-heatmap-legend i[data-level='1'] {
+  background: var(--hm-l1);
+}
+.welcome-heatmap-legend i[data-level='2'] {
+  background: var(--hm-l2);
+}
+.welcome-heatmap-legend i[data-level='3'] {
+  background: var(--hm-l3);
+}
+.welcome-heatmap-legend i[data-level='4'] {
+  background: var(--hm-l4);
+}
+
+.welcome-heatmap-empty {
+  margin-top: 8px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-height: 20px;
+  text-align: left;
+}
+
+.welcome-heatmap-empty p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.welcome-heatmap-empty span {
+  font-size: 11px;
+  color: var(--text-tertiary-readable);
+}
+
+.welcome-heatmap-retry {
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.welcome-heatmap-tip {
+  position: fixed;
+  z-index: 80;
+  width: 176px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+  border: 1px solid var(--border-hairline);
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  pointer-events: none;
+}
+
+.welcome-heatmap-tip-date {
+  font-size: 11px;
+  color: var(--text-tertiary-readable);
+  font-variant-numeric: tabular-nums;
+}
+
+.welcome-heatmap-tip-value {
+  margin-top: 3px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--text-primary);
+}
+
+.welcome-heatmap-tip-value b {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.welcome-heatmap-tip-value span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.welcome-heatmap-tip-note {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary-readable);
+}
+
+@keyframes welcome-heatmap-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-heatmap-cell {
+    transition: none;
+  }
+  .welcome-heatmap-cell:hover {
+    transform: none;
+    outline: 1px solid var(--accent-text);
+    outline-offset: 1px;
+  }
+  .welcome-heatmap-grid[data-loading='true'] .welcome-heatmap-cell {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .welcome-heatmap-cell {
+  transition: none;
+}
+:root[data-motion='reduced'] .welcome-heatmap-cell:hover {
+  transform: none;
+  outline: 1px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+/* 矮窗压缩策略（DESIGN §9）：760 以下收起副题与底部统计/图例，只留标题+网格；
+   620 以下整块隐藏（hero 回到只有报头/输入卡的现状），保证输入卡在一屏内不被挤、无滚动条。 */
+@media (max-height: 759px) {
+  .welcome-heatmap-sub {
+    display: none;
+  }
+  .welcome-heatmap-foot {
+    display: none;
+  }
+  .welcome-heatmap-plot {
+    margin-top: 8px;
+  }
+}
+
+@media (max-height: 619px) {
+  .welcome-heatmap {
+    display: none;
+  }
+}

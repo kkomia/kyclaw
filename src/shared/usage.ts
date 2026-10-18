@@ -60,13 +60,78 @@ export type UsageResponse = z.infer<typeof usageResponseSchema>
  *   - `today*` 是本地日历当天**全部会话**的合计（窗口合计口径，用整轮合计累加 —— 页面说的是
  *     "今天花了多少 token"，不是"当前上下文多大"）；`todayCachedInput` 同理。
  */
+/** 该会话全部 usage_runs 的合计（上下文浮窗的「Token 用量 / 会话统计」口径，一处算） */
+export const usageThreadTotalsSchema = z.strictObject({
+  /** 该会话记过账的轮数（usage_runs 行数） */
+  rounds: z.number().int().min(0),
+  /** 模型调用次数 = Σ stepCount（老记录没有 step 数时按"一轮至少一次"记 1） */
+  modelCalls: z.number().int().min(0),
+  /** 全部轮的输入合计（含缓存命中的部分） */
+  input: z.number().int().min(0),
+  /** 缓存读取（provider 报的 cachedInput 合计） */
+  cachedInput: z.number().int().min(0),
+  /** 未缓存输入 = input − cachedInput（不足 0 归 0） */
+  uncachedInput: z.number().int().min(0),
+  output: z.number().int().min(0),
+  /** 缓存命中率 %（input = 0 → null，不假装 0） */
+  hitRate: z.number().int().min(0).max(100).nullable()
+})
+
+export type UsageThreadTotals = z.infer<typeof usageThreadTotalsSchema>
+
+/**
+ * 「系统提示词 / 工具定义」的拆分（~估算）：baselineInput 是两者合计；
+ * 用该会话**首份请求快照**的 system_chars / tools_chars 字符占比拆分。
+ * 拿不到请求快照（老会话 / 快照表读失败）→ 整个对象为 null，UI 合并成一行，不编两个数。
+ */
+export const usageThreadCompositionSchema = z.strictObject({
+  systemPrompt: z.number().int().min(0),
+  toolDefinitions: z.number().int().min(0)
+})
+
+export type UsageThreadComposition = z.infer<typeof usageThreadCompositionSchema>
+
 export const usageThreadContextSchema = z.strictObject({
   threadId: z.string().min(1),
   lastInput: z.number().int().min(0).nullable(),
   lastCachedInput: z.number().int().min(0).nullable(),
   baselineInput: z.number().int().min(0).nullable(),
   todayInput: z.number().int().min(0),
-  todayCachedInput: z.number().int().min(0)
+  todayCachedInput: z.number().int().min(0),
+  /** 全会话合计（Token 用量四格 + 会话统计的数据面） */
+  totals: usageThreadTotalsSchema,
+  /** baseline 的 sys/tools 拆分；null = 无法诚实拆分（UI 合并一行） */
+  composition: usageThreadCompositionSchema.nullable()
 })
 
 export type UsageThreadContext = z.infer<typeof usageThreadContextSchema>
+
+/**
+ * GET /api/usage/calendar?year=YYYY 的回包（task-127 首页日历热力图的数据面）。
+ * 口径与 /api/usage 一致：**本地日历**按天聚合；只回有记录的天（渲染端补零），不造数据。
+ * 每轮 usage_runs 一行：input/output 为整轮合计，cachedInput 为 provider 报的缓存命中，
+ * steps = Σ stepCount（老记录没有 step 数时按一轮至少调 1 次记 1，下界不虚报）。
+ */
+export const usageCalendarDaySchema = z.strictObject({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  input: z.number().int().min(0),
+  output: z.number().int().min(0),
+  cachedInput: z.number().int().min(0),
+  runs: z.number().int().min(0),
+  steps: z.number().int().min(0)
+})
+
+export type UsageCalendarDay = z.infer<typeof usageCalendarDaySchema>
+
+export const usageCalendarSchema = z.strictObject({
+  year: z.number().int().min(2000).max(2100),
+  days: z.array(usageCalendarDaySchema),
+  totalActiveDays: z.number().int().min(0),
+  /** 当年 Σ tokens.total（input+output；与 /api/usage 的 tokens.total 同口径） */
+  totalTokens: z.number().int().min(0)
+})
+
+export type UsageCalendar = z.infer<typeof usageCalendarSchema>
+
+/** 查询参数：年份缺省由路由取当前年；脏值 400，不静默回落 */
+export const usageCalendarYearSchema = z.coerce.number().int().min(2000).max(2100)

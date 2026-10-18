@@ -1,5 +1,5 @@
 import * as PopoverPrimitive from '@radix-ui/react-popover'
-import type { ReactElement, ReactNode } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import { cn } from './cn'
 import { OVERLAY_SURFACE_CLASS } from './surface'
 
@@ -14,6 +14,8 @@ export interface PopoverProps {
   sideOffset?: number
   children: ReactNode
   className?: string
+  /** 内容面板的额外内联样式（磨砂玻璃这类需要覆盖 surface 默认面的场景；值应来自 token） */
+  contentStyle?: CSSProperties
 }
 
 /**
@@ -29,7 +31,8 @@ export function Popover({
   side = 'bottom',
   sideOffset = 4,
   children,
-  className
+  className,
+  contentStyle
 }: PopoverProps): React.JSX.Element {
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -39,6 +42,7 @@ export function Popover({
           align={align}
           side={side}
           sideOffset={sideOffset}
+          style={contentStyle}
           className={cn(OVERLAY_SURFACE_CLASS, 'p-4', className)}
         >
           {children}

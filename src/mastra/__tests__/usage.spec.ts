@@ -19,7 +19,7 @@ import { LibSQLStore } from '@mastra/libsql'
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startAgentServer, type AgentServerHandle } from '../../main/agent/service'
-import { usageResponseSchema, type UsageResponse } from '../../shared/usage'
+import { usageCalendarSchema, usageResponseSchema, type UsageResponse } from '../../shared/usage'
 import { threadMemoryBody } from '../../shared/threads'
 import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
 import type { KyclawModel } from '../model'
@@ -28,6 +28,7 @@ import {
   createUsageRecorder,
   createUsageStore,
   rangeStart,
+  summarizeCalendar,
   summarizeUsage,
   threadTokenReadout,
   usageSqlClient,
@@ -90,6 +91,29 @@ function run(overrides: {
 /** 从行列表算窗口内的运行总数（断言"记了几行"用） */
 function runCount(usage: UsageResponse): number {
   return usage.byModel.reduce((sum, row) => sum + row.runs, 0)
+}
+
+/** task-107：请求快照摘要（composition 拆分只读 system_chars / tools_chars） */
+function snapshotSummary(overrides: {
+  systemChars: number | null
+  toolsChars: number | null
+}): Record<string, unknown> {
+  return {
+    id: `snap-${Math.random().toString(36).slice(2)}`,
+    runId: null,
+    threadId: 'thread-compose',
+    step: null,
+    status: 'complete',
+    error: null,
+    model: 'm',
+    provider: null,
+    messageCount: null,
+    toolCount: null,
+    systemChars: overrides.systemChars,
+    toolsChars: overrides.toolsChars,
+    truncated: false,
+    createdAt: new Date(2026, 9, 15, 9, 0, 0).toISOString()
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -429,8 +453,128 @@ describe('用量路由：窗口过滤（真 libsql，注入 now）', () => {
       lastCachedInput: 300,
       baselineInput: 100,
       todayInput: 560,
-      todayCachedInput: 300
+      todayCachedInput: 300,
+      // task-107：全会话合计（两条 run：input 100+400 / cached 300 / output 5+5）
+      totals: {
+        rounds: 2,
+        modelCalls: 2,
+        input: 500,
+        cachedInput: 300,
+        uncachedInput: 200,
+        output: 10,
+        hitRate: 60
+      },
+      // 没注入请求快照 → 不拆（UI 合并一行，不编两个数）
+      composition: null
     })
+  })
+
+  it('task-107：totals 聚合 = 整轮合计 + Σ stepCount，命中率 = Σcached/Σinput', async () => {
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-aggr',
+        input: 200,
+        output: 10,
+        cachedInput: 100,
+        stepCount: 3,
+        at: new Date(2026, 9, 15, 9, 0, 0)
+      })
+    )
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-aggr',
+        input: 300,
+        output: 20,
+        cachedInput: 150,
+        stepCount: 2,
+        at: new Date(2026, 9, 15, 10, 0, 0)
+      })
+    )
+
+    const response = await app.request('/api/usage/context?threadId=thread-aggr')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      totals: Record<string, number | null>
+    }
+    expect(body.totals).toEqual({
+      rounds: 2,
+      modelCalls: 5,
+      input: 500,
+      cachedInput: 250,
+      uncachedInput: 250,
+      output: 30,
+      hitRate: 50
+    })
+  })
+
+  it('task-107：composition 用首份请求快照的 system/tools 字符占比拆 baseline（~估算）', async () => {
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-compose',
+        input: 300,
+        output: 10,
+        contextInput: 1000,
+        at: new Date(2026, 9, 15, 9, 0, 0)
+      })
+    )
+    const snapshots = {
+      listByThread: async (): Promise<unknown[]> => [
+        snapshotSummary({ systemChars: 300, toolsChars: 100 }),
+        snapshotSummary({ systemChars: 900, toolsChars: 900 })
+      ]
+    }
+    const appWithSnapshots = new Hono().route(
+      '/api/usage',
+      createUsageRouter({
+        store,
+        now: () => NOW,
+        snapshots: snapshots as never
+      })
+    )
+
+    const response = await appWithSnapshots.request('/api/usage/context?threadId=thread-compose')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      composition: { systemPrompt: number; toolDefinitions: number } | null
+    }
+    // 首份快照 300:100 → baseline 1000 拆成 750 / 250（只认第一份，后续快照不参与）
+    expect(body.composition).toEqual({ systemPrompt: 750, toolDefinitions: 250 })
+  })
+
+  it('task-107：快照表读失败 → composition null（不拖垮用量路由）', async () => {
+    await store.insert(
+      run({
+        model: 'm',
+        threadId: 'thread-compose-fail',
+        input: 300,
+        output: 10,
+        contextInput: 1000,
+        at: new Date(2026, 9, 15, 9, 0, 0)
+      })
+    )
+    const brokenSnapshots = {
+      listByThread: async (): Promise<unknown[]> => {
+        throw new Error('snapshot store down')
+      }
+    }
+    const appWithSnapshots = new Hono().route(
+      '/api/usage',
+      createUsageRouter({
+        store,
+        now: () => NOW,
+        snapshots: brokenSnapshots as never
+      })
+    )
+
+    const response = await appWithSnapshots.request(
+      '/api/usage/context?threadId=thread-compose-fail'
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { composition: unknown }
+    expect(body.composition).toBeNull()
   })
 
   it('上下文接口：threadId 缺失 / 空白 → 400', async () => {
@@ -640,5 +784,129 @@ describe('014 兼容：老库（带 cost 值）照样读写', () => {
       ['legacy-model', 0.0123],
       ['new-model', null]
     ])
+  })
+})
+
+describe('task-127 日历聚合：本地日 / 跨年 / 空', () => {
+  it('空年：days 空、totalActiveDays/totalTokens 0（不造零值天）', () => {
+    expect(summarizeCalendar([], 2026)).toEqual({
+      year: 2026,
+      days: [],
+      totalActiveDays: 0,
+      totalTokens: 0
+    })
+  })
+
+  it('同一天多轮合并 input/output/cached/runs/steps；无 stepCount 按 1 记（下界）', () => {
+    const result = summarizeCalendar(
+      [
+        run({
+          model: 'm',
+          input: 10,
+          output: 1,
+          cachedInput: 4,
+          stepCount: 2,
+          at: new Date(2026, 0, 2, 9, 0, 0)
+        }),
+        run({
+          model: 'm',
+          input: 5,
+          output: 1,
+          cachedInput: 0,
+          stepCount: null,
+          at: new Date(2026, 0, 2, 14, 0, 0)
+        })
+      ],
+      2026
+    )
+    expect(result.days).toEqual([
+      { date: '2026-01-02', input: 15, output: 2, cachedInput: 4, runs: 2, steps: 3 }
+    ])
+    expect(result.totalActiveDays).toBe(1)
+    expect(result.totalTokens).toBe(17)
+  })
+
+  it('跨年边界按本地日历切：12-31 23:59 归上年、01-01 00:00 归当年；非法 createdAt 跳过', () => {
+    const lastYear = summarizeCalendar(
+      [
+        run({ model: 'm', input: 1, output: 1, at: new Date(2025, 11, 31, 23, 59, 59) }),
+        run({ model: 'm', input: 100, output: 100, at: new Date(2026, 0, 1, 0, 0, 0) }),
+        run({ model: 'm', input: 200, output: 200, at: new Date(2027, 0, 1, 0, 0, 0) })
+      ],
+      2025
+    )
+    expect(lastYear.days.map((day) => day.date)).toEqual(['2025-12-31'])
+    expect(lastYear.totalTokens).toBe(2)
+
+    const thisYear = summarizeCalendar(
+      [
+        run({ model: 'm', input: 1, output: 1, at: new Date(2025, 11, 31, 23, 59, 59) }),
+        run({ model: 'm', input: 100, output: 100, at: new Date(2026, 0, 1, 0, 0, 0) }),
+        { ...run({ model: 'm', input: 1, output: 1 }), createdAt: 'not-a-date' }
+      ],
+      2026
+    )
+    expect(thisYear.days.map((day) => day.date)).toEqual(['2026-01-01'])
+    expect(thisYear.totalTokens).toBe(200)
+  })
+})
+
+describe('task-127 /api/usage/calendar 路由（注入 now + 假 store）', () => {
+  const NOW = new Date(2026, 9, 15, 12, 0, 0)
+  const rows = [
+    run({
+      model: 'm',
+      input: 10,
+      output: 1,
+      cachedInput: 4,
+      stepCount: 2,
+      at: new Date(2026, 0, 2, 9, 0, 0)
+    }),
+    run({ model: 'm', input: 5, output: 1, stepCount: null, at: new Date(2026, 0, 2, 14, 0, 0) }),
+    run({ model: 'm', input: 100, output: 10, at: new Date(2025, 11, 31, 23, 59, 59) }),
+    run({ model: 'm', input: 200, output: 20, at: new Date(2027, 0, 1, 0, 0, 0) })
+  ]
+  const store = {
+    ensureTable: async () => undefined,
+    insert: async () => undefined,
+    listSince: async () => rows,
+    listByThread: async () => rows
+  } as unknown as UsageStore
+  const app = new Hono().route('/api/usage', createUsageRouter({ store, now: () => NOW }))
+
+  it('year=2026：只回当年有记录的天（升序）+ 合计；严格 schema 可解析', async () => {
+    const response = await app.request('/api/usage/calendar?year=2026')
+    expect(response.status).toBe(200)
+    const body = usageCalendarSchema.parse(await response.json())
+    expect(body).toEqual({
+      year: 2026,
+      days: [{ date: '2026-01-02', input: 15, output: 2, cachedInput: 4, runs: 2, steps: 3 }],
+      totalActiveDays: 1,
+      totalTokens: 17
+    })
+  })
+
+  it('不传 year 走当前本地年（注入 now 2026）', async () => {
+    const response = await app.request('/api/usage/calendar')
+    expect(response.status).toBe(200)
+    expect((await response.json()) as { year: number }).toMatchObject({ year: 2026 })
+  })
+
+  it('空年：200 + 空数组（不报错、不造数）', async () => {
+    const response = await app.request('/api/usage/calendar?year=2024')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      year: 2024,
+      days: [],
+      totalActiveDays: 0,
+      totalTokens: 0
+    })
+  })
+
+  it('脏 year（非整数 / 越界 / 空串）→ 400', async () => {
+    for (const raw of ['nope', '1999', '2101', '2026.5', '']) {
+      const response = await app.request(`/api/usage/calendar?year=${raw}`)
+      expect(response.status, raw).toBe(400)
+    }
   })
 })

@@ -6,8 +6,10 @@
  */
 import type { z } from 'zod'
 import {
+  usageCalendarSchema,
   usageResponseSchema,
   usageThreadContextSchema,
+  type UsageCalendar,
   type UsageRange,
   type UsageResponse,
   type UsageThreadContext
@@ -52,4 +54,13 @@ export async function fetchUsage(range: UsageRange): Promise<UsageResponse> {
 export async function fetchThreadContext(threadId: string): Promise<UsageThreadContext> {
   const response = await authorized(`/api/usage/context?threadId=${encodeURIComponent(threadId)}`)
   return json(response, usageThreadContextSchema)
+}
+
+/**
+ * 某本地年的按日聚合（task-127）：首页日历热力图的数据面。
+ * 只回有记录的天（渲染端补零）；口径见 shared/usage.ts 的 usageCalendarSchema。
+ */
+export async function fetchUsageCalendar(year: number): Promise<UsageCalendar> {
+  const response = await authorized(`/api/usage/calendar?year=${encodeURIComponent(String(year))}`)
+  return json(response, usageCalendarSchema)
 }

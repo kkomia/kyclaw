@@ -28,7 +28,13 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { LibSQLStore, SqliteClient } from '@mastra/libsql'
-import type { UsageRange, UsageResponse, UsageTokens } from '../shared/usage'
+import type {
+  UsageCalendar,
+  UsageCalendarDay,
+  UsageRange,
+  UsageResponse,
+  UsageTokens
+} from '../shared/usage'
 
 /** usage_runs 的表名（自建表，与 Mastra 的表同库） */
 export const USAGE_TABLE = 'usage_runs'
@@ -268,21 +274,71 @@ function contextOrTurn(contextValue: number | null, turnValue: number): number {
   return contextValue ?? turnValue
 }
 
-export async function threadTokenReadout(
-  store: UsageStore,
-  threadId: string
-): Promise<ThreadTokenReadout> {
-  const rows = await store.listByThread(threadId)
+export interface ThreadUsageTotals {
+  rounds: number
+  modelCalls: number
+  input: number
+  cachedInput: number
+  uncachedInput: number
+  output: number
+  hitRate: number | null
+}
+
+export interface ThreadUsageSummary extends ThreadTokenReadout {
+  totals: ThreadUsageTotals
+}
+
+/**
+ * 一条会话的全部 usage_runs（时间升序）→ 最近一轮 / 首轮基线 + 全会话合计。
+ *
+ * 合计口径（上下文浮窗「Token 用量 / 会话统计」）：整轮合计累加（input/output/cachedInput），
+ * 模型调用次数 = Σ stepCount（老记录没有 step 数时按一轮至少一次记 1，**不编造**）；
+ * 命中率 = ΣcachedInput / Σinput。**只有这一处算**，`threadTokenReadout` 也从这里取，
+ * 避免环/浮窗/压缩读数各算一套。
+ */
+export function summarizeThreadUsage(rows: readonly UsageRun[]): ThreadUsageSummary {
   const first = rows[0]
   const last = rows[rows.length - 1]
+  let input = 0
+  let cachedInput = 0
+  let output = 0
+  let modelCalls = 0
+  for (const row of rows) {
+    input += row.tokens.input
+    output += row.tokens.output
+    cachedInput += Math.max(0, row.cachedInput ?? 0)
+    modelCalls += typeof row.stepCount === 'number' && row.stepCount > 0 ? row.stepCount : 1
+  }
+  const totals: ThreadUsageTotals = {
+    rounds: rows.length,
+    modelCalls,
+    input,
+    cachedInput,
+    uncachedInput: Math.max(0, input - cachedInput),
+    output,
+    hitRate: input === 0 ? null : Math.round((cachedInput / input) * 100)
+  }
   if (last === undefined) {
-    return { lastInput: null, lastCachedInput: null, baselineInput: null }
+    return { lastInput: null, lastCachedInput: null, baselineInput: null, totals }
   }
   return {
     lastInput: contextOrTurn(last.contextInput, last.tokens.input),
     lastCachedInput: last.contextCachedInput ?? last.cachedInput,
     baselineInput:
-      first === undefined ? null : contextOrTurn(first.contextInput, first.tokens.input)
+      first === undefined ? null : contextOrTurn(first.contextInput, first.tokens.input),
+    totals
+  }
+}
+
+export async function threadTokenReadout(
+  store: UsageStore,
+  threadId: string
+): Promise<ThreadTokenReadout> {
+  const summary = summarizeThreadUsage(await store.listByThread(threadId))
+  return {
+    lastInput: summary.lastInput,
+    lastCachedInput: summary.lastCachedInput,
+    baselineInput: summary.baselineInput
   }
 }
 
@@ -292,6 +348,47 @@ export function rangeStart(range: UsageRange, now: Date): Date {
   if (range === 'month') start.setDate(1)
   start.setHours(0, 0, 0, 0)
   return start
+}
+
+/** 本地日历日键 `YYYY-MM-DD`（热力图分桶；用本机时区，不按 UTC 切日） */
+function localDateKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${String(date.getFullYear())}-${month}-${day}`
+}
+
+/**
+ * 年度日历聚合（task-127）：`usage_runs` 一行 = 一轮；按**本地日历日**归并。
+ *   - 只保留 `createdAt` 落在 `year` 本地年的行；非法时间串跳过（不猜日期）；
+ *   - 只回有记录的天，按日期升序；`totalActiveDays = days.length`；
+ *   - `totalTokens` = Σ `tokens.total`（与 /api/usage 同口径）；
+ *   - `steps` 对老记录（无 stepCount）按 1/轮下界记，不虚报。
+ */
+export function summarizeCalendar(rows: readonly UsageRun[], year: number): UsageCalendar {
+  const days = new Map<string, UsageCalendarDay>()
+  let totalTokens = 0
+  for (const row of rows) {
+    const at = new Date(row.createdAt)
+    if (Number.isNaN(at.getTime()) || at.getFullYear() !== year) continue
+    const date = localDateKey(at)
+    const existing = days.get(date) ?? {
+      date,
+      input: 0,
+      output: 0,
+      cachedInput: 0,
+      runs: 0,
+      steps: 0
+    }
+    existing.input += row.tokens.input
+    existing.output += row.tokens.output
+    existing.cachedInput += Math.max(0, row.cachedInput ?? 0)
+    existing.runs += 1
+    existing.steps += row.stepCount !== null && row.stepCount > 0 ? row.stepCount : 1
+    days.set(date, existing)
+    totalTokens += row.tokens.total
+  }
+  const sorted = [...days.values()].sort((a, b) => a.date.localeCompare(b.date))
+  return { year, days: sorted, totalActiveDays: sorted.length, totalTokens }
 }
 
 /** 聚合：总量 + 按模型拆分（token 降序） */

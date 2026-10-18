@@ -607,7 +607,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   app.route(MEMORY_ROUTE_PREFIX, createMemoryRouter({ memory, recall }))
 
   // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
-  app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage }))
+  app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage, snapshots: requestSnapshots }))
 
   // 轨迹数据面（用户反馈 015 / 017）：逐次模型请求的摘要 + 按 id 取正文。
   // 独立路由、独立表（request_snapshots / request_blobs）：用量那条腿坏掉不牵连轨迹。
