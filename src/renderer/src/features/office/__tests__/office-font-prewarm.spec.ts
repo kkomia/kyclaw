@@ -173,6 +173,9 @@ describe('P0-2 / P0-5：升格面定位不再 rAF 空转 + 字体预热门控', 
     expect(prewarmTs).not.toContain('if (!started) startOfficeFontPrewarm()')
     // CR-10：rAF 之外有固定 500ms 定时器兜底（隐藏窗口 rAF 不跑也能起）
     expect(prewarmTs).toContain('setTimeout(run, 500)')
+    // R2-01：起预热前先看**真实 paint 记录**（不是「两帧 rAF」近似）
+    expect(prewarmTs).toContain('waitPaint')
+    expect(prewarmTs).toContain("getEntriesByType('paint')")
     // CR-11：失败有界重试 1 次（2s 退避）
     expect(prewarmTs).toContain('retried')
     expect(prewarmTs).toContain('2_000')

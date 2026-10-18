@@ -93,6 +93,16 @@ let started = false
 let state: PrewarmState = 'idle'
 /** CR-11：预热超时/失败后只允许一次有界重试（2s 退避），避免慢盘一次性失败就永久放弃 */
 let retried = false
+/** R2-04：失败重试的定时器句柄——真实面 ready/升格时必须清掉，避免白起一次 27MB 预热 */
+let retryTimer: number | null = null
+
+function clearRetryTimer(): void {
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer)
+    retryTimer = null
+  }
+}
+
 /** task-101：可升格复用（首个文档面直接拿走）的预热 iframe 与其 host */
 let prewarmHost: HTMLDivElement | null = null
 let prewarmFrame: HTMLIFrameElement | null = null
@@ -146,6 +156,8 @@ export function startOfficeFontPrewarm(): void {
   if (started || typeof window === 'undefined' || typeof document === 'undefined') return
   const root = document.documentElement
   if (root.dataset.officeFontPrewarm === 'skipped') return
+  // R2-04：新的启动会取代挂起的重试，先清掉定时器（幂等）
+  clearRetryTimer()
   started = true
   state = 'loading'
   applyPrewarmDataset(root, 'loading')
@@ -201,7 +213,9 @@ export function startOfficeFontPrewarm(): void {
       window.clearTimeout(timer)
       timer = null
     }
-    window.removeEventListener('message', onMessage)
+    // R2-04：error 后可能还挂着 2s 重试——这段时间要保留 message 监听，
+    // 才能被「真实面 ready」取消；最终失败/成功时才摘。
+    if (next !== 'error') window.removeEventListener('message', onMessage)
   }
 
   const dispose = (): void => {
@@ -240,6 +254,8 @@ export function startOfficeFontPrewarm(): void {
     }
     // 其它文档面已就绪（不是升格复用）：用户已打开 Office 文档 → 记「用过」；预热使命完成，释放隐藏面。
     markOfficeUsed()
+    // R2-04：真实面已就绪 → 取消可能挂起的「失败重试」，别白起一次 27MB 预热。
+    clearRetryTimer()
     // task-101：若预热面**曾被升格**过，不能在这里销毁 —— 归还后它还要留给下一个文档复用
     // （否则第二个文档面 ready 时把 host 删掉，后续 take 永远失败）。60s 归还窗口自行回收。
     if (prewarmEverAdopted) return
@@ -260,7 +276,16 @@ export function startOfficeFontPrewarm(): void {
       retried = true
       started = false
       state = 'idle'
-      window.setTimeout(() => startOfficeFontPrewarm(), 2_000)
+      clearRetryTimer()
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        // 旧的 onMessage 监听留给「真实面 ready 取消重试」用；重试会重新挂一份，这里先摘掉
+        window.removeEventListener('message', onMessage)
+        startOfficeFontPrewarm()
+      }, 2_000)
+    } else {
+      // 最终失败（已重试过）：不再等待，摘掉监听
+      window.removeEventListener('message', onMessage)
     }
   }, PREWARM_TIMEOUT_MS)
 }
@@ -311,6 +336,8 @@ export function takePrewarmedSurface(): PrewarmedSurface | null {
   if (state !== 'ready' || prewarmAdopted) return null
   if (prewarmHost === null || prewarmFrame === null || !prewarmHost.isConnected) return null
   if (prewarmNonce === null) return null
+  // R2-04：升格成功 → 真实面已用上预热，取消挂起的失败重试
+  clearRetryTimer()
   prewarmAdopted = true
   prewarmEverAdopted = true
   markOfficeUsed()
@@ -345,10 +372,10 @@ export function releasePrewarmedSurface(): void {
   }, 60_000)
 }
 /** 启动期调度（task-100；PB-017 起不再按「是否用过 Office」延后）。
- *  - **首帧让位**：优先在头两帧之后起（约 1–2 个 rAF），让 splash/首屏先出；
- *    用户拍板「启动就预热，宁可首屏慢一点」——不再有 12s 门控。
- *  - **CR-10**：rAF 在隐藏/后台窗口可能完全不跑（原「10s rAF 兜底」实际永不触发）——
- *    这里同时挂一个固定 500ms 定时器兜底：无论 paint 记录/rAF 是否可用，预热都会在 500ms 内起。
+ *  - **首帧让位（R2-01）**：在 rAF 里看**真实 paint 记录**（splash/首屏先画完再读 27MB），
+ *    不再用「两帧 rAF」近似（rAF 回调发生在 paint 之前，语义不对）。
+ *  - **CR-10**：隐藏/后台窗口 rAF 可能完全不回调（原「10s rAF 兜底」永不触发）——
+ *    同时挂一个**真实的 500ms 定时器**作上限：paint 判定与 500ms 谁先到谁起，绝不卡死。
  *  - 建的是 hidden iframe，加载/注册都在后台跑；与设置读盘 / React 首屏并行。 */
 export function scheduleOfficeFontPrewarm(): void {
   if (typeof window === 'undefined') return
@@ -365,9 +392,18 @@ export function scheduleOfficeFontPrewarm(): void {
       ? window.requestAnimationFrame.bind(window)
       : null
   if (raf !== null) {
-    // 两帧之后起：第一帧画 splash，第二帧画首屏骨架；拿不到 rAF 也由下面的定时器兜底。
-    raf(() => raf(run))
+    const waitPaint = (): void => {
+      if (fired) return
+      // paint 记录只在首帧真正上屏后出现；rAF 回调本身发生在 paint 之前，所以必须查记录。
+      if (performance.getEntriesByType('paint').length > 0) {
+        run()
+        return
+      }
+      raf(waitPaint)
+    }
+    raf(waitPaint)
   }
+  // 上限兜底：隐藏窗口拿不到 paint 记录/rAF 不跑时，500ms 后无条件起（CR-10）
   window.setTimeout(run, 500)
 }
 
