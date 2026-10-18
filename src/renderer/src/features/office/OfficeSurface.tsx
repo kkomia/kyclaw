@@ -468,38 +468,62 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       frameWindow.postMessage(message, '*')
     }, [documentInfo, documentBytes, status])
 
-    // task-101：升格面常驻 body，用绝对定位覆盖本组件内容区；切标签/隐藏时同步 display:none。
+    // task-101 / P0-2：升格面常驻 body，用绝对定位覆盖本组件内容区。
+    // P0-2（shell-auditor 审计）：**不再用永不暂停的 rAF 循环**（隐藏/切走仍 60fps 写 style）；
+    // 改为事件驱动：ResizeObserver（尺寸/显隐变化）+ IntersectionObserver（进出视口）+
+    // window resize / scroll / document.visibilitychange（页面 hidden 停、visible 时立即同步一次）。
+    // 无事件时 0 次 getBoundingClientRect / 0 次 style 写入。
     useEffect(() => {
       if (!adopted) return
       const host = adoptedHostRef.current
       const container = containerRef.current
       if (host === null || container === null) return
-      let raf = 0
+
+      let lastVisible: boolean | null = null
       const sync = (): void => {
         const rect = container.getBoundingClientRect()
-        const visible = rect.width > 1 && rect.height > 1
+        const visible = document.visibilityState === 'visible' && rect.width > 1 && rect.height > 1
         if (!visible) {
-          host.style.display = 'none'
-        } else {
-          host.style.display = 'block'
-          host.style.position = 'fixed'
-          host.style.left = `${Math.round(rect.left)}px`
-          host.style.top = `${Math.round(rect.top)}px`
-          host.style.width = `${Math.round(rect.width)}px`
-          host.style.height = `${Math.round(rect.height)}px`
-          host.style.opacity = '1'
-          host.style.pointerEvents = 'auto'
+          if (lastVisible !== false) {
+            host.style.display = 'none'
+            lastVisible = false
+          }
+          return
         }
-        raf = window.requestAnimationFrame(sync)
+        host.style.display = 'block'
+        host.style.position = 'fixed'
+        host.style.left = `${Math.round(rect.left)}px`
+        host.style.top = `${Math.round(rect.top)}px`
+        host.style.width = `${Math.round(rect.width)}px`
+        host.style.height = `${Math.round(rect.height)}px`
+        host.style.opacity = '1'
+        host.style.pointerEvents = 'auto'
+        lastVisible = true
       }
-      const observer = new ResizeObserver(sync)
-      observer.observe(container)
-      window.addEventListener('resize', sync)
+
+      const resizeObserver = new ResizeObserver(sync)
+      resizeObserver.observe(container)
+      // 显隐可能不改变 box（visibility/opacity）：IntersectionObserver 负责进出视口唤醒
+      const intersectionObserver = new IntersectionObserver(sync, { threshold: 0 })
+      intersectionObserver.observe(container)
+      const onVisibilityChange = (): void => {
+        sync()
+      }
+      const onWindowChange = (): void => {
+        sync()
+      }
+      window.addEventListener('resize', onWindowChange)
+      window.addEventListener('scroll', onWindowChange, true)
+      document.addEventListener('visibilitychange', onVisibilityChange)
+      // 首次挂载立即同步一次（此后只在事件发生时同步）
       sync()
+
       return () => {
-        window.cancelAnimationFrame(raf)
-        observer.disconnect()
-        window.removeEventListener('resize', sync)
+        resizeObserver.disconnect()
+        intersectionObserver.disconnect()
+        window.removeEventListener('resize', onWindowChange)
+        window.removeEventListener('scroll', onWindowChange, true)
+        document.removeEventListener('visibilitychange', onVisibilityChange)
       }
     }, [adopted])
 

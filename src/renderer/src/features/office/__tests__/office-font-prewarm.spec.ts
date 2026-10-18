@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { applyPrewarmDataset, buildFontPrewarmUrl } from '../office-font-prewarm'
+import {
+  applyPrewarmDataset,
+  buildFontPrewarmUrl,
+  isOfficeUsed,
+  markOfficeUsed,
+  NEVER_USED_PREWARM_DELAY_MS,
+  OFFICE_USED_STORAGE_KEY,
+  prewarmDelayMs
+} from '../office-font-prewarm'
 import { isSurfaceFontsReady } from '../../../office/font-prewarm-protocol'
 
 /**
@@ -88,7 +96,7 @@ describe('字体预注册：启动接线与面侧行为（源码契约）', () =
     // 首帧让位（rAF 一次）后立刻开始：不再有 idle 长延迟
     expect(prewarmTs).toContain('requestAnimationFrame')
     expect(prewarmTs).not.toContain('requestIdleCallback')
-    expect(prewarmTs).not.toContain('PREWARM_DELAY_MS')
+    expect(prewarmTs).not.toContain('const PREWARM_DELAY_MS')
   })
 
   it('预热面：hidden host（off-screen + display:none）/ sandbox 同口径 / 升格前不被销毁', () => {
@@ -144,5 +152,39 @@ describe('字体预注册：启动接线与面侧行为（源码契约）', () =
     // 协议字段在专门的协议文件里（不经 src/shared IPC 契约）
     expect(protocolTs).toContain("type: 'surface:fonts-ready'")
     expect(protocolTs).toContain('elapsedMs')
+  })
+})
+
+describe('P0-2 / P0-5：升格面定位不再 rAF 空转 + 字体预热门控', () => {
+  it('P0-2：OfficeSurface 升格定位用事件驱动（无 requestAnimationFrame 循环）', () => {
+    // rAF 循环已移除；改用 ResizeObserver / IntersectionObserver / visibilitychange 事件
+    expect(officeSurfaceTsx).not.toContain('requestAnimationFrame')
+    expect(officeSurfaceTsx).toContain('new ResizeObserver(sync)')
+    expect(officeSurfaceTsx).toContain('new IntersectionObserver(sync')
+    expect(officeSurfaceTsx).toContain("document.addEventListener('visibilitychange'")
+  })
+
+  it('P0-5：未用过 Office → 预热延后 12s；用过 → 首帧后立即', () => {
+    expect(prewarmDelayMs(true)).toBe(0)
+    expect(prewarmDelayMs(false)).toBe(NEVER_USED_PREWARM_DELAY_MS)
+    expect(NEVER_USED_PREWARM_DELAY_MS).toBe(12_000)
+    // 标记持久在 localStorage（随 userData），并驱动 schedule 门控
+    expect(prewarmTs).toContain(OFFICE_USED_STORAGE_KEY)
+    expect(prewarmTs).toContain('hashchange')
+    expect(prewarmTs).toContain('officeFontPrewarmDeferred')
+    expect(prewarmTs).toContain('installOfficeUsedWatcher')
+    // 用户提前用 Office 时取消挂起的延后预热（避免同一会话白付 27MB）
+    expect(prewarmTs).toContain('deferredTimer')
+    expect(prewarmTs).toContain('prewarmDelayMs(used)')
+  })
+
+  it('P0-5：markOfficeUsed / isOfficeUsed 持久化（localStorage）', () => {
+    window.localStorage.clear()
+    expect(isOfficeUsed()).toBe(false)
+    markOfficeUsed()
+    expect(isOfficeUsed()).toBe(true)
+    expect(window.localStorage.getItem(OFFICE_USED_STORAGE_KEY)).toBe('1')
+    window.localStorage.clear()
+    expect(isOfficeUsed()).toBe(false)
   })
 })

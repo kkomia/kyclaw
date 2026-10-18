@@ -31,6 +31,73 @@ import { currentSurfaceUrl } from './surface-url'
 /** 预热面加载/注册的总超时（27MB 在慢盘上也可能 >10s，给足但别无限挂着） */
 const PREWARM_TIMEOUT_MS = 30_000
 
+/** P0-5：Office 使用标记（localStorage，随 userData 持久；仅本地门控，不上传、不新增 IPC） */
+export const OFFICE_USED_STORAGE_KEY = 'kyclaw:office-used'
+/** 从未用过 Office：预热延后到的空闲时间（本会话不先付 27MB/46 注册的启动成本） */
+export const NEVER_USED_PREWARM_DELAY_MS = 12_000
+
+let officeUsedWatcherInstalled = false
+/** P0-5：未用过 Office 时挂起的「延后预热」定时器（用户提前用 Office 就取消，避免白付一次 27MB） */
+let deferredTimer: number | null = null
+
+function readLocalFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeLocalFlag(key: string): void {
+  try {
+    window.localStorage.setItem(key, '1')
+  } catch {
+    // 存储不可用：退化为「未用过」门控，不影响其它功能
+  }
+}
+
+/** 是否用过 Office（打开过 Office 文档/进入过 Office 模块）。 */
+export function isOfficeUsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return readLocalFlag(OFFICE_USED_STORAGE_KEY)
+}
+
+/** 标记「用过 Office」（打开文档/升格/回退/进入 Office 路由时调用；幂等）。 */
+export function markOfficeUsed(): void {
+  if (typeof window === 'undefined') return
+  writeLocalFlag(OFFICE_USED_STORAGE_KEY)
+  // P0-5：用户已经打开 Office → 取消挂起的「从未用过」延后预热，避免同一会话里再白读 27MB；
+  // 若需要预热（进 Office 路由）由 installOfficeUsedWatcher 主动 start。
+  if (!started && deferredTimer !== null) {
+    window.clearTimeout(deferredTimer)
+    deferredTimer = null
+    delete document.documentElement.dataset.officeFontPrewarmDeferred
+  }
+}
+
+/** 预热等待时间（纯函数，便于单测）：用过 → 首帧后立即；从未用过 → 延后 12s。 */
+export function prewarmDelayMs(used: boolean): number {
+  return used ? 0 : NEVER_USED_PREWARM_DELAY_MS
+}
+
+/**
+ * P0-5：进 Office 模块就补一次预热（HashRouter：`#/office`）。
+ * 这样「首次使用前」可以避免启动即付 27MB，而用户真进 Office 时又能尽快 Ready；
+ * 监听在 window 上、无 IPC/权限变更，模块卸载（页面关闭）自然结束。
+ */
+function installOfficeUsedWatcher(): void {
+  if (typeof window === 'undefined' || officeUsedWatcherInstalled) return
+  officeUsedWatcherInstalled = true
+  const onRouteChange = (): void => {
+    if (!window.location.hash.includes('/office')) return
+    markOfficeUsed()
+    if (!started) startOfficeFontPrewarm()
+  }
+  window.addEventListener('hashchange', onRouteChange)
+  // 启动时可能已经在 Office 路由（刷新/深链）
+  onRouteChange()
+}
+
 type PrewarmState = 'idle' | 'loading' | 'ready' | 'error' | 'skipped'
 
 let started = false
@@ -90,6 +157,11 @@ export function startOfficeFontPrewarm(): void {
   if (root.dataset.officeFontPrewarm === 'skipped') return
   started = true
   state = 'loading'
+  if (deferredTimer !== null) {
+    window.clearTimeout(deferredTimer)
+    deferredTimer = null
+  }
+  delete root.dataset.officeFontPrewarmDeferred
   applyPrewarmDataset(root, 'loading')
 
   const host = document.createElement('div')
@@ -180,7 +252,8 @@ export function startOfficeFontPrewarm(): void {
       scheduleDispose(60_000)
       return
     }
-    // 其它文档面已就绪（不是升格复用）：预热使命完成，释放隐藏面。
+    // 其它文档面已就绪（不是升格复用）：用户已打开 Office 文档 → 记「用过」；预热使命完成，释放隐藏面。
+    markOfficeUsed()
     // task-101：若预热面**曾被升格**过，不能在这里销毁 —— 归还后它还要留给下一个文档复用
     // （否则第二个文档面 ready 时把 host 删掉，后续 take 永远失败）。60s 归还窗口自行回收。
     if (prewarmEverAdopted) return
@@ -210,6 +283,8 @@ function writeSurfaceDataset(value: string): void {
 
 /** 记录一次「没有升格面可用」并给出原因（not-ready / occupied / disposed / unavailable） */
 export function notePrewarmFallback(): void {
+  // 走到这里说明用户确实打开了 Office 文档面（回退旧路径）→ 记「用过」
+  markOfficeUsed()
   const reason: string =
     state !== 'ready'
       ? state === 'error'
@@ -245,6 +320,7 @@ export function takePrewarmedSurface(): PrewarmedSurface | null {
   if (prewarmNonce === null) return null
   prewarmAdopted = true
   prewarmEverAdopted = true
+  markOfficeUsed()
   prewarmAdoptions += 1
   writeSurfaceDataset('adopted')
   if (disposeTimer !== null) {
@@ -275,7 +351,7 @@ export function releasePrewarmedSurface(): void {
     writeSurfaceDataset('disposed')
   }, 60_000)
 }
-/** 启动期调度（task-100）：**首帧画完立刻开始**，不再等 idle / 800ms 长延迟。
+/** 启动期调度（task-100 + P0-5）：**首帧画完后**开始；首次使用 Office 前延后 12s（门控见 schedule 实现）。
  *  - 先 rAF 轮询等到「浏览器已产生 paint 记录」（= splash/首屏已经上屏），再 `setTimeout(0)` 起预热，
  *    保证 27MB 字体读取/注册不跟首屏抢首次绘制；等待循环本身只是读 performance entries，成本可忽略。
  *  - 前台窗口 1-2 帧内就会拿到 paint；后台/jsdom 没有 paint 记录时 rAF 轮询有限次后退化为 setTimeout(0)
@@ -283,7 +359,21 @@ export function releasePrewarmedSurface(): void {
  *  - 建的是 hidden iframe，加载/注册都在后台跑；与设置读盘 / React 首屏并行。 */
 export function scheduleOfficeFontPrewarm(): void {
   if (typeof window === 'undefined') return
-  const run = (): void => startOfficeFontPrewarm()
+  // P0-5：首次使用 Office 前不付启动成本；进 Office 路由/打开文档会提前触发并记「用过」
+  installOfficeUsedWatcher()
+  const used = isOfficeUsed()
+  const delay = prewarmDelayMs(used)
+  const run = (): void => {
+    if (delay > 0) {
+      document.documentElement.dataset.officeFontPrewarmDeferred = '1'
+      deferredTimer = window.setTimeout(() => {
+        deferredTimer = null
+        startOfficeFontPrewarm()
+      }, delay)
+    } else {
+      startOfficeFontPrewarm()
+    }
+  }
   const raf =
     typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
