@@ -115,10 +115,13 @@ describe('task-51：--font-prose 字体栈（拉丁衬线 + DSH 黑体中文链�
     const toolCard = read('src/renderer/src/features/chat/parts/ToolCard.tsx')
     expect(toolCard).toContain('font-prose text-c1')
     expect(toolCard).toMatch(/isTechnicalDetail\(shownDetail\)[\s\S]*?font-mono text-c1/)
-    // Composer / 按钮 / 侧栏仍是 sans（不因正文改衬线而波及 chrome）
-    expect(read('src/renderer/src/features/chat/Composer.tsx')).toMatch(
-      /font-sans[^"']*text-b1|text-b1[^"']*font-sans/
-    )
+    // Composer / 按钮 / 侧栏仍是 sans（不因正文改衬线而波及 chrome）。
+    // 注：输入卡/镜像现在用的是 `font-sans text-[15px]` / `text-[14px]`（PB 改版后不再用 text-b1
+    // 这类语义档），所以这里钉「有 font-sans」且「没有 font-prose」——两条都有实质约束，
+    // 不是"永远通过"的空断言。
+    const composer = read('src/renderer/src/features/chat/Composer.tsx')
+    expect(composer).toMatch(/font-sans/)
+    expect(composer).not.toMatch(/font-prose/)
     expect(readIfExists('src/renderer/src/features/chat/ErrorCard.tsx')).toMatch(
       /font-sans text-b2 font-semibold/
     )
