@@ -51,7 +51,7 @@ import {
   X,
   type LucideIcon
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { cn } from '@renderer/components/ui/cn'
 import {
   handleTabListKeyDown,
@@ -81,7 +81,15 @@ import { BrowserTool } from './BrowserTool'
 import { FilesTool } from './FilesTool'
 import { GitTool } from './GitTool'
 import { PreviewTool } from './PreviewTool'
-import { TerminalTool } from './TerminalTool'
+
+/**
+ * 终端（xterm）按需加载（包体 P0）：`@xterm/xterm` + fit addon 原静态进首屏主包；
+ * 终端的挂载/保活/收尾语义不变，只是把这块代码挪到打开终端标签时才拉的分块里。
+ * 首次打开多一次本地 chunk 读（毫秒级）；转圈占位与三件工具的加载态同一观感。
+ */
+const LazyTerminalTool = lazy(async () => ({
+  default: (await import('./TerminalTool')).TerminalTool
+}))
 
 /** 工具的正式名（新建菜单与面板 aria-label 用；标签标题见 tabLabel） */
 const TOOL_LABEL: Record<WorkbenchTabKind, string> = {
@@ -378,7 +386,11 @@ function renderTool(
     case 'git':
       return <GitTool root={root} />
     case 'terminal':
-      return <TerminalTool root={root} active={active} />
+      return (
+        <Suspense fallback={<ToolLoading />}>
+          <LazyTerminalTool root={root} active={active} />
+        </Suspense>
+      )
     case 'preview':
       return <PreviewTool root={root} relative={tab.path ?? ''} tabId={tab.id} />
   }
@@ -389,6 +401,18 @@ function ToolSettling(): React.JSX.Element {
   return (
     <div
       data-testid="workbench-settling"
+      className="flex min-h-0 flex-1 items-center justify-center"
+    >
+      <Spinner label="加载中" className="text-ink-tertiary" />
+    </div>
+  )
+}
+
+/** 懒加载分块（如终端 xterm）在路上的占位：观感同 ToolSettling，testid 区分用途。 */
+function ToolLoading(): React.JSX.Element {
+  return (
+    <div
+      data-testid="workbench-tool-loading"
       className="flex min-h-0 flex-1 items-center justify-center"
     >
       <Spinner label="加载中" className="text-ink-tertiary" />

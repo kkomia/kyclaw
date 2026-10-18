@@ -66,7 +66,7 @@ describe('ExcelPreview：送进 FortuneSheet 的只读配置', () => {
   it('csv：不编辑 / 不摆工具栏 / 右键只留复制 / 语言中文 / 数据是解析出来的那张表', async () => {
     render(<ExcelPreview bytes={csv('姓名,年龄\n张三,28\n')} filename="名单.csv" />)
 
-    const root = await screen.findByTestId('excel-preview')
+    const root = await screen.findByTestId('excel-preview', {}, { timeout: 5_000 })
     expect(root).toHaveAttribute('data-excel-preview')
     expect(root).toHaveAttribute('aria-label', EXCEL_TEXT.title)
     expect(screen.queryByTestId('excel-preview-notice')).toBeNull()

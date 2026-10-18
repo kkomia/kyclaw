@@ -11,7 +11,7 @@
 import { lazy, Suspense, useMemo } from 'react'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { excelFormatOrNull } from './format'
-import { resolveLimits, type ExcelLimits } from './model'
+import { resolveLimits, type ExcelLimits } from './limits'
 import { EXCEL_TEXT } from './text'
 import './ExcelPreview.css'
 
