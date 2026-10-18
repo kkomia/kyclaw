@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { forwardRef, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SURFACE_PROTOCOL_VERSION } from '../bridge-protocol'
@@ -30,6 +30,16 @@ const editorMock = vi.hoisted(() => ({
 }))
 
 const fontsMock = vi.hoisted(() => ({
+  stats: {
+    fonts: Array.from({ length: 6 }, (_, index) => ({
+      family: `Face${String(index)}`,
+      bytes: new Uint8Array([index + 1])
+    })),
+    faces: 6,
+    uniqueFaces: 5,
+    bytes: 10_467_004,
+    ms: 42
+  },
   ensureSurfaceFonts: vi.fn(async () => ({
     faces: 22,
     registrations: 46,
@@ -37,7 +47,24 @@ const fontsMock = vi.hoisted(() => ({
     fontSetSize: 47,
     ms: 100,
     cjk: true
-  }))
+  })),
+  loadPptxFonts: vi.fn(async () => fontsMock.stats)
+}))
+
+const pptxMock = vi.hoisted(() => ({
+  saveBytes: new Uint8Array([8, 9]) as Uint8Array | null,
+  saveCalls: 0,
+  reloads: [] as Uint8Array[],
+  lastProps: null as null | {
+    documentId: string
+    name: string
+    readOnly: boolean
+    theme: string
+    fonts: readonly unknown[]
+    onChanged: () => void
+    onSaveRequest: () => void
+    onLoaded: () => void
+  }
 }))
 
 const xlsxMock = vi.hoisted(() => ({
@@ -91,6 +118,24 @@ vi.mock('../XlsxEditorPane', () => ({
   )
 }))
 
+vi.mock('../PptxEditorPane', () => ({
+  PptxEditorPane: forwardRef<unknown, Record<string, unknown>>(
+    function MockPptxEditorPane(props, ref) {
+      pptxMock.lastProps = props as typeof pptxMock.lastProps
+      useImperativeHandle(ref, () => ({
+        save: async () => {
+          pptxMock.saveCalls += 1
+          return pptxMock.saveBytes
+        },
+        reload: async (bytes: Uint8Array) => {
+          pptxMock.reloads.push(bytes)
+        }
+      }))
+      return <div data-testid="surface-pptx-editor" data-document-id={props.documentId as string} />
+    }
+  )
+}))
+
 vi.mock('../fonts', () => fontsMock)
 
 import { SurfaceBoot } from '../SurfaceBoot'
@@ -113,7 +158,13 @@ beforeEach(() => {
   xlsxMock.saveCalls = 0
   xlsxMock.reloads = []
   xlsxMock.lastProps = null
+  pptxMock.saveBytes = new Uint8Array([8, 9])
+  pptxMock.saveCalls = 0
+  pptxMock.reloads = []
+  pptxMock.lastProps = null
   fontsMock.ensureSurfaceFonts.mockClear()
+  fontsMock.loadPptxFonts.mockClear()
+  fontsMock.loadPptxFonts.mockImplementation(async () => fontsMock.stats)
 })
 
 /** 以"来自父页"的形态派发一条消息（jsdom 顶层页的 parent 就是自己） */
@@ -167,6 +218,16 @@ const DOC_XLSX = {
   sha256: 'b'.repeat(64),
   readOnly: false,
   bytes: new Uint8Array([7, 7, 7, 7])
+}
+
+const DOC_PPTX = {
+  type: 'doc:open',
+  documentId: 'slides-1',
+  kind: 'pptx',
+  name: '答辩.pptx',
+  sha256: 'c'.repeat(64),
+  readOnly: false,
+  bytes: new Uint8Array([6, 6, 6])
 }
 
 describe('SurfaceBoot：握手状态机', () => {
@@ -280,16 +341,62 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
   })
 
-  it('M4-X：doc:open 缺 kind / kind=pptx 一律丢弃（面只认 docx/xlsx）', async () => {
+  it('M4-P：doc:open kind=pptx → 等 loadPptxFonts 成功后挂 PptxEditorPane（6 面稳定引用）', async () => {
     const postMessage = vi.spyOn(window, 'postMessage')
     render(<SurfaceBoot />)
     const nonce = await handshake(postMessage)
     act(() => {
-      dispatchFromParent({ ...DOC, kind: 'pptx', nonce })
+      dispatchFromParent({ ...DOC_PPTX, nonce })
+    })
+    // 字体加载完成前不挂编辑器
+    expect(screen.queryByTestId('surface-pptx-editor')).not.toBeInTheDocument()
+    await waitFor(() => expect(fontsMock.loadPptxFonts).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByTestId('surface-pptx-editor')).toBeInTheDocument())
+    expect(pptxMock.lastProps?.fonts).toBe(fontsMock.stats.fonts)
+    expect(pptxMock.lastProps?.fonts).toHaveLength(6)
+    expect(screen.getByTestId('surface-pptx-fonts')).toHaveAttribute(
+      'data-pptx-fonts-state',
+      'ready'
+    )
+    expect(screen.getByTestId('surface-pptx-fonts')).toHaveAttribute('data-pptx-fonts-faces', '6')
+    expect(screen.getByTestId('surface-pptx-fonts')).toHaveAttribute('data-pptx-fonts-unique', '5')
+    expect(screen.getByTestId('surface-pptx-fonts')).toHaveAttribute(
+      'data-pptx-fonts-bytes',
+      '10467004'
+    )
+    act(() => pptxMock.lastProps?.onLoaded())
+    expect(
+      sentMessages(postMessage).find((message) => message.type === 'doc:loaded')
+    ).toMatchObject({ documentId: 'slides-1', pages: 0 })
+  })
+
+  it('M4-P：loadPptxFonts 失败 → 不挂编辑器（绝不空数组挂），错误态可重试', async () => {
+    fontsMock.loadPptxFonts.mockImplementationOnce(async () => {
+      throw new Error('pptx 本地字体加载超时')
+    })
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC_PPTX, nonce })
+    })
+    await waitFor(() => expect(screen.getByTestId('surface-pptx-fonts-error')).toBeInTheDocument())
+    expect(screen.queryByTestId('surface-pptx-editor')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('surface-pptx-fonts-retry'))
+    await waitFor(() => expect(screen.getByTestId('surface-pptx-editor')).toBeInTheDocument())
+  })
+
+  it('M4-X/P：doc:open 缺 kind / 未知 kind 一律丢弃', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC, kind: 'pdf', nonce })
     })
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(screen.queryByTestId('surface-docx-editor')).not.toBeInTheDocument()
     expect(screen.queryByTestId('surface-xlsx-editor')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('surface-pptx-editor')).not.toBeInTheDocument()
   })
 
   it('预热面（?officePrewarm=1）发出的 fonts-ready 带 prewarm:true（壳据此释放 hidden iframe）', async () => {

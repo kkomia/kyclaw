@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isDocOpen,
   isDocSaveRequest,
   isDocSaveResult,
   isSurfaceFatal,
@@ -68,6 +69,28 @@ describe('bridge-protocol：M3-S4 面内快捷键', () => {
     expect(isSurfaceShortcut({ type: 'surface:shortcut', nonce: 'n1' })).toBe(false)
     expect(isSurfaceShortcut({ type: 'doc:save', nonce: 'n1', action: 'save' })).toBe(false)
     expect(isSurfaceShortcut(null)).toBe(false)
+  })
+})
+
+describe('bridge-protocol：M4-X/P doc:open kind', () => {
+  const base = {
+    type: 'doc:open' as const,
+    nonce: 'n1',
+    documentId: 'doc-1',
+    name: '文件',
+    sha256: 'a'.repeat(64),
+    readOnly: false,
+    bytes: new Uint8Array([1])
+  }
+  it('docx / xlsx / pptx 三种 kind 都接受', () => {
+    for (const kind of ['docx', 'xlsx', 'pptx'] as const) {
+      expect(isDocOpen({ ...base, kind })).toBe(true)
+    }
+  })
+  it('缺 kind / 未知 kind / 非 kind 字段一律拒绝', () => {
+    expect(isDocOpen(base)).toBe(false)
+    expect(isDocOpen({ ...base, kind: 'pdf' })).toBe(false)
+    expect(isDocOpen({ ...base, kind: 1 })).toBe(false)
   })
 })
 

@@ -131,7 +131,10 @@ export function asarFilePaths(asarPath: string): string[] | null {
     }
     if (typeof parsed.files !== 'object' || parsed.files === null) return null
     const paths: string[] = []
-    const walk = (files: Record<string, { files?: Record<string, unknown> }>, prefix: string): void => {
+    const walk = (
+      files: Record<string, { files?: Record<string, unknown> }>,
+      prefix: string
+    ): void => {
       for (const [name, entry] of Object.entries(files)) {
         const path = prefix === '' ? name : `${prefix}/${name}`
         if (entry !== null && typeof entry === 'object' && entry.files !== undefined) {
@@ -230,8 +233,8 @@ export function packagedResourceProblems(layout: PackagedLayout, version: string
         problems.push('app.asar 里没有 out/renderer/office.html（Office 隔离面没进包）')
       }
       const wasmCount = asarEntries.filter((path) => path.endsWith('.wasm')).length
-      // M4-X 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm = 5；M4-P 接 PPTX 后应为 6（届时改这里）
-      const expectedWasm = 5
+      // M4-P 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm + 1 个 PPTX wasm = 6
+      const expectedWasm = 6
       if (wasmCount !== expectedWasm) {
         problems.push(
           `app.asar 里的 wasm 数量是 ${String(wasmCount)}，期望 ${String(expectedWasm)}（Office 面资源被漏打/多打？）`

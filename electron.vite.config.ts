@@ -43,6 +43,7 @@ export default defineConfig({
      * M4-X：XLSX 内核同属 `@betteroffice/*`，`new URL('./generated/xlsx_wasm_bg.wasm',
      * import.meta.url)` 同样不能进 esbuild 预打包 —— 一并 exclude（否则 dev 打开 xlsx 报
      * `expected magic word ... found 3c 21 64 6f`）。
+     * M4-P：PPTX 同口径（`pptx_wasm_bg.wasm` 5,395,943 B），三包一并 exclude。
      */
     optimizeDeps: {
       exclude: [
@@ -53,7 +54,10 @@ export default defineConfig({
         '@betteroffice/fonts-cjk',
         '@betteroffice/xlsx',
         '@betteroffice/xlsx-react',
-        '@betteroffice/xlsx-i18n'
+        '@betteroffice/xlsx-i18n',
+        '@betteroffice/pptx',
+        '@betteroffice/pptx-react',
+        '@betteroffice/pptx-i18n'
       ]
     },
     // 0.2.0 Office 面（M3-S0）：渲染端多入口 —— 主界面 index.html + 隔离的 office.html。

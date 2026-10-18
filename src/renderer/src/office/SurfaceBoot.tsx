@@ -40,9 +40,15 @@ import {
   type SurfaceTheme
 } from './bridge-protocol'
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
+import { PptxEditorPane, type PptxEditorPaneHandle } from './PptxEditorPane'
 import { XlsxEditorPane, type XlsxEditorPaneHandle } from './XlsxEditorPane'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
-import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
+import {
+  ensureSurfaceFonts,
+  loadPptxFonts,
+  type PptxFontsStats,
+  type SurfaceFontStats
+} from './fonts'
 import type { SurfaceFontsReadyMessage } from './font-prewarm-protocol'
 
 /** hello 重发间隔与总窗口：父页监听挂晚了也能对上 */
@@ -73,8 +79,8 @@ function applySurfaceTheme(theme: SurfaceTheme): void {
 /** 面当前打开的文档（S3：字节留在内存里给编辑器；壳不持久化内容） */
 interface SurfaceDocument {
   documentId: string
-  /** M4-X：docx / xlsx（面据此挂对应编辑器；xlsx 不需要字体注册） */
-  kind: 'docx' | 'xlsx'
+  /** M4-X/P：docx / xlsx / pptx（面据此挂对应编辑器；xlsx 不需要字体，pptx 等 6 面加载） */
+  kind: 'docx' | 'xlsx' | 'pptx'
   name: string
   sha256: string
   readOnly: boolean
@@ -82,10 +88,12 @@ interface SurfaceDocument {
 }
 
 /** 两种编辑器 pane 的命令式句柄形状一致（save/reload）；SurfaceBoot 只按这个用 */
-type SurfaceEditorPaneHandle = DocxEditorPaneHandle | XlsxEditorPaneHandle
+type SurfaceEditorPaneHandle = DocxEditorPaneHandle | XlsxEditorPaneHandle | PptxEditorPaneHandle
 
 export type SurfaceBootState = 'booting' | 'ready'
 type FontsState = 'idle' | 'loading' | 'ready' | 'error'
+/** M4-P：pptx 6 面字体加载（与 docx 的 document.fonts 注册是两条独立链） */
+type PptxFontsState = 'idle' | 'loading' | 'ready' | 'error'
 type EditorState = 'idle' | 'loading' | 'ready' | 'error'
 
 export function SurfaceBoot(): React.JSX.Element {
@@ -95,6 +103,11 @@ export function SurfaceBoot(): React.JSX.Element {
   const [fontsState, setFontsState] = useState<FontsState>('idle')
   const [fontStats, setFontStats] = useState<SurfaceFontStats | null>(null)
   const [fontsError, setFontsError] = useState('')
+  /** M4-P：pptx 字体（6 条/5 唯一/10,467,004B）加载状态与统计 */
+  const [pptxFonts, setPptxFonts] = useState<PptxFontsStats | null>(null)
+  const [pptxFontsState, setPptxFontsState] = useState<PptxFontsState>('idle')
+  const [pptxFontsError, setPptxFontsError] = useState('')
+  const [pptxFontsRetry, setPptxFontsRetry] = useState(0)
   const [editorState, setEditorState] = useState<EditorState>('idle')
   const [editorReadyMs, setEditorReadyMs] = useState<number | null>(null)
   const [revision, setRevision] = useState(0)
@@ -534,10 +547,49 @@ export function SurfaceBoot(): React.JSX.Element {
       })
   }, [postError, prewarm])
 
+  /**
+   * M4-P：pptx 6 面字体只在 `doc.kind==='pptx'` 时加载；成功才挂 `PptxEditorPane`。
+   * 失败/20s 超时**不空数组挂编辑器**：进错误态 + 重试按钮（重试清掉失败缓存，见 fonts.ts）。
+   */
+  useEffect(() => {
+    if (doc?.kind !== 'pptx') {
+      setPptxFonts(null)
+      setPptxFontsState('idle')
+      setPptxFontsError('')
+      return
+    }
+    let alive = true
+    setPptxFonts(null)
+    setPptxFontsState('loading')
+    setPptxFontsError('')
+    loadPptxFonts()
+      .then((stats) => {
+        if (!alive) return
+        setPptxFonts(stats)
+        setPptxFontsState('ready')
+      })
+      .catch((cause: unknown) => {
+        if (!alive) return
+        const message = cause instanceof Error ? cause.message : String(cause)
+        setPptxFontsState('error')
+        setPptxFontsError(message)
+        postError('open', `PPTX 字体加载失败：${message}`)
+      })
+    return () => {
+      alive = false
+    }
+  }, [doc?.documentId, doc?.kind, pptxFontsRetry, postError])
+
   const ready = bootState === 'ready'
-  /** M4-X：xlsx 不需要本地字体注册（canvas 用浏览器字体）；docx 仍等字体 ready */
-  const needsFonts = doc?.kind !== 'xlsx'
-  const showEditor = doc !== null && (!needsFonts || fontsState === 'ready')
+  /** M4-X/P：xlsx 不需要字体；pptx 等 6 面加载；docx 等 document.fonts 注册 */
+  const needsDocxFonts = doc?.kind === 'docx'
+  const needsPptxFonts = doc?.kind === 'pptx'
+  const fontsReady = needsPptxFonts
+    ? pptxFontsState === 'ready'
+    : needsDocxFonts
+      ? fontsState === 'ready'
+      : true
+  const showEditor = doc !== null && fontsReady
 
   return (
     <main
@@ -592,6 +644,18 @@ export function SurfaceBoot(): React.JSX.Element {
         >
           保存 {saveStats.count} 次
         </span>
+        <span
+          data-testid="surface-pptx-fonts"
+          data-pptx-fonts-state={pptxFontsState}
+          data-pptx-fonts-faces={pptxFonts?.faces ?? 0}
+          data-pptx-fonts-unique={pptxFonts?.uniqueFaces ?? 0}
+          data-pptx-fonts-bytes={pptxFonts?.bytes ?? 0}
+          data-pptx-fonts-ms={pptxFonts?.ms ?? ''}
+        >
+          {pptxFontsState === 'ready'
+            ? `pptx 字体 ${String(pptxFonts?.faces ?? 0)} 面`
+            : `pptx 字体 ${pptxFontsState}`}
+        </span>
         {saveError === '' ? null : (
           <span
             data-testid="surface-save-error"
@@ -613,9 +677,24 @@ export function SurfaceBoot(): React.JSX.Element {
           <div className="office-surface-loading" data-testid="surface-editor-empty">
             等待文档…
           </div>
-        ) : doc.kind !== 'xlsx' && fontsState === 'error' ? (
+        ) : doc.kind === 'docx' && fontsState === 'error' ? (
           <div className="office-surface-loading" data-testid="surface-fonts-error">
             本地字体注册失败：{fontsError}
+          </div>
+        ) : doc.kind === 'pptx' && pptxFontsState === 'error' ? (
+          <div
+            className="office-surface-loading"
+            data-testid="surface-pptx-fonts-error"
+            role="alert"
+          >
+            <span>PPTX 字体加载失败：{pptxFontsError}</span>
+            <button
+              type="button"
+              data-testid="surface-pptx-fonts-retry"
+              onClick={() => setPptxFontsRetry((current) => current + 1)}
+            >
+              重试
+            </button>
           </div>
         ) : showEditor ? (
           doc.kind === 'xlsx' ? (
@@ -627,6 +706,23 @@ export function SurfaceBoot(): React.JSX.Element {
               bytes={doc.bytes}
               readOnly={doc.readOnly}
               theme={theme}
+              probe={probe}
+              onChanged={handleChanged}
+              onSaveRequest={requestSave}
+              onLoaded={() => handleLoaded(0)}
+              onError={handleEditorError}
+            />
+          ) : doc.kind === 'pptx' ? (
+            // M4-P：PptxEditorPane 由 office-engineer 提供；字体 ready 后才走到这里
+            <PptxEditorPane
+              key={doc.documentId}
+              ref={editorPaneRef}
+              documentId={doc.documentId}
+              name={doc.name}
+              bytes={doc.bytes}
+              readOnly={doc.readOnly}
+              theme={theme}
+              fonts={pptxFonts?.fonts ?? []}
               probe={probe}
               onChanged={handleChanged}
               onSaveRequest={requestSave}

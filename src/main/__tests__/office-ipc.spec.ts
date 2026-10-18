@@ -272,7 +272,7 @@ describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', (
       properties?: string[]
     }
     expect(options.properties).toContain('openFile')
-    expect(options.filters?.[0]?.extensions).toEqual(['docx', 'xlsx'])
+    expect(options.filters?.[0]?.extensions).toEqual(['docx', 'xlsx', 'pptx'])
   })
 
   it('选中真实 docx：回 document 信息 + alreadyOpen:false；read 回字节与 sha256', async () => {
@@ -331,6 +331,22 @@ describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', (
     expect(opened.document.kind).toBe('xlsx')
     expect(opened.document.displayName).toBe('预算.xlsx')
     expect(opened.document.size).toBe(Buffer.byteLength('真实表格字节'))
+  })
+
+  it('M4-P：选中 pptx → document.kind=pptx', async () => {
+    const directory = tempDir()
+    const path = writeFile(directory, '答辩.pptx', '真实演示字节')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [path] })
+    register({})
+
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(2))
+    )
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.document.kind).toBe('pptx')
+    expect(opened.document.displayName).toBe('答辩.pptx')
+    expect(opened.document.size).toBe(Buffer.byteLength('真实演示字节'))
   })
 
   it('KYCLAW_OFFICE_OPEN 绕过原生选择器（测试专用）', async () => {
@@ -651,6 +667,32 @@ describe('office:save-as（S3 另存为接线）', () => {
     expect(saved.document.displayName).toBe('另存为.docx')
     expect(saved.document.absolutePath).toBe(realpathSync.native(target))
     expect(readFileSync(target, 'utf8')).toBe('另存内容')
+  })
+
+  it('M4-P：pptx 另存为对话框标题/过滤器按 kind 切换', async () => {
+    const directory = tempDir()
+    const path = writeFile(directory, '原件.pptx', 'origin')
+    const captured: { title?: string; filters?: { name: string; extensions: string[] }[] }[] = []
+    register({
+      env: { KYCLAW_OFFICE_OPEN: path },
+      showSaveDialog: async (_parent, options) => {
+        captured.push(options as (typeof captured)[number])
+        return { canceled: true }
+      }
+    })
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(1))
+    )
+    if (!opened.ok) throw new Error('打开失败')
+    const cancelled = officeSaveAsResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.saveAs, eventOf(1), {
+        documentId: opened.document.documentId,
+        bytes: new TextEncoder().encode('x')
+      })
+    )
+    expect(cancelled).toMatchObject({ ok: false, code: 'cancelled' })
+    expect(captured[0]?.title).toBe('另存为 PowerPoint 演示文稿')
+    expect(captured[0]?.filters).toEqual([{ name: 'PowerPoint 演示文稿', extensions: ['pptx'] }])
   })
 
   it('KYCLAW_OFFICE_SAVE_AS 绕过保存对话框；打包态忽略 env（走对话框）', async () => {

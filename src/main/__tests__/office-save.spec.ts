@@ -292,6 +292,34 @@ describe('saveAs：写新落点 + 注册表重定向', () => {
     expect(readFileSync(target, 'utf8')).toBe('新表格字节')
   })
 
+  it('M4-P：pptx 只能另存为 .pptx；重定向后 kind 保持 pptx', async () => {
+    const directory = tempDir()
+    const path = writeDocx(directory, '幻灯片.pptx', '原始演示字节')
+    const docs = createOfficeDocuments()
+    const opened = await docs.open(path, { owner: 1, openedFrom: 'picker' })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.document.kind).toBe('pptx')
+
+    for (const wrong of ['错后缀.docx', '错后缀.xlsx']) {
+      expect(
+        await docs.saveAs(opened.document.documentId, 1, join(directory, wrong), {
+          bytes: Buffer.from('x')
+        })
+      ).toMatchObject({ ok: false, code: 'unsupported-format' })
+    }
+
+    const target = join(directory, '另存幻灯片.pptx')
+    const result = await docs.saveAs(opened.document.documentId, 1, target, {
+      bytes: Buffer.from('新演示字节')
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.document.kind).toBe('pptx')
+    expect(result.document.displayName).toBe('另存幻灯片.pptx')
+    expect(readFileSync(target, 'utf8')).toBe('新演示字节')
+  })
+
   it('目标后缀不是 docx / 目标已被另一个已打开文档占用 → 分类失败，不写文件', async () => {
     const { docs, directory, documentId } = await openDocument()
     expect(

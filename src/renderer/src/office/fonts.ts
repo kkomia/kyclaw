@@ -208,3 +208,146 @@ async function registerSurfaceFonts(): Promise<SurfaceFontStats> {
     devAssetUrls: DEV
   }
 }
+
+/** ---------------------------------------------------------------------------
+ * M4-P：PPTX 编辑器字体面（6 条 / 5 唯一 face / 10,467,004 B，复用 docx 同一套随包字体字节）。
+ *
+ * 为什么单独一个加载器而不复用 `ensureSurfaceFonts`：
+ *   - docx 是「document.fonts 注册 46 个别名」，pptx 的 `PptxEditor` 只要**字节数组**（`PptxFontFace[]`）；
+ *   - pptx 只用到 3 个 family（Liberation Sans / Carlito / Noto Sans SC）→ 6 个条目、5 个唯一文件；
+ *   - 仍走**同一套字节缓存**：构建态 `loadBundledFontBytes`（包内 bytesCache）、dev 态 `loadDevFontBytes`
+ *     （devBytesCache），同一文档面内按 file 只读一次；Noto 两个别名共用同一 Uint8Array。
+ *
+ * 与上游 `@betteroffice/pptx` 的 `PptxFontFace { family; bold?; italic?; bytes }` **结构兼容**
+ * （这里不 import 该包：依赖安装/构建期解耦，SurfaceBoot 直接把 `stats.fonts` 传给 PptxEditor）。
+ * 失败/超时：整次 reject（清 pending 以便重试），**绝不返回空数组**给编辑器。
+ * ------------------------------------------------------------------------- */
+
+/** 与 `@betteroffice/pptx` 的 `PptxFontFace` 结构兼容的输入（不依赖该包的 import） */
+export interface PptxFontFaceInput {
+  family: string
+  bold?: boolean
+  italic?: boolean
+  bytes: Uint8Array
+}
+
+/** pptx 字体加载结果（SurfaceBoot 用于挂 PptxEditor + 打点） */
+export interface PptxFontsStats {
+  fonts: readonly PptxFontFaceInput[]
+  /** 条目数：6 */
+  faces: number
+  /** 唯一字节文件数：5 */
+  uniqueFaces: number
+  /** 唯一字节合计：10,467,004 */
+  bytes: number
+  ms: number
+}
+
+/** pptx 需要的 6 个 family 别名 → 随包字体面（源 family + 字重） */
+const PPTX_FONT_ALIASES = [
+  { sourceFamily: 'Liberation Sans', weight: 400, alias: 'Arial', bold: false },
+  { sourceFamily: 'Liberation Sans', weight: 700, alias: 'Arial', bold: true },
+  { sourceFamily: 'Carlito', weight: 400, alias: 'Calibri', bold: false },
+  { sourceFamily: 'Carlito', weight: 700, alias: 'Calibri', bold: true },
+  { sourceFamily: 'Noto Sans SC', weight: 400, alias: 'Microsoft YaHei', bold: false },
+  { sourceFamily: 'Noto Sans SC', weight: 400, alias: 'Noto Sans SC', bold: false }
+] as const
+
+/** 单次加载上限：正常 6 面 ~0.3–2.5s（Noto 8.33MB 为主）；超时如实报错，不挂空字体编辑器 */
+const PPTX_FONTS_TIMEOUT_MS = 20_000
+
+function resolvePptxSourceFace(family: string, weight: number): BundledFontFace {
+  const face = BUNDLED_FONTS.find(
+    (candidate) =>
+      candidate.family === family &&
+      candidate.weight === weight &&
+      candidate.style === 'normal' &&
+      candidate.metricCompatWith !== undefined
+  )
+  if (face === undefined) {
+    throw new Error(`pptx 字体面缺失：${family} ${weight}（随包字体清单里没有）`)
+  }
+  return face
+}
+
+let pptxPending: Promise<PptxFontsStats> | null = null
+
+/**
+ * 加载 pptx 编辑器需要的 6 条字体面（5 个唯一文件，≈10.47MB）。
+ *
+ * SurfaceBoot 的调用方式（`doc.kind === 'pptx'` 时，挂 PptxEditorPane 之前）：
+ * ```ts
+ * const stats = await loadPptxFonts()   // 失败/超时 → catch 后进错误态，可重试；不要空数组挂编辑器
+ * setPptxFonts(stats.fonts)
+ * setPptxFontStats(stats)               // { faces:6, uniqueFaces:5, bytes:10467004, ms }
+ * ```
+ * 同一文档面内重复调用返回同一个 Promise/结果（成功缓存；失败清缓存可重试）。
+ */
+export function loadPptxFonts(): Promise<PptxFontsStats> {
+  if (pptxPending !== null) return pptxPending
+  const promise = loadPptxFontsInner().catch((error: unknown) => {
+    pptxPending = null
+    throw error
+  })
+  pptxPending = promise
+  return promise
+}
+
+async function loadPptxFontsInner(): Promise<PptxFontsStats> {
+  const started = performance.now()
+  let timer: number | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = window.setTimeout(() => {
+      reject(new Error(`pptx 本地字体加载超时（${PPTX_FONTS_TIMEOUT_MS}ms）`))
+    }, PPTX_FONTS_TIMEOUT_MS)
+  })
+
+  const load = async (): Promise<PptxFontsStats> => {
+    const bytesByFile = new Map<string, Promise<Uint8Array>>()
+    /** 同一 face 文件只读一次（成功/失败都按 file 归一；失败由底层缓存清理，重试会重读） */
+    const bytesOf = (face: BundledFontFace): Promise<Uint8Array> => {
+      const cached = bytesByFile.get(face.file)
+      if (cached !== undefined) return cached
+      const promise = (DEV ? loadDevFontBytes(face) : loadBundledFontBytes(face)).then((buffer) => {
+        if (buffer.byteLength !== face.byteLength) {
+          throw new Error(
+            `pptx 字体字节长度不符：${face.file} ${buffer.byteLength}≠${face.byteLength}`
+          )
+        }
+        return new Uint8Array(buffer)
+      })
+      bytesByFile.set(face.file, promise)
+      return promise
+    }
+
+    const fonts = await Promise.all(
+      PPTX_FONT_ALIASES.map(async (spec) => {
+        const face = resolvePptxSourceFace(spec.sourceFamily, spec.weight)
+        const bytes = await bytesOf(face)
+        return {
+          family: spec.alias,
+          bold: spec.bold,
+          italic: false,
+          bytes
+        } satisfies PptxFontFaceInput
+      })
+    )
+    const uniqueBytes = [...bytesByFile.keys()].reduce(
+      (total, file) => total + (BUNDLED_FONTS.find((face) => face.file === file)?.byteLength ?? 0),
+      0
+    )
+    return {
+      fonts,
+      faces: fonts.length,
+      uniqueFaces: bytesByFile.size,
+      bytes: uniqueBytes,
+      ms: Math.round((performance.now() - started) * 100) / 100
+    }
+  }
+
+  try {
+    return await Promise.race([load(), timeout])
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer)
+  }
+}

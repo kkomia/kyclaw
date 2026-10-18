@@ -41,7 +41,8 @@ import {
 /** M4-X：注册表接受的扩展名 → kind（大小写不敏感；PPTX 在 M4-P 再扩） */
 export const OFFICE_EDITOR_EXTENSION_KINDS: Readonly<Record<string, OfficeEditorKind>> = {
   '.docx': 'docx',
-  '.xlsx': 'xlsx'
+  '.xlsx': 'xlsx',
+  '.pptx': 'pptx'
 }
 
 /** 路径 → 可编辑 kind（不支持的格式回 undefined，调用方回 unsupported-format） */
@@ -534,7 +535,11 @@ export function createOfficeDocuments(
       if (officeEditorKindOfPath(targetPath) !== record.kind) {
         return officeFailure(
           'unsupported-format',
-          record.kind === 'xlsx' ? '另存为只支持 .xlsx' : '另存为只支持 .docx'
+          record.kind === 'pptx'
+            ? '另存为只支持 .pptx'
+            : record.kind === 'xlsx'
+              ? '另存为只支持 .xlsx'
+              : '另存为只支持 .docx'
         )
       }
 

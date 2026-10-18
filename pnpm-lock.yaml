@@ -103,6 +103,15 @@ importers:
       '@betteroffice/fonts-cjk':
         specifier: 0.4.0
         version: 0.4.0
+      '@betteroffice/pptx':
+        specifier: 0.2.0
+        version: 0.2.0
+      '@betteroffice/pptx-i18n':
+        specifier: 0.2.0
+        version: 0.2.0
+      '@betteroffice/pptx-react':
+        specifier: 0.2.0
+        version: 0.2.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@betteroffice/xlsx':
         specifier: 0.3.0
         version: 0.3.0
@@ -529,6 +538,18 @@ packages:
     peerDependenciesMeta:
       '@betteroffice/fonts-cjk':
         optional: true
+
+  '@betteroffice/pptx-i18n@0.2.0':
+    resolution: {integrity: sha512-v+mrz02exXGB0hcQL1W0cBKASU3r++F1u1yZxaqXGZ2K7IjFT3bKDT7rhQL1aGQpTNdkt9h6cienS3APD5BFow==}
+
+  '@betteroffice/pptx-react@0.2.0':
+    resolution: {integrity: sha512-/F4BrpSlEZ4os6petOJQP4DruUJAGWIJVZO/V/CPjqexg4W8z6ot1iEXjPMu+xr+yc1r6bO8gWJPMHiW/SEJjQ==}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+
+  '@betteroffice/pptx@0.2.0':
+    resolution: {integrity: sha512-pNPQ58tlA+pVibERbLdQNskvP7a0GIMf4jhkCU/gPp8043Ichf6gB3PSb4ra9sfqoIaWqOaZKCWyptovA2+Q0A==}
 
   '@betteroffice/xlsx-i18n@0.3.0':
     resolution: {integrity: sha512-wQx7boZyKr+8MDDtUdos52pDfHeyesY8Hrsj4zEiptAi1c+8Tgy+d3sTPyYX2WZit9EoeSGy4AzombARI03vOQ==}
@@ -6092,6 +6113,17 @@ snapshots:
   '@betteroffice/fonts@0.4.0(@betteroffice/fonts-cjk@0.4.0)':
     optionalDependencies:
       '@betteroffice/fonts-cjk': 0.4.0
+
+  '@betteroffice/pptx-i18n@0.2.0': {}
+
+  '@betteroffice/pptx-react@0.2.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@betteroffice/pptx': 0.2.0
+      '@betteroffice/pptx-i18n': 0.2.0
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+
+  '@betteroffice/pptx@0.2.0': {}
 
   '@betteroffice/xlsx-i18n@0.3.0': {}
 

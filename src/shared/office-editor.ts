@@ -50,7 +50,11 @@ export const OFFICE_IPC_CHANNELS = {
    * `app.getPath('temp')/kyclaw/未命名-<ts>.docx`、注册进文档注册表后返回 `OfficeOpenResult`。
    * v1 只接 docx（xlsx/pptx 编辑器未就绪，入口在新增标签页里隐藏）。
    */
-  createBlank: 'office:create-blank'
+  createBlank: 'office:create-blank',
+  /** M4-T锛氬紓姝ユ爣棰炬寔涔呭寲锛氫粎 documentId 鏁扮粍 */
+  sessionSync: 'office:session-sync',
+  /** M4-T锛氬惎鍔ㄦ仮澶嶏細涓绘祰绋嬫寜鐩樼増鏈噸寮€骞跺洖鏂?documentId 鍒楄〃 */
+  sessionRestore: 'office:session-restore'
 } as const
 
 /**
@@ -94,7 +98,7 @@ export type OfficeErrorCode = z.infer<typeof officeErrorCodeSchema>
 
 /** 分类 → 中文人话（主进程回包与渲染端提示共用；不回绝对路径/errno 细节给界面之外的地方） */
 export const OFFICE_EDITOR_ERROR_MESSAGES: Readonly<Record<OfficeErrorCode, string>> = {
-  'unsupported-format': '当前只支持 .docx / .xlsx 文件',
+  'unsupported-format': '当前只支持 .docx / .xlsx / .pptx 文件',
   'too-large': '这个文件太大（超过 64MB），当前版本打不开',
   unreadable: '读不了这个文件：它可能已损坏、无权限，或不是普通文件',
   'write-locked': '文件被其他程序占用，可以先另存为再替换',
@@ -108,10 +112,10 @@ export const OFFICE_EDITOR_ERROR_MESSAGES: Readonly<Record<OfficeErrorCode, stri
 }
 
 /**
- * 可编辑的 Office 格式（M4-X：DOCX + XLSX；PPTX 在 M4-P 再扩）。
+ * 可编辑的 Office 格式（M4-X/P：DOCX + XLSX + PPTX）。
  * 这里是**主进程已接**集合，不是标签类型全集（pdf/image/text/web 只是标签占位）。
  */
-export const OFFICE_EDITOR_KINDS = ['docx', 'xlsx'] as const
+export const OFFICE_EDITOR_KINDS = ['docx', 'xlsx', 'pptx'] as const
 export const officeEditorKindSchema = z.enum(OFFICE_EDITOR_KINDS)
 export type OfficeEditorKind = z.infer<typeof officeEditorKindSchema>
 
@@ -119,7 +123,7 @@ export type OfficeEditorKind = z.infer<typeof officeEditorKindSchema>
 export const officeDocumentInfoSchema = z.strictObject({
   /** 主进程随机生成的不透明 id（同一 realpath 只发一个） */
   documentId: z.string().min(1),
-  /** 文档格式：docx / xlsx（M4-X 起；标签图标与编辑器挂载都按它走） */
+  /** 文档格式：docx / xlsx / pptx（M4-X/P；标签图标与编辑器挂载都按它走） */
   kind: officeEditorKindSchema,
   /** 文件名（标签标题） */
   displayName: z.string().min(1),
@@ -423,3 +427,19 @@ export type OfficeQuitResult = z.infer<typeof officeQuitResultSchema>
 
 /** `office:quit-result` 入参：[result]（主进程按 sender.id + requestId 双匹配后采信） */
 export const officeQuitResultArgsSchema = z.tuple([officeQuitResultSchema])
+
+/** M4-T锛氬紓姝ユ爣棰峰悓姝ュ叆鍙傦紙瀹夊叏绾㈢嚎锛氬彧瀛?documentId锛屼笉瀛楄妭/璺緞锛?*/
+export const officeSessionSyncArgsSchema = z.strictObject({
+  documentIds: z.array(z.string().min(1)).max(OFFICE_MAX_OPEN_DOCUMENTS),
+  activeDocumentId: z.string().min(1).nullable().optional()
+})
+export type OfficeSessionSyncArgs = z.infer<typeof officeSessionSyncArgsSchema>
+
+/** M4-T锛氭仮澶嶅洖鍖咃紙restored 涓烘寜鐩樼増鏈噸寮€鍚庣殑鏂囨。淇℃伅锛?*/
+export const officeSessionRestoreResultSchema = z.strictObject({
+  restored: z.array(officeDocumentInfoSchema),
+  activeDocumentId: z.string().min(1).nullable(),
+  modifiedOnDisk: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative()
+})
+export type OfficeSessionRestoreResult = z.infer<typeof officeSessionRestoreResultSchema>

@@ -145,8 +145,8 @@ export interface DocOpenMessage {
   type: 'doc:open'
   nonce: string
   documentId: string
-  /** M4-X：编辑器格式；面据此挂 DocxEditor 或 XlsxEditor */
-  kind: 'docx' | 'xlsx'
+  /** M4-X/P：编辑器格式；面据此挂 DocxEditor / XlsxEditor / PptxEditor */
+  kind: 'docx' | 'xlsx' | 'pptx'
   name: string
   sha256: string
   readOnly: boolean
@@ -270,7 +270,7 @@ export function isDocOpen(value: unknown): value is DocOpenMessage {
     value.type === 'doc:open' &&
     isNonEmptyString(value.nonce) &&
     isNonEmptyString(value.documentId) &&
-    (value.kind === 'docx' || value.kind === 'xlsx') &&
+    (value.kind === 'docx' || value.kind === 'xlsx' || value.kind === 'pptx') &&
     isNonEmptyString(value.name) &&
     typeof value.sha256 === 'string' &&
     value.sha256.length > 0 &&

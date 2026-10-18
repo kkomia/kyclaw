@@ -2650,25 +2650,28 @@ PERFORMANCE OF THIS SOFTWARE.
 
 ---
 
-## 6. BetterOffice 编辑器内核与字体（0.2.0：DOCX；M4-X 起的 XLSX）
+## 6. BetterOffice 编辑器内核与字体（0.2.0：DOCX；M4-X 起的 XLSX；M4-P 起的 PPTX）
 
-0.2.0 起 Office 面（隔离 iframe）里的 DOCX 编辑器/查看器用 **BetterOffice**；M4-X 起 XLSX 也接同一套
-BetterOffice 内核。这些包都放 `devDependencies`：包目录**不进安装包**（打包态 asar 里没有
+0.2.0 起 Office 面（隔离 iframe）里的 DOCX 编辑器/查看器用 **BetterOffice**；M4-X 起 XLSX、M4-P 起 PPTX
+也接同一套 BetterOffice 内核。这些包都放 `devDependencies`：包目录**不进安装包**（打包态 asar 里没有
 `node_modules/@betteroffice`），代码与字体在构建时被 Vite 内联进 office 渲染入口的 bundle
 （落成 `out/renderer/assets/*`），所以许可文本只能由本文件承载（口径同第 5 节开头那张表）。
-`@betteroffice/docx-i18n` / `@betteroffice/xlsx-i18n` 是各自 React 包的传递依赖，同样随 bundle
-分发，同样按本节声明。
+`@betteroffice/docx-i18n` / `@betteroffice/xlsx-i18n` / `@betteroffice/pptx-i18n` 是各自 React 包的
+传递依赖，同样随 bundle 分发，同样按本节声明。
 
-| 包                          | 版本  | 许可                   | 用在哪                                                           |
-| --------------------------- | ----- | ---------------------- | ---------------------------------------------------------------- |
-| `@betteroffice/docx`        | 0.4.3 | Apache-2.0             | OOXML 解析 / 排版 / 编辑内核（Rust→WASM，4 个 `.wasm`）          |
-| `@betteroffice/docx-react`  | 0.4.3 | Apache-2.0             | 编辑器 / 查看器的 React 组件与样式（`styles.css`）               |
-| `@betteroffice/docx-i18n`   | 0.4.3 | Apache-2.0             | `docx-react` 的界面文案（传递依赖）                              |
-| `@betteroffice/xlsx`        | 0.3.0 | Apache-2.0             | XLSX 解析 / 计算 / 渲染 / 编辑内核（Rust→WASM，1 个 `.wasm`）    |
-| `@betteroffice/xlsx-react`  | 0.3.0 | Apache-2.0             | XLSX 编辑器 / 查看器的 React 组件                                |
-| `@betteroffice/xlsx-i18n`   | 0.3.0 | Apache-2.0             | `xlsx-react` 的界面文案（传递依赖）                              |
-| `@betteroffice/fonts`       | 0.4.0 | Apache-2.0 AND OFL-1.1 | 随编辑器分发的西文字体（17 个字体族、65 个 `.ttf`）              |
-| `@betteroffice/fonts-cjk`   | 0.4.0 | Apache-2.0 AND OFL-1.1 | 中日韩字体（Noto Sans SC/TC/JP/KR + Noto Serif SC，5 个 `.otf`） |
+| 包                         | 版本  | 许可                   | 用在哪                                                           |
+| -------------------------- | ----- | ---------------------- | ---------------------------------------------------------------- |
+| `@betteroffice/docx`       | 0.4.3 | Apache-2.0             | OOXML 解析 / 排版 / 编辑内核（Rust→WASM，4 个 `.wasm`）          |
+| `@betteroffice/docx-react` | 0.4.3 | Apache-2.0             | 编辑器 / 查看器的 React 组件与样式（`styles.css`）               |
+| `@betteroffice/docx-i18n`  | 0.4.3 | Apache-2.0             | `docx-react` 的界面文案（传递依赖）                              |
+| `@betteroffice/xlsx`       | 0.3.0 | Apache-2.0             | XLSX 解析 / 计算 / 渲染 / 编辑内核（Rust→WASM，1 个 `.wasm`）    |
+| `@betteroffice/xlsx-react` | 0.3.0 | Apache-2.0             | XLSX 编辑器 / 查看器的 React 组件                                |
+| `@betteroffice/xlsx-i18n`  | 0.3.0 | Apache-2.0             | `xlsx-react` 的界面文案（传递依赖）                              |
+| `@betteroffice/pptx`       | 0.2.0 | Apache-2.0             | PPTX 解析 / 渲染 / 编辑内核（Rust→WASM，1 个 `.wasm`）           |
+| `@betteroffice/pptx-react` | 0.2.0 | Apache-2.0             | PPTX 编辑器 / 查看器的 React 组件                                |
+| `@betteroffice/pptx-i18n`  | 0.2.0 | Apache-2.0             | `pptx-react` 的界面文案（传递依赖）                              |
+| `@betteroffice/fonts`      | 0.4.0 | Apache-2.0 AND OFL-1.1 | 随编辑器分发的西文字体（17 个字体族、65 个 `.ttf`）              |
+| `@betteroffice/fonts-cjk`  | 0.4.0 | Apache-2.0 AND OFL-1.1 | 中日韩字体（Noto Sans SC/TC/JP/KR + Noto Serif SC，5 个 `.otf`） |
 
 上游：`https://github.com/openooxml/betteroffice`（npm 上 `author=OpenOOXML`、
 `homepage=https://betteroffice.dev/`），版本取自 npmmirror（`registry.npmmirror.com`）。
@@ -2682,12 +2685,13 @@ BetterOffice 内核。这些包都放 `devDependencies`：包目录**不进安�
 OFL-1.1 第 2 条要求每一份副本都带著作权声明与许可文本：本节的字体版权行 + OFL-1.1 全文随本声明
 分发即满足该项 —— 本文件经 `extraResources` 原样进安装目录的 `resources/skills/`，不在 asar 里。
 
-### 6.1 Apache-2.0 全文（`@betteroffice/docx` / `docx-react` / `docx-i18n` / `xlsx` / `xlsx-react` / `xlsx-i18n`，以及 `fonts` / `fonts-cjk` 的代码部分）
+### 6.1 Apache-2.0 全文（`@betteroffice/docx` / `docx-react` / `docx-i18n` / `xlsx` / `xlsx-react` / `xlsx-i18n` / `pptx` / `pptx-react` / `pptx-i18n`，以及 `fonts` / `fonts-cjk` 的代码部分）
 
 docx 系三个包各自带的 `LICENSE` 是**同一份** Apache-2.0 文本（三份 sha256 逐字节相同：
-`004ed989f5f3e9941e180bcb338385aa5db84e3a929305b52551096e430e6707`）；xlsx 系三个包也是同一份
-Apache-2.0 文本（`xlsx` / `xlsx-react` 的 sha256 为 `db17c7e4531fd3e1a376cd87ad1ddf9a195118e47fde7f26b9feb657c8c114af`，
-`xlsx-i18n` 与 docx 系同 sha），与 docx 系全文相同、仅版权行
+`004ed989f5f3e9941e180bcb338385aa5db84e3a929305b52551096e430e6707`）；xlsx 系与 pptx 系也是同一份
+Apache-2.0 文本（`xlsx` / `xlsx-react` / `pptx` / `pptx-react` 的 sha256 为
+`db17c7e4531fd3e1a376cd87ad1ddf9a195118e47fde7f26b9feb657c8c114af`，`xlsx-i18n` / `pptx-i18n`
+与 docx 系同 sha），与 docx 系全文相同、仅版权行
 （`Copyright 2026 The OpenOOXML contributors`）不同。原文照抄如下：
 
 ```
@@ -3029,15 +3033,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ### 6.4 本节的边界（别当"已穷尽"）
 
-- 本节只覆盖**第一步接的 DOCX**（`@betteroffice/docx*` + 字体）；表格 / 演示的 Office 内核还没接，
-  将来接入时按同口径在本文件追加。
-- S0（依赖 + 入口 + 许可基线）的 office 入口**故意不 import 编辑器**，所以本步构建产物里还没有
-  wasm / 字体，**也还没产生这几个包代码的分发义务**；S1 首次 import 编辑器后，`docx-react` 的
-  传递依赖里新引入的那几个（如 `sonner`、`@radix-ui/react-select@2.4.1`，均 MIT）会随 bundle 内联，
-  届时要把它们的许可文本补进第 5 节（同类 MIT 口径已有先例）。
+- 本节覆盖已接的三种格式：DOCX（`@betteroffice/docx*`）、XLSX（`@betteroffice/xlsx*`）、
+  PPTX（`@betteroffice/pptx*`）与字体；后续新增 Office 能力按同口径在本文件追加。
+- `docx-react` 的传递依赖里新引入的那几个（如 `sonner`、`@radix-ui/react-select@2.4.1`，均 MIT）
+  随 bundle 内联，其许可文本已在第 5 节补登（同类 MIT 口径已有先例）。
 - 体积口径（未压缩，`@betteroffice/*` npm 包内实测）：`docx` 的 4 个 wasm 合计 30,073,417 B
-  （≈ 28.7 MiB）；`fonts` 的 65 个 ttf 合计 14,876,000 B（≈ 14.2 MiB）；`fonts-cjk` 的 5 个 otf
-  合计 34,818,280 B（≈ 33.2 MiB）。它们随渲染端 bundle 分发，不进 asar 的 `dependencies`。
+  （≈ 28.7 MiB）；`xlsx` 的 1 个 wasm 5,171,156 B（≈ 4.9 MiB）；`pptx` 的 1 个 wasm
+  5,395,943 B（≈ 5.1 MiB）；`fonts` 的 65 个 ttf 合计 14,876,000 B（≈ 14.2 MiB）；`fonts-cjk`
+  的 5 个 otf 合计 34,818,280 B（≈ 33.2 MiB）。它们随渲染端 bundle 分发，不进 asar 的
+  `dependencies`。
 
 ---
 
@@ -3068,7 +3072,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 以下为 SIL Open Font License 1.1 全文（与 `OFL-NotoSerif.txt` 逐字一致）：
 
-````text
+```text
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
@@ -3089,7 +3093,7 @@ with others.
 
 The OFL allows the licensed fonts to be used, studied, modified and
 redistributed freely as long as they are not sold by themselves. The
-fonts, including any derivative works, can be bundled, embedded, 
+fonts, including any derivative works, can be bundled, embedded,
 redistributed and/or sold with any software provided that any reserved
 names are not used by derivative works. The fonts and derivatives,
 however, cannot be released under any other type of license. The
@@ -3163,4 +3167,4 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
-````
+```
