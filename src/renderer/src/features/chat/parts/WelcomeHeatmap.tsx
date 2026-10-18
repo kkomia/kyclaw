@@ -59,7 +59,12 @@ export function WelcomeHeatmap({
   const [calendar, setCalendar] = useState<UsageCalendar | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [hover, setHover] = useState<{ cell: HeatmapCell; left: number; top: number } | null>(null)
+  const [hover, setHover] = useState<{
+    cell: HeatmapCell
+    left: number
+    top: number
+    compact: boolean
+  } | null>(null)
   const requestRef = useRef(0)
 
   const load = useMemo(() => loadCalendar ?? defaultLoadCalendar, [loadCalendar])
@@ -121,15 +126,6 @@ export function WelcomeHeatmap({
     const section = event.currentTarget.closest('.welcome-heatmap')?.getBoundingClientRect()
     const width = 176
     const cardHeight = 88
-    // 横向夹在热力图块内（不跑出内容列）；上方空间不够（第一行）就翻到格子下方，
-    // 避免盖住上面的标题/副题。
-    const left = Math.max(
-      section?.left ?? 8,
-      Math.min(
-        (section?.right ?? window.innerWidth) - width,
-        rect.left + rect.width / 2 - width / 2
-      )
-    )
     const preferredTop = rect.top - cardHeight - 8
     const headBottom =
       event.currentTarget
@@ -138,12 +134,21 @@ export function WelcomeHeatmap({
         ?.getBoundingClientRect().bottom ??
       section?.top ??
       0
-    // 上方空间不够（或会盖住标题行）→ 翻到格子下方；仍夹在视口内
-    const top =
-      preferredTop < headBottom + 4
-        ? Math.min(window.innerHeight - cardHeight - 8, rect.bottom + 8)
-        : Math.max(8, preferredTop)
-    setHover({ cell, left, top })
+    // 首行/靠上格子：上方放不下浮卡。这里不翻到下方（会遮住下面网格/图例），
+    // 改用「更轻的呈现」——把读数写进标题行（替换副题），水平方向不挡任何关键读数。
+    if (preferredTop < headBottom + 4) {
+      setHover({ cell, left: 0, top: 0, compact: true })
+      return
+    }
+    // 其余格子：水平夹在热力图块内，浮卡在格子上方
+    const left = Math.max(
+      section?.left ?? 8,
+      Math.min(
+        (section?.right ?? window.innerWidth) - width,
+        rect.left + rect.width / 2 - width / 2
+      )
+    )
+    setHover({ cell, left, top: Math.max(8, preferredTop), compact: false })
   }
 
   /** 年切换键盘：←/→ 直接换年（Enter/Space 是 button 原生点击）；nav 有 aria-label 提供当前年。 */
@@ -157,8 +162,9 @@ export function WelcomeHeatmap({
     }
   }
 
+  const compactHover = hover?.compact === true ? hover : null
   const hoverCard =
-    hover === null || hover.cell.day === null ? null : (
+    hover === null || hover.compact || hover.cell.day === null ? null : (
       <div
         data-testid="welcome-heatmap-tip"
         className="welcome-heatmap-tip"
@@ -183,7 +189,18 @@ export function WelcomeHeatmap({
       <div className="welcome-heatmap-head">
         <div className="welcome-heatmap-title">
           <h2>本地活动</h2>
-          <span className="welcome-heatmap-sub">近一年 · 数据不出这台机器</span>
+          {compactHover !== null && compactHover.cell.day !== null ? (
+            <span
+              className="welcome-heatmap-inline font-mono"
+              data-testid="welcome-heatmap-inline"
+              title={monthDateLabel(compactHover.cell.date ?? '')}
+            >
+              {compactHover.cell.date?.slice(5)} · {formatTokens(compactHover.cell.tokens)} tokens ·{' '}
+              {compactHover.cell.day.runs} 轮
+            </span>
+          ) : (
+            <span className="welcome-heatmap-sub">近一年 · 数据不出这台机器</span>
+          )}
         </div>
         <div
           className="welcome-heatmap-year"

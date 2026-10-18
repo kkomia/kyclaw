@@ -46,6 +46,17 @@
   white-space: nowrap;
 }
 
+/* 首行/靠上格子的轻量读数：写进标题行（替换副题），不遮网格/图例；宽度不够时省略号。 */
+.welcome-heatmap-inline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .welcome-heatmap-year {
   display: inline-flex;
   align-items: center;
@@ -334,6 +345,7 @@
 }
 
 /* 矮窗压缩策略（DESIGN §9）：760 以下收起副题与底部统计/图例，只留标题+网格；
+   620–759 之间（含实测 660）一致走压缩态，不出现布局跳动/溢出；
    620 以下整块隐藏（hero 回到只有报头/输入卡的现状），保证输入卡在一屏内不被挤、无滚动条。 */
 @media (max-height: 759px) {
   .welcome-heatmap-sub {

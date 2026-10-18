@@ -81,13 +81,53 @@ describe('task-127 欢迎页日历热力图', () => {
     )
   })
 
-  it('hover 卡：mouseenter 出现日期/tokens/轮次，mouseleave 消失（portal 到 body）', async () => {
+  it('hover 首行（jsdom 零矩形）：用标题行轻量读数，不弹浮卡、不遮网格', async () => {
     renderHeatmap(async (year) => calendar(year, [day('2026-03-04', 500, 100, 4, 6)]))
     await waitFor(() => expect(screen.getByTestId('welcome-heatmap-stat')).toBeInTheDocument())
     const cell = screen
       .getByTestId('welcome-heatmap-grid')
       .querySelector('[data-date="2026-03-04"]')
     expect(cell).not.toBeNull()
+    fireEvent.mouseEnter(cell as Element)
+    const inline = await screen.findByTestId('welcome-heatmap-inline')
+    expect(inline).toHaveTextContent('03-04')
+    expect(inline).toHaveTextContent('600')
+    expect(inline).toHaveTextContent('4 轮')
+    expect(screen.queryByTestId('welcome-heatmap-tip')).not.toBeInTheDocument()
+    fireEvent.mouseLeave(cell as Element)
+    await waitFor(() =>
+      expect(screen.queryByTestId('welcome-heatmap-inline')).not.toBeInTheDocument()
+    )
+    expect(screen.getByText('近一年 · 数据不出这台机器')).toBeInTheDocument()
+  })
+
+  it('hover 非首行：浮卡（portal）出现日期/tokens/轮次，移出消失', async () => {
+    renderHeatmap(async (year) => calendar(year, [day('2026-03-04', 500, 100, 4, 6)]))
+    await waitFor(() => expect(screen.getByTestId('welcome-heatmap-stat')).toBeInTheDocument())
+    const section = screen.getByTestId('welcome-heatmap')
+    const cell = section
+      .querySelector('[data-testid="welcome-heatmap-grid"]')
+      ?.querySelector('[data-date="2026-03-04"]')
+    expect(cell).not.toBeNull()
+    const rect = (overrides: Partial<DOMRect>): DOMRect =>
+      ({
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        top: 0,
+        left: 0,
+        right: 10,
+        bottom: 10,
+        toJSON: () => ({}),
+        ...overrides
+      }) as DOMRect
+    Object.defineProperty(section, 'getBoundingClientRect', {
+      value: () => rect({ top: 200, left: 400, right: 1300, width: 900, height: 300, bottom: 500 })
+    })
+    Object.defineProperty(cell as Element, 'getBoundingClientRect', {
+      value: () => rect({ top: 400, left: 500, right: 515, width: 15, height: 15, bottom: 415 })
+    })
     fireEvent.mouseEnter(cell as Element)
     const tip = await screen.findByTestId('welcome-heatmap-tip')
     expect(tip).toHaveTextContent('2026 年 3 月 4 日')
@@ -151,13 +191,20 @@ describe('task-127 欢迎页日历热力图', () => {
     expect(css).toContain('--hm-gap: 3px')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('transform: none')
-    // 矮窗：760 以下收副题+底部统计，620 以下整块隐藏（输入卡不被挤）
+    // 矮窗：760 以下收副题+底部统计，620 以下整块隐藏（输入卡不被挤）；620–759（含实测 660）同一压缩档
     expect(css).toMatch(
       /@media \(max-height: 759px\)[\s\S]*?\.welcome-heatmap-sub[\s\S]*?display: none/
     )
     expect(css).toMatch(
+      /@media \(max-height: 759px\)[\s\S]*?\.welcome-heatmap-foot[\s\S]*?display: none/
+    )
+    expect(css).toMatch(
       /@media \(max-height: 619px\)[\s\S]*?\.welcome-heatmap[\s\S]*?display: none/
     )
+    expect(css).toContain('含实测 660')
+    // 首行 hover 的轻量读数（不挡网格/图例）
+    expect(css).toContain('.welcome-heatmap-inline')
+    expect(css).toContain('text-overflow: ellipsis')
     // 年按钮键盘 focus 可见
     expect(css).toContain('outline: 2px solid var(--accent-text)')
   })
