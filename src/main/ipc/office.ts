@@ -37,6 +37,7 @@ import {
   officeOpenFromSessionArgsSchema,
   officeSaveArgsSchema,
   officeSaveAsArgsSchema,
+  officeSessionSyncArgsSchema,
   officeSurfaceUrls,
   type OfficeConfig
 } from '../../shared/office-editor'
@@ -47,6 +48,13 @@ import {
   type OfficeDocuments
 } from '../office-documents'
 import { resolveInsideWorkspace } from '../permission/realpath'
+import {
+  officeSessionPath,
+  planOfficeSessionRestore,
+  readOfficeSession,
+  writeOfficeSession,
+  type OfficeSessionTab
+} from '../office-session'
 import { blankDocxBytes } from '../office-blank-template'
 import { settingsPath } from '../settings'
 import { sessionRootForThread, type ProjectIdOf } from './workspace'
@@ -65,14 +73,15 @@ function samePathIgnoringCase(left: string, right: string): boolean {
   return resolve(left).toLowerCase() === resolve(right).toLowerCase()
 }
 
-/** 原生选择器的选项（M4-X：Word + Excel；取消是一等结果） */
+/** 原生选择器的选项（M4-X/P：Word + Excel + PowerPoint；取消是一等结果） */
 const OPEN_DIALOG_OPTIONS: OpenDialogOptions = {
   title: '打开 Office 文档',
   properties: ['openFile'],
   filters: [
-    { name: 'Office 文档', extensions: ['docx', 'xlsx'] },
+    { name: 'Office 文档', extensions: ['docx', 'xlsx', 'pptx'] },
     { name: 'Word 文档', extensions: ['docx'] },
-    { name: 'Excel 表格', extensions: ['xlsx'] }
+    { name: 'Excel 表格', extensions: ['xlsx'] },
+    { name: 'PowerPoint 演示文稿', extensions: ['pptx'] }
   ]
 }
 
@@ -84,18 +93,19 @@ export interface OfficeOpenDialogResult {
 
 /** 另存为对话框选项（每次按当前文档 kind + 文件名现拼默认路径） */
 function saveDialogOptions(
-  kind: 'docx' | 'xlsx',
+  kind: 'docx' | 'xlsx' | 'pptx',
   defaultPath: string | undefined
 ): SaveDialogOptions {
-  const isExcel = kind === 'xlsx'
+  const presets = {
+    docx: { title: '另存为 Word 文档', name: 'Word 文档', extension: 'docx' },
+    xlsx: { title: '另存为 Excel 表格', name: 'Excel 表格', extension: 'xlsx' },
+    pptx: { title: '另存为 PowerPoint 演示文稿', name: 'PowerPoint 演示文稿', extension: 'pptx' }
+  } as const
+  const preset = presets[kind]
   return {
-    title: isExcel ? '另存为 Excel 表格' : '另存为 Word 文档',
+    title: preset.title,
     ...(defaultPath === undefined ? {} : { defaultPath }),
-    filters: [
-      isExcel
-        ? { name: 'Excel 表格', extensions: ['xlsx'] }
-        : { name: 'Word 文档', extensions: ['docx'] }
-    ]
+    filters: [{ name: preset.name, extensions: [preset.extension] }]
   }
 }
 
@@ -256,6 +266,68 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
       probe: !isPackaged && env.KYCLAW_OFFICE_PROBE === '1'
     }
     return config
+  })
+
+  // M4-T锛氬紓姝ユ爣棰炬寔涔呭寲锛氬彧鎺?documentId 鏁扮粍锛堝畨鍏ㄧ孩绾匡級锛涙寜 owner 鍙栧厓鏁版嵁锛屽師瀛愬啓
+  ipcMain.handle(IPC_CHANNELS.office.sessionSync, (_event, ...args) => {
+    void args
+    const parsed = officeSessionSyncArgsSchema.safeParse(args[0])
+    if (!parsed.success) return { ok: false as const, message: 'invalid session args' }
+    const owner = _event.sender.id
+    const tabs: OfficeSessionTab[] = []
+    for (const documentId of parsed.data.documentIds) {
+      const info = documents.info(documentId, owner)
+      if (info === null) continue
+      tabs.push({
+        documentId: info.documentId,
+        realPath: info.absolutePath,
+        kind: info.kind,
+        readOnly: info.readOnly,
+        dirty: false,
+        sha256: info.sha256
+      })
+      if (tabs.length >= OFFICE_MAX_OPEN_DOCUMENTS) break
+    }
+    const ok = writeOfficeSession(officeSessionPath(userDataDir), {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      activeDocumentId: parsed.data.activeDocumentId ?? null,
+      tabs
+    })
+    return ok ? { ok: true as const } : { ok: false as const, message: 'session write failed' }
+  })
+
+  // M4-T锛氬惎鍔ㄦ仮澶嶏細璇?session 鈫?plan锛堜笂闄?3/鑴忎笉鎭㈠/纾佺洏鐗堟湰锛夆啋 涓插紑
+  ipcMain.handle(IPC_CHANNELS.office.sessionRestore, async (event, ...args) => {
+    void args
+    const session = readOfficeSession(officeSessionPath(userDataDir))
+    if (session === null) {
+      return { restored: [], activeDocumentId: null, modifiedOnDisk: 0, skipped: 0 }
+    }
+    const plan = planOfficeSessionRestore(session, () => ({ exists: true }))
+    const owner = event.sender.id
+    const restored: Array<Record<string, unknown>> = []
+    let modifiedOnDisk = plan.modifiedOnDisk
+    let skipped = plan.skipped
+    for (const candidate of plan.restorable) {
+      const opened = await documents.open(candidate.realPath, {
+        owner,
+        openedFrom: 'session',
+        readOnly: candidate.readOnly
+      })
+      if (!opened.ok) {
+        skipped += 1
+        continue
+      }
+      if (opened.document.sha256 !== candidate.sha256) modifiedOnDisk += 1
+      restored.push(opened.document)
+    }
+    const activeDocumentId =
+      plan.activeDocumentId !== null &&
+      restored.some((doc) => doc.documentId === plan.activeDocumentId)
+        ? plan.activeDocumentId
+        : ((restored[0]?.documentId as string | undefined) ?? null)
+    return { restored, activeDocumentId, modifiedOnDisk, skipped }
   })
 
   ipcMain.handle(IPC_CHANNELS.office.openDialog, async (event, ...args) => {

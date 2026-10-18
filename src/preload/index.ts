@@ -113,7 +113,9 @@ import {
   officeQuitRequestPayloadSchema,
   officeReadResultSchema,
   officeSaveAsResultSchema,
-  officeSaveResultSchema
+  officeSaveResultSchema,
+  officeSessionRestoreResultSchema,
+  officeSessionSyncArgsSchema
 } from '../shared/office-editor'
 
 const windowApi: KyclawWindowApi = {
@@ -782,7 +784,7 @@ const officeApi: KyclawOfficeApi = {
     const parsed = officeConfigSchema.safeParse(
       await ipcRenderer.invoke(IPC_CHANNELS.office.config)
     )
-    if (!parsed.success) throw new Error('[kyclaw] Office 配置响应结构不合法')
+    if (!parsed.success) throw new Error('[kyclaw] invalid session restore response')
     return parsed.data
   },
   openDialog: async () => {
@@ -846,6 +848,22 @@ const officeApi: KyclawOfficeApi = {
   },
   respondQuitRequest: async (result) => {
     await ipcRenderer.invoke(IPC_CHANNELS.office.quitResult, result)
+  },
+  sessionSync: async (documentIds, activeDocumentId = null) => {
+    const parsed = officeSessionSyncArgsSchema.safeParse({ documentIds, activeDocumentId })
+    if (!parsed.success) return { ok: false, message: 'invalid session args' }
+    const result = (await ipcRenderer.invoke(IPC_CHANNELS.office.sessionSync, parsed.data)) as {
+      ok?: boolean
+      message?: string
+    }
+    return result.ok === true ? { ok: true } : { ok: false, message: result.message ?? 'session write failed' }
+  },
+  sessionRestore: async () => {
+    const parsed = officeSessionRestoreResultSchema.safeParse(
+      await ipcRenderer.invoke(IPC_CHANNELS.office.sessionRestore)
+    )
+    if (!parsed.success) throw new Error('[kyclaw] invalid session restore response')
+    return parsed.data
   }
 }
 

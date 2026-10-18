@@ -211,6 +211,24 @@ describe('office-tabs-store：M3-S2 openDocument（按 documentId 去重）', ()
       documentId: 'xlsx-1'
     })
   })
+
+  it('M4-P：info.kind=pptx → 标签 kind=pptx（id 前缀也按格式）', () => {
+    const id = useOfficeTabsStore.getState().openDocument(
+      officeDocumentFixture({
+        documentId: 'pptx-1',
+        kind: 'pptx',
+        displayName: '答辩.pptx',
+        displayPath: '答辩.pptx',
+        absolutePath: 'D:\\工作\\答辩.pptx'
+      })
+    )
+    expect(id.startsWith('pptx-')).toBe(true)
+    expect(useOfficeTabsStore.getState().tabs.find((tab) => tab.id === id)).toMatchObject({
+      kind: 'pptx',
+      title: '答辩.pptx',
+      documentId: 'pptx-1'
+    })
+  })
 })
 describe('office-tabs-store：M3-S4 绝对路径身份（只读，只用于匹配）', () => {
   it('openDocument 把 info.absolutePath 存进标签；replaceDocument（另存为）跟着更新；直接 open() 没有', () => {

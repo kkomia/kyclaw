@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -28,16 +28,22 @@ export interface LaunchOptions {
   secrets?: Record<string, string>
   /** 额外环境变量（默认已带 KYCLAW_FORCE_MOCK=1） */
   env?: Record<string, string>
+  /** 复用既有 userData（跨启动探针；不传 = 每例 mkdtemp 的现状） */
+  userDataDir?: string
+  /** 关闭时不清理 userData（默认 false = 清） */
+  keepUserData?: boolean
 }
 
 export interface LaunchedApp {
   app: ElectronApplication
   page: Page
   userDataDir: string
+  keepUserData: boolean
 }
 
 export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedApp> {
-  const userDataDir = mkdtempSync(join(tmpdir(), 'kyclaw-e2e-'))
+  const userDataDir = options.userDataDir ?? mkdtempSync(join(tmpdir(), 'kyclaw-e2e-'))
+  mkdirSync(userDataDir, { recursive: true })
   const settings: AppSettings = { ...defaultSettings(), ...options.settings }
   writeFileSync(
     join(userDataDir, 'settings.json'),
@@ -59,7 +65,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
-  return { app, page, userDataDir }
+  return { app, page, userDataDir, keepUserData: options.keepUserData === true }
 }
 
 /** 关实例 + 清临时 userData（cases 里放 finally） */
@@ -69,7 +75,7 @@ export async function closeApp(launched: LaunchedApp): Promise<void> {
   } catch {
     // 用例自己点过「关闭」时 app 已经退了，这里不必再抛
   }
-  rmSync(launched.userDataDir, { recursive: true, force: true })
+  if (launched.keepUserData !== true) rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 
 /**

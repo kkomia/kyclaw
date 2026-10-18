@@ -17,6 +17,7 @@ import { OfficeStatusBar } from './OfficeStatusBar'
 import { OfficeSurface, type OfficeSurfaceHandle, type OfficeSurfaceStatus } from './OfficeSurface'
 import { createOfficeSaveMachine, type OfficeSaveMachine } from './office-save-machine'
 import { useOfficeTabsStore, type OfficeTab } from './office-tabs-store'
+import { restoreOfficeSessionOnce, startOfficeSessionSync } from './office-session-sync'
 import {
   isAiPanelAutoCollapsed,
   officeDebugEnabled,
@@ -72,6 +73,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   const blankVisible = newTabOpen && newTabActive
   const [opening, setOpening] = useState(false)
   const [openError, setOpenError] = useState('')
+  const [sessionNotice, setSessionNotice] = useState('')
   /** 面 URL 由主进程下发（dev 端口随 Vite 走；preview/打包是 kyclaw-office://surface/） */
   const [surfaceUrl, setSurfaceUrl] = useState<string | undefined>(undefined)
   /** D17：面内拍点 API 开关（仅未打包 + KYCLAW_OFFICE_PROBE=1；生产恒 false） */
@@ -141,6 +143,20 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     window.addEventListener('resize', onWindowResize)
     return () => window.removeEventListener('resize', onWindowResize)
   }, [setAiPanelAutoCollapsed])
+
+  useEffect(() => {
+    const stopSync = startOfficeSessionSync()
+    void restoreOfficeSessionOnce().then((summary) => {
+      if (summary.modifiedOnDisk > 0) {
+        setSessionNotice(
+          String(summary.modifiedOnDisk) + ' files changed on disk, restored from disk'
+        )
+      } else if (summary.skipped > 0) {
+        setSessionNotice(String(summary.skipped) + ' tabs not restored')
+      }
+    })
+    return stopSync
+  }, [])
 
   const openViaDialog = useCallback(async (): Promise<void> => {
     setOpening(true)
@@ -226,13 +242,18 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
         inert={blankVisible}
         className={blankVisible ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}
       >
+        {sessionNotice === '' ? null : (
+          <p data-testid="office-session-notice" className="px-4 py-1 text-c1 text-ink-tertiary">
+            {sessionNotice}
+          </p>
+        )}
         {tabs.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col bg-(--doc-canvas-bg)">
             <EmptyState
               data-testid="office-empty"
               icon={<Briefcase />}
               title="还没有打开的文档"
-              description="打开一份 .docx / .xlsx 开始；标签不绑定会话，切换会话不会关掉这里。"
+              description="打开一份 .docx / .xlsx / .pptx 开始；标签不绑定会话，切换会话不会关掉这里。"
               action={
                 <Button
                   data-testid="office-open"
@@ -365,7 +386,7 @@ function OfficeWorkspace({
   /** 是否当前可见标签（面内快捷键只在该 workspace 上转发，双保险） */
   active: boolean
   surfaceUrl?: string
-  /** D17 探针缝：透传到 OfficeSurface（仅 xlsx 面用，生产 false） */
+  /** D17 探针缝：透传到 OfficeSurface（xlsx / pptx 面用，生产 false） */
   probe?: boolean
   /** M3-S5-3：整面重载判定要的两个全局量（当前标签数 / 未保存数） */
   openTabCount: number
@@ -379,8 +400,10 @@ function OfficeWorkspace({
 }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
-  // M4-X：DOCX / XLSX 标签挂真编辑器（面内 DocxEditor / XlsxEditor）；其它格式仍占位
-  const isEditor = tab.kind === 'docx' || tab.kind === 'xlsx'
+  // M4-X/P：DOCX / XLSX / PPTX 标签挂真编辑器（面内 DocxEditor / XlsxEditor / PptxEditor）；其它格式仍占位
+  const isEditorKind = tab.kind === 'docx' || tab.kind === 'xlsx' || tab.kind === 'pptx'
+  // 没有 documentId 的标签（例如历史占位/尚未打开成功）不假挂编辑器，仍走占位
+  const isEditor = isEditorKind && tab.documentId !== undefined
   const isDocx = tab.kind === 'docx'
   const theme = useDocumentTheme()
   const surfaceRef = useRef<OfficeSurfaceHandle | null>(null)

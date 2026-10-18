@@ -41,6 +41,7 @@ import {
   type OfficeConfig,
   type OfficeCreateBlankInput,
   type OfficeOpenResult,
+  type OfficeSessionRestoreResult,
   type OfficeQuitRequestPayload,
   type OfficeQuitResult,
   type OfficeReadResult,
@@ -1329,6 +1330,10 @@ export interface KyclawOfficeApi {
    * `OfficeOpenResult`（`displayName = 未命名文档`）。v1 只支持 docx；容量/写盘失败回分类结果。
    */
   createBlank(input: OfficeCreateBlankInput): Promise<OfficeOpenResult>
+  /** M4-T锛氬紓姝ユ爣棰峰悓姝ワ紙鍙寔涔呭寲 documentId锛?*/
+  sessionSync(documentIds: string[], activeDocumentId?: string | null): Promise<{ ok: boolean; message?: string }>
+  /** M4-T锛氬惎鍔ㄦ仮澶嶏細涓绘祰绋嬫寜鐩樼増鏈噸寮€鍚庡洖鏂囨。淇℃伅 */
+  sessionRestore(): Promise<OfficeSessionRestoreResult>
   /** 按 documentId 重读字节，并复核/刷新注册表里的 stat/hash（重载/冲突复查用） */
   read(documentId: string): Promise<OfficeReadResult>
   /**
