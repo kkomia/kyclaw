@@ -3168,3 +3168,13 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ```
+
+---
+
+## Pele (MIT)
+
+- Package: `pele@1.6.0` (https://github.com/obsidianmd/pele)
+- Copyright (c) 2026 kepano
+- License: MIT (full text: `node_modules/pele/LICENSE`)
+- Note: `tests/compat` specs and grammar files are derived from Mermaid (MIT); they are not part of the runtime bundle.
+

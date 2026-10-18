@@ -37,7 +37,7 @@ describe('PrimaryNav 一级导航', () => {
     renderNav()
     const nav = screen.getByTestId('primary-nav')
 
-    for (const label of ['主对话', '笔记', '知识库', 'Office']) {
+    for (const label of ['主对话', '笔记', '知识库', 'Office', '导图']) {
       expect(within(nav).getByRole('button', { name: label })).toBeInTheDocument()
     }
     expect(screen.getByTestId('primary-nav-chat')).toHaveAttribute('aria-current', 'page')

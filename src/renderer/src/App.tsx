@@ -31,6 +31,9 @@ const NotesPage = lazy(async () => ({
 const KnowledgePage = lazy(async () => ({
   default: (await import('./features/knowledge/KnowledgePage')).KnowledgePage
 }))
+const MindmapPage = lazy(async () => ({
+  default: (await import('./features/mindmap/MindmapPage')).MindmapPage
+}))
 const SettingsPage = lazy(async () => ({
   default: (await import('./features/settings/SettingsPage')).SettingsPage
 }))
@@ -55,6 +58,7 @@ export function AppRoutes(): React.JSX.Element {
           <Route path="/knowledge" element={<KnowledgePage />} />
           {/* M3-S4：Office 也交给 ModuleHost 常驻（与 /chat 同口径），路由只负责匹配 */}
           <Route path="/office" element={null} />
+          <Route path="/mindmap" element={<MindmapPage />} />
           <Route path="/settings/:section?" element={<SettingsPage />} />
           <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/memory" element={<MemoryPage />} />

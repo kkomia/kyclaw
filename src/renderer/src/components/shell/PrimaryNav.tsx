@@ -2,6 +2,7 @@ import {
   Briefcase,
   Library,
   MessageSquare,
+  Network,
   NotebookPen,
   Settings,
   type LucideIcon
@@ -29,7 +30,8 @@ const MODULE_ENTRIES: ModuleEntry[] = [
     testId: 'primary-nav-knowledge',
     icon: Library
   },
-  { id: 'office', to: '/office', label: 'Office', testId: 'primary-nav-office', icon: Briefcase }
+  { id: 'office', to: '/office', label: 'Office', testId: 'primary-nav-office', icon: Briefcase },
+  { id: 'mindmap', to: '/mindmap', label: '导图', testId: 'primary-nav-mindmap', icon: Network }
 ]
 
 /**

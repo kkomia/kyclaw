@@ -1,0 +1,161 @@
+/**
+ * PB-024 导图模块样式：左文本 / 右 Pele 预览 / 底部状态栏。
+ * 只用现有 token；Pele 颜色走 `--pele-*` 映射（切换主题不需要重渲染）。
+ */
+
+.mm-root {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  flex: none;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--bg-primary);
+}
+
+.mm-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.mm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mm-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: background-color var(--motion-feedback, 120ms) ease;
+}
+
+.mm-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.mm-toolbar > .mm-btn:last-child {
+  margin-left: auto;
+}
+
+.mm-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mm-editor-pane {
+  display: flex;
+  flex: 0 0 40%;
+  min-width: 260px;
+  max-width: 620px;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--border-hairline);
+  background: var(--bg-primary);
+}
+
+.mm-editor-label {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-hairline);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.mm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  tab-size: 2;
+}
+
+.mm-preview-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--doc-canvas-bg, var(--bg-secondary));
+}
+
+/* Pele 主题：现有 token → Pele 变量（深浅切换只改变量，不重渲染） */
+.mm-preview {
+  position: absolute;
+  inset: 0;
+  --pele-bg: var(--bg-primary);
+  --pele-fg: var(--text-primary);
+  --pele-muted: var(--text-tertiary);
+  --pele-line: var(--border-hairline);
+  --pele-surface: var(--bg-secondary);
+  --pele-surface-alt: var(--surface-3);
+  --pele-border: var(--border-hairline);
+  --pele-accent: var(--accent);
+  --pele-font: var(--font-ui, system-ui, sans-serif);
+  --pele-radius: 10px;
+}
+
+.mm-error {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.mm-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 16px;
+  height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-primary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.mm-status-error {
+  color: var(--danger);
+}

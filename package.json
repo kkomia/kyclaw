@@ -1,6 +1,6 @@
 {
   "name": "kyclaw",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "kyclaw：Kimi 风格三栏桌面应用（Electron + React + 内嵌 Mastra agent）",
   "main": "./out/main/index.js",
   "author": "kkomia",
@@ -58,6 +58,7 @@
     "mammoth": "1.13.0",
     "node-pty": "1.1.0",
     "pdfjs-dist": "6.4.299",
+    "pele": "1.6.0",
     "pptxgenjs": "4.0.1",
     "zod": "4.6.5"
   },
