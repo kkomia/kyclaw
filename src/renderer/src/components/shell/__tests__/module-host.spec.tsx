@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, configure, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Link, MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRoutes } from '@renderer/App'
@@ -63,8 +63,13 @@ function renderAt(path: string): void {
   )
 }
 
-/** 懒路由页面 chunk 在并行负载下可能 >1s 才落定：异步断言给足窗口，不降断言强度。 */
-const SUSPENSE_TIMEOUT = 8_000
+/**
+ * 静默等待上限：**整套并发（~178 files）** 时路由懒加载 chunk + 会话历史回灌会明显变慢，
+ * 单跑时 1s 足够，组合跑里常 >1s。这里把本文件所有 find/waitFor 的兜底窗口统一提到 15s，
+ * 断言内容/强度不变（只给异步落定留时间，不会把"没发生"当成"发生了"）。
+ */
+const SUSPENSE_TIMEOUT = 15_000
+configure({ asyncUtilTimeout: SUSPENSE_TIMEOUT })
 
 /** 等主对话这一挂的历史回灌收尾（测试结束前把请求清干净，别落到已摘掉的桥上） */
 async function waitForChatReady(title = '会话 A'): Promise<void> {
