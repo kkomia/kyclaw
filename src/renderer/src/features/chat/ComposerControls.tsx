@@ -945,7 +945,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
             data-testid="composer-model"
             disabled={pending}
             className={cn(
-              'inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-1 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
+              'inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-1 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
               COMPOSER_READOUT_CLASS
             )}
           >

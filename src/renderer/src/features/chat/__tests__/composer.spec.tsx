@@ -1091,6 +1091,12 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     // 圆角形态不变（10px control 档）
     expect(model).toHaveClass('rounded-control')
     expect(effort).toHaveClass('rounded-control')
+    // Gwen 最终裁决：菜单展开不再铺 open 底色（否则「open 底色 + 指针停在兄弟」两片 wash 同亮，
+    // 贴合的 10px 圆角在中间相切）；保留 text-ink 表达「我开着」。
+    for (const trigger of [model, effort]) {
+      expect(trigger).not.toHaveClass('data-[state=open]:bg-hover')
+      expect(trigger).toHaveClass('data-[state=open]:text-ink')
+    }
     const group = screen.getByTestId('composer-model-effort-group')
     expect(group).toHaveClass('gap-0', 'inline-flex', 'items-center')
     expect(group).toContainElement(model)
@@ -1414,14 +1420,16 @@ describe('round 7 · 模型 chip（T8 已配置 provider，含 isDefault）', ()
     expect(screen.getByTestId('composer-model-other')).toHaveTextContent('other')
   })
 
-  it('round 8：默认不带圆角框线（无 border）；hover / 展开才铺灰底', () => {
+  it('round 8 + PB-015：默认不带圆角框线（无 border）；hover 才铺灰底；展开靠 text-ink 不铺底', () => {
     setup()
 
     const trigger = screen.getByTestId('composer-model')
     expect(trigger).not.toHaveClass('border-hairline')
     expect(trigger.className).not.toContain('border')
     expect(trigger).toHaveClass('hover:bg-hover', 'hover:text-ink')
-    expect(trigger.className).toContain('data-[state=open]:bg-hover')
+    // PB-015（Gwen 裁决）：展开态不再铺灰底（防两片 wash 同亮时 10px 圆角相切），只留 text-ink
+    expect(trigger.className).not.toContain('data-[state=open]:bg-hover')
+    expect(trigger).toHaveClass('data-[state=open]:text-ink')
     // 文字按钮形态：与 ＋ 按钮同高（h-8），不是 Chip 的药丸（不占 chip 高度 token）
     expect(trigger).toHaveClass('h-8')
     expect(trigger).not.toHaveClass('h-(--chip-height)')
