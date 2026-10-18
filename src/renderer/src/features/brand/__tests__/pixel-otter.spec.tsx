@@ -1,21 +1,34 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PixelOtter } from '../PixelOtter'
-import { pickSheetVariant } from '../pixel-otter-sheets'
 import { OTTER_STATES, type PixelOtterSize, type PixelOtterState } from '../otter-states'
 import { MASCOT_IDLE_FALLBACK_MS, useChatMascotState } from '../chat-mascot-state'
 import { resetThreadRunStore, useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 
 /**
- * 像素海獭组件（v4 / 设计稿 32×32）：
- *   - props：6 个状态 × 7 档尺寸（32/64/96/128/192/256/512）；浅/深两层 sheet（主题跟 `data-theme`）；
+ * 像素海獭 · 聊天状态灯（v4-pixel · 32 原生栅格，inline SVG sprite strip）：
+ *   - props：3 个状态（idle/think/type）× 7 档尺寸（32 的整数倍）；浅/深由 --po-* 变量切；
+ *   - 资产：3 个 self-contained SVG，每帧 32 用户单位；组件只内联 strip 层；
  *   - 装饰性：aria-hidden + pointer-events:none；title 只做 hover 提示；
- *   - 不可见就停：IntersectionObserver / document.hidden → data-paused；
- *   - reduced-motion：读 matchMedia，静态帧（CSS 契约在 splash-asset.spec 里对文件断言）；
+ *   - 不可见就停：IntersectionObserver / document.hidden → data-paused（只暂停，不重置帧）；
+ *   - reduced-motion / 父层 paused：定格在 OTTER_STATES[state].reducedFrame（静态可读态）；
  *   - chat 状态灯：run-store（busy）+ 工具卡 DOM → idle/think/type，结束 1.2s 回 idle。
  */
 
 const THREAD_ID = 't-otter'
+
+const CSS = readFileSync(
+  resolve(process.cwd(), 'src/renderer/src/features/brand/pixel-otter.css'),
+  'utf8'
+)
+const CSS_CODE = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+const ASSET = (state: string): string =>
+  readFileSync(
+    resolve(process.cwd(), `src/renderer/src/features/brand/otter-v4/chat-${state}.svg`),
+    'utf8'
+  )
 
 /** matchMedia 替身（jsdom 没有）：reduced-motion 场景 */
 function stubMatchMedia(matches: boolean): void {
@@ -72,9 +85,9 @@ afterEach(() => {
   resetThreadRunStore()
 })
 
-describe('PixelOtter · 渲染契约', () => {
-  it('6 个状态都渲染：data-state + manifest 的帧数/帧时/循环/reduced 帧', () => {
-    const states: PixelOtterState[] = ['idle', 'loading', 'float', 'wave', 'think', 'type']
+describe('PixelOtter · 渲染契约（v4-pixel 32 栅格）', () => {
+  it('3 个状态都渲染：data-state + 帧数/帧时/循环/reduced 帧与规格表一致', () => {
+    const states: PixelOtterState[] = ['idle', 'think', 'type']
 
     for (const state of states) {
       const view = render(<PixelOtter state={state} size={32} />)
@@ -90,18 +103,18 @@ describe('PixelOtter · 渲染契约', () => {
     }
   })
 
-  it('尺寸写进 --otter-size（显式宽高，不产生 CLS）；v4 是 32 的整数倍、最小 32', () => {
+  it('尺寸写进 --otter-size（显式宽高，不产生 CLS）；32 原生栅格、允许 32 的整数倍', () => {
     const first = render(<PixelOtter state="idle" size={32} />)
     const otter = within(first.container).getByTestId('pixel-otter')
     expect(otter).toHaveAttribute('data-size', '32')
     expect(otter.style.getPropertyValue('--otter-size')).toBe('32px')
-    // 32 = 1x 的 1:1（输入卡状态灯）
+    // 输入卡状态灯 = 32 原生栅格的 1×（不是旧 32 sheet 的倍率）
     expect(otter).toHaveAttribute('data-sheet-cell', '32')
     first.unmount()
 
     const sizes: PixelOtterSize[] = [32, 64, 96, 128, 192, 256, 512]
     for (const size of sizes) {
-      const view = render(<PixelOtter state="float" size={size} />)
+      const view = render(<PixelOtter state="type" size={size} />)
       expect(
         within(view.container).getByTestId('pixel-otter').style.getPropertyValue('--otter-size')
       ).toBe(`${size}px`)
@@ -109,34 +122,73 @@ describe('PixelOtter · 渲染契约', () => {
     }
   })
 
-  it('sheet 倍率：输入卡 32→1x；欢迎页 96→@3x、128→@4x；更大尺寸就近放大（不重画）', () => {
-    expect(pickSheetVariant('idle', 32).cell).toBe(32)
-    expect(pickSheetVariant('think', 32).cell).toBe(32)
-    expect(pickSheetVariant('float', 96).cell).toBe(96)
-    expect(pickSheetVariant('float', 128).cell).toBe(128)
-    expect(pickSheetVariant('wave', 128).cell).toBe(128)
-    expect(pickSheetVariant('float', 256).cell).toBe(128)
-    expect(pickSheetVariant('loading', 128).cell).toBe(128)
-    // 小于最小档（32）时退回最小档缩放（v4 起不再支持 16/24 显示档）
-    expect(pickSheetVariant('idle', 16).cell).toBe(32)
+  it('inline SVG：32 viewBox、crispEdges、每状态 N 帧、只有 strip 一层（不是整张 sheet 上屏）', () => {
+    for (const state of ['idle', 'think', 'type'] as const) {
+      const view = render(<PixelOtter state={state} size={32} />)
+      const otter = screen.getByTestId('pixel-otter')
+      const svg = otter.querySelector('svg')
+      expect(svg).not.toBeNull()
+      expect(svg).toHaveAttribute('viewBox', '0 0 32 32')
+      expect(svg).toHaveAttribute('width', '32')
+      expect(svg).toHaveAttribute('height', '32')
+      expect(svg).toHaveAttribute('shape-rendering', 'crispEdges')
+      // 真实 path 已内联（不是 img / 背景图 / 空壳）
+      expect(otter.querySelectorAll('path').length).toBeGreaterThan(5)
+      expect(otter.querySelector('img')).toBeNull()
+      expect(otter.querySelector('image')).toBeNull()
+      // 一屏一格：strip 里恰好 N 帧，x = 0 / 32 / 64 / 96 整数位移
+      const frames = Array.from(svg?.querySelectorAll('g.pixel-otter-strip > g') ?? [])
+      expect(frames).toHaveLength(OTTER_STATES[state].frames)
+      expect(frames.map((frame) => frame.getAttribute('transform'))).toEqual(
+        OTTER_STATES[state].frames === 3
+          ? ['translate(0 0)', 'translate(32 0)', 'translate(64 0)']
+          : ['translate(0 0)', 'translate(32 0)', 'translate(64 0)', 'translate(96 0)']
+      )
+      view.unmount()
+    }
   })
 
-  it('装饰性：aria-hidden；title 只做 hover 提示；浅/深两层 sheet 都在 DOM（CSS 按 data-theme 切）', () => {
+  it('资产文件是 self-contained SVG：32 栅格、整数坐标、无 stroke/filter/位图/外链', () => {
+    for (const state of ['idle', 'think', 'type'] as const) {
+      const raw = ASSET(state)
+      expect(raw).toContain('viewBox="0 0 32 32"')
+      expect(raw).toContain('shape-rendering="crispEdges"')
+      expect(raw).toContain('<g class="pixel-otter-strip">')
+      expect((raw.match(/<g transform=/g) ?? []).length).toBe(OTTER_STATES[state].frames)
+      // 像素几何：path 全是 M x y h w v1 h -w z 的行游程，没有 stroke / filter / image
+      const d = raw.match(/ d="([^"]*)"/g) ?? []
+      expect(d.length).toBeGreaterThan(0)
+      for (const pathData of d) {
+        expect(pathData).not.toMatch(/[0-9]\.[0-9]/) // 无小数坐标
+        expect(pathData).toMatch(/^ d="(?:M\d+ \d+h\d+v1h-\d+z)+"$/)
+      }
+      expect(raw).not.toContain('<image')
+      expect(raw).not.toContain('stroke=')
+      expect(raw).not.toContain('<filter')
+      // 无外链（xmlns 是唯一允许的 http 字符串）
+      expect(raw).not.toMatch(/https?:\/\/(?!www\.w3\.org\/2000\/svg)/)
+    }
+  })
+
+  it('装饰性：aria-hidden；title 只做 hover 提示；浅/深靠同一份 inline SVG 的变量（无 sheet 等待）', () => {
     render(<PixelOtter state="idle" size={32} title="kyclaw" />)
     const otter = screen.getByTestId('pixel-otter')
     expect(otter).toHaveAttribute('aria-hidden', 'true')
     expect(otter).toHaveAttribute('title', 'kyclaw')
-    expect(otter.querySelectorAll('.pixel-otter-sheet--light')).toHaveLength(1)
-    expect(otter.querySelectorAll('.pixel-otter-sheet--dark')).toHaveLength(1)
-    // 背景图来自 Vite 资产（sprite sheet），不是外链
-    const light = otter.querySelector<HTMLElement>('.pixel-otter-sheet--light')
-    expect(light?.style.backgroundImage).toContain('url(')
+    expect(otter.querySelectorAll('svg')).toHaveLength(1)
+    expect(otter.querySelectorAll('img, image')).toHaveLength(0)
+    expect(CSS).toContain('--po-page: #ffffff')
+    expect(CSS).toContain(":root[data-theme='dark'] .pixel-otter")
+    for (const token of ['--po-page', '--po-ink', '--po-fur', '--po-line', '--po-clay']) {
+      expect(CSS, `深色缺 ${token}`).toContain(`${token}:`)
+    }
   })
 
-  it('不可见就停：滚出视口 → data-paused=true，回到视口恢复', () => {
+  it('不可见就停：滚出视口 → data-paused=true，回到视口恢复（不改 data-reduced）', () => {
     const io = stubIntersectionObserver()
-    render(<PixelOtter state="float" size={96} />)
+    render(<PixelOtter state="think" size={32} />)
     expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-paused', 'false')
+    expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-reduced', 'false')
 
     io.trigger(false)
     expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-paused', 'true')
@@ -145,17 +197,69 @@ describe('PixelOtter · 渲染契约', () => {
     expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-paused', 'false')
   })
 
-  it('reduced-motion：读 matchMedia，标 data-reduced（CSS 停动画并停到 reducedFrame）', () => {
+  it('reduced-motion：读 matchMedia，标 data-reduced（CSS 定格在 reducedFrame，不隐藏）', () => {
     stubMatchMedia(true)
     render(<PixelOtter state="think" size={32} />)
     expect(screen.getByTestId('pixel-otter')).toHaveAttribute('data-reduced', 'true')
   })
 
-  it('显式 paused（父层离场）优先暂停，不重置状态', () => {
-    render(<PixelOtter state="wave" size={128} paused />)
+  it('显式 paused（壳层「减弱」/父层离场）→ data-paused + 静态帧，不重置状态', () => {
+    render(<PixelOtter state="type" size={32} paused />)
     const otter = screen.getByTestId('pixel-otter')
     expect(otter).toHaveAttribute('data-paused', 'true')
-    expect(otter).toHaveAttribute('data-state', 'wave')
+    expect(otter).toHaveAttribute('data-reduced', 'true')
+    expect(otter).toHaveAttribute('data-state', 'type')
+  })
+})
+
+describe('pixel-otter.css · 动效契约（离散帧 / 整数位移 / 静态 reduced）', () => {
+  it('三态各自的 steps 动画 + 关键帧；整数 32 用户单位位移', () => {
+    expect(CSS).toMatch(
+      /\[data-state='idle'\][\s\S]*?--po-anim: pixel-otter-idle 4s steps\(1, end\) infinite/
+    )
+    expect(CSS).toMatch(
+      /\[data-state='think'\][\s\S]*?--po-anim: pixel-otter-frames-4 480ms steps\(4\) infinite/
+    )
+    expect(CSS).toMatch(
+      /\[data-state='type'\][\s\S]*?--po-anim: pixel-otter-frames-4 360ms steps\(4\) infinite/
+    )
+    expect(CSS).toContain('@keyframes pixel-otter-idle')
+    expect(CSS).toContain('@keyframes pixel-otter-frames-4')
+    expect(CSS).toContain('translateX(-32px)')
+    expect(CSS).toContain('translateX(-64px)')
+    expect(CSS).toContain('translateX(-128px)')
+    // 像素图不插值：没有线性/缓动 timing function
+    expect(CSS_CODE).not.toMatch(/animation:.*\b(ease|linear|cubic-bezier)\b/)
+  })
+
+  it('一屏一格：SVG viewBox 32 + overflow hidden；不再用 background-position sheet 机制', () => {
+    expect(CSS).toMatch(/\.pixel-otter svg \{[\s\S]*?overflow: hidden;/)
+    expect(CSS).not.toContain('background-position')
+    expect(CSS).not.toContain('.pixel-otter-sheet')
+    expect(CSS).not.toContain('image-rendering')
+  })
+
+  it('不可见暂停：data-paused 用 animation-play-state（不重置帧）；reduced 用静态 transform', () => {
+    expect(CSS).toMatch(
+      /\.pixel-otter\[data-paused='true'\] \.pixel-otter-strip \{\s*animation-play-state: paused;/
+    )
+    expect(CSS).toMatch(
+      /\.pixel-otter\[data-reduced='true'\] \.pixel-otter-strip \{\s*animation: none !important;[\s\S]*?transform: translateX\(var\(--po-reduced-x, 0px\)\)/
+    )
+    expect(CSS).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.pixel-otter \.pixel-otter-strip \{\s*animation: none !important;[\s\S]*?transform: translateX\(var\(--po-reduced-x, 0px\)\)/
+    )
+    // reduced 静态帧：idle 帧 A / think 帧 C / type 帧 D（-64px / -96px）
+    expect(CSS).toMatch(/\[data-state='think'\][\s\S]*?--po-reduced-x: -64px/)
+    expect(CSS).toMatch(/\[data-state='type'\][\s\S]*?--po-reduced-x: -96px/)
+  })
+
+  it('装饰性：pointer-events:none（不挡输入区/发送钮），尺寸只吃 --otter-size', () => {
+    expect(CSS).toMatch(/\.pixel-otter \{[\s\S]*?pointer-events: none;/)
+    expect(CSS).toContain('width: var(--otter-size)')
+    expect(CSS).toContain('height: var(--otter-size)')
+    expect(CSS).not.toMatch(/font-size:\s*.*em/)
+    expect(CSS_CODE).not.toMatch(/transform:\s*scale/)
   })
 })
 

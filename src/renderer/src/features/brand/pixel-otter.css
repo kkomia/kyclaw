@@ -1,19 +1,25 @@
 /**
- * 像素海獭动画（brand mark · v4 / 32×32 栅格）。
+ * 像素海獭 · 聊天输入卡状态灯（v4-pixel 设计语言 · 32 原生栅格）。
  *
- * 帧机制：sprite sheet 横向平铺，`steps(N)` 只在整帧之间跳（不做补间 —— 像素图不插值）；
- * 一种状态只有一档帧数/时长（数值来源 `otter-states.ts` ↔ launch-v2 manifest）。
- * 缩放：`image-rendering: pixelated` 最近邻；尺寸由 `--otter-size` 给（组件内联）。
- * 主题：浅/深两层 sheet，`:root[data-theme='dark']` 切显隐（与全站主题机制唯一来源一致）。
- * reduced-motion：停动画、停在状态的 `reducedFrame` 静态帧；`data-paused`（滚出视口/页面隐藏/父层不活动）
- * 时暂定 `animation-play-state`，不重置帧。
- *
- * 尺寸：v4 起全部为 32 的整数倍（32/64/96/128/192/256/512，最小 32，弃 24）；
- * 组件按请求尺寸挑 sheet 倍率（1x/3x/4x），CSS 只按 `--otter-size` 等比缩放，不再有按落点写死的
- * 尺寸覆写（旧 `.chat-otter`/`.welcome-otter` 的响应式规则已随 v4 删除）。
+ * 帧机制：inline SVG sprite strip，`transform: translateX(-32px × n)` 只在整帧之间跳
+ * （`steps()` / `steps(1,end)`，不做补间 —— 像素图不插值）。SVG 的 viewBox 是 0 0 32 32，
+ * 一屏只露出一格；`overflow:hidden` + `crispEdges` 保证不会出现「多帧同显」或抗锯齿。
+ * 尺寸：`--otter-size` 由组件按 32 的整数倍写死（输入卡 32 = 1×）；不用 em / scale。
+ * 主题：浅/深只换 `--po-*` 变量（`:root[data-theme='dark']`），同一份 inline SVG 同帧切，无图片请求。
+ * reduced-motion / `paused`（壳层「减弱」）：定格在状态的 `--po-reduced-x`（静态帧，不是隐藏）；
+ * 不可见（滚出视口 / 页面隐藏）：只 `animation-play-state: paused`，不重置帧。
  */
 
 .pixel-otter {
+  --po-page: #ffffff;
+  --po-ink: #141413;
+  --po-fur: #8a6647;
+  --po-cream: #e8dcc8;
+  --po-nose: #5c3f2a;
+  --po-eye: #141413;
+  --po-line: #b0aea5;
+  --po-clay: #d97757;
+
   position: relative;
   display: inline-block;
   flex: none;
@@ -21,95 +27,117 @@
   height: var(--otter-size);
   line-height: 0;
   pointer-events: none;
+  user-select: none;
+  vertical-align: middle;
 }
 
-.pixel-otter-sheet {
-  position: absolute;
-  inset: 0;
-  background-repeat: no-repeat;
-  background-position-x: 0;
-  background-size: calc(var(--otter-frames, 1) * var(--otter-size)) var(--otter-size);
-  image-rendering: pixelated;
-  animation: var(--otter-animation, none);
+:root[data-theme='dark'] .pixel-otter {
+  --po-page: #1e1e1d;
+  --po-ink: #faf9f5;
+  --po-fur: #a9835f;
+  --po-line: #8f8d84;
+  --po-clay: #e08a6d;
 }
 
-.pixel-otter-sheet--dark {
-  display: none;
-}
-
-:root[data-theme='dark'] .pixel-otter-sheet--light {
-  display: none;
-}
-
-:root[data-theme='dark'] .pixel-otter-sheet--dark {
+/* 32 栅格的 viewBox：SVG 自己裁掉 strip 里另外几帧（一屏只有一格） */
+.pixel-otter svg {
   display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
-/* ── 每状态一档：帧数 / 时长 / 循环 / reduced 静态帧（与 manifest 对齐） ── */
+.pixel-otter .f-page {
+  fill: var(--po-page);
+}
+.pixel-otter .f-ink {
+  fill: var(--po-ink);
+}
+.pixel-otter .f-fur {
+  fill: var(--po-fur);
+}
+.pixel-otter .f-cream {
+  fill: var(--po-cream);
+}
+.pixel-otter .f-nose {
+  fill: var(--po-nose);
+}
+.pixel-otter .f-eye {
+  fill: var(--po-eye);
+}
+.pixel-otter .f-line {
+  fill: var(--po-line);
+}
+.pixel-otter .f-clay {
+  fill: var(--po-clay);
+}
+
+.pixel-otter-strip {
+  animation: var(--po-anim, none);
+}
+
+/* ── 每态：帧数 / 周期 / reduced 定格（与 otter-states.ts 对齐） ── */
+/* idle：3 帧，沿用 otter-animated 的 4 s 时间轴（光标闪 + 眨眼） */
 .pixel-otter[data-state='idle'] {
-  --otter-frames: 8;
-  --otter-animation: otter-frames-8 960ms steps(8) infinite;
-  --otter-reduced-frame: 0;
+  --po-anim: pixel-otter-idle 4s steps(1, end) infinite;
+  --po-reduced-x: 0px;
 }
 
-.pixel-otter[data-state='loading'] {
-  --otter-frames: 6;
-  --otter-animation: otter-frames-6 480ms steps(6) infinite;
-  --otter-reduced-frame: 0;
-}
-
-.pixel-otter[data-state='float'] {
-  --otter-frames: 6;
-  --otter-animation: otter-frames-6 720ms steps(6) infinite;
-  --otter-reduced-frame: 0;
-}
-
-/* wave：6 帧 ×100ms 播 2 遍（≈1.2s）后停住；由调用方（欢迎页）在 1.2s 时切回 float */
-.pixel-otter[data-state='wave'] {
-  --otter-frames: 6;
-  --otter-animation: otter-frames-6 600ms steps(6) 2 forwards;
-  --otter-reduced-frame: 0;
-}
-
+/* think：4 帧 × 120 ms = 480 ms，星点呼吸；reduced 停在帧 C（星点十字） */
 .pixel-otter[data-state='think'] {
-  --otter-frames: 6;
-  --otter-animation: otter-frames-6 720ms steps(6) infinite;
-  --otter-reduced-frame: 2; /* 三点气泡最长的一帧：静态也能读出"在想" */
+  --po-anim: pixel-otter-frames-4 480ms steps(4) infinite;
+  --po-reduced-x: -64px;
 }
 
+/* type：4 帧 × 90 ms = 360 ms，纸页一行前进 + 光标跟走；reduced 停在帧 D（最长一行） */
 .pixel-otter[data-state='type'] {
-  --otter-frames: 4;
-  --otter-animation: otter-frames-4 320ms steps(4) infinite;
-  --otter-reduced-frame: 0;
+  --po-anim: pixel-otter-frames-4 360ms steps(4) infinite;
+  --po-reduced-x: -96px;
 }
 
-@keyframes otter-frames-4 {
-  to {
-    background-position-x: calc(-4 * var(--otter-size));
+/* 关键帧百分比 = DESIGN §4 的时间表：37.5% = 1.5s、50% = 2.0s、55% = 2.2s、60% = 2.4s */
+@keyframes pixel-otter-idle {
+  0% {
+    transform: translateX(0);
+  }
+  37.5% {
+    transform: translateX(-32px);
+  }
+  50% {
+    transform: translateX(0);
+  }
+  55% {
+    transform: translateX(-64px);
+  }
+  60% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(0);
   }
 }
 
-@keyframes otter-frames-6 {
+/* 4 帧 × 32 用户单位：steps(4) 让每 1/4 周期跳一格，整帧位移、无插值 */
+@keyframes pixel-otter-frames-4 {
   to {
-    background-position-x: calc(-6 * var(--otter-size));
-  }
-}
-
-@keyframes otter-frames-8 {
-  to {
-    background-position-x: calc(-8 * var(--otter-size));
+    transform: translateX(-128px);
   }
 }
 
 /* 不可见 / 父层不活动：暂停在当帧（不重置、不卸 DOM） */
-.pixel-otter[data-paused='true'] .pixel-otter-sheet {
+.pixel-otter[data-paused='true'] .pixel-otter-strip {
   animation-play-state: paused;
 }
 
-/* reduced-motion：不启动动画，直接停在状态的 reducedFrame（静态帧，不是隐藏） */
+/* reduced-motion / 父层「减弱」/ 静态档：不启动动画，停在状态的静态帧 */
+.pixel-otter[data-reduced='true'] .pixel-otter-strip {
+  animation: none !important;
+  transform: translateX(var(--po-reduced-x, 0px));
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pixel-otter-sheet {
+  .pixel-otter .pixel-otter-strip {
     animation: none !important;
-    background-position-x: calc(-1 * var(--otter-reduced-frame, 0) * var(--otter-size));
+    transform: translateX(var(--po-reduced-x, 0px));
   }
 }
