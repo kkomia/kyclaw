@@ -1003,6 +1003,12 @@ export function Composer({
                   </span>
                 )
               )}
+              {draft.endsWith('\n') ? (
+                // CR-02：行尾换行时，pre-wrap 的尾换行是 hanging 的——镜像层不会为空的最后一行生成
+                // 行盒，Range 量到的仍是上一行 → caret 落错/看不见。补一个零宽空格把最后一行撑出来
+                // （视觉不可见、aria-hidden；只影响测量，不改 textarea 内容）。
+                <span data-testid="composer-mirror-linebreak">{'\u200b'}</span>
+              ) : null}
             </div>
           </div>
           {/* DSH placeholder：absolute 顶部、24 行高、14px、caption、nowrap ellipsis；有内容即消失 */}

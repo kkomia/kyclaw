@@ -2501,6 +2501,19 @@ describe('P1b · Composer 自绘 caret', () => {
 
     await waitFor(() => expect(layer.style.width).toBe('300px'))
   })
+
+  it('CR-02：行尾换行时镜像层补零宽空格（空行也有行盒，caret 才量得到）', async () => {
+    setup()
+    const input = screen.getByTestId('composer-input')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '第一行\n' } })
+
+    expect(await screen.findByTestId('composer-mirror-linebreak')).toBeInTheDocument()
+    expect(await screen.findByTestId('composer-caret')).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: '第一行' } })
+    expect(screen.queryByTestId('composer-mirror-linebreak')).not.toBeInTheDocument()
+  })
 })
 
 /** 动效 B §2.4：caret=off 时不自绘、走原生 caret（颜色已是 --accent）。 */
