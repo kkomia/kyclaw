@@ -77,6 +77,31 @@ export function caretRectAtOffset(container: Node, offset: number): DOMRect | nu
     const height = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : rect.height
     return new DOMRect(rect.left + paddingLeft, rect.top + paddingTop, 0, height)
   }
+  // CR-02：行尾换行时 Chromium 对「末尾换行之后」的折叠 Range 返回 0×0（真机实测），
+  // 用容器几何合成空行 rect：行数 = 内容高 / 行高（镜像层尾换行已由零宽空格撑出行盒）。
+  const rawText = container.textContent ?? ''
+  const text = rawText.endsWith('\u200b') ? rawText.slice(0, -1) : rawText
+  if (text.endsWith('\n') && Math.max(0, offset) >= text.length) {
+    const element = container as Element
+    if (typeof element.getBoundingClientRect === 'function') {
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      const paddingTop = Number.parseFloat(style.paddingTop) || 0
+      const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+      const lineHeight = Number.parseFloat(style.lineHeight)
+      if (Number.isFinite(lineHeight) && lineHeight > 0 && rect.height > 0) {
+        const contentHeight = Math.max(0, rect.height - paddingTop - paddingBottom)
+        const lineCount = Math.max(1, Math.round(contentHeight / lineHeight))
+        return new DOMRect(
+          rect.left + paddingLeft,
+          rect.top + paddingTop + (lineCount - 1) * lineHeight,
+          0,
+          lineHeight
+        )
+      }
+    }
+  }
   if ((container.textContent ?? '') === '') {
     // 空容器：真机优先用**内容盒 + padding** 兜底（Range 在空元素起点常贴 border-box 左缘，
     // dev 实拍会画到输入卡左边缘外）；量不到尺寸（jsdom）再用被 mock 的空 Range 兜底。

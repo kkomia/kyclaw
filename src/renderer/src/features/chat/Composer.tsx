@@ -347,6 +347,12 @@ export function Composer({
     if (mirror.style !== undefined && textarea.clientWidth > 0) {
       mirror.style.width = `${textarea.clientWidth}px`
     }
+    // 镜像层的滚动位置也必须与 textarea 一致：程序化改值（粘贴/insertText）时 scroll 事件可能早于
+    // React 重排，镜像会停在旧 scrollTop=0 → Range 量到的是未滚动坐标（caret 直接跑到视口外被隐藏）。
+    const mirrorHost = mirrorRef.current
+    if (mirrorHost !== null && Math.abs(mirrorHost.scrollTop - textarea.scrollTop) > 0.5) {
+      mirrorHost.scrollTop = textarea.scrollTop
+    }
     const rect = caretRectAtOffset(mirror, textarea.selectionStart ?? 0)
     if (rect === null) {
       setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
@@ -366,18 +372,17 @@ export function Composer({
     const rawTop = rect.top - halfLeading - textareaRect.top
     // jsdom/无布局（clientHeight=0）没有视口概念：跳过「滚出即隐藏/钳制」，单元测试仍能断言 caret 存在。
     if (textarea.clientHeight > 0) {
-      // 与原生 textarea 一致：行完全滚出视口 → 不画；部分可见 → 钳进内容盒（绝不进 padding 区）。
+      // 与原生 textarea 一致：行完全滚出视口 → 不画；行仍在视口内 → 照实画（容器 overflow-hidden
+      // 负责裁剪超出内容盒的那一截）。只做「不越过 paddingTop」的保底，不做向下钳位——
+      // 向下钳会让 caret 与它所属的行错位（实测长文本最后一行部分可见时差 8.5px）。
       const contentBottom = textarea.clientHeight - padBottom
       if (rawTop + caretHeight <= padTop || rawTop >= contentBottom) {
         setCaretPlacement((current) => (current.visible ? { ...current, visible: false } : current))
         return
       }
-      const clampedTop = Math.min(
-        Math.max(rawTop, padTop),
-        Math.max(padTop, contentBottom - caretHeight)
-      )
+      const top = Math.max(rawTop, padTop)
       const placement = caretPlacementFromRects(
-        { left: rect.left, top: clampedTop + textareaRect.top, height: caretHeight },
+        { left: rect.left, top: top + textareaRect.top, height: caretHeight },
         textareaRect,
         0
       )
@@ -961,7 +966,7 @@ export function Composer({
           的折行点可能差半行（隐形占位整段不内折）。chip 底用 **bg-secondary（不透明）**——
           Fills 系是半透明填充（5% 黑），当"盖字形"的底会透出原文。textarea 关掉拼写检查
           （spellCheck={false}，图1 的红波浪）。 */}
-        <div className="relative">
+        <div className="relative overflow-hidden">
           <div
             ref={mirrorRef}
             aria-hidden="true"

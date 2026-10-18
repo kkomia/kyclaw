@@ -2477,17 +2477,17 @@ describe('P1b · Composer 自绘 caret', () => {
     await waitFor(() => expect(screen.queryByTestId('composer-caret')).not.toBeInTheDocument())
   })
 
-  it('CR-18：行部分可见 → caret 钳进内容盒（绝不画进 padding 区）', async () => {
+  it('CR-18：行部分可见 → 照实画（容器 overflow-hidden 裁剪），不向下钳位', async () => {
     setup()
     const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
     prepareLayout(input, 180)
-    // 字形盒 top=165 → 行盒 top≈161.5；内容盒 7..173，24 高放不下 → 钳到 173-24=149
+    // 字形盒 top=165 → 行盒 top≈161.5（仍小于内容盒底 173，不算滚出）→ 照实画，不被钳到 149
     defineRangeRect({ top: 165, height: 17 })
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: 'x' } })
 
     const caret = await screen.findByTestId('composer-caret')
-    await waitFor(() => expect(caret).toHaveStyle({ top: '149px' }))
+    await waitFor(() => expect(caret).toHaveStyle({ top: '162px' }))
   })
 
   it('CR-01：镜像层宽度跟 textarea.clientWidth（滚动条槽 6px 不让折行点漂移）', async () => {
