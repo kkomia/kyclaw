@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { SectionTitle } from '@renderer/components/ui/page-chrome'
 import { useNewTabPointer } from './use-newtab-pointer'
 import { CircleAlert, TriangleAlert } from 'lucide-react'
@@ -129,8 +129,9 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
     openDocument,
     openRecent
   } = controller
-  // 背景指针跟随（视觉层）：只改 CSS 变量；reduced/触摸设备不挂监听（见 use-newtab-pointer.ts）
-  useNewTabPointer(pageRef)
+  // 背景格子点阵 + 点击涟漪（视觉层）：reduced/触摸设备不挂监听（见 use-newtab-pointer.ts）
+  const latticeCanvasRef = useRef<HTMLCanvasElement>(null)
+  useNewTabPointer(pageRef, latticeCanvasRef)
   const [showFuture, setShowFuture] = useState(true)
 
   const weekday = WEEKDAYS[today.getDay()] ?? ''
@@ -193,6 +194,7 @@ export function NewTabView(controller: NewTabController): React.JSX.Element {
     >
       <div className="lt-bg" aria-hidden="true">
         <div className="lt-field" />
+        <canvas ref={latticeCanvasRef} data-testid="npw-lattice" className="lt-lattice" />
       </div>
 
       {/* 页眉：字标 + 新标签页 + 真实日期 + Esc */}

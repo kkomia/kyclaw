@@ -1290,24 +1290,15 @@
   --npw-active: 0;
 }
 
-.lt-bg::after {
-  content: '';
+/* task-109：格子被指针逐格点亮 + 点击水波涟漪（canvas 由 use-newtab-pointer.ts 驱动）。
+   不再有 `.lt-bg::after` 大块 radial 光晕；canvas 与 32px 网格同相位（inset:0）。 */
+.lt-lattice {
   position: absolute;
   inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  background:
-    radial-gradient(
-      circle 360px at var(--npw-mx) var(--npw-my),
-      color-mix(in srgb, var(--accent) 9%, transparent),
-      transparent 72%
-    ),
-    radial-gradient(
-      circle 640px at var(--npw-mx) var(--npw-my),
-      color-mix(in srgb, var(--warm) 18%, transparent),
-      transparent 78%
-    );
-  opacity: calc(var(--npw-active) * 0.9);
-  transition: opacity var(--motion-enter) var(--ease-glide);
 }
 
 .lt-bg::before {
@@ -1330,9 +1321,9 @@
   transform: translate3d(calc(var(--npw-dx) * 1.5px), calc(var(--npw-dy) * 1.5px), 0);
 }
 
-/* 降级：reduced（系统/设置）与触摸设备 → 背景跟随层隐藏、水印归位（设计本身保留） */
+/* 降级：reduced（系统/设置）与触摸设备 → 关闭 canvas 层（静态网格线保留） */
 @media (prefers-reduced-motion: reduce) {
-  .lt-bg::after {
+  .lt-lattice {
     display: none;
   }
 
@@ -1341,7 +1332,7 @@
   }
 }
 
-:root[data-motion='reduced'] .lt-bg::after {
+:root[data-motion='reduced'] .lt-lattice {
   display: none;
 }
 
@@ -1350,7 +1341,7 @@
 }
 
 @media (pointer: coarse) {
-  .lt-bg::after {
+  .lt-lattice {
     display: none;
   }
 
