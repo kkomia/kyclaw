@@ -49,6 +49,7 @@ import {
 } from './office-font-prewarm'
 import { officeDebugEnabled } from './office-ui-store'
 import { currentSurfaceUrl } from './surface-url'
+import { useEffectiveMotion } from '@renderer/lib/motion'
 
 /** 面状态：loading = 已建 iframe 等握手；ready = 面已应用 init；fatal = 等了超时/面自报崩溃 */
 export type OfficeSurfaceStatus = 'loading' | 'ready' | 'fatal'
@@ -178,6 +179,10 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     const themeRef = useRef(theme)
     /** D17：探针开关也要能随 init 下发给复用的预热面（该面 URL 里没有 officeProbe） */
     const probeRef = useRef(probe)
+    /** PB-019：应用内「减弱动效」随 init 传进隔离面（预热面复用后同样靠这条更新） */
+    const motion = useEffectiveMotion()
+    const motionRef = useRef<'full' | 'reduced'>(motion.reduced ? 'reduced' : 'full')
+    motionRef.current = motion.reduced ? 'reduced' : 'full'
     const onDocLoadedRef = useRef(onDocLoaded)
     const onDocChangedRef = useRef(onDocChanged)
     const onDocSaveRequestRef = useRef(onDocSaveRequest)
@@ -316,7 +321,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       const postInit = (nonce: string, force: boolean): void => {
         const frameWindow = iframeRef.current?.contentWindow
         if (frameWindow === null || frameWindow === undefined) return
-        const key = `${nonce}:${localeRef.current}:${themeRef.current}`
+        const key = `${nonce}:${localeRef.current}:${themeRef.current}:${String(probeRef.current)}:${motionRef.current}`
         if (!force && sentInitRef.current === key) return
         sentInitRef.current = key
         const init: ShellToSurfaceMessage = {
@@ -324,7 +329,8 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           nonce,
           locale: localeRef.current,
           theme: themeRef.current,
-          probe: probeRef.current
+          probe: probeRef.current,
+          motion: motionRef.current
         }
         frameWindow.postMessage(init, '*')
       }
@@ -433,7 +439,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       const nonce = nonceRef.current
       const frameWindow = iframeRef.current?.contentWindow
       if (nonce === null || frameWindow === null || frameWindow === undefined) return
-      const key = `${nonce}:${locale}:${theme}:${String(probe)}`
+      const key = `${nonce}:${locale}:${theme}:${String(probe)}:${motionRef.current}`
       if (sentInitRef.current === key) return
       sentInitRef.current = key
       const init: ShellToSurfaceMessage = {
@@ -441,10 +447,11 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         nonce,
         locale,
         theme,
-        probe
+        probe,
+        motion: motionRef.current
       }
       frameWindow.postMessage(init, '*')
-    }, [locale, theme, probe, status])
+    }, [locale, theme, probe, status, motion.reduced])
 
     // 文档投递：ready 之后、同一文档只发一次；切标签/重读不同版本（sha/长度变化）会重发
     useEffect(() => {

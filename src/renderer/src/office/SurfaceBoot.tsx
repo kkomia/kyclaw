@@ -42,6 +42,7 @@ import {
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
 import { PptxEditorPane, type PptxEditorPaneHandle } from './PptxEditorPane'
 import { XlsxEditorPane, type XlsxEditorPaneHandle } from './XlsxEditorPane'
+import { SurfaceLoading, loadingStageOf } from './SurfaceLoading'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
 import {
   ensureSurfaceFonts,
@@ -69,10 +70,12 @@ const SAVE_RESULT_TIMEOUT_MS = 15_000
  * - `color-scheme`：让原生控件（滚动条/输入框）跟着变；
  * - 背景/文字由 surface.css 的 `--doc-canvas-bg` / `--text-primary` 给（画布=灰、纸=白由内核负责）。
  */
-function applySurfaceTheme(theme: SurfaceTheme): void {
+function applySurfaceTheme(theme: SurfaceTheme, motion: 'full' | 'reduced' = 'full'): void {
   const root = document.documentElement
   root.dataset.surfaceTheme = theme
   root.dataset.theme = theme
+  // PB-019：应用内「减弱动效」经 surface:init 传进面；面内样式按 [data-motion='reduced'] 静态兜底
+  root.dataset.motion = motion
   root.style.colorScheme = theme
 }
 
@@ -359,7 +362,7 @@ export function SurfaceBoot(): React.JSX.Element {
       }
 
       if (isSurfaceInit(data) && data.nonce === nonce) {
-        applySurfaceTheme(data.theme)
+        applySurfaceTheme(data.theme, data.motion ?? 'full')
         document.documentElement.lang = data.locale
         setTheme(data.theme)
         // D17：复用的预热面 URL 不带 officeProbe，开关从 init 下发（每次 init 覆盖）
@@ -591,6 +594,30 @@ export function SurfaceBoot(): React.JSX.Element {
       : true
   const showEditor = doc !== null && fontsReady
 
+  // PB-019：加载态骨架（方案 A）。升格命中的预热面不渲染骨架（E2）；错误态撤骨架走原错误条。
+  const loadingError =
+    (doc?.kind === 'docx' && fontsState === 'error') ||
+    (doc?.kind === 'pptx' && pptxFontsState === 'error')
+  const loadingStage = loadingStageOf({
+    kind: doc?.kind ?? null,
+    doc: doc !== null,
+    fontsState,
+    pptxFontsState,
+    editorState
+  })
+  const [loadingGone, setLoadingGone] = useState(false)
+  useEffect(() => {
+    if (prewarm || loadingError) {
+      setLoadingGone(true)
+      return
+    }
+    if (editorState !== 'ready') return
+    // 骨架离场 150ms（--motion-reveal），期间阶段 4「即将显示」
+    const timer = window.setTimeout(() => setLoadingGone(true), 150)
+    return () => window.clearTimeout(timer)
+  }, [editorState, loadingError, prewarm])
+  const loadingVisible = !prewarm && !loadingGone && !loadingError
+
   return (
     <main
       className="office-surface-root"
@@ -673,15 +700,11 @@ export function SurfaceBoot(): React.JSX.Element {
         )}
       </div>
       <div className="office-surface-body">
-        {doc === null ? (
-          <div className="office-surface-loading" data-testid="surface-editor-empty">
-            等待文档…
-          </div>
-        ) : doc.kind === 'docx' && fontsState === 'error' ? (
+        {doc !== null && doc.kind === 'docx' && fontsState === 'error' ? (
           <div className="office-surface-loading" data-testid="surface-fonts-error">
             本地字体注册失败：{fontsError}
           </div>
-        ) : doc.kind === 'pptx' && pptxFontsState === 'error' ? (
+        ) : doc !== null && doc.kind === 'pptx' && pptxFontsState === 'error' ? (
           <div
             className="office-surface-loading"
             data-testid="surface-pptx-fonts-error"
@@ -696,7 +719,8 @@ export function SurfaceBoot(): React.JSX.Element {
               重试
             </button>
           </div>
-        ) : showEditor ? (
+        ) : null}
+        {showEditor ? (
           doc.kind === 'xlsx' ? (
             <XlsxEditorPane
               key={doc.documentId}
@@ -745,11 +769,17 @@ export function SurfaceBoot(): React.JSX.Element {
               saveState={saveState}
             />
           )
-        ) : (
-          <div className="office-surface-loading" data-testid="surface-fonts-loading">
-            正在注册本地字体…
-          </div>
-        )}
+        ) : null}
+        {/* PB-019：骨架/阶段读数（覆盖在编辑器首帧之上，就绪后 150ms 淡出；预热面不渲染） */}
+        {loadingVisible ? (
+          <SurfaceLoading
+            kind={doc?.kind ?? 'docx'}
+            stage={loadingStage}
+            docBytes={doc?.bytes.byteLength ?? 0}
+            testId={doc === null ? 'surface-editor-empty' : 'surface-fonts-loading'}
+            leaving={loadingStage === 4}
+          />
+        ) : null}
       </div>
     </main>
   )

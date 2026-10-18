@@ -1,0 +1,311 @@
+/**
+ * PB-019 · Office 打开加载态（方案 A）样式。
+ *
+ * 只吃 token（面入口已 import identity/motion/kimi/semantic）；纯 CSS、无图无 chunk；
+ * 动画只动 opacity / transform（脉冲 / 粒子 / meter 扫光），不抢首帧。
+ * 骨架 ribbon 与真实 chrome 同高（28 + 54 + 1 = 83），就绪时无 83px 跳变。
+ * 选择器带 `[data-surface-loading-stage]`：只作用于新骨架，错误条仍用 surface.css 的旧规则。
+ */
+
+.office-surface-loading[data-surface-loading-stage] {
+  position: absolute;
+  inset: 0;
+  /* 必须盖住编辑器自己的 chrome（ribbon 有独立层叠上下文）：骨架 ribbon 与真实 ribbon 同高，
+     若被编辑器压住会出现「真实工具栏 + 骨架纸」的错位画面 */
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  opacity: 1;
+  background: var(--doc-canvas-bg);
+  pointer-events: none;
+  animation: osl-fade-in var(--motion-reveal) var(--motion-ease-glide) both;
+  transition: opacity var(--motion-reveal) var(--motion-ease-glide);
+}
+
+.office-surface-loading[data-surface-loading-stage][data-leaving='true'] {
+  opacity: 0;
+}
+
+/* ── 骨架 ribbon：28 tabs + 54 band + 1 hairline = 83（--office-ribbon-total-height） ── */
+.osl-ribbon {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: var(--office-ribbon-total-height);
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--bg-primary);
+}
+
+.osl-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--office-ribbon-tabs-height);
+  padding: 0 12px;
+}
+
+.osl-tabs i {
+  width: 72px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  animation: osl-pulse 1600ms ease-in-out infinite;
+}
+
+.osl-band {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: var(--office-ribbon-body-height);
+  padding: 0 12px;
+}
+
+.osl-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.osl-group + .osl-group {
+  padding-left: 24px;
+  border-left: 1px solid var(--hairline-soft);
+}
+
+.osl-group i {
+  width: 28px;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  animation: osl-pulse 1600ms ease-in-out infinite;
+}
+
+.osl-tabs i:nth-child(2),
+.osl-group:nth-child(2) i {
+  animation-delay: -200ms;
+}
+
+.osl-tabs i:nth-child(3),
+.osl-group:nth-child(4) i {
+  animation-delay: -400ms;
+}
+
+/* ── 灰画布 + 纸 ── */
+.osl-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 32px 16px 24px;
+  overflow: hidden;
+}
+
+.osl-paper {
+  width: min(720px, 62%);
+  height: min(58%, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 96px 64px;
+  background: var(--doc-page-bg);
+  box-shadow: var(--doc-page-shadow);
+}
+
+.osl-line {
+  display: block;
+  width: 88%;
+  height: 16px;
+  border-radius: 3px;
+  /* 深色纸是浅灰：用低透明墨色，不要用 --text-primary（深色下近白会消失） */
+  background: rgba(20, 20, 19, 0.1);
+}
+
+.osl-line[data-row='title'] {
+  width: 92%;
+  height: 24px;
+}
+
+.osl-line[data-row='1'] {
+  width: 76%;
+}
+
+.osl-line[data-row='2'] {
+  width: 88%;
+}
+
+.osl-line[data-row='3'] {
+  width: 92%;
+}
+
+.osl-line[data-row='4'] {
+  width: 52%;
+}
+
+/* 阶段揭示：1 = 只有标题行；2 = 标题 + 前两行；3/4 = 全部 */
+.office-surface-loading[data-surface-loading-stage='1'] .osl-line:not([data-row='title']) {
+  opacity: 0;
+}
+
+.office-surface-loading[data-surface-loading-stage='2'] .osl-line[data-row='3'],
+.office-surface-loading[data-surface-loading-stage='2'] .osl-line[data-row='4'] {
+  opacity: 0;
+}
+
+/* ── 阶段行：13 / 500 / 20（PB-003 读数档）+ 三颗粒子 ── */
+.osl-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--text-secondary);
+}
+
+.osl-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+}
+
+.osl-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: osl-bounce var(--motion-dot) var(--motion-ease-glide) infinite;
+}
+
+.osl-dots i:nth-child(2) {
+  animation-delay: 200ms;
+}
+
+.osl-dots i:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.osl-meta {
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-tertiary-readable);
+}
+
+/* ── 四段 meter（24×2 / gap 6 / r1；只按阶段，不报假百分比） ── */
+.osl-meter {
+  display: flex;
+  gap: 6px;
+}
+
+.osl-meter i {
+  position: relative;
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--hairline-soft);
+  overflow: hidden;
+}
+
+.osl-meter i[data-state='done'] {
+  background: var(--accent);
+}
+
+.osl-meter i[data-state='current']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform: translateX(-100%);
+  animation: osl-sweep var(--motion-sweep) var(--motion-ease-glide) infinite;
+}
+
+@keyframes osl-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes osl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes osl-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* 扫光：1.5s 一趟，最后 1/3 停住（DSH sweep-window 66.66% 口径） */
+@keyframes osl-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  66.66%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ── 减弱动效：应用内设置（surface:init.motion）与系统偏好都走静态兜底 ── */
+[data-motion='reduced'] .office-surface-loading[data-surface-loading-stage],
+[data-motion='reduced'] .office-surface-loading[data-surface-loading-stage] * {
+  animation: none !important;
+  transition-duration: var(--motion-reduced) !important;
+}
+
+[data-motion='reduced'] .osl-tabs i,
+[data-motion='reduced'] .osl-group i {
+  opacity: 0.8;
+}
+
+[data-motion='reduced'] .osl-dots i {
+  opacity: 0.55;
+  transform: none;
+}
+
+[data-motion='reduced'] .osl-meter i[data-state='current'] {
+  background: var(--accent);
+}
+
+[data-motion='reduced'] .osl-meter i[data-state='current']::after {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-surface-loading[data-surface-loading-stage],
+  .office-surface-loading[data-surface-loading-stage] * {
+    animation: none !important;
+    transition-duration: var(--motion-reduced) !important;
+  }
+
+  .osl-dots i {
+    opacity: 0.55;
+    transform: none;
+  }
+
+  .osl-meter i[data-state='current'] {
+    background: var(--accent);
+  }
+
+  .osl-meter i[data-state='current']::after {
+    display: none;
+  }
+}

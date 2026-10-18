@@ -89,12 +89,12 @@ html[data-theme='dark'] body {
   background: var(--doc-canvas-bg);
 }
 
-/* 首开加载占位：可见文案，按 Office chrome 的 12 档（C1），不另起字阶 */
+/* 错误条/旧占位：可见文案，按读数档 13/500/20（PB-019 起骨架在 surface-loading.css） */
 .office-surface-loading {
   padding: 16px;
-  font-size: 12px;
-  line-height: 1.5;
-  opacity: 0.75;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
 }
 
 /*

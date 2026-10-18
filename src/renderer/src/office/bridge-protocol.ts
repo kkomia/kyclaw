@@ -134,6 +134,8 @@ export interface SurfaceInitMessage {
   theme: SurfaceTheme
   /** D17：测试探针缝（仅未打包 + KYCLAW_OFFICE_PROBE；复用的预热面靠这条拿到开关） */
   probe?: boolean
+  /** PB-019：应用内「减弱动效」传进隔离面（缺省 full，向后兼容） */
+  motion?: 'full' | 'reduced'
 }
 
 /**
@@ -260,7 +262,8 @@ export function isSurfaceInit(value: unknown): value is SurfaceInitMessage {
     typeof value.locale === 'string' &&
     value.locale.length > 0 &&
     (value.theme === 'light' || value.theme === 'dark') &&
-    (value.probe === undefined || typeof value.probe === 'boolean')
+    (value.probe === undefined || typeof value.probe === 'boolean') &&
+    (value.motion === undefined || value.motion === 'full' || value.motion === 'reduced')
   )
 }
 

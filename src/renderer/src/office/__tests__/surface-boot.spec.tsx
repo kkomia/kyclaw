@@ -330,7 +330,8 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
       dispatchFromParent({ ...DOC_XLSX, nonce })
     })
     await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
-    expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+    // PB-019：xlsx 没有字体阶段，但编辑器首帧前仍显示骨架（覆盖层），就绪后 150ms 淡出
+    expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument()
     expect(screen.queryByTestId('surface-docx-editor')).not.toBeInTheDocument()
     expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-bytes', '4')
 
@@ -339,6 +340,10 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     const loaded = sentMessages(postMessage).find((message) => message.type === 'doc:loaded')
     expect(loaded).toMatchObject({ documentId: 'sheet-1', pages: 0 })
     expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+    // PB-019：就绪后骨架 150ms 淡出（离场短于入场），之后 DOM 移除
+    await waitFor(() =>
+      expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+    )
   })
 
   it('M4-P：doc:open kind=pptx → 等 loadPptxFonts 成功后挂 PptxEditorPane（6 面稳定引用）', async () => {
@@ -797,5 +802,24 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     expect(
       sentMessages(postMessage).filter((message) => message.type === 'surface:shortcut')
     ).toHaveLength(0)
+  })
+
+  it('PB-019：升格命中的预热面（?officePrewarm=1）不渲染骨架（E2，防闪）', async () => {
+    window.history.replaceState({}, '', '/?officePrewarm=1')
+    try {
+      const postMessage = vi.spyOn(window, 'postMessage')
+      render(<SurfaceBoot />)
+      await waitFor(() => expect(postMessage).toHaveBeenCalled())
+      const nonce = await handshake(postMessage)
+      act(() => {
+        dispatchFromParent({ ...DOC, nonce })
+      })
+      // 预热面：即使还在等字体，也不出加载骨架（用户看到的应是已注册好的面直接进编辑器）
+      expect(screen.queryByTestId('surface-editor-empty')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.getByTestId('surface-docx-editor')).toBeInTheDocument())
+    } finally {
+      window.history.replaceState({}, '', '/')
+    }
   })
 })

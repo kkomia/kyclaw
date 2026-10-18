@@ -142,8 +142,17 @@ describe('P3 Office 面：surface.css fallback 收敛 + 字号复核', () => {
     expect(chromeCss).not.toContain('font-size: 9.5px')
   })
 
-  it('首开 loading 文案 12 档、调试条 11 属调试专用（注释登记）', () => {
-    expect(blockOf(surfaceCss, '.office-surface-loading')).toContain('font-size: 12px;')
+  it('PB-019：加载态读数 13/500/20（PB-003 同档）、调试条 11 属调试专用（注释登记）', () => {
+    const loadingBlock = blockOf(surfaceCss, '.office-surface-loading')
+    expect(loadingBlock).toContain('font-size: 13px;')
+    expect(loadingBlock).toContain('font-weight: 500;')
+    expect(loadingBlock).toContain('line-height: 20px;')
+    // 骨架的几何/动效在独立 CSS（ribbon 83 = 28+54+1，脉冲 1.6s、扫光 1.5s、点 500ms）
+    const skeletonCss = readSource('../surface-loading.css')
+    expect(skeletonCss).toContain('--office-ribbon-total-height')
+    expect(skeletonCss).toContain('osl-pulse 1600ms')
+    expect(skeletonCss).toContain('osl-sweep var(--motion-sweep)')
+    expect(skeletonCss).toContain("[data-motion='reduced']")
     expect(blockOf(surfaceCss, '.office-surface-status')).toContain('font-size: 11px;')
     expect(surfaceCss).toContain('调试条（S2/S3')
   })
