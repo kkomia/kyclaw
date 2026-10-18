@@ -928,11 +928,12 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
         : displayNameOf(current.model, currentOverride)
 
   return (
-    // task-87：模型名与推理强度是一组（用户：「模型名和推理强度那个地方离得有点远」）——
-    // 组内 gap-1（4px，落在要求的 4–6px），组与左侧 ＋/权限、右侧发送保持原父级间距层次。
+    // PB-015（Gwen 裁决 B1）：两个触发器各自对称 px-1（4/4），组 gap 归零 →
+    // 文字间距 = 4+0+4 = 8px（与 PB-003 验收口径一致），hover 背景左右内距对称；
+    // 两片背景贴合是「文字居中」的几何必然（间距 = 2×内距 + gap）。transition 走 120ms 反馈档。
     <span
       data-testid="composer-model-effort-group"
-      className="inline-flex min-w-0 shrink-0 items-center gap-2"
+      className="inline-flex min-w-0 shrink-0 items-center gap-0"
     >
       <Menu
         trigger={
@@ -944,7 +945,7 @@ export function ModelChip({ onNotice }: ModelChipProps): React.JSX.Element {
             data-testid="composer-model"
             disabled={pending}
             className={cn(
-              'inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control pl-2 pr-0 transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
+              'inline-flex h-8 max-w-44 shrink-0 items-center gap-1.5 rounded-control px-1 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink disabled:cursor-not-allowed disabled:text-(--text-disabled) motion-reduce:transition-none',
               COMPOSER_READOUT_CLASS
             )}
           >

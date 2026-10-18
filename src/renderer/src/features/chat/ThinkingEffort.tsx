@@ -258,13 +258,13 @@ export function ThinkingEffort({
       side="top"
       trigger={
         // 与 ComposerControls 的 ModelChip 触发器同版式（PB-003：共吃 COMPOSER_READOUT_CLASS，
-        // 13px / 500 / 20px 行盒）；两者并排时 top/bottom/height 与文字基线一致。
+        // 13px / 500 / 20px 行盒）；PB-015：对称 px-1 + 组 gap-0，文字间距仍 8px。
         <button
           type="button"
           data-testid="composer-effort"
           aria-label={`${EFFORT_LABEL_TEXT}: ${displayLabel}`}
           className={cn(
-            'inline-flex h-8 shrink-0 items-center rounded-control pl-0 pr-2 transition-colors duration-(--motion-fast) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
+            'inline-flex h-8 shrink-0 items-center rounded-control px-1 transition-colors duration-(--motion-feedback) ease-main hover:bg-hover hover:text-ink data-[state=open]:bg-hover data-[state=open]:text-ink motion-reduce:transition-none',
             COMPOSER_READOUT_CLASS,
             !motion.reduced && 'thinking-effort-trigger--lit'
           )}

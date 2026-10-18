@@ -1058,7 +1058,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
     )
   })
 
-  it('模型名与推理强度触发器同版式（h-8 / 读数 13·500·20 / rounded-control）；朝向彼此的 padding 收窄', () => {
+  it('PB-015：模型名/推理强度触发器对称 px-1 + 组 gap-0（文字间距仍 8，hover 文字居中）', () => {
     setup()
 
     const model = screen.getByTestId('composer-model')
@@ -1079,13 +1079,20 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
       expect(trigger).not.toHaveClass('leading-none')
     }
 
-    // task-106：两个触发器 rect 间距 = 组 gap-2（8px）；朝彼此不再留 padding，文字贴合矩形边缘
-    expect(model).toHaveClass('pl-2', 'pr-0')
-    expect(effort).toHaveClass('pl-0', 'pr-2')
-    expect(model).not.toHaveClass('px-2')
-    expect(effort).not.toHaveClass('px-2')
+    // PB-015（Gwen 裁决 B1）：两片各自对称 px-1（4/4）、组 gap-0 →
+    // 文字间距 = 4 + 0 + 4 = 8px；hover 背景左右内距对称（组总宽 −8px，由 footer spacer 吸收）。
+    expect(model).toHaveClass('px-1')
+    expect(effort).toHaveClass('px-1')
+    expect(model).not.toHaveClass('pl-2')
+    expect(effort).not.toHaveClass('pr-2')
+    // 过渡走章程反馈档 120ms（--motion-feedback），reduced 仍直接落位
+    expect(model).toHaveClass('duration-(--motion-feedback)', 'motion-reduce:transition-none')
+    expect(effort).toHaveClass('duration-(--motion-feedback)', 'motion-reduce:transition-none')
+    // 圆角形态不变（10px control 档）
+    expect(model).toHaveClass('rounded-control')
+    expect(effort).toHaveClass('rounded-control')
     const group = screen.getByTestId('composer-model-effort-group')
-    expect(group).toHaveClass('gap-2', 'inline-flex', 'items-center')
+    expect(group).toHaveClass('gap-0', 'inline-flex', 'items-center')
     expect(group).toContainElement(model)
     expect(group).toContainElement(effort)
   })
