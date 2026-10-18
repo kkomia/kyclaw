@@ -207,53 +207,105 @@ export function asarPatchProblems(asarPath: string): string[] {
 }
 
 /**
- * 依赖自带、**必须随包**的 wasm（名字不带 hash，按名字基线断言）。它们与 Office 无关：
- * 缺席时 PDF 预览（pdfjs 的 JPEG2000 / JBIG2 扫描件、色彩管理、表单脚本沙箱）只会在运行时炸，
- * 而这种"包能装、点开就崩"的缺口正是 CR-24 要挡的。路径以 `node_modules/` 开头为准（pnpm hoisted）。
+ * 依赖自带、**必须随包**的 wasm 的一条基线：文件名 + 必须落在哪个 npm 包目录下。
+ *
+ * 为什么带包名（R2-06①）：只按 basename 判的话，**任何**依赖里同名的 wasm 都能满足闸门
+ * （`endsWith('/openjpeg.wasm')` 对 `node_modules/some-other-dep/openjpeg.wasm` 也成立），
+ * 等于把"pdfjs 的运行时还在不在"这条语义悄悄换成了"asar 里某个角落有个同名文件"。
+ * 所以每条都钉「`node_modules/<包>/**`（含 pnpm 的 `.pnpm/<包>@<版本>/node_modules/<包>/**`）」。
  */
-export const DEPENDENCY_WASM_NAMES = [
-  'quickjs-eval.wasm', // pdfjs-dist/wasm：PDF 内脚本沙箱
-  'openjpeg.wasm', // pdfjs-dist/wasm：JPEG2000 图像
-  'jbig2.wasm', // pdfjs-dist/wasm：JBIG2 扫描件
-  'qcms_bg.wasm', // pdfjs-dist/wasm：色彩管理
-  'xxhash.wasm' // xxhash-wasm/workerd：哈希
-] as const
+export interface DependencyWasmBaseline {
+  /** asar 里的文件名（不带内容 hash，稳定） */
+  readonly name: string
+  /** 必须出现在哪个 npm 包目录下 */
+  readonly packageName: string
+  /** 它为什么必须随包（失败信息里带一句，省得下一个人把它当噪音删掉） */
+  readonly why: string
+}
+
+/** pdfjs 的 4 个 + xxhash 的 1 个：缺席时 PDF 预览 / 哈希只会在运行时炸，包能装、点开就崩（CR-24） */
+export const DEPENDENCY_WASM_BASELINE: readonly DependencyWasmBaseline[] = [
+  { name: 'quickjs-eval.wasm', packageName: 'pdfjs-dist', why: 'PDF 内脚本沙箱' },
+  { name: 'openjpeg.wasm', packageName: 'pdfjs-dist', why: 'JPEG2000 图像解码' },
+  { name: 'jbig2.wasm', packageName: 'pdfjs-dist', why: 'JBIG2 扫描件解码' },
+  { name: 'qcms_bg.wasm', packageName: 'pdfjs-dist', why: '色彩管理' },
+  { name: 'xxhash.wasm', packageName: 'xxhash-wasm', why: '哈希' }
+]
 
 /** Office 隔离面（`out/renderer/**`）应有的 wasm 数：4 DOCX + 1 XLSX + 1 PPTX */
 export const OFFICE_WASM_COUNT = 6
 
+/** 路径最后一段（asar 里一律 `/` 分隔） */
+function basenameOf(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
+/**
+ * 这条路径是不是落在 `node_modules/<包>/**` 下（含 pnpm 深路径）：
+ *   `node_modules/pdfjs-dist/wasm/openjpeg.wasm`
+ *   `node_modules/.pnpm/pdfjs-dist@5.0.0/node_modules/pdfjs-dist/wasm/openjpeg.wasm`
+ * 只认这两类，`node_modules/别的包/openjpeg.wasm` 不算（R2-06①）。
+ */
+function insidePackageDir(path: string, packageName: string): boolean {
+  if (path.startsWith(`node_modules/${packageName}/`)) return true
+  return (
+    path.startsWith('node_modules/.pnpm/') && path.includes(`/node_modules/${packageName}/`)
+  )
+}
+
 /**
  * 打包 asar 的 wasm 闸门（**纯函数**：只吃 asar 文件路径清单，返回问题清单；空 = 过）。
- * 离线自检可直接调它，不用真起打包件。
+ * 单测：`src/main/__tests__/packaged-wasm-gate.spec.ts`（离线、不碰打包件）。
  *
  * 两条互补、互不替代：
- *   1. **Office 面只许 6 个**（`out/renderer/**`）：4 DOCX + 1 XLSX + 1 PPTX，不许漏打、不许多打。
- *      这 6 个文件名带内容 hash（Vite 产物），所以按**数量**钉，不钉名字。
- *   2. **依赖自带 5 个按名字逐个必须在**（pdfjs 4 + xxhash 1，见 {@link DEPENDENCY_WASM_NAMES}）：
- *      它们名字稳定，按**名字基线**钉 —— 将来 `files` 再收窄、或依赖升级把文件挪走/删掉，这里点名
- *      缺哪个，而不是留给运行时去发现（**CR-24：pdfjs/xxhash 不许"没有闸门"**）。
+ *   1. **Office 面只许 6 个**（`out/renderer/**` 里、**且不属于依赖基线那 5 个名字**的 wasm）：
+ *      4 DOCX + 1 XLSX + 1 PPTX，不许漏打、不许多打。这 6 个名字带内容 hash（Vite 产物），
+ *      所以按**数量**钉，不钉名字。
+ *      排除依赖名（R2-06②）：万一哪天 Vite 把 pdfjs/xxhash 的 wasm 也收进了 `out/renderer`，
+ *      它们不会把 6 顶成 7 造成误报；这种"依赖 wasm 被收进渲染端"只在依赖侧缺席时才作为线索报出。
+ *   2. **依赖自带 5 个按「包目录 + 名字」逐个必须在**（pdfjs 4 + xxhash 1，见
+ *      {@link DEPENDENCY_WASM_BASELINE}）：将来 `files` 再收窄、或依赖升级把文件挪走/删掉，
+ *      这里点名缺哪个、期望路径是什么、实际找到的同名文件在哪，而不是留给运行时去发现。
  *
  * 刻意**不数"全 asar 的 wasm 总数"**：那是把两类混在一起（PB-016 实测 11 个），既会因 Office 面
  * 变化误报、也会掩盖依赖侧漏打；上面两条各自更精确。
  */
 export function wasmGateProblems(asarEntries: readonly string[]): string[] {
   const problems: string[] = []
+
+  const dependencyNames = new Set(DEPENDENCY_WASM_BASELINE.map((item) => item.name))
   const officeWasm = asarEntries.filter(
-    (path) => path.startsWith('out/renderer/') && path.endsWith('.wasm')
+    (path) =>
+      path.startsWith('out/renderer/') &&
+      path.endsWith('.wasm') &&
+      !dependencyNames.has(basenameOf(path))
   )
   if (officeWasm.length !== OFFICE_WASM_COUNT) {
     problems.push(
-      `app.asar 的 out/renderer 里 wasm 数量是 ${String(officeWasm.length)}，期望 ${String(OFFICE_WASM_COUNT)}（Office 面资源被漏打/多打？）`
+      `app.asar 的 out/renderer 里 Office wasm 数量是 ${String(officeWasm.length)}，期望 ${String(OFFICE_WASM_COUNT)}（Office 面资源被漏打/多打？）`
     )
   }
-  const missing = DEPENDENCY_WASM_NAMES.filter(
-    (name) =>
-      !asarEntries.some((path) => path.startsWith('node_modules/') && path.endsWith(`/${name}`))
-  )
+
+  const missing: string[] = []
+  for (const expected of DEPENDENCY_WASM_BASELINE) {
+    const expectedPattern = `node_modules/${expected.packageName}/**/${expected.name}`
+    const matched = asarEntries.some(
+      (path) => basenameOf(path) === expected.name && insidePackageDir(path, expected.packageName)
+    )
+    if (matched) continue
+    // 同名文件在别处（别的包 / out/renderer）：给出来，好判断是"挪了位置"还是"真删了"
+    const sameName = asarEntries.filter((path) => basenameOf(path) === expected.name)
+    const nearMiss =
+      sameName.length === 0
+        ? ''
+        : `；实际找到同名文件：${sameName.slice(0, 3).join('、')}${sameName.length > 3 ? ` 等 ${String(sameName.length)} 处` : ''}（都不在期望包目录下）`
+    missing.push(`${expectedPattern}（${expected.why}）${nearMiss}`)
+  }
   if (missing.length > 0) {
     problems.push(
-      `app.asar 里缺依赖自带的 wasm：${missing.join('、')}（pdfjs 预览 / xxhash 的运行时；` +
-        '打包排除项收窄、或依赖升级把它们挤掉了？）'
+      `app.asar 里缺依赖自带的 wasm（${String(missing.length)} 个；期望路径模式含 pnpm 的 ` +
+        `\`.pnpm/<包>@<版本>/node_modules/<包>/**\` 深路径）：\n- ${missing.join('\n- ')}\n` +
+        '（pdfjs 预览 / xxhash 的运行时；打包排除项收窄、或依赖升级把它们挤掉了？）'
     )
   }
   return problems
