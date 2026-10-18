@@ -207,6 +207,59 @@ export function asarPatchProblems(asarPath: string): string[] {
 }
 
 /**
+ * 依赖自带、**必须随包**的 wasm（名字不带 hash，按名字基线断言）。它们与 Office 无关：
+ * 缺席时 PDF 预览（pdfjs 的 JPEG2000 / JBIG2 扫描件、色彩管理、表单脚本沙箱）只会在运行时炸，
+ * 而这种"包能装、点开就崩"的缺口正是 CR-24 要挡的。路径以 `node_modules/` 开头为准（pnpm hoisted）。
+ */
+export const DEPENDENCY_WASM_NAMES = [
+  'quickjs-eval.wasm', // pdfjs-dist/wasm：PDF 内脚本沙箱
+  'openjpeg.wasm', // pdfjs-dist/wasm：JPEG2000 图像
+  'jbig2.wasm', // pdfjs-dist/wasm：JBIG2 扫描件
+  'qcms_bg.wasm', // pdfjs-dist/wasm：色彩管理
+  'xxhash.wasm' // xxhash-wasm/workerd：哈希
+] as const
+
+/** Office 隔离面（`out/renderer/**`）应有的 wasm 数：4 DOCX + 1 XLSX + 1 PPTX */
+export const OFFICE_WASM_COUNT = 6
+
+/**
+ * 打包 asar 的 wasm 闸门（**纯函数**：只吃 asar 文件路径清单，返回问题清单；空 = 过）。
+ * 离线自检可直接调它，不用真起打包件。
+ *
+ * 两条互补、互不替代：
+ *   1. **Office 面只许 6 个**（`out/renderer/**`）：4 DOCX + 1 XLSX + 1 PPTX，不许漏打、不许多打。
+ *      这 6 个文件名带内容 hash（Vite 产物），所以按**数量**钉，不钉名字。
+ *   2. **依赖自带 5 个按名字逐个必须在**（pdfjs 4 + xxhash 1，见 {@link DEPENDENCY_WASM_NAMES}）：
+ *      它们名字稳定，按**名字基线**钉 —— 将来 `files` 再收窄、或依赖升级把文件挪走/删掉，这里点名
+ *      缺哪个，而不是留给运行时去发现（**CR-24：pdfjs/xxhash 不许"没有闸门"**）。
+ *
+ * 刻意**不数"全 asar 的 wasm 总数"**：那是把两类混在一起（PB-016 实测 11 个），既会因 Office 面
+ * 变化误报、也会掩盖依赖侧漏打；上面两条各自更精确。
+ */
+export function wasmGateProblems(asarEntries: readonly string[]): string[] {
+  const problems: string[] = []
+  const officeWasm = asarEntries.filter(
+    (path) => path.startsWith('out/renderer/') && path.endsWith('.wasm')
+  )
+  if (officeWasm.length !== OFFICE_WASM_COUNT) {
+    problems.push(
+      `app.asar 的 out/renderer 里 wasm 数量是 ${String(officeWasm.length)}，期望 ${String(OFFICE_WASM_COUNT)}（Office 面资源被漏打/多打？）`
+    )
+  }
+  const missing = DEPENDENCY_WASM_NAMES.filter(
+    (name) =>
+      !asarEntries.some((path) => path.startsWith('node_modules/') && path.endsWith(`/${name}`))
+  )
+  if (missing.length > 0) {
+    problems.push(
+      `app.asar 里缺依赖自带的 wasm：${missing.join('、')}（pdfjs 预览 / xxhash 的运行时；` +
+        '打包排除项收窄、或依赖升级把它们挤掉了？）'
+    )
+  }
+  return problems
+}
+
+/**
  * 安装目录的"缺什么"清单（空数组 = 全齐）。门开着时这些**每一条都是硬闸门**。
  * @param layout 安装目录落点
  * @param version 本版版本号（`repoVersion()`）
@@ -232,20 +285,8 @@ export function packagedResourceProblems(layout: PackagedLayout, version: string
       if (officeHtml === undefined) {
         problems.push('app.asar 里没有 out/renderer/office.html（Office 隔离面没进包）')
       }
-      // M4-P 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm + 1 个 PPTX wasm = 6。
-      // **只数 `out/renderer/**`（Office 隔离面的 Vite 产物）**：asar 里另有 5 个与 Office 无关的
-      // 依赖自带 wasm —— pdfjs-dist 的 4 个（quickjs-eval / openjpeg / jbig2 / qcms，PDF 解码用）
-      // 和 xxhash-wasm 的 xxhash.wasm；按"全 asar"数会被它们顶成 11（PB-016 实测），闸门就永远红。
-      // 闸门语义不变：这一面的 6 个 Office wasm 不许漏打、也不许多打。
-      const officeWasmEntries = asarEntries.filter(
-        (path) => path.startsWith('out/renderer/') && path.endsWith('.wasm')
-      )
-      const expectedWasm = 6
-      if (officeWasmEntries.length !== expectedWasm) {
-        problems.push(
-          `app.asar 的 out/renderer 里 wasm 数量是 ${String(officeWasmEntries.length)}，期望 ${String(expectedWasm)}（Office 面资源被漏打/多打？）`
-        )
-      }
+      // M4-P + CR-24：Office 面 6 个 wasm 计数闸门 + 依赖自带 5 个 wasm 的名字基线（详见 wasmGateProblems）
+      problems.push(...wasmGateProblems(asarEntries))
       const bundledBetterOffice = asarEntries.filter((path) =>
         path.startsWith('node_modules/@betteroffice/')
       )
