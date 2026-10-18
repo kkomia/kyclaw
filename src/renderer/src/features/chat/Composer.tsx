@@ -330,7 +330,7 @@ export function Composer({
 
   const syncComposerCaret = useCallback((): void => {
     const textarea = textareaRef.current
-    const mirror = mirrorRef.current?.firstElementChild
+    const mirror = mirrorRef.current?.firstElementChild as HTMLElement | null | undefined
     if (
       !caretCustom ||
       textarea === null ||
@@ -396,7 +396,7 @@ export function Composer({
     // CR-01：镜像层同时承载引用 chip 的覆盖层——即使自绘 caret 关闭（caret=off）或 IME 中，
     // 滚动条槽出现时也要把镜像宽度钉到 textarea.clientWidth，否则长文本 chip/量位都会漂 6px。
     const textarea = textareaRef.current
-    const mirror = mirrorRef.current?.firstElementChild
+    const mirror = mirrorRef.current?.firstElementChild as HTMLElement | null | undefined
     if (textarea !== null && mirror !== null && mirror !== undefined && textarea.clientWidth > 0) {
       mirror.style.width = `${textarea.clientWidth}px`
     }
