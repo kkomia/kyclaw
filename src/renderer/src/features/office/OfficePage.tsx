@@ -147,13 +147,14 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   useEffect(() => {
     const stopSync = startOfficeSessionSync()
     void restoreOfficeSessionOnce().then((summary) => {
+      const parts: string[] = []
       if (summary.modifiedOnDisk > 0) {
-        setSessionNotice(
-          String(summary.modifiedOnDisk) + ' files changed on disk, restored from disk'
-        )
-      } else if (summary.skipped > 0) {
-        setSessionNotice(String(summary.skipped) + ' tabs not restored')
+        parts.push(String(summary.modifiedOnDisk) + ' files changed on disk, restored from disk')
       }
+      if (summary.skipped > 0) {
+        parts.push(String(summary.skipped) + ' tabs not restored')
+      }
+      if (parts.length > 0) setSessionNotice(parts.join('; '))
     })
     return stopSync
   }, [])
