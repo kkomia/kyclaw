@@ -601,7 +601,9 @@ export function SurfaceBoot(): React.JSX.Element {
   //  - 错误态立刻撤骨架，走原错误条/重试。
   const loadingError =
     (doc?.kind === 'docx' && fontsState === 'error') ||
-    (doc?.kind === 'pptx' && pptxFontsState === 'error')
+    (doc?.kind === 'pptx' && pptxFontsState === 'error') ||
+    // E8：编辑器/解析失败（如损坏 pptx）也必须立刻撤骨架，否则骨架盖住错误条与重试
+    editorState === 'error'
   const loadingStage = loadingStageOf({
     kind: doc?.kind ?? null,
     doc: doc !== null,
@@ -615,6 +617,7 @@ export function SurfaceBoot(): React.JSX.Element {
   const [skeletonDone, setSkeletonDone] = useState(false)
   useEffect(() => {
     if (loadingError) {
+      // 错误态：立即撤（不等最短展示），错误条/重试优先可见
       setSkeletonDone(true)
       return
     }
@@ -627,6 +630,10 @@ export function SurfaceBoot(): React.JSX.Element {
     return () => window.clearTimeout(timer)
   }, [editorState, loadingError, skeletonShown, skeletonDone])
   useEffect(() => {
+    if (loadingError) {
+      setSkeletonDone(true)
+      return
+    }
     if (editorState !== 'ready') return
     if (!skeletonShown) {
       // 瞬时路径：骨架从未出现，直接结束（不渲染）
@@ -637,8 +644,9 @@ export function SurfaceBoot(): React.JSX.Element {
     const wait = Math.max(0, 150 - shownFor)
     const timer = window.setTimeout(() => setSkeletonDone(true), wait + 150)
     return () => window.clearTimeout(timer)
-  }, [editorState, skeletonShown])
+  }, [editorState, loadingError, skeletonShown])
   const loadingVisible = skeletonShown && !skeletonDone && !loadingError
+
 
 
   return (

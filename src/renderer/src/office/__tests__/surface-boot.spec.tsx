@@ -876,4 +876,28 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     })
     expect(document.documentElement.dataset.motion).toBe('full')
   })
+
+  it('PB-019 E8：编辑器报错（损坏文档）→ 骨架立刻撤掉，不盖错误条/重试', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    await waitFor(() => expect(postMessage).toHaveBeenCalled())
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC_XLSX, nonce })
+    })
+    await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
+    // 一直不 onLoaded → 等过 150ms 阈值，骨架出现
+    await waitFor(
+      () => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(),
+      { timeout: 2000 }
+    )
+    // 解析失败：编辑器报错 → 骨架必须立刻消失（不等最短展示），错误态与重试可见
+    act(() => xlsxMock.lastProps?.onError?.('open', 'bad zip: invalid Zip archive'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+    )
+    expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'error')
+    // 报错消息已经转给壳（错误条由壳渲染）
+    expect(sentMessages(postMessage).some((message) => message.type === 'doc:error')).toBe(true)
+  })
 })
