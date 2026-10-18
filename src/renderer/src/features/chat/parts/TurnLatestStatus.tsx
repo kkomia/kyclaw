@@ -29,13 +29,14 @@ export function TurnLatestStatus({
   const [elapsedMs, setElapsedMs] = useState(0)
 
   useEffect(() => {
+    if (!running) return undefined
     startedAtRef.current ??= Date.now()
     const timer = window.setInterval(() => {
       const startedAt = startedAtRef.current
       if (startedAt !== null) setElapsedMs(Date.now() - startedAt)
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [running])
 
   if (!running) return null
   return (
