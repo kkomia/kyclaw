@@ -346,6 +346,31 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     )
   })
 
+  it('PB-023 返工：xlsx 打开后既不 ready 也不报错 → 8s 看门狗转错误态（doc:error phase=open）', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    const timerSpy = vi.spyOn(window, 'setTimeout')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC_XLSX, nonce })
+    })
+    await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
+
+    // 不调用 onLoaded：模拟损坏文件/引擎静默失败；看门狗定时器必须已排上
+    const watchdog = timerSpy.mock.calls.find((call) => call[1] === 8000)
+    expect(watchdog).toBeDefined()
+    act(() => {
+      ;(watchdog?.[0] as () => void)()
+    })
+
+    await waitFor(() => expect(screen.getByTestId('surface-editor-error')).toBeInTheDocument())
+    expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'error')
+    const errorMessage = sentMessages(postMessage).find((message) => message.type === 'doc:error')
+    expect(errorMessage).toMatchObject({ phase: 'open' })
+    // 骨架同步撤掉
+    expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+  })
+
   it('M4-P：doc:open kind=pptx → 等 loadPptxFonts 成功后挂 PptxEditorPane（6 面稳定引用）', async () => {
     const postMessage = vi.spyOn(window, 'postMessage')
     render(<SurfaceBoot />)

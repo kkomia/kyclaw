@@ -18,7 +18,7 @@
  * 为什么有重发 hello：父页（React）的 message 监听是在 effect 里挂的，而 iframe 的文档加载可能
  * 先完成；这里每 250ms 重发一次 hello、最多 5s，直到收到 init —— 一次竞态也不用父页配合重试。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   createSurfaceNonce,
   isSurfaceHelloRequest,
@@ -78,6 +78,29 @@ function applySurfaceTheme(theme: SurfaceTheme, motion: 'full' | 'reduced' = 'fu
   root.dataset.motion = motion
   root.style.colorScheme = theme
 }
+
+/** PB-023 返工：xlsx 等上游编辑器在损坏文件上可能「既不 ready 也不报错」→ 用错误边界兜住渲染异常 */
+class SurfaceEditorBoundary extends Component<
+  { onError: (message: string) => void; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: unknown): void {
+    this.props.onError(error instanceof Error ? error.message : String(error))
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
+/** 编辑器启动看门狗：上游静默失败（不 ready 不报错）时也要走错误态，不能永远停在 loading */
+const EDITOR_BOOT_TIMEOUT_MS = 8_000
 
 /** 面当前打开的文档（S3：字节留在内存里给编辑器；壳不持久化内容） */
 interface SurfaceDocument {
@@ -651,7 +674,15 @@ export function SurfaceBoot(): React.JSX.Element {
   }, [editorState, loadingError, skeletonShown])
   const loadingVisible = skeletonShown && !skeletonDone && !loadingError
 
-
+  // PB-023 返工：上游编辑器静默失败（不 ready 也不报错，如损坏 xlsx）→ 8s 看门狗转错误态，
+  // 保证「错误发给壳（phase=open）+ 骨架撤掉 + 错误条可见」三条都成立。
+  useEffect(() => {
+    if (!showEditor || editorState !== 'loading') return
+    const timer = window.setTimeout(() => {
+      handleEditorError('open', '打开超时：文件可能损坏或格式不受支持')
+    }, EDITOR_BOOT_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [showEditor, editorState, handleEditorError])
 
   return (
     <main
@@ -762,8 +793,10 @@ export function SurfaceBoot(): React.JSX.Element {
             className="office-editor-settle"
             data-ready={editorState === 'ready' ? 'true' : 'false'}
           >
-            {doc.kind === 'xlsx' ? (
-            <XlsxEditorPane
+            {/* PB-023 返工：损坏文件在上游渲染期抛错时由边界兜住，统一走 doc:error(phase=open) */}
+            <SurfaceEditorBoundary onError={(message) => handleEditorError('open', message)}>
+              {doc.kind === 'xlsx' ? (
+                <XlsxEditorPane
               key={`${doc.documentId}:${editorRetry}`}
               ref={editorPaneRef}
               documentId={doc.documentId}
@@ -812,6 +845,7 @@ export function SurfaceBoot(): React.JSX.Element {
               saveState={saveState}
             />
             )}
+            </SurfaceEditorBoundary>
           </div>
         ) : null}
         {/* PB-019：骨架/阶段读数（覆盖在编辑器首帧之上，就绪后 150ms 淡出）；<150ms 的瞬时路径不显示 */}
