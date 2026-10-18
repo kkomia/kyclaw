@@ -232,7 +232,8 @@ describe('office:config：surfaceUrl / origin / 上限', () => {
       surfaceUrl: 'kyclaw-office://surface/',
       surfaceOrigin: 'kyclaw-office://surface',
       maxBytes: OFFICE_EDITOR_MAX_BYTES,
-      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS
+      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS,
+      probe: false
     })
   })
 
@@ -243,10 +244,22 @@ describe('office:config：surfaceUrl / origin / 上限', () => {
     expect(config.surfaceOrigin).toBe('http://localhost:6123')
     expect(officeSurfaceUrls('http://localhost:6123').surfaceOrigin).toBe('http://localhost:6123')
   })
+
+  it('D17 探针缝：KYCLAW_OFFICE_PROBE=1 只在未打包构建里 probe=true', async () => {
+    register({ env: { KYCLAW_OFFICE_PROBE: '1' } })
+    const devConfig = officeConfigSchema.parse(await invoke(IPC_CHANNELS.office.config, eventOf(1)))
+    expect(devConfig.probe).toBe(true)
+
+    register({ env: { KYCLAW_OFFICE_PROBE: '1' }, isPackaged: true })
+    const packagedConfig = officeConfigSchema.parse(
+      await invoke(IPC_CHANNELS.office.config, eventOf(1))
+    )
+    expect(packagedConfig.probe).toBe(false)
+  })
 })
 
 describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', () => {
-  it('取消是一等结果：ok:false + code:cancelled（不抛），且过滤 .docx', async () => {
+  it('取消是一等结果：ok:false + code:cancelled（不抛），且过滤 docx + xlsx', async () => {
     mocks.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] })
     register({})
     const result = officeOpenResultSchema.parse(
@@ -255,11 +268,11 @@ describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', (
     expect(result).toMatchObject({ ok: false, code: 'cancelled' })
     expect(mocks.showOpenDialog).toHaveBeenCalledTimes(1)
     const options = mocks.showOpenDialog.mock.calls[0]?.[0] as {
-      filters?: { extensions: string[] }[]
+      filters?: { name: string; extensions: string[] }[]
       properties?: string[]
     }
     expect(options.properties).toContain('openFile')
-    expect(options.filters?.[0]?.extensions).toContain('docx')
+    expect(options.filters?.[0]?.extensions).toEqual(['docx', 'xlsx'])
   })
 
   it('选中真实 docx：回 document 信息 + alreadyOpen:false；read 回字节与 sha256', async () => {
@@ -274,6 +287,7 @@ describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', (
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
     expect(opened.alreadyOpen).toBe(false)
+    expect(opened.document.kind).toBe('docx')
     expect(opened.document.displayName).toBe('项目计划.docx')
     expect(opened.document.displayPath).toBe(path)
     // absolutePath 是 realpath 归一后的绝对路径（只读回包字段）；displayPath 保留调用方给的写法
@@ -301,6 +315,22 @@ describe('office:open-dialog：取消 / 真实选择器 / KYCLAW_OFFICE_OPEN', (
       alreadyOpen: true,
       document: { documentId: opened.document.documentId }
     })
+  })
+
+  it('M4-X：选中 xlsx → document.kind=xlsx（选择器不过滤掉它）', async () => {
+    const directory = tempDir()
+    const path = writeFile(directory, '预算.xlsx', '真实表格字节')
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [path] })
+    register({})
+
+    const opened = officeOpenResultSchema.parse(
+      await invoke(IPC_CHANNELS.office.openDialog, eventOf(2))
+    )
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.document.kind).toBe('xlsx')
+    expect(opened.document.displayName).toBe('预算.xlsx')
+    expect(opened.document.size).toBe(Buffer.byteLength('真实表格字节'))
   })
 
   it('KYCLAW_OFFICE_OPEN 绕过原生选择器（测试专用）', async () => {

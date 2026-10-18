@@ -103,6 +103,15 @@ importers:
       '@betteroffice/fonts-cjk':
         specifier: 0.4.0
         version: 0.4.0
+      '@betteroffice/xlsx':
+        specifier: 0.3.0
+        version: 0.3.0
+      '@betteroffice/xlsx-i18n':
+        specifier: 0.3.0
+        version: 0.3.0
+      '@betteroffice/xlsx-react':
+        specifier: 0.3.0
+        version: 0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@electron-toolkit/eslint-config-prettier':
         specifier: 3.0.1
         version: 3.0.1(eslint@9.39.5(jiti@2.7.0))(prettier@3.9.9)
@@ -520,6 +529,18 @@ packages:
     peerDependenciesMeta:
       '@betteroffice/fonts-cjk':
         optional: true
+
+  '@betteroffice/xlsx-i18n@0.3.0':
+    resolution: {integrity: sha512-wQx7boZyKr+8MDDtUdos52pDfHeyesY8Hrsj4zEiptAi1c+8Tgy+d3sTPyYX2WZit9EoeSGy4AzombARI03vOQ==}
+
+  '@betteroffice/xlsx-react@0.3.0':
+    resolution: {integrity: sha512-ZKHTKGvWKz9Np33MiENcE115QDddREO3LuvtZTnPiNVphB3J5DvxICV9FET/CMgKP5Y5WMgtNDJcJfe6AvLo6A==}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+
+  '@betteroffice/xlsx@0.3.0':
+    resolution: {integrity: sha512-K2bHtdk/epAxsmvxJlIWBRndjP3ltQU0Oh3p4gcZd2n5/YgXglo3SmMYX4nQe8WEm/yvz91p+aIasKyXXQP9Wg==}
 
   '@bramus/specificity@2.4.3':
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
@@ -5696,7 +5717,7 @@ packages:
         optional: true
 
   xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz:
-    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
+    resolution: {tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
     version: 0.20.3
     engines: {node: '>=0.8'}
     hasBin: true
@@ -6071,6 +6092,17 @@ snapshots:
   '@betteroffice/fonts@0.4.0(@betteroffice/fonts-cjk@0.4.0)':
     optionalDependencies:
       '@betteroffice/fonts-cjk': 0.4.0
+
+  '@betteroffice/xlsx-i18n@0.3.0': {}
+
+  '@betteroffice/xlsx-react@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@betteroffice/xlsx': 0.3.0
+      '@betteroffice/xlsx-i18n': 0.3.0
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+
+  '@betteroffice/xlsx@0.3.0': {}
 
   '@bramus/specificity@2.4.3':
     dependencies:

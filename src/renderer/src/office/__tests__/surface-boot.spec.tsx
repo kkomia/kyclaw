@@ -40,6 +40,21 @@ const fontsMock = vi.hoisted(() => ({
   }))
 }))
 
+const xlsxMock = vi.hoisted(() => ({
+  saveBytes: new Uint8Array([5, 6, 7]) as Uint8Array | null,
+  saveCalls: 0,
+  reloads: [] as Uint8Array[],
+  lastProps: null as null | {
+    documentId: string
+    name: string
+    readOnly: boolean
+    theme: string
+    onChanged: () => void
+    onSaveRequest: () => void
+    onLoaded: () => void
+  }
+}))
+
 vi.mock('../DocxEditorPane', () => ({
   DocxEditorPane: forwardRef<unknown, Record<string, unknown>>(
     function MockDocxEditorPane(props, ref) {
@@ -54,6 +69,24 @@ vi.mock('../DocxEditorPane', () => ({
         }
       }))
       return <div data-testid="surface-docx-editor" data-document-id={props.documentId as string} />
+    }
+  )
+}))
+
+vi.mock('../XlsxEditorPane', () => ({
+  XlsxEditorPane: forwardRef<unknown, Record<string, unknown>>(
+    function MockXlsxEditorPane(props, ref) {
+      xlsxMock.lastProps = props as typeof xlsxMock.lastProps
+      useImperativeHandle(ref, () => ({
+        save: async () => {
+          xlsxMock.saveCalls += 1
+          return xlsxMock.saveBytes
+        },
+        reload: async (bytes: Uint8Array) => {
+          xlsxMock.reloads.push(bytes)
+        }
+      }))
+      return <div data-testid="surface-xlsx-editor" data-document-id={props.documentId as string} />
     }
   )
 }))
@@ -76,6 +109,10 @@ beforeEach(() => {
   editorMock.saveCalls = 0
   editorMock.reloads = []
   editorMock.lastProps = null
+  xlsxMock.saveBytes = new Uint8Array([5, 6, 7])
+  xlsxMock.saveCalls = 0
+  xlsxMock.reloads = []
+  xlsxMock.lastProps = null
   fontsMock.ensureSurfaceFonts.mockClear()
 })
 
@@ -115,10 +152,21 @@ async function handshake(
 const DOC = {
   type: 'doc:open',
   documentId: 'doc-1',
+  kind: 'docx',
   name: '方案.docx',
   sha256: 'a'.repeat(64),
   readOnly: false,
   bytes: new Uint8Array([9, 9, 9])
+}
+
+const DOC_XLSX = {
+  type: 'doc:open',
+  documentId: 'sheet-1',
+  kind: 'xlsx',
+  name: '预算.xlsx',
+  sha256: 'b'.repeat(64),
+  readOnly: false,
+  bytes: new Uint8Array([7, 7, 7, 7])
 }
 
 describe('SurfaceBoot：握手状态机', () => {
@@ -208,6 +256,40 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
     const loaded = sentMessages(postMessage).find((message) => message.type === 'doc:loaded')
     expect(loaded).toMatchObject({ documentId: 'doc-1', pages: 3 })
     expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+  })
+
+  it('M4-X：doc:open kind=xlsx → 挂 XlsxEditorPane（不等字体），loaded 后 ready', async () => {
+    // 字体尚未就绪也不该阻塞 XLSX（canvas 用浏览器字体）
+    fontsMock.ensureSurfaceFonts.mockImplementationOnce(() => new Promise(() => {}))
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+
+    act(() => {
+      dispatchFromParent({ ...DOC_XLSX, nonce })
+    })
+    await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
+    expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('surface-docx-editor')).not.toBeInTheDocument()
+    expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-bytes', '4')
+
+    // xlsx pane 的 onLoaded 没有页数参数 → doc:loaded pages=0
+    act(() => xlsxMock.lastProps?.onLoaded())
+    const loaded = sentMessages(postMessage).find((message) => message.type === 'doc:loaded')
+    expect(loaded).toMatchObject({ documentId: 'sheet-1', pages: 0 })
+    expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+  })
+
+  it('M4-X：doc:open 缺 kind / kind=pptx 一律丢弃（面只认 docx/xlsx）', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC, kind: 'pptx', nonce })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(screen.queryByTestId('surface-docx-editor')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('surface-xlsx-editor')).not.toBeInTheDocument()
   })
 
   it('预热面（?officePrewarm=1）发出的 fonts-ready 带 prewarm:true（壳据此释放 hidden iframe）', async () => {

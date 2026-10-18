@@ -29,6 +29,7 @@ import {
   OFFICE_EDITOR_ERROR_MESSAGES,
   OFFICE_MAX_OPEN_DOCUMENTS,
   type OfficeDocumentInfo,
+  type OfficeEditorKind,
   type OfficeErrorCode,
   type OfficeFailure,
   type OfficeOpenResult,
@@ -37,7 +38,18 @@ import {
   type OfficeSaveResult
 } from '../shared/office-editor'
 
-/** 第一步只接 DOCX：扩展名大小写不敏感 */
+/** M4-X：注册表接受的扩展名 → kind（大小写不敏感；PPTX 在 M4-P 再扩） */
+export const OFFICE_EDITOR_EXTENSION_KINDS: Readonly<Record<string, OfficeEditorKind>> = {
+  '.docx': 'docx',
+  '.xlsx': 'xlsx'
+}
+
+/** 路径 → 可编辑 kind（不支持的格式回 undefined，调用方回 unsupported-format） */
+export function officeEditorKindOfPath(filePath: string): OfficeEditorKind | undefined {
+  return OFFICE_EDITOR_EXTENSION_KINDS[extname(filePath).toLowerCase()]
+}
+
+/** 兼容旧导出名（S2/S3 单测与调用方）：现在只代表 DOCX 扩展名 */
 export const OFFICE_DOCX_EXTENSION = '.docx'
 
 /** 打开时的入口（只进注册表内部，不回渲染端） */
@@ -222,6 +234,7 @@ export function officeSha256(bytes: Uint8Array): string {
 function infoOf(record: OfficeDocumentRecord): OfficeDocumentInfo {
   return {
     documentId: record.documentId,
+    kind: record.kind,
     displayName: record.displayName,
     displayPath: record.displayPath,
     // realpath 归一后的绝对路径：只读回包字段（渲染端仅用于匹配/展示，不作授权参数）
@@ -373,10 +386,9 @@ export function createOfficeDocuments(
 
   return {
     async open(filePath, context) {
-      // ① 格式闸门先于任何 IO：非 .docx 的文件根本不该被读进内存
-      if (extname(filePath).toLowerCase() !== OFFICE_DOCX_EXTENSION) {
-        return officeFailure('unsupported-format')
-      }
+      // ① 格式闸门先于任何 IO：不支持的格式根本不该被读进内存
+      const kind = officeEditorKindOfPath(filePath)
+      if (kind === undefined) return officeFailure('unsupported-format')
 
       // ② realpath 归一：去重键必须用真实路径（Windows 大小写 / 8.3 短名 / 链接）
       let realPath: string
@@ -430,6 +442,7 @@ export function createOfficeDocuments(
 
       const record: OfficeDocumentRecord = {
         documentId: randomUUID(),
+        kind,
         realPath,
         displayName: context.displayName ?? basename(realPath),
         displayPath: context.displayPath === undefined ? filePath : context.displayPath,
@@ -518,8 +531,11 @@ export function createOfficeDocuments(
       const target = saveTargetOf(documentId, owner, input.bytes)
       if ('failure' in target) return target.failure
       const { record } = target
-      if (extname(targetPath).toLowerCase() !== OFFICE_DOCX_EXTENSION) {
-        return officeFailure('unsupported-format', '另存为只支持 .docx')
+      if (officeEditorKindOfPath(targetPath) !== record.kind) {
+        return officeFailure(
+          'unsupported-format',
+          record.kind === 'xlsx' ? '另存为只支持 .xlsx' : '另存为只支持 .docx'
+        )
       }
 
       // 目标真实路径：已存在文件走 realpath；新文件取"真实目录 + 文件名"（目录必须存在）

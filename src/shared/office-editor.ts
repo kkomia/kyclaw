@@ -65,9 +65,8 @@ export const OFFICE_EDITOR_MAX_BYTES = 64 * 1024 * 1024
  */
 export const OFFICE_MAX_OPEN_DOCUMENTS = 24
 
-/**
- * 失败分类（渲染端据此给人话/动作；**人话口径只住 `OFFICE_EDITOR_ERROR_MESSAGES` 一处**）。
- *   - `unsupported-format`：第一步只接 .docx；
+/** 失败分类（渲染端据此给人话/动作；**人话口径只住 `OFFICE_EDITOR_ERROR_MESSAGES` 一处**）。
+ *   - `unsupported-format`：当前只接 .docx / .xlsx；
  *   - `too-large`：源文件 > 64MB；
  *   - `unreadable`：ENOENT/EACCES/EISDIR/被占用等读不出来的情况；
  *   - `write-locked` / `no-space` / `write-failed`：S3 写链路（先冻结词表）；
@@ -95,7 +94,7 @@ export type OfficeErrorCode = z.infer<typeof officeErrorCodeSchema>
 
 /** 分类 → 中文人话（主进程回包与渲染端提示共用；不回绝对路径/errno 细节给界面之外的地方） */
 export const OFFICE_EDITOR_ERROR_MESSAGES: Readonly<Record<OfficeErrorCode, string>> = {
-  'unsupported-format': '第一步只支持 .docx 文件',
+  'unsupported-format': '当前只支持 .docx / .xlsx 文件',
   'too-large': '这个文件太大（超过 64MB），当前版本打不开',
   unreadable: '读不了这个文件：它可能已损坏、无权限，或不是普通文件',
   'write-locked': '文件被其他程序占用，可以先另存为再替换',
@@ -109,12 +108,19 @@ export const OFFICE_EDITOR_ERROR_MESSAGES: Readonly<Record<OfficeErrorCode, stri
 }
 
 /**
- * 注册表对外暴露的文档信息（**只读回包字段**，不含真实路径与 owner）。
- * `displayPath` 仅供界面展示：选择器给绝对路径，会话入口给相对路径。
+ * 可编辑的 Office 格式（M4-X：DOCX + XLSX；PPTX 在 M4-P 再扩）。
+ * 这里是**主进程已接**集合，不是标签类型全集（pdf/image/text/web 只是标签占位）。
  */
+export const OFFICE_EDITOR_KINDS = ['docx', 'xlsx'] as const
+export const officeEditorKindSchema = z.enum(OFFICE_EDITOR_KINDS)
+export type OfficeEditorKind = z.infer<typeof officeEditorKindSchema>
+
+/** 注册表对外暴露的文档信息（**只读回包字段**，不含真实路径与 owner）。 */
 export const officeDocumentInfoSchema = z.strictObject({
   /** 主进程随机生成的不透明 id（同一 realpath 只发一个） */
   documentId: z.string().min(1),
+  /** 文档格式：docx / xlsx（M4-X 起；标签图标与编辑器挂载都按它走） */
+  kind: officeEditorKindSchema,
   /** 文件名（标签标题） */
   displayName: z.string().min(1),
   /** 仅供显示：绝对路径或会话相对路径 */
@@ -188,7 +194,12 @@ export const officeConfigSchema = z.strictObject({
   /** 面的 origin（`http(s)` 取 URL.origin；自定义协议原样） */
   surfaceOrigin: z.string().min(1),
   maxBytes: z.number().int().positive(),
-  maxOpenDocuments: z.number().int().positive()
+  maxOpenDocuments: z.number().int().positive(),
+  /**
+   * D17 测试缝：仅未打包构建且 `KYCLAW_OFFICE_PROBE=1` 时为 true。
+   * 面会在 `?officeProbe=1` 时暴露只读/编辑的拍点 API（生产为 false，不设即不存在）。
+   */
+  probe: z.boolean()
 })
 export type OfficeConfig = z.infer<typeof officeConfigSchema>
 

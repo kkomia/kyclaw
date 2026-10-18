@@ -266,6 +266,32 @@ describe('saveAs：写新落点 + 注册表重定向', () => {
     expect(docs.info(documentId, 1)?.absolutePath).toBe(realpathSync.native(target))
   })
 
+  it('M4-X：xlsx 只能另存为 .xlsx；重定向后 kind 保持 xlsx', async () => {
+    const directory = tempDir()
+    const path = writeDocx(directory, '预算.xlsx', '原始表格字节')
+    const docs = createOfficeDocuments()
+    const opened = await docs.open(path, { owner: 1, openedFrom: 'picker' })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+    expect(opened.document.kind).toBe('xlsx')
+
+    expect(
+      await docs.saveAs(opened.document.documentId, 1, join(directory, '错后缀.docx'), {
+        bytes: Buffer.from('x')
+      })
+    ).toMatchObject({ ok: false, code: 'unsupported-format' })
+
+    const target = join(directory, '另存预算.xlsx')
+    const result = await docs.saveAs(opened.document.documentId, 1, target, {
+      bytes: Buffer.from('新表格字节')
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.document.kind).toBe('xlsx')
+    expect(result.document.displayName).toBe('另存预算.xlsx')
+    expect(readFileSync(target, 'utf8')).toBe('新表格字节')
+  })
+
   it('目标后缀不是 docx / 目标已被另一个已打开文档占用 → 分类失败，不写文件', async () => {
     const { docs, directory, documentId } = await openDocument()
     expect(

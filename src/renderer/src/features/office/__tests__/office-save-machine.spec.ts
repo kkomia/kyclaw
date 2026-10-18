@@ -45,6 +45,7 @@ function makeMachine(
     ok: true as const,
     document: {
       documentId: 'doc-1',
+      kind: 'docx' as const,
       displayName: '另存.docx',
       displayPath: 'D:\\另存.docx',
       absolutePath: 'D:\\另存.docx',

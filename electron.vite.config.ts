@@ -39,6 +39,10 @@ export default defineConfig({
      * 表现为 `WebAssembly.compile(): expected magic word ... found 3c 21 64 6f` / 字体字节数不对。
      * 让它们走 dev 的源码转换管线（Vite 会重写成 `/@fs/...` 真文件 URL）即可；构建态由 Rollup
      * 处理同一语法，本来就没问题（preview/打包不受这条影响）。
+     *
+     * M4-X：XLSX 内核同属 `@betteroffice/*`，`new URL('./generated/xlsx_wasm_bg.wasm',
+     * import.meta.url)` 同样不能进 esbuild 预打包 —— 一并 exclude（否则 dev 打开 xlsx 报
+     * `expected magic word ... found 3c 21 64 6f`）。
      */
     optimizeDeps: {
       exclude: [
@@ -46,7 +50,10 @@ export default defineConfig({
         '@betteroffice/docx-react',
         '@betteroffice/docx/layout',
         '@betteroffice/fonts',
-        '@betteroffice/fonts-cjk'
+        '@betteroffice/fonts-cjk',
+        '@betteroffice/xlsx',
+        '@betteroffice/xlsx-react',
+        '@betteroffice/xlsx-i18n'
       ]
     },
     // 0.2.0 Office 面（M3-S0）：渲染端多入口 —— 主界面 index.html + 隔离的 office.html。

@@ -447,10 +447,16 @@ function main() {
         'resources/skills/THIRD_PARTY_NOTICES.md 没有进包（extraResources 的 skills 那条被改坏了？）'
       )
     }
-    // 0.2.0：office 渲染入口内联的 BetterOffice（Apache-2.0）与随编辑器分发的字体（OFL-1.1）
-    // 也只能靠这份声明承载 —— 标记断言，防止将来删段后静默通过（不改动上面那条"必须进包"的语义）。
+    // 0.2.0 / M4-X：office 渲染入口内联的 BetterOffice（Apache-2.0，DOCX + XLSX）与随编辑器分发的字体
+    // （OFL-1.1）也只能靠这份声明承载 —— 标记断言，防止将来删段后静默通过
+    // （不改动上面那条"必须进包"的语义）。
     const noticesText = readFileSync(noticesPath, 'utf8')
-    for (const marker of ['BetterOffice', 'SIL OPEN FONT LICENSE']) {
+    for (const marker of [
+      'BetterOffice',
+      'SIL OPEN FONT LICENSE',
+      '@betteroffice/xlsx',
+      '@betteroffice/xlsx-react'
+    ]) {
       if (!noticesText.includes(marker)) {
         fail(`随包 THIRD_PARTY_NOTICES.md 缺「${marker}」（BetterOffice / 字体许可那一段被删了？）`)
       }

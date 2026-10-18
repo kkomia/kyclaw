@@ -680,6 +680,7 @@ export interface OfficeApiStub {
 export function officeDocumentFixture(patch: Partial<OfficeDocumentInfo> = {}): OfficeDocumentInfo {
   return {
     documentId: 'doc-1',
+    kind: 'docx',
     displayName: '方案.docx',
     displayPath: 'D:\\工作\\方案.docx',
     absolutePath: 'D:\\工作\\方案.docx',
@@ -697,7 +698,8 @@ export function officeApiStub(): OfficeApiStub {
       surfaceUrl: OFFICE_SURFACE_URL,
       surfaceOrigin: OFFICE_SURFACE_ORIGIN,
       maxBytes: OFFICE_EDITOR_MAX_BYTES,
-      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS
+      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS,
+      probe: false
     })),
     openDialog: vi.fn(async (): Promise<OfficeOpenResult> => ({
       ok: false,

@@ -74,6 +74,8 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
   const [openError, setOpenError] = useState('')
   /** 面 URL 由主进程下发（dev 端口随 Vite 走；preview/打包是 kyclaw-office://surface/） */
   const [surfaceUrl, setSurfaceUrl] = useState<string | undefined>(undefined)
+  /** D17：面内拍点 API 开关（仅未打包 + KYCLAW_OFFICE_PROBE=1；生产恒 false） */
+  const [probe, setProbe] = useState(false)
   /** 标志消费去重（StrictMode 双跑 / 连点「＋」时只发一次） */
   const openingFromFlagRef = useRef(false)
 
@@ -100,7 +102,10 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
     void window.kyclaw?.office
       .config()
       .then((config) => {
-        if (alive) setSurfaceUrl(config.surfaceUrl)
+        if (alive) {
+          setSurfaceUrl(config.surfaceUrl)
+          setProbe(config.probe === true)
+        }
       })
       .catch(() => {
         // 读不到配置就退回渲染端自算（surface-url.ts），不拦打开文档
@@ -227,7 +232,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
               data-testid="office-empty"
               icon={<Briefcase />}
               title="还没有打开的文档"
-              description="打开一份 .docx 开始；标签不绑定会话，切换会话不会关掉这里。"
+              description="打开一份 .docx / .xlsx 开始；标签不绑定会话，切换会话不会关掉这里。"
               action={
                 <Button
                   data-testid="office-open"
@@ -271,6 +276,7 @@ export function OfficePage({ active = true }: OfficePageProps = {}): React.JSX.E
                       tab={tab}
                       active={isActive}
                       surfaceUrl={surfaceUrl}
+                      probe={probe}
                       openTabCount={openTabCount}
                       dirtyCount={dirtyCount}
                       aiPanelOpen={aiPanelOpen}
@@ -348,6 +354,7 @@ function OfficeWorkspace({
   tab,
   active,
   surfaceUrl,
+  probe,
   openTabCount,
   dirtyCount,
   aiPanelOpen,
@@ -358,6 +365,8 @@ function OfficeWorkspace({
   /** 是否当前可见标签（面内快捷键只在该 workspace 上转发，双保险） */
   active: boolean
   surfaceUrl?: string
+  /** D17 探针缝：透传到 OfficeSurface（仅 xlsx 面用，生产 false） */
+  probe?: boolean
   /** M3-S5-3：整面重载判定要的两个全局量（当前标签数 / 未保存数） */
   openTabCount: number
   dirtyCount: number
@@ -370,7 +379,8 @@ function OfficeWorkspace({
 }): React.JSX.Element {
   const Icon = OFFICE_KIND_ICON[tab.kind]
   const source = tab.path ?? tab.url ?? ''
-  // M3-S3：DOCX 标签挂真编辑器（面内 DocxEditor）；其它格式仍占位（后续步骤再接）
+  // M4-X：DOCX / XLSX 标签挂真编辑器（面内 DocxEditor / XlsxEditor）；其它格式仍占位
+  const isEditor = tab.kind === 'docx' || tab.kind === 'xlsx'
   const isDocx = tab.kind === 'docx'
   const theme = useDocumentTheme()
   const surfaceRef = useRef<OfficeSurfaceHandle | null>(null)
@@ -404,7 +414,7 @@ function OfficeWorkspace({
   useEffect(() => {
     // 每个标签一份 OfficeWorkspace 且常驻：本 effect 只在首次挂载/documentId 变化时读一次，
     // 切标签不重读（S3 遗留的"保存后壳内 loaded 快照不更新"不在 S4 做静默重读）
-    if (!isDocx || tab.documentId === undefined) return
+    if (!isEditor || tab.documentId === undefined) return
     let alive = true
     const read = window.kyclaw?.office?.read
     if (typeof read !== 'function') {
@@ -433,7 +443,7 @@ function OfficeWorkspace({
     return () => {
       alive = false
     }
-  }, [isDocx, tab.documentId, reloadGeneration])
+  }, [isEditor, tab.documentId, reloadGeneration])
 
   /** M3-S5-3：激活一次 = 复用一次（ref 计数，不触发渲染） */
   useEffect(() => {
@@ -451,7 +461,7 @@ function OfficeWorkspace({
    * 状态变更排到下一拍：避免在 effect 体内同步 setState 造成级联渲染。
    */
   useEffect(() => {
-    if (active || !surfaceAlive || !isDocx) return
+    if (active || !surfaceAlive || !isEditor) return
     if (tab.dirty) return
     const reload = shouldReloadSurface({
       openTabCount,
@@ -470,17 +480,17 @@ function OfficeWorkspace({
       setPageCount(0)
     }, 0)
     return () => window.clearTimeout(handle)
-  }, [active, surfaceAlive, isDocx, tab.dirty, openTabCount, dirtyCount])
+  }, [active, surfaceAlive, isEditor, tab.dirty, openTabCount, dirtyCount])
 
   /** M3-S5-3：被卸掉的面在标签重新激活时按需重开（重读磁盘 → 重建 save-machine） */
   useEffect(() => {
-    if (!active || surfaceAlive || !isDocx) return
+    if (!active || surfaceAlive || !isEditor) return
     const handle = window.setTimeout(() => {
       setSurfaceAlive(true)
       setReloadGeneration((generation) => generation + 1)
     }, 0)
     return () => window.clearTimeout(handle)
-  }, [active, surfaceAlive, isDocx])
+  }, [active, surfaceAlive, isEditor])
 
   // 保存状态机：文档字节到手后创建，并把运行时注册进模块级 registry（S4 的标签条也走它）
   const loadedDocumentId = loaded?.info.documentId
@@ -552,7 +562,7 @@ function OfficeWorkspace({
 
   // 注意：render 期不读 ref（react-hooks/refs）。editorReady 只会在保存状态机建好之后变真，
   // 因此这个门足够；运行时缺失时 saveOfficeTab 自己会返回 false（不伪造成功）。
-  const canSave = isDocx && editorReady && tab.dirty && !saving
+  const canSave = isEditor && editorReady && tab.dirty && !saving
 
   const requestSave = (): void => {
     // 新一次尝试开始前清掉上一次的错误条（失败会由状态机再写回）
@@ -622,7 +632,7 @@ function OfficeWorkspace({
       data-document-id={tab.documentId ?? ''}
       data-active={active ? 'true' : 'false'}
       data-document-state={loaded === null ? (docError === '' ? 'loading' : 'error') : 'loaded'}
-      data-editor-state={isDocx ? (editorReady ? 'ready' : 'loading') : 'n/a'}
+      data-editor-state={isEditor ? (editorReady ? 'ready' : 'loading') : 'n/a'}
       className="relative flex min-h-0 flex-1 flex-col"
     >
       {/*
@@ -655,7 +665,7 @@ function OfficeWorkspace({
           {source}
           {pageCount > 0 ? ` · ${pageCount} 页` : ''}
         </p>
-        {isDocx ? (
+        {isEditor ? (
           // 保存按钮（A1 起视觉上收进调试 strip；A2 会搬进 ribbon QAT）
           <Button
             data-testid="office-save"
@@ -669,7 +679,7 @@ function OfficeWorkspace({
             保存
           </Button>
         ) : null}
-        {isDocx ? (
+        {isEditor ? (
           <span
             data-testid="office-surface-status"
             data-state={surfaceStatus}
@@ -704,8 +714,8 @@ function OfficeWorkspace({
         </span>
       </div>
 
-      {isDocx ? (
-        // A3：画布（iframe，flex-1）+ 右侧 AI 面板（shell 侧，320 可折叠）同排。
+      {isEditor ? (
+        // A3：画布（iframe，flex-1）+ 右侧 AI 面板（docx 才有；shell 侧，320 可折叠）同排。
         // A1 的全出血不变：左侧画布区自己铺满，圆角仍由 content-region 裁。
         <div className="relative flex min-h-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -717,6 +727,7 @@ function OfficeWorkspace({
                 documentInfo={loaded?.info}
                 documentBytes={loaded?.bytes}
                 surfaceUrl={surfaceUrl}
+                probe={probe}
                 onDocLoaded={(pages) => {
                   setEditorReady(true)
                   setPageCount(pages)
@@ -743,7 +754,7 @@ function OfficeWorkspace({
               A3：面板收起时，画布右缘给一个窄「AI」把手（aria-expanded=false + tooltip）。
               自动收起（窗口过窄）时禁用并说明原因——不挤压画布，也不假装能开。
             */}
-            {aiPanelOpen ? null : (
+            {isDocx && !aiPanelOpen ? (
               <button
                 type="button"
                 data-testid="office-ai-handle"
@@ -758,7 +769,7 @@ function OfficeWorkspace({
                 <Sparkles aria-hidden="true" className="size-3.5" />
                 AI
               </button>
-            )}
+            ) : null}
             {docError === '' ? null : (
               <p
                 data-testid="office-doc-error"
@@ -796,11 +807,13 @@ function OfficeWorkspace({
               </div>
             )}
           </div>
-          <OfficeAiPanel
-            open={aiPanelOpen}
-            autoCollapsed={aiPanelAutoCollapsed}
-            onCollapse={onToggleAiPanel}
-          />
+          {isDocx ? (
+            <OfficeAiPanel
+              open={aiPanelOpen}
+              autoCollapsed={aiPanelAutoCollapsed}
+              onCollapse={onToggleAiPanel}
+            />
+          ) : null}
         </div>
       ) : (
         <div

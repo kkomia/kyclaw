@@ -179,11 +179,11 @@ export const useOfficeTabsStore = create<OfficeTabsState>()((set, get) => ({
       return { ok: true, tabId: existing.id }
     }
     // 打开闸门（标签数 / 未保存数超限）：拒绝并带回原因，**不新增标签**（不静默加）
-    const block = openBlockReason(get().tabs, 'docx')
+    const block = openBlockReason(get().tabs, info.kind)
     if (block !== null) return { ok: false, block }
     const tab: OfficeTab = {
-      id: nextTabId('docx'),
-      kind: 'docx',
+      id: nextTabId(info.kind),
+      kind: info.kind,
       title: info.displayName,
       path: info.displayPath,
       absolutePath: info.absolutePath,

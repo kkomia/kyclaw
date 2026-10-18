@@ -111,6 +111,45 @@ export function asarTopLevelNames(asarPath: string): string[] | null {
   }
 }
 
+/**
+ * 读 asar 头里**所有文件路径**（递归展开 `files`；目录条目不带 `files` 的按文件）。
+ * M4-X 打包自检用：`out/renderer/office.html` / wasm 清单 / 不得有 `node_modules/@betteroffice`。
+ * 头解析失败回 null（调用方如实报"没验成"，不冒充验过）。
+ */
+export function asarFilePaths(asarPath: string): string[] | null {
+  let fd: number | undefined
+  try {
+    fd = openSync(asarPath, 'r')
+    const head = Buffer.alloc(16)
+    if (readSync(fd, head, 0, 16, 0) !== 16) return null
+    const jsonSize = head.readUInt32LE(12)
+    if (jsonSize <= 0 || jsonSize > 64 * 1024 * 1024) return null
+    const raw = Buffer.alloc(jsonSize)
+    if (readSync(fd, raw, 0, jsonSize, 16) !== jsonSize) return null
+    const parsed = JSON.parse(raw.toString('utf8')) as {
+      files?: Record<string, { files?: Record<string, unknown> }>
+    }
+    if (typeof parsed.files !== 'object' || parsed.files === null) return null
+    const paths: string[] = []
+    const walk = (files: Record<string, { files?: Record<string, unknown> }>, prefix: string): void => {
+      for (const [name, entry] of Object.entries(files)) {
+        const path = prefix === '' ? name : `${prefix}/${name}`
+        if (entry !== null && typeof entry === 'object' && entry.files !== undefined) {
+          walk(entry.files as Record<string, { files?: Record<string, unknown> }>, path)
+        } else {
+          paths.push(path)
+        }
+      }
+    }
+    walk(parsed.files, '')
+    return paths
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
 /** 根 `patches/**` 里的补丁文件名（进了 asar 就是打包配置漏了排除） */
 const PATCH_FILE_NAMES = [
   '@fortune-sheet__core@1.0.4.patch',
@@ -181,6 +220,53 @@ export function packagedResourceProblems(layout: PackagedLayout, version: string
     problems.push(`没有 ${layout.asar}（打包件结构不对？）`)
   } else {
     problems.push(...asarPatchProblems(layout.asar))
+    // M4-X（recon §4）：Office 面产物必须进 asar；@betteroffice 的包目录不能进（只允许 Vite 内联代码）
+    const asarEntries = asarFilePaths(layout.asar)
+    if (asarEntries === null) {
+      problems.push('app.asar 头部解析失败：无法核验 Office 面资源（office.html / wasm / 字体）')
+    } else {
+      const officeHtml = asarEntries.find((path) => path === 'out/renderer/office.html')
+      if (officeHtml === undefined) {
+        problems.push('app.asar 里没有 out/renderer/office.html（Office 隔离面没进包）')
+      }
+      const wasmCount = asarEntries.filter((path) => path.endsWith('.wasm')).length
+      // M4-X 验收口径：4 个 DOCX wasm + 1 个 XLSX wasm = 5；M4-P 接 PPTX 后应为 6（届时改这里）
+      const expectedWasm = 5
+      if (wasmCount !== expectedWasm) {
+        problems.push(
+          `app.asar 里的 wasm 数量是 ${String(wasmCount)}，期望 ${String(expectedWasm)}（Office 面资源被漏打/多打？）`
+        )
+      }
+      const bundledBetterOffice = asarEntries.filter((path) =>
+        path.startsWith('node_modules/@betteroffice/')
+      )
+      if (bundledBetterOffice.length > 0) {
+        problems.push(
+          `app.asar 里出现了 node_modules/@betteroffice（应只留 Vite 内联代码，不随 node_modules 打包）：${bundledBetterOffice.slice(0, 3).join('、')}`
+        )
+      }
+      const fontCount = asarEntries.filter(
+        (path) => path.endsWith('.ttf') || path.endsWith('.otf')
+      ).length
+      // BetterOffice 自带 65 TTF + 5 OTF，但 asar 里还混有 PDF/文档预览等其它字体资产：
+      // 数量按"至少 70"兜底，另点名验证 BetterOffice 的几支代表字体（西文/CJK/衬线）确实在。
+      if (fontCount < 70) {
+        problems.push(
+          `app.asar 里字体文件只有 ${String(fontCount)} 个，少于 BetterOffice 的 65 ttf + 5 otf`
+        )
+      }
+      const requiredFonts = [
+        'Carlito-Regular-',
+        'SourceSans3-Regular-',
+        'NotoSansSC-Regular-',
+        'NotoSerifSC-Regular-'
+      ]
+      for (const font of requiredFonts) {
+        if (!asarEntries.some((path) => path.includes(font))) {
+          problems.push(`app.asar 里缺 BetterOffice 字体「${font}」（字体资产漏打？）`)
+        }
+      }
+    }
   }
   if (!statSync(layout.unpacked, { throwIfNoEntry: false })?.isDirectory()) {
     problems.push(`没有 ${layout.unpacked}（asarUnpack 没生效？）`)

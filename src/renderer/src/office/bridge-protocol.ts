@@ -132,6 +132,8 @@ export interface SurfaceInitMessage {
   nonce: string
   locale: string
   theme: SurfaceTheme
+  /** D17：测试探针缝（仅未打包 + KYCLAW_OFFICE_PROBE；复用的预热面靠这条拿到开关） */
+  probe?: boolean
 }
 
 /**
@@ -143,6 +145,8 @@ export interface DocOpenMessage {
   type: 'doc:open'
   nonce: string
   documentId: string
+  /** M4-X：编辑器格式；面据此挂 DocxEditor 或 XlsxEditor */
+  kind: 'docx' | 'xlsx'
   name: string
   sha256: string
   readOnly: boolean
@@ -190,6 +194,12 @@ export interface DocCloseMessage {
   documentId: string
 }
 
+/** 壳 → 面：请求面重新发一次 `surface:hello`（task-100 复用启动预热面：面已 boot，
+ * 但 hello 重试窗口（5s）早已结束，壳需要重新握手才能拿 nonce / init / doc:open）。 */
+export interface SurfaceHelloRequestMessage {
+  type: 'surface:hello-request'
+}
+
 export type ShellToSurfaceMessage =
   | SurfaceInitMessage
   | DocOpenMessage
@@ -197,6 +207,7 @@ export type ShellToSurfaceMessage =
   | DocSaveResultMessage
   | DocReloadMessage
   | DocCloseMessage
+  | SurfaceHelloRequestMessage
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -232,6 +243,15 @@ export function isSurfaceFatal(value: unknown): value is SurfaceFatalMessage {
   return value.type === 'surface:fatal' && typeof value.message === 'string'
 }
 
+/** 面侧守卫：壳请求重新 hello */
+export function isSurfaceHelloRequest(value: unknown): value is SurfaceHelloRequestMessage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { type?: unknown }).type === 'surface:hello-request'
+  )
+}
+
 export function isSurfaceInit(value: unknown): value is SurfaceInitMessage {
   if (!isRecord(value)) return false
   return (
@@ -239,7 +259,8 @@ export function isSurfaceInit(value: unknown): value is SurfaceInitMessage {
     isNonEmptyString(value.nonce) &&
     typeof value.locale === 'string' &&
     value.locale.length > 0 &&
-    (value.theme === 'light' || value.theme === 'dark')
+    (value.theme === 'light' || value.theme === 'dark') &&
+    (value.probe === undefined || typeof value.probe === 'boolean')
   )
 }
 
@@ -249,6 +270,7 @@ export function isDocOpen(value: unknown): value is DocOpenMessage {
     value.type === 'doc:open' &&
     isNonEmptyString(value.nonce) &&
     isNonEmptyString(value.documentId) &&
+    (value.kind === 'docx' || value.kind === 'xlsx') &&
     isNonEmptyString(value.name) &&
     typeof value.sha256 === 'string' &&
     value.sha256.length > 0 &&

@@ -42,6 +42,11 @@ import {
   type SurfaceShortcutAction,
   type SurfaceTheme
 } from '@renderer/office/bridge-protocol'
+import {
+  notePrewarmFallback,
+  releasePrewarmedSurface,
+  takePrewarmedSurface
+} from './office-font-prewarm'
 import { officeDebugEnabled } from './office-ui-store'
 import { currentSurfaceUrl } from './surface-url'
 
@@ -78,6 +83,8 @@ export interface OfficeSurfaceProps {
   readyTimeoutMs?: number
   /** 覆盖 surface URL（单测用；默认按 surface-url.ts 从 location 现算） */
   surfaceUrl?: string
+  /** D17：测试探针缝（仅未打包 + KYCLAW_OFFICE_PROBE=1；拼进面 URL 的 ?officeProbe=1） */
+  probe?: boolean
 }
 
 /** 壳持着这个句柄驱动面内编辑器（S3 保存/重载/关闭） */
@@ -108,11 +115,12 @@ const SAVE_REQUEST_TIMEOUT_MS = 60_000
  * 「surface ready / theme / 已收到…」调试条才会显示（默认隐藏，交付态干净）。
  * 非 dev / 开关关：URL 原样（单测与 preview 探针断言的 src 不变）。
  */
-function surfaceUrlWithDebugFlag(url: string): string {
-  if (!officeDebugEnabled()) return url
+function surfaceUrlWithDebugFlag(url: string, probe: boolean): string {
+  if (!officeDebugEnabled() && !probe) return url
   try {
     const parsed = new URL(url)
-    parsed.searchParams.set('officeDebug', '1')
+    if (officeDebugEnabled()) parsed.searchParams.set('officeDebug', '1')
+    if (probe) parsed.searchParams.set('officeProbe', '1')
     return parsed.toString()
   } catch {
     return url
@@ -133,15 +141,22 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       onDocError,
       onShortcut,
       readyTimeoutMs = 15_000,
-      surfaceUrl
+      surfaceUrl,
+      probe = false
     },
     ref
   ) {
     const iframeRef = useRef<HTMLIFrameElement | null>(null)
+    /** JSX 里自建 iframe 的 ref（React 卸载时只会清它，不会误清升格面的 iframeRef） */
+    const ownIframeRef = useRef<HTMLIFrameElement | null>(null)
+    /** task-101：升格复用的启动预热面（iframe 在 body 里绝对定位覆盖本组件内容区） */
+    const containerRef = useRef<HTMLDivElement | null>(null)
+    const adoptedHostRef = useRef<HTMLDivElement | null>(null)
+    const [adopted, setAdopted] = useState(false)
     const statusRef = useRef<OfficeSurfaceStatus>('loading')
     const [status, setStatus] = useState<OfficeSurfaceStatus>('loading')
     const [fatalMessage, setFatalMessage] = useState('')
-    const [url] = useState(() => surfaceUrlWithDebugFlag(surfaceUrl ?? currentSurfaceUrl()))
+    const [url] = useState(() => surfaceUrlWithDebugFlag(surfaceUrl ?? currentSurfaceUrl(), probe))
 
     /** 面生成的握手 nonce（hello 时记下；所有壳→面消息都带它） */
     const nonceRef = useRef<string | null>(null)
@@ -161,6 +176,8 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     // 回调/最新 props 放 ref：父组件传内联函数或切主题不会让下面那个握手 effect 反复重挂
     const localeRef = useRef(locale)
     const themeRef = useRef(theme)
+    /** D17：探针开关也要能随 init 下发给复用的预热面（该面 URL 里没有 officeProbe） */
+    const probeRef = useRef(probe)
     const onDocLoadedRef = useRef(onDocLoaded)
     const onDocChangedRef = useRef(onDocChanged)
     const onDocSaveRequestRef = useRef(onDocSaveRequest)
@@ -170,6 +187,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     useEffect(() => {
       localeRef.current = locale
       themeRef.current = theme
+      probeRef.current = probe
       onDocLoadedRef.current = onDocLoaded
       onDocChangedRef.current = onDocChanged
       onDocSaveRequestRef.current = onDocSaveRequest
@@ -179,6 +197,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
     }, [
       locale,
       theme,
+      probe,
       onDocLoaded,
       onDocChanged,
       onDocSaveRequest,
@@ -257,6 +276,22 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       // 清理时按"挂载那一刻"的 Map 兑现在途 generate（effect 期内不会换 Map 实例）
       const pendingSaves = pendingSavesRef.current
 
+      // task-101（用户反馈：启动预注册必须真的省掉首开注册）：
+      // 若启动预热面已 ready，直接「升格」复用同一文档——iframe 留在原 DOM 位置（reparent 会重载），
+      // 由独立 effect 把 host 绝对定位覆盖到本组件内容区；字体已在面内注册好（0 次重复注册）。
+      // 预热面已 boot 很久、hello 重试窗口（5s）早结束，这里主动请求它重新 hello 完成握手。
+      const prewarmed = takePrewarmedSurface()
+      if (prewarmed === null) notePrewarmFallback()
+      if (prewarmed !== null) {
+        iframeRef.current = prewarmed.frame
+        adoptedHostRef.current = prewarmed.host
+        prewarmed.frame.dataset.testid = 'office-surface-iframe'
+        prewarmed.frame.removeAttribute('aria-hidden')
+        prewarmed.frame.removeAttribute('tabindex')
+        prewarmed.frame.title = 'Office 隔离面'
+        setAdopted(true)
+      }
+
       /**
        * 就绪超时定时器（A5 真机验收 P1 bug）：收到 surface:ready 后必须清掉它，否则
        * 15s 后必然误报「隔离面启动失败」（文档其实早已 ready、可编辑）。
@@ -288,9 +323,19 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           type: 'surface:init',
           nonce,
           locale: localeRef.current,
-          theme: themeRef.current
+          theme: themeRef.current,
+          probe: probeRef.current
         }
         frameWindow.postMessage(init, '*')
+      }
+
+      // 升格面在隐藏期已由预热模块完成 hello→init（见 office-font-prewarm.ts），这里直接沿用
+      // nonce 进入 ready：事件监听仍挂上（doc:loaded/changed/save 等都还走同一套），
+      // 并再发一次 init 让 locale/theme 与当前 workspace 对齐（面侧 init 幂等）。
+      if (prewarmed !== null) {
+        nonceRef.current = prewarmed.nonce
+        update('ready')
+        postInit(prewarmed.nonce, true)
       }
 
       const onMessage = (event: MessageEvent): void => {
@@ -353,14 +398,18 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       window.addEventListener('message', onMessage)
       // 监听挂上之后再设 src（JSX 里不写 src）：避免面先加载完、hello 落在监听之前。
       // 面侧另有 250ms 重发兜底，两道保险都只为把竞态窗口压到 0。
-      if (iframeRef.current !== null) iframeRef.current.src = url
-      readyTimer = window.setTimeout(() => {
-        readyTimer = null
-        update(
-          'fatal',
-          'surface 初始化超时（若为 dev 形态，确认 Vite 已起来且 CSP 的 localhost:5173 与端口一致）'
-        )
-      }, readyTimeoutMs)
+      if (prewarmed === null) {
+        iframeRef.current = ownIframeRef.current
+        if (iframeRef.current !== null) iframeRef.current.src = url
+      }
+      if (prewarmed === null)
+        readyTimer = window.setTimeout(() => {
+          readyTimer = null
+          update(
+            'fatal',
+            'surface 初始化超时（若为 dev 形态，确认 Vite 已起来且 CSP 的 localhost:5173 与端口一致）'
+          )
+        }, readyTimeoutMs)
 
       return () => {
         disposed = true
@@ -369,6 +418,12 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         pendingSaves.clear()
         clearReadyTimer()
         window.removeEventListener('message', onMessage)
+        if (prewarmed !== null) {
+          // 归还预热面：隐藏保留（下个文档面可继续复用，字体注册仍为 0 次）
+          iframeRef.current = null
+          adoptedHostRef.current = null
+          releasePrewarmedSurface()
+        }
       }
     }, [url, readyTimeoutMs])
 
@@ -378,12 +433,18 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       const nonce = nonceRef.current
       const frameWindow = iframeRef.current?.contentWindow
       if (nonce === null || frameWindow === null || frameWindow === undefined) return
-      const key = `${nonce}:${locale}:${theme}`
+      const key = `${nonce}:${locale}:${theme}:${String(probe)}`
       if (sentInitRef.current === key) return
       sentInitRef.current = key
-      const init: ShellToSurfaceMessage = { type: 'surface:init', nonce, locale, theme }
+      const init: ShellToSurfaceMessage = {
+        type: 'surface:init',
+        nonce,
+        locale,
+        theme,
+        probe
+      }
       frameWindow.postMessage(init, '*')
-    }, [locale, theme, status])
+    }, [locale, theme, probe, status])
 
     // 文档投递：ready 之后、同一文档只发一次；切标签/重读不同版本（sha/长度变化）会重发
     useEffect(() => {
@@ -398,6 +459,7 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
         type: 'doc:open',
         nonce,
         documentId: documentInfo.documentId,
+        kind: documentInfo.kind,
         name: documentInfo.displayName,
         sha256: documentInfo.sha256,
         readOnly: documentInfo.readOnly,
@@ -406,8 +468,44 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
       frameWindow.postMessage(message, '*')
     }, [documentInfo, documentBytes, status])
 
+    // task-101：升格面常驻 body，用绝对定位覆盖本组件内容区；切标签/隐藏时同步 display:none。
+    useEffect(() => {
+      if (!adopted) return
+      const host = adoptedHostRef.current
+      const container = containerRef.current
+      if (host === null || container === null) return
+      let raf = 0
+      const sync = (): void => {
+        const rect = container.getBoundingClientRect()
+        const visible = rect.width > 1 && rect.height > 1
+        if (!visible) {
+          host.style.display = 'none'
+        } else {
+          host.style.display = 'block'
+          host.style.position = 'fixed'
+          host.style.left = `${Math.round(rect.left)}px`
+          host.style.top = `${Math.round(rect.top)}px`
+          host.style.width = `${Math.round(rect.width)}px`
+          host.style.height = `${Math.round(rect.height)}px`
+          host.style.opacity = '1'
+          host.style.pointerEvents = 'auto'
+        }
+        raf = window.requestAnimationFrame(sync)
+      }
+      const observer = new ResizeObserver(sync)
+      observer.observe(container)
+      window.addEventListener('resize', sync)
+      sync()
+      return () => {
+        window.cancelAnimationFrame(raf)
+        observer.disconnect()
+        window.removeEventListener('resize', sync)
+      }
+    }, [adopted])
+
     return (
       <div
+        ref={containerRef}
         data-testid="office-surface"
         data-state={status}
         data-theme={theme}
@@ -418,14 +516,22 @@ export const OfficeSurface = forwardRef<OfficeSurfaceHandle, OfficeSurfaceProps>
           src 不写在 JSX 里：由上面的 effect 在 message 监听挂好之后赋值（避免竞态）。
           React 不会替我们清掉命令式设置的 src —— 后续重渲染时该属性不在 props diff 里。
         */}
-        <iframe
-          ref={iframeRef}
-          data-testid="office-surface-iframe"
-          data-status={status}
-          title="Office 隔离面"
-          className="block h-full min-h-0 w-full flex-1 border-0"
-          sandbox="allow-scripts allow-same-origin"
-        />
+        {adopted ? (
+          // 升格复用：iframe 在 body 里由定位 effect 覆盖这块占位，这里只保留几何
+          <div
+            data-testid="office-surface-adopted"
+            className="block h-full min-h-0 w-full flex-1"
+          />
+        ) : (
+          <iframe
+            ref={ownIframeRef}
+            data-testid="office-surface-iframe"
+            data-status={status}
+            title="Office 隔离面"
+            className="block h-full min-h-0 w-full flex-1 border-0"
+            sandbox="allow-scripts allow-same-origin"
+          />
+        )}
         {status === 'fatal' ? (
           <div
             data-testid="office-surface-fatal"

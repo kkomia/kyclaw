@@ -65,11 +65,15 @@ function samePathIgnoringCase(left: string, right: string): boolean {
   return resolve(left).toLowerCase() === resolve(right).toLowerCase()
 }
 
-/** 原生选择器的选项（`.docx` 过滤；取消是一等结果） */
+/** 原生选择器的选项（M4-X：Word + Excel；取消是一等结果） */
 const OPEN_DIALOG_OPTIONS: OpenDialogOptions = {
-  title: '打开 Word 文档',
+  title: '打开 Office 文档',
   properties: ['openFile'],
-  filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+  filters: [
+    { name: 'Office 文档', extensions: ['docx', 'xlsx'] },
+    { name: 'Word 文档', extensions: ['docx'] },
+    { name: 'Excel 表格', extensions: ['xlsx'] }
+  ]
 }
 
 /** 一次原生对话框的结果（只留用得到的两个字段，便于测试注入） */
@@ -78,12 +82,20 @@ export interface OfficeOpenDialogResult {
   filePaths: readonly string[]
 }
 
-/** 另存为对话框选项（每次按当前文件名现拼默认路径） */
-function saveDialogOptions(defaultPath: string | undefined): SaveDialogOptions {
+/** 另存为对话框选项（每次按当前文档 kind + 文件名现拼默认路径） */
+function saveDialogOptions(
+  kind: 'docx' | 'xlsx',
+  defaultPath: string | undefined
+): SaveDialogOptions {
+  const isExcel = kind === 'xlsx'
   return {
-    title: '另存为 Word 文档',
+    title: isExcel ? '另存为 Excel 表格' : '另存为 Word 文档',
     ...(defaultPath === undefined ? {} : { defaultPath }),
-    filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+    filters: [
+      isExcel
+        ? { name: 'Excel 表格', extensions: ['xlsx'] }
+        : { name: 'Word 文档', extensions: ['docx'] }
+    ]
   }
 }
 
@@ -239,7 +251,9 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
       surfaceUrl,
       surfaceOrigin,
       maxBytes: OFFICE_EDITOR_MAX_BYTES,
-      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS
+      maxOpenDocuments: OFFICE_MAX_OPEN_DOCUMENTS,
+      // D17：canvas 探针缝只在未打包 + env 打开时存在；生产恒 false
+      probe: !isPackaged && env.KYCLAW_OFFICE_PROBE === '1'
     }
     return config
   })
@@ -392,7 +406,7 @@ export function registerOfficeIpc(userDataDir: string, deps: OfficeIpcDeps = {})
       target = scripted
     } else {
       const parent = BrowserWindow.fromWebContents(event.sender)
-      const result = await showSaveDialog(parent, saveDialogOptions(info.absolutePath))
+      const result = await showSaveDialog(parent, saveDialogOptions(info.kind, info.absolutePath))
       if (result.canceled || result.filePath === undefined || result.filePath === '') {
         return officeFailure('cancelled')
       }

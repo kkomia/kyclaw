@@ -65,6 +65,7 @@ describe('open：realpath 去重与回包形状', () => {
     if (!first.ok) return
     expect(first.alreadyOpen).toBe(false)
     expect(first.document.documentId.length).toBeGreaterThan(0)
+    expect(first.document.kind).toBe('docx')
     expect(first.document.displayName).toBe('方案.docx')
     expect(first.document.displayPath).toBe(path)
     expect(first.document.size).toBe(10)
@@ -125,6 +126,40 @@ describe('open：realpath 去重与回包形状', () => {
     if (!result.ok) return
     expect(result.document.readOnly).toBe(true)
     expect(result.document.displayPath).toBe('子目录/只读.docx')
+  })
+})
+
+describe('M4-X：kind 矩阵（docx / xlsx；pptx 在 M4-P 前仍拒绝）', () => {
+  it('打开 .xlsx → kind=xlsx；read 回包同 kind；同 realpath 去重不重读', async () => {
+    const path = writeDocx('预算.xlsx', 'fake-xlsx-bytes')
+    const docs = createOfficeDocuments()
+    const first = await docs.open(path, { owner: 1, openedFrom: 'picker' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.document.kind).toBe('xlsx')
+    expect(first.document.displayName).toBe('预算.xlsx')
+
+    const read = await docs.read(first.document.documentId, 1)
+    expect(read.ok).toBe(true)
+    if (!read.ok) return
+    expect(read.document.kind).toBe('xlsx')
+    expect(read.bytes.length).toBe('fake-xlsx-bytes'.length)
+
+    const second = await docs.open(path, { owner: 1, openedFrom: 'picker' })
+    expect(second).toMatchObject({
+      ok: true,
+      alreadyOpen: true,
+      document: { kind: 'xlsx', documentId: first.document.documentId }
+    })
+  })
+
+  it('pptx 仍 unsupported-format（不接幽灵格式）', async () => {
+    const path = writeDocx('幻灯片.pptx', 'fake-pptx')
+    const realpath = vi.fn(defaultOfficeDocumentIo.realpath)
+    const docs = createOfficeDocuments(ioWith({ realpath }))
+    const result = await docs.open(path, { owner: 1, openedFrom: 'picker' })
+    expect(result).toMatchObject({ ok: false, code: 'unsupported-format' })
+    expect(realpath).not.toHaveBeenCalled()
   })
 })
 

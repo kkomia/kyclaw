@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createSurfaceNonce,
+  isSurfaceHelloRequest,
   isDocClose,
   isDocOpen,
   isDocReload,
@@ -39,6 +40,7 @@ import {
   type SurfaceTheme
 } from './bridge-protocol'
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
+import { XlsxEditorPane, type XlsxEditorPaneHandle } from './XlsxEditorPane'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
 import { ensureSurfaceFonts, type SurfaceFontStats } from './fonts'
 import type { SurfaceFontsReadyMessage } from './font-prewarm-protocol'
@@ -71,11 +73,16 @@ function applySurfaceTheme(theme: SurfaceTheme): void {
 /** 面当前打开的文档（S3：字节留在内存里给编辑器；壳不持久化内容） */
 interface SurfaceDocument {
   documentId: string
+  /** M4-X：docx / xlsx（面据此挂对应编辑器；xlsx 不需要字体注册） */
+  kind: 'docx' | 'xlsx'
   name: string
   sha256: string
   readOnly: boolean
   bytes: Uint8Array
 }
+
+/** 两种编辑器 pane 的命令式句柄形状一致（save/reload）；SurfaceBoot 只按这个用 */
+type SurfaceEditorPaneHandle = DocxEditorPaneHandle | XlsxEditorPaneHandle
 
 export type SurfaceBootState = 'booting' | 'ready'
 type FontsState = 'idle' | 'loading' | 'ready' | 'error'
@@ -107,11 +114,15 @@ export function SurfaceBoot(): React.JSX.Element {
    * `surface:fonts-ready { prewarm:true }`（壳据此释放 iframe，HTTP cache 留给首个真实文档面）。
    */
   const [prewarm] = useState(() => new URLSearchParams(window.location.search).has('officePrewarm'))
+  /** D17：测试探针缝（只有未打包 dev 的 shell 会拼 ?officeProbe=1） */
+  const [probe, setProbe] = useState(() =>
+    new URLSearchParams(window.location.search).has('officeProbe')
+  )
 
   const nonceRef = useRef<string | null>(null)
   const docRef = useRef<SurfaceDocument | null>(null)
   const revisionRef = useRef(0)
-  const editorPaneRef = useRef<DocxEditorPaneHandle | null>(null)
+  const editorPaneRef = useRef<SurfaceEditorPaneHandle | null>(null)
   /** 字体注册只启动一次（面内单实例；注册本身在 fonts.ts 里还做了一层幂等） */
   const fontsStartedRef = useRef(false)
   /**
@@ -327,14 +338,25 @@ export function SurfaceBoot(): React.JSX.Element {
       if (event.source !== window.parent) return
       const data: unknown = event.data
 
+      // task-100：复用启动预热面时，壳在监听挂好后请求面重新 hello（重开 5s 重试窗口）
+      if (isSurfaceHelloRequest(data)) {
+        if (!initialized) startHelloRetry()
+        announce()
+        return
+      }
+
       if (isSurfaceInit(data) && data.nonce === nonce) {
         applySurfaceTheme(data.theme)
         document.documentElement.lang = data.locale
         setTheme(data.theme)
+        // D17：复用的预热面 URL 不带 officeProbe，开关从 init 下发（每次 init 覆盖）
+        setProbe(data.probe === true)
         if (!initialized) {
           initialized = true
-          window.clearInterval(retryTimer)
-          window.clearTimeout(stopTimer)
+          if (retryTimer !== null) window.clearInterval(retryTimer)
+          if (stopTimer !== null) window.clearTimeout(stopTimer)
+          retryTimer = null
+          stopTimer = null
           setBootState('ready')
         }
         // 父页可能因重发 hello / 主题切换而重复回 init：每次都给 ready（幂等）
@@ -348,6 +370,7 @@ export function SurfaceBoot(): React.JSX.Element {
       if (isDocOpen(data) && data.nonce === nonce) {
         const next: SurfaceDocument = {
           documentId: data.documentId,
+          kind: data.kind,
           name: data.name,
           sha256: data.sha256,
           readOnly: data.readOnly,
@@ -411,19 +434,29 @@ export function SurfaceBoot(): React.JSX.Element {
       }
     }
 
-    const retryTimer = window.setInterval(() => {
-      if (!initialized) announce()
-    }, HELLO_RETRY_MS)
-    const stopTimer = window.setTimeout(
-      () => window.clearInterval(retryTimer),
-      HELLO_RETRY_WINDOW_MS
-    )
+    let retryTimer: number | null = null
+    let stopTimer: number | null = null
+    /** 开/重开 hello 重试窗口（复用预热面时壳会发 surface:hello-request 触发） */
+    const startHelloRetry = (): void => {
+      if (initialized) return
+      if (retryTimer === null) {
+        retryTimer = window.setInterval(() => {
+          if (!initialized) announce()
+        }, HELLO_RETRY_MS)
+      }
+      if (stopTimer !== null) window.clearTimeout(stopTimer)
+      stopTimer = window.setTimeout(() => {
+        if (retryTimer !== null) window.clearInterval(retryTimer)
+        retryTimer = null
+      }, HELLO_RETRY_WINDOW_MS)
+    }
+    startHelloRetry()
     window.addEventListener('message', onMessage)
     announce()
 
     return () => {
-      window.clearInterval(retryTimer)
-      window.clearTimeout(stopTimer)
+      if (retryTimer !== null) window.clearInterval(retryTimer)
+      if (stopTimer !== null) window.clearTimeout(stopTimer)
       window.removeEventListener('message', onMessage)
     }
   }, [post, postError, handleSaveResult, clearPendingSave])
@@ -502,7 +535,9 @@ export function SurfaceBoot(): React.JSX.Element {
   }, [postError, prewarm])
 
   const ready = bootState === 'ready'
-  const showEditor = doc !== null && fontsState === 'ready'
+  /** M4-X：xlsx 不需要本地字体注册（canvas 用浏览器字体）；docx 仍等字体 ready */
+  const needsFonts = doc?.kind !== 'xlsx'
+  const showEditor = doc !== null && (!needsFonts || fontsState === 'ready')
 
   return (
     <main
@@ -578,25 +613,42 @@ export function SurfaceBoot(): React.JSX.Element {
           <div className="office-surface-loading" data-testid="surface-editor-empty">
             等待文档…
           </div>
-        ) : fontsState === 'error' ? (
+        ) : doc.kind !== 'xlsx' && fontsState === 'error' ? (
           <div className="office-surface-loading" data-testid="surface-fonts-error">
             本地字体注册失败：{fontsError}
           </div>
         ) : showEditor ? (
-          <DocxEditorPane
-            key={doc.documentId}
-            ref={editorPaneRef}
-            documentId={doc.documentId}
-            name={doc.name}
-            bytes={doc.bytes}
-            readOnly={doc.readOnly}
-            theme={theme}
-            onChanged={handleChanged}
-            onSaveRequest={requestSave}
-            onLoaded={handleLoaded}
-            onError={handleEditorError}
-            saveState={saveState}
-          />
+          doc.kind === 'xlsx' ? (
+            <XlsxEditorPane
+              key={doc.documentId}
+              ref={editorPaneRef}
+              documentId={doc.documentId}
+              name={doc.name}
+              bytes={doc.bytes}
+              readOnly={doc.readOnly}
+              theme={theme}
+              probe={probe}
+              onChanged={handleChanged}
+              onSaveRequest={requestSave}
+              onLoaded={() => handleLoaded(0)}
+              onError={handleEditorError}
+            />
+          ) : (
+            <DocxEditorPane
+              key={doc.documentId}
+              ref={editorPaneRef}
+              documentId={doc.documentId}
+              name={doc.name}
+              bytes={doc.bytes}
+              readOnly={doc.readOnly}
+              theme={theme}
+              onChanged={handleChanged}
+              onSaveRequest={requestSave}
+              onLoaded={handleLoaded}
+              onError={handleEditorError}
+              saveState={saveState}
+            />
+          )
         ) : (
           <div className="office-surface-loading" data-testid="surface-fonts-loading">
             正在注册本地字体…
