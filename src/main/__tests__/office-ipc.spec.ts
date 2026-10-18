@@ -164,7 +164,7 @@ function register(options: {
 }
 
 describe('注册面：通道清单', () => {
-  it('注册七条打开/读/写/释放通道（S3 起含 save / save-as）', () => {
+  it('注册十条通道（S3 起含 save/save-as；M4-T 起含 session-sync/session-restore）', () => {
     register({})
     expect([...mocks.handlers.keys()].sort()).toEqual(
       [
@@ -175,7 +175,9 @@ describe('注册面：通道清单', () => {
         IPC_CHANNELS.office.read,
         IPC_CHANNELS.office.release,
         IPC_CHANNELS.office.save,
-        IPC_CHANNELS.office.saveAs
+        IPC_CHANNELS.office.saveAs,
+        IPC_CHANNELS.office.sessionSync,
+        IPC_CHANNELS.office.sessionRestore
       ].sort()
     )
     // 通道名口径（shared/ipc.ts 直接挂 office-editor 的常量）
@@ -187,6 +189,8 @@ describe('注册面：通道清单', () => {
     expect(IPC_CHANNELS.office.release).toBe('office:release')
     expect(IPC_CHANNELS.office.save).toBe('office:save')
     expect(IPC_CHANNELS.office.saveAs).toBe('office:save-as')
+    expect(IPC_CHANNELS.office.sessionSync).toBe('office:session-sync')
+    expect(IPC_CHANNELS.office.sessionRestore).toBe('office:session-restore')
   })
 })
 
