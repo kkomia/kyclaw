@@ -27,6 +27,24 @@
   opacity: 0;
 }
 
+/* 编辑器先挂载预热、就绪前不可见（防止真实 ribbon 从骨架里透出），就绪后 250ms settle 淡入 */
+.office-editor-settle {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  opacity: 0;
+  transition: opacity var(--motion-open) var(--motion-ease-settle);
+}
+
+.office-editor-settle[data-ready='true'] {
+  opacity: 1;
+}
+
+[data-motion='reduced'] .office-editor-settle {
+  transition-duration: var(--motion-reduced) !important;
+}
+
 /* ── 骨架 ribbon：28 tabs + 54 band + 1 hairline = 83（--office-ribbon-total-height） ── */
 .osl-ribbon {
   flex: none;

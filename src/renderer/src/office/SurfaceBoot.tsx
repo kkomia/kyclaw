@@ -594,7 +594,11 @@ export function SurfaceBoot(): React.JSX.Element {
       : true
   const showEditor = doc !== null && fontsReady
 
-  // PB-019：加载态骨架（方案 A）。升格命中的预热面不渲染骨架（E2）；错误态撤骨架走原错误条。
+  // PB-019：加载态骨架（方案 A）。规则（Lead/Finn 复审版）：
+  //  - 未就绪 **≥150ms** 才显示骨架（真正的瞬时路径 <150ms 不闪）；
+  //  - 升格/预热面同样遵守（pptx 在预热面里等 6 面字体时也必须看到加载态）；
+  //  - 已显示则**最短展示 150ms**（再走 150ms 淡出），阶段 4「即将显示」；
+  //  - 错误态立刻撤骨架，走原错误条/重试。
   const loadingError =
     (doc?.kind === 'docx' && fontsState === 'error') ||
     (doc?.kind === 'pptx' && pptxFontsState === 'error')
@@ -605,18 +609,37 @@ export function SurfaceBoot(): React.JSX.Element {
     pptxFontsState,
     editorState
   })
-  const [loadingGone, setLoadingGone] = useState(false)
+  const mountedAtRef = useRef(performance.now())
+  const shownAtRef = useRef<number | null>(null)
+  const [skeletonShown, setSkeletonShown] = useState(false)
+  const [skeletonDone, setSkeletonDone] = useState(false)
   useEffect(() => {
-    if (prewarm || loadingError) {
-      setLoadingGone(true)
+    if (loadingError) {
+      setSkeletonDone(true)
       return
     }
-    if (editorState !== 'ready') return
-    // 骨架离场 150ms（--motion-reveal），期间阶段 4「即将显示」
-    const timer = window.setTimeout(() => setLoadingGone(true), 150)
+    if (skeletonShown || skeletonDone || editorState === 'ready') return
+    const remaining = Math.max(0, 150 - (performance.now() - mountedAtRef.current))
+    const timer = window.setTimeout(() => {
+      shownAtRef.current = performance.now()
+      setSkeletonShown(true)
+    }, remaining)
     return () => window.clearTimeout(timer)
-  }, [editorState, loadingError, prewarm])
-  const loadingVisible = !prewarm && !loadingGone && !loadingError
+  }, [editorState, loadingError, skeletonShown, skeletonDone])
+  useEffect(() => {
+    if (editorState !== 'ready') return
+    if (!skeletonShown) {
+      // 瞬时路径：骨架从未出现，直接结束（不渲染）
+      setSkeletonDone(true)
+      return
+    }
+    const shownFor = performance.now() - (shownAtRef.current ?? performance.now())
+    const wait = Math.max(0, 150 - shownFor)
+    const timer = window.setTimeout(() => setSkeletonDone(true), wait + 150)
+    return () => window.clearTimeout(timer)
+  }, [editorState, skeletonShown])
+  const loadingVisible = skeletonShown && !skeletonDone && !loadingError
+
 
   return (
     <main
@@ -721,7 +744,13 @@ export function SurfaceBoot(): React.JSX.Element {
           </div>
         ) : null}
         {showEditor ? (
-          doc.kind === 'xlsx' ? (
+          // PB-019：编辑器先挂载预热，但在 doc:loaded 前保持不可见（避免真实 ribbon 从骨架里透出）；
+          // 就绪后 250ms settle 淡入（--motion-open），与骨架 150ms 淡出并行。
+          <div
+            className="office-editor-settle"
+            data-ready={editorState === 'ready' ? 'true' : 'false'}
+          >
+            {doc.kind === 'xlsx' ? (
             <XlsxEditorPane
               key={doc.documentId}
               ref={editorPaneRef}
@@ -768,9 +797,10 @@ export function SurfaceBoot(): React.JSX.Element {
               onError={handleEditorError}
               saveState={saveState}
             />
-          )
+            )}
+          </div>
         ) : null}
-        {/* PB-019：骨架/阶段读数（覆盖在编辑器首帧之上，就绪后 150ms 淡出；预热面不渲染） */}
+        {/* PB-019：骨架/阶段读数（覆盖在编辑器首帧之上，就绪后 150ms 淡出）；<150ms 的瞬时路径不显示 */}
         {loadingVisible ? (
           <SurfaceLoading
             kind={doc?.kind ?? 'docx'}

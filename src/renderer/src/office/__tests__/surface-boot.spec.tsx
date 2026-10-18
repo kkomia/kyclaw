@@ -330,8 +330,8 @@ describe('SurfaceBoot：doc:open → 字体 → 编辑器', () => {
       dispatchFromParent({ ...DOC_XLSX, nonce })
     })
     await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
-    // PB-019：xlsx 没有字体阶段，但编辑器首帧前仍显示骨架（覆盖层），就绪后 150ms 淡出
-    expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument()
+    // PB-019：xlsx 通常 <150ms 就绪 → 瞬时路径不渲染骨架（防闪）
+    expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
     expect(screen.queryByTestId('surface-docx-editor')).not.toBeInTheDocument()
     expect(screen.getByTestId('surface-doc-open')).toHaveAttribute('data-bytes', '4')
 
@@ -804,7 +804,9 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     ).toHaveLength(0)
   })
 
-  it('PB-019：升格命中的预热面（?officePrewarm=1）不渲染骨架（E2，防闪）', async () => {
+  it('PB-019：未就绪 ≥150ms 才显示骨架（docx 字体慢路径，升格面同样显示）', async () => {
+    // 让字体链一直 pending：未就绪会超过 150ms
+    fontsMock.ensureSurfaceFonts.mockImplementationOnce(() => new Promise(() => {}))
     window.history.replaceState({}, '', '/?officePrewarm=1')
     try {
       const postMessage = vi.spyOn(window, 'postMessage')
@@ -814,12 +816,64 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
       act(() => {
         dispatchFromParent({ ...DOC, nonce })
       })
-      // 预热面：即使还在等字体，也不出加载骨架（用户看到的应是已注册好的面直接进编辑器）
-      expect(screen.queryByTestId('surface-editor-empty')).not.toBeInTheDocument()
+      // <150ms：还没到显示阈值（瞬时路径不闪）
       expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
-      await waitFor(() => expect(screen.getByTestId('surface-docx-editor')).toBeInTheDocument())
+      // ≥150ms：骨架出现（预热/升格面也一样，pptx 在升格面里等 6 面时必须有加载态）
+      await waitFor(
+        () => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(),
+        { timeout: 2000 }
+      )
+      expect(screen.getByTestId('surface-fonts-loading')).toHaveAttribute(
+        'data-surface-loading-stage',
+        '3'
+      )
+      expect(screen.getByText('正在准备中文字体')).toBeInTheDocument()
+      expect(screen.getByText(/46 个字面/)).toBeInTheDocument()
     } finally {
       window.history.replaceState({}, '', '/')
     }
+  })
+
+  it('PB-019：<150ms 就绪 → 不渲染骨架（瞬时路径防闪）', async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    await waitFor(() => expect(postMessage).toHaveBeenCalled())
+    const nonce = await handshake(postMessage)
+    act(() => {
+      dispatchFromParent({ ...DOC_XLSX, nonce })
+    })
+    act(() => xlsxMock.lastProps?.onLoaded())
+    // 过了 150ms 阈值也不应出现骨架（就绪早于阈值）
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
+    expect(screen.getByTestId('surface-editor-state')).toHaveAttribute('data-state', 'ready')
+  })
+
+  it("PB-019：init.motion='reduced' 写 [data-motion]，缺省为 full", async () => {
+    const postMessage = vi.spyOn(window, 'postMessage')
+    render(<SurfaceBoot />)
+    await waitFor(() => expect(postMessage).toHaveBeenCalled())
+    const nonce = await handshake(postMessage)
+    expect(document.documentElement.dataset.motion).toBe('full')
+    act(() => {
+      dispatchFromParent({
+        type: 'surface:init',
+        nonce,
+        locale: 'zh-CN',
+        theme: 'light',
+        motion: 'reduced'
+      })
+    })
+    expect(document.documentElement.dataset.motion).toBe('reduced')
+    // 主题切换重发 init（不带 motion）→ 回落 full（旧壳兼容语义）
+    act(() => {
+      dispatchFromParent({
+        type: 'surface:init',
+        nonce,
+        locale: 'zh-CN',
+        theme: 'dark'
+      })
+    })
+    expect(document.documentElement.dataset.motion).toBe('full')
   })
 })

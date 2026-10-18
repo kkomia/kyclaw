@@ -47,6 +47,51 @@ describe('bridge-protocol：hello / init / ready / fatal 判别', () => {
     )
   })
 
+  it('PB-019：motion 字段向后兼容（缺省接受）且非法值被拒', () => {
+    // ① 旧壳不带 motion：仍被接受（升级面/旧版本兼容）
+    expect(
+      isSurfaceInit({ type: 'surface:init', nonce: 'n1', locale: 'zh-CN', theme: 'light' })
+    ).toBe(true)
+    // 合法值
+    expect(
+      isSurfaceInit({
+        type: 'surface:init',
+        nonce: 'n1',
+        locale: 'zh-CN',
+        theme: 'light',
+        motion: 'full'
+      })
+    ).toBe(true)
+    expect(
+      isSurfaceInit({
+        type: 'surface:init',
+        nonce: 'n1',
+        locale: 'zh-CN',
+        theme: 'dark',
+        motion: 'reduced'
+      })
+    ).toBe(true)
+    // ② 非法 motion 值被拒
+    expect(
+      isSurfaceInit({
+        type: 'surface:init',
+        nonce: 'n1',
+        locale: 'zh-CN',
+        theme: 'light',
+        motion: 'fast'
+      })
+    ).toBe(false)
+    expect(
+      isSurfaceInit({
+        type: 'surface:init',
+        nonce: 'n1',
+        locale: 'zh-CN',
+        theme: 'light',
+        motion: true
+      })
+    ).toBe(false)
+  })
+
   it('ready / fatal：判别字段正确；类型错的不认', () => {
     expect(isSurfaceReady({ type: 'surface:ready', nonce: 'n1' })).toBe(true)
     expect(isSurfaceReady({ type: 'surface:ready' })).toBe(false)
