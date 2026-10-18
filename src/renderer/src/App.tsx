@@ -1,15 +1,9 @@
-import { useLayoutEffect } from 'react'
+import { lazy, useLayoutEffect } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { AppShell } from './components/shell/AppShell'
 import { ModuleHost } from './components/shell/ModuleHost'
 import { advanceStartupSplash, dismissStartupSplash } from './lib/startup-splash'
 import { startupMark } from './lib/startup-timing'
-import { KnowledgePage } from './features/knowledge/KnowledgePage'
-import { MemoryPage } from './features/memory/MemoryPage'
-import { NotesPage } from './features/notes/NotesPage'
-import { PluginsPage } from './features/plugins/PluginsPage'
-import { SettingsPage } from './features/settings/SettingsPage'
-import { UsagePage } from './features/usage/UsagePage'
 
 /**
  * 路由表：壳是布局路由（element 不带 path），主列的 <Outlet/> 渲染子路由内容。
@@ -26,7 +20,30 @@ import { UsagePage } from './features/usage/UsagePage'
  * 一进设置宿主（连同常驻 ChatPage）就被卸载，输入草稿/滚动/页签全丢。现在它们也进 ModuleHost：
  * 切过去时 ChatPage 只 hidden+inert，页面由宿主的 <Outlet/> 渲染。这四条不是一级模块
  * （primaryModuleOf 返回 null ⇒ chatActive=false），所以宿主不会把聊天当"当前页"显示。
+ *
+ * P1 包体（2026-10-18）：**首屏关键路径只保留 ChatPage 与壳**；六个二级页面改 React.lazy，
+ * 首次导航到各自路由时才拉对应 chunk。占位统一用 ModuleHost 里的 <Suspense fallback={RouteFallback}/>，
+ * 壳/侧栏不闪白。Office 由 ModuleHost 懒挂（首次进 /office 才拉 office 页 chunk，之后同口径保活）。
  */
+const NotesPage = lazy(async () => ({
+  default: (await import('./features/notes/NotesPage')).NotesPage
+}))
+const KnowledgePage = lazy(async () => ({
+  default: (await import('./features/knowledge/KnowledgePage')).KnowledgePage
+}))
+const SettingsPage = lazy(async () => ({
+  default: (await import('./features/settings/SettingsPage')).SettingsPage
+}))
+const PluginsPage = lazy(async () => ({
+  default: (await import('./features/plugins/PluginsPage')).PluginsPage
+}))
+const MemoryPage = lazy(async () => ({
+  default: (await import('./features/memory/MemoryPage')).MemoryPage
+}))
+const UsagePage = lazy(async () => ({
+  default: (await import('./features/usage/UsagePage')).UsagePage
+}))
+
 export function AppRoutes(): React.JSX.Element {
   return (
     <Routes>

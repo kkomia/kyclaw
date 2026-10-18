@@ -118,7 +118,7 @@ describe('ModuleHost 模块宿主', () => {
 
     fireEvent.click(screen.getByTestId('primary-nav-notes'))
 
-    expect(screen.getByTestId('notes-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('notes-page')).toBeInTheDocument()
     // 笔记模块不挂会话二级栏：内容卡可见左缘回到 0
     expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument()
     // v2（用户 2026-10-17）：顶栏侧栏开合钮恒显 —— 没有二级栏的模块里也保留这个位置，不隐藏
@@ -145,7 +145,7 @@ describe('ModuleHost 模块宿主', () => {
   it('直接进 /notes：sessions-store 已初始化并落位 activeId', async () => {
     renderAt('/notes')
 
-    expect(screen.getByTestId('notes-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('notes-page')).toBeInTheDocument()
     expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument()
     // 没进过主对话不预挂聊天（只把会话列表初始化好）
     expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
@@ -155,24 +155,24 @@ describe('ModuleHost 模块宿主', () => {
     })
   })
 
-  it('笔记 / 知识库 / Office 都有标题、空态与稳定 testid；离开 Office 后它仍挂载（hidden+inert）', () => {
+  it('笔记 / 知识库 / Office 都有标题、空态与稳定 testid；离开 Office 后它仍挂载（hidden+inert）', async () => {
     renderAt('/knowledge')
-    expect(screen.getByTestId('knowledge-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('knowledge-page')).toBeInTheDocument()
     expect(screen.getByTestId('knowledge-page-title')).toHaveTextContent('知识库')
     expect(screen.getByTestId('knowledge-empty')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('primary-nav-office'))
-    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('office-page')).toBeInTheDocument()
     expect(screen.getByTestId('office-page-title')).toHaveTextContent('Office')
     expect(screen.getByTestId('office-empty')).toBeInTheDocument()
     expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'true')
 
     fireEvent.click(screen.getByTestId('primary-nav-notes'))
-    expect(screen.getByTestId('notes-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('notes-page')).toBeInTheDocument()
     expect(screen.getByTestId('notes-page-title')).toHaveTextContent('笔记')
     expect(screen.getByTestId('notes-empty')).toBeInTheDocument()
     // M3-S4：Office 常驻，切走只 hidden+inert —— 不是 not.toBeInTheDocument()
-    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('office-page')).toBeInTheDocument()
     expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'false')
     expect(screen.getByTestId('module-office')).toHaveClass('hidden')
     expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
@@ -181,7 +181,7 @@ describe('ModuleHost 模块宿主', () => {
   it('直接深链 /office：只挂 OfficePage，不预挂 ChatPage；首次进 /chat 才挂聊天且 Office 保活', async () => {
     renderAt('/office')
 
-    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('office-page')).toBeInTheDocument()
     expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
     expect(screen.getByTestId('module-office')).toHaveAttribute('data-active', 'true')
     expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
@@ -190,13 +190,13 @@ describe('ModuleHost 模块宿主', () => {
     await waitForChatReady()
 
     expect(screen.getByTestId('chat-page')).toBeInTheDocument()
-    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('office-page')).toBeInTheDocument()
     expect(screen.getByTestId('module-office')).toHaveClass('hidden')
     expect(screen.getByTestId('module-office')).toHaveAttribute('inert')
 
     fireEvent.click(screen.getByTestId('primary-nav-office'))
     expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
-    expect(screen.getByTestId('office-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('office-page')).toBeInTheDocument()
   })
 
   it('Office 保活：切模块后 iframe/workspace 是同一节点，可见性随路由切换', async () => {
@@ -206,7 +206,7 @@ describe('ModuleHost 模块宿主', () => {
       .openDocument(officeDocumentFixture({ documentId: 'doc-keep', displayName: '保活.docx' }))
     renderAt('/office')
 
-    const officePage = screen.getByTestId('office-page')
+    const officePage = await screen.findByTestId('office-page')
     const workspace = screen.getByTestId('office-workspace')
     const iframe = screen.getByTestId('office-surface-iframe')
     expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
@@ -223,7 +223,7 @@ describe('ModuleHost 模块宿主', () => {
     expect(screen.getByTestId('office-surface-iframe')).toBe(iframe)
 
     fireEvent.click(screen.getByTestId('primary-nav-office'))
-    expect(screen.getByTestId('office-page')).toBe(officePage)
+    expect(await screen.findByTestId('office-page')).toBe(officePage)
     expect(screen.getByTestId('office-surface-iframe')).toBe(iframe)
     expect(screen.getByTestId('module-office')).not.toHaveClass('hidden')
     expect(screen.getByTestId('module-office')).not.toHaveAttribute('inert')
@@ -280,7 +280,7 @@ describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => 
     fireEvent.click(screen.getByTestId('primary-nav-settings'))
 
     // 设置页出来了，但主对话只是 hidden+inert：同一节点、没有第二个聊天
-    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('settings-page')).toBeInTheDocument()
     expect(screen.getByTestId('chat-page')).toBe(chat)
     expect(screen.getAllByTestId('chat-page')).toHaveLength(1)
     expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
@@ -300,7 +300,7 @@ describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => 
   it('设置深链不预挂聊天（与 /notes 同口径）：chat-page 不在 DOM；首次进对话才挂上', async () => {
     renderAt('/settings')
 
-    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('settings-page')).toBeInTheDocument()
     expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('primary-nav-chat'))
@@ -340,7 +340,7 @@ describe('ModuleHost · W7（设置 / 旧深链往返不丢主对话）', () => 
     ] as const
     for (const [link, page] of stops) {
       fireEvent.click(screen.getByTestId(link))
-      expect(screen.getByTestId(page)).toBeInTheDocument()
+      expect(await screen.findByTestId(page)).toBeInTheDocument()
       expect(screen.getByTestId('chat-page')).toBe(chat)
       expect(screen.getByTestId('module-chat')).toHaveClass('hidden')
     }

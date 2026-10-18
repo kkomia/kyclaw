@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router'
 import { ChatPage } from '@renderer/features/chat/ChatPage'
-import { OfficePage } from '@renderer/features/office/OfficePage'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { primaryModuleOf } from '@renderer/lib/primary-modules'
+import { RouteFallback } from './RouteFallback'
+
+/**
+ * Office 页按需加载（P1 包体）：首次进 /office 才拉 office 页 chunk；挂上之后仍走
+ * 本宿主的 hidden+inert 锁存，iframe/编辑器/标签/滚动位置与之前完全一致（不卸载）。
+ */
+const LazyOfficePage = lazy(async () => ({
+  default: (await import('@renderer/features/office/OfficePage')).OfficePage
+}))
 
 /**
  * 一级模块宿主（0.2.0 应用壳）：主对话与 Office 常驻，模块切换只换可见性、不卸载。
@@ -74,14 +82,20 @@ export function ModuleHost(): React.JSX.Element {
           inert={!officeActive}
           className={officeActive ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
         >
-          <OfficePage active={officeActive} />
+          <Suspense fallback={<RouteFallback />}>
+            <LazyOfficePage active={officeActive} />
+          </Suspense>
         </div>
       ) : null}
       <div
         data-testid="module-outlet"
         className={chatActive || officeActive ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}
       >
-        <Outlet />
+        {/* P1：二级页面（notes/knowledge/settings/plugins/memory/usage）是 React.lazy；
+            它们 suspend 时只把这格换成 RouteFallback，壳/侧栏/常驻 ChatPage 不动。 */}
+        <Suspense fallback={<RouteFallback />}>
+          <Outlet />
+        </Suspense>
       </div>
     </div>
   )
