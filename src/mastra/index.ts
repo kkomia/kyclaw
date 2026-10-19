@@ -91,8 +91,10 @@ import { createTasksContext, type TasksContext } from './tasks-context'
 import { prepareTaskChatParams } from './tasks-chat'
 import { AskUserRuntime } from './ask-user-runtime'
 import { createSessionPlanStore, type SessionPlanStore } from './session-plan'
+import { createSessionGoalStore, type SessionGoalStore } from './session-goal'
 import { createPlanRuntime, planRefOf, type PlanRuntime, type PlanSuspension } from './plan-runtime'
 import { createPlanRoutes } from './routes/plans'
+import { createGoalRoutes } from './routes/goal'
 import { planRefSchema } from '../shared/plan'
 import { createRulesProcessor, type RulesProcessorDependencies } from './rules'
 import {
@@ -178,6 +180,8 @@ export interface KyclawMastra {
   tasksContext: TasksContext
   plans: SessionPlanStore
   planRuntime: PlanRuntime
+  /** PB-039：每会话一个 goal 的权威状态（revision CAS + 进程本地 activation） */
+  goals: SessionGoalStore
   mastra: Mastra
   storage: LibSQLStore
   memory: MastraMemory
@@ -455,6 +459,9 @@ export async function createKyclawMastra(options: {
   const tasksContext = createTasksContext()
   const plans = createSessionPlanStore(storage)
   await plans.ensureTable()
+  // PB-039：每会话一个 goal（单行 + revision CAS）；activation 在该 store 的进程内 Map 里
+  const goals = createSessionGoalStore(storage)
+  await goals.ensureTable()
   const planRuntime = createPlanRuntime({
     store: plans,
     coordinator: {
@@ -602,6 +609,7 @@ export async function createKyclawMastra(options: {
       apiRoutes: [
         ...askUserRoutes.routes,
         ...(await createPlanRoutes(planRuntime)),
+        ...(await createGoalRoutes(goals)),
         {
           ...registerApiRoute(CHAT_ROUTE_PATH, {
             method: 'POST',
@@ -666,6 +674,7 @@ export async function createKyclawMastra(options: {
     tasksContext,
     plans,
     planRuntime,
+    goals,
     mastra,
     storage,
     memory,
@@ -681,3 +690,4 @@ export async function createKyclawMastra(options: {
     recall
   }
 }
+
