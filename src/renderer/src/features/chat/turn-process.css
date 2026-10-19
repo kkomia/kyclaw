@@ -104,12 +104,14 @@
 [data-motion='reduced'] .turn-latest-dot {
   animation: none;
 }
-/* task-82：汇总行固定过程区顶部 + 1px hairline 与下方条目分隔（无条目不出线） */
+/* task-82：汇总行在过程区顶部 + 1px hairline 与下方条目分隔（无条目不出线）。
+   PB-030（0.1.6）：**不再 sticky**。header 确实不在 `.turn-process-body` 的内滚区里，
+   但它的最近滚动祖先是 message-list（MessageList.tsx，`overflow-y: auto`）——吸顶会让它钉在
+   整个对话的视口顶部，而流式中过程区恒展开、对话持续自动滚，于是下面的工具行/思考行从它
+   **底下滚过去**；底色又是 transparent（task-83 去"黑条"后就是这个值），穿透可见 →
+   看起来就是"汇总行与工具命令行重叠"。过程区自己有 max-height 内滚（`.turn-process-body`），
+   头在内滚区外本来就始终可见，不需要 sticky。 */
 .turn-process-header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  /* task-83 返工：不再铺 canvas（比聊天页 bg-primary 更暗，形成黑条）；header 在滚动区外，无需底色 */
   background-color: transparent;
 }
 
