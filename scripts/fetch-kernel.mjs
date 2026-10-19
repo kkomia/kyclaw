@@ -2,19 +2,23 @@
 /**
  * B4 / PB-006：把冻结的 rc.2 内核快照解到 `resources/kernel/rc.2/`（随包输入，**不入 git**）。
  *
- * 为什么要有这个脚本：快照 113+ MiB / 12,241 文件，不可能进公开仓库；但出包必须能**可复跑**地
- * 拿到同一份东西。源头是冻结的完整取证件 `kernel-snapshot-rc2-complete.tar.gz`（27.3 MiB），
- * 它的 SHA256 就是验收⑤的取证值：`206C75FD…20905D`。脚本：
+ * 为什么要有这个脚本：快照 130+ MiB / 12,249 文件，不可能进公开仓库；但出包必须能**可复跑**地
+ * 拿到同一份东西。源头是冻结的完整取证件 `kernel-snapshot-rc2-complete-sharp.tar.gz`（35.3 MiB），
+ * 它的 SHA256 就是验收⑤的取证值：`16EEF017…C2F47B`。脚本：
  *   1. 校验 tar.gz 的字节数与 SHA256（钉死在下面 PINNED；不匹配不接包）；
  *   2. 用系统 tar（Windows 10+ 自带 bsdtar）解到临时目录，校验通过后才替换 `rc.2/`；
- *   3. 按快照自带的 `SNAPSHOT.json` / `SHA256SUMS.txt` 全量核对（524 包 / 12,236 文件 / 12,241 文件）；
+ *   3. 按快照自带的 `SNAPSHOT.json` / `SHA256SUMS.txt` 全量核对（524 包 / 12,244 文件 / 12,249 文件）；
  *   4. 写 `resources/kernel/current.json`（版本 + SHA256 + 文件数；主进程按它找版本目录）。
  *
  * 勘误（PB-005 实测）：Ada 初版 `kernel-snapshot-rc2.tar.gz`（SHA256 `BD1CB907…E7B241`）只从
  * DSH 的 `app.asar` 提取，漏了 electron-builder 的 `app.asar.unpacked` 区 —— `koffi/src/koffi`
  * 等 306 个保留包文件只在 unpacked 区，导致真实轮次 `Cannot find module …/koffi/src/koffi/index.js`。
- * 完整快照 = 初版 + unpacked 区 overlay（仅补"包根仍在快照里"的文件；被裁掉的 LibreOffice/sherpa/
- * sharp 等 752 个文件仍不进包）。来源与差异清单见 `resources/kernel/README.md`。
+ * 完整快照 = 初版 + unpacked 区 overlay（仅补"包根仍在快照里"的文件；被裁掉的 LibreOffice/sherpa
+ * 等 750+ 个文件仍不进包）。来源与差异清单见 `resources/kernel/README.md`。
+ *
+ * PB-040 勘误（read_image 实测）：上一版完整快照仍把 `@img/sharp-win32-x64` 裁掉，导致内核
+ * `read_image` 报 `Could not load the "sharp" module`。本版把它（`sharp.node` + libvips dll +
+ * package.json/index.cjs，8 文件 / ~19.85 MB）补进 overlay；它必须随快照走，不能按"平台相关可裁"处理。
  *
  * 用法：
  *   pnpm fetch:kernel                 # 首次解出，或已存在则只校验
@@ -53,29 +57,30 @@ const DEFAULT_TARBALL = join(
   '.superpowers',
   'dev-verify',
   '20261019-0.2.0',
-  'ada',
-  'kernel-snapshot-rc2-complete.tar.gz'
+  'kai',
+  'kernel-sharp-repack',
+  'kernel-snapshot-rc2-complete-sharp.tar.gz'
 )
 
 const PINNED = {
   version: 'rc.2',
-  tarballName: 'kernel-snapshot-rc2-complete.tar.gz',
-  bytes: 28602571,
+  tarballName: 'kernel-snapshot-rc2-complete-sharp.tar.gz',
+  bytes: 36994698,
   /**
    * 完整快照取证值（大写；比较时大小写无关）。
    * 溯源：Ada 初版 `kernel-snapshot-rc2.tar.gz`（SHA256 BD1CB907…E7B241）只从 `app.asar` 提取，
    * 漏了 electron-builder 的 `app.asar.unpacked` 区 → koffi/src/koffi 等 306 个保留包文件缺失
-   * （PB-005 真实轮次报 Cannot find module …/koffi/src/koffi/index.js）。本值 = 补上 unpacked 区
-   * 后重新冻结的完整快照；差异清单见 resources/kernel/README.md 与
-   * .superpowers/dev-verify/20261019-0.2.0/kai/（本地证据）。
+   * （PB-005 真实轮次报 Cannot find module …/koffi/src/koffi/index.js）。本值 = 再补
+   * `@img/sharp-win32-x64`（PB-040：read_image 必需，8 文件）后重新冻结的完整快照；
+   * 差异清单见 resources/kernel/README.md 与 .superpowers/dev-verify/20261019-0.2.0/kai/。
    */
-  sha256: '206c75fd6b01a8cda42e58159b055408d740cb99137bf665b726d219f820905d',
+  sha256: '16eef01776f022a078326972d80ff35e9ae83fba47a27cae7613125107c2f47b',
   /** tar.gz 内的文件总数（含 SNAPSHOT.json / SHA256SUMS.txt / package.json 等根文件） */
-  files: 12241,
+  files: 12249,
   /** node_modules 内文件数（= SNAPSHOT.json.files = SHA256SUMS.txt 行数） */
-  nodeModulesFiles: 12236,
-  /** app.asar.unpacked 覆盖区补进来的文件数（见 SNAPSHOT.json.overlay） */
-  overlayFiles: 306,
+  nodeModulesFiles: 12244,
+  /** app.asar.unpacked 覆盖区补进来的文件数（见 SNAPSHOT.json.overlay；含 sharp 8 个） */
+  overlayFiles: 314,
   packages: 524
 }
 
