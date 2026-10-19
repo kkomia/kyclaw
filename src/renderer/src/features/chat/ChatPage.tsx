@@ -1462,7 +1462,8 @@ function ActiveChat({
       >
         <WelcomeHero active={hero} />
         {error ? (
-          <div className="px-4 pt-2">
+          // PB-036：轮次失败卡与消息正文同栅格（同一 --chat-reading-indent 左基线），不超出正文左缘
+          <div className="px-4 pt-2 pl-[calc(1rem+var(--chat-reading-indent))]">
             <ErrorCard error={toError(error)} onRetry={retry} />
           </div>
         ) : null}

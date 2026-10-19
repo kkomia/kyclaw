@@ -340,9 +340,9 @@ describe('编辑 = 截断重发（服务端 + 客户端两边）', () => {
       fireEvent.click(screen.getByTestId('message-edit-save'))
     })
 
-    // 没有发出第三轮请求，历史也保持原样
+    // 没有发出第三轮请求，历史也保持原样（PB-036 后主文案与详情原文都会命中，故 scope 到主文案）
     await waitFor(() => {
-      expect(screen.getByText(/没能在服务端同步/)).toBeInTheDocument()
+      expect(screen.getByTestId('error-message')).toHaveTextContent(/没能在服务端同步/)
     })
     expect(control.requests).toHaveLength(1)
     expect(screen.getByTestId('message-list')).toHaveTextContent('原始问题')

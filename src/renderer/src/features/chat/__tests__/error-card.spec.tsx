@@ -98,6 +98,29 @@ describe('ErrorCard 渲染', () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
+  it('PB-036：主文案中文、原始串收进「详情」（等宽折行），重试热区 ≥26（sm=26）', () => {
+    render(
+      <MemoryRouter>
+        <ErrorCard
+          error={new Error('socket hang up: ECONNRESET at TLS wrap on the same long line')}
+          onRetry={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId('error-message')).toHaveTextContent('连接中断')
+    const details = screen.getByTestId('error-details')
+    expect(details).toHaveTextContent('socket hang up')
+    const raw = screen.getByTestId('error-raw')
+    expect(raw.className).toContain('font-mono')
+    expect(raw.className).toContain('break-all')
+    expect(raw.className).toContain('whitespace-pre-wrap')
+    // 卡片内每行同一左缩进（px-4），标题行/主文案/详情/按钮都在这条基线上
+    const card = screen.getByTestId('error-card')
+    expect(card.className).toContain('px-4')
+    expect(screen.getByTestId('error-retry').className).toContain('h-(--control-height-sm)')
+  })
+
   it('401：多一条"去设置填 Key"的指引，链接指向设置页', () => {
     const unauthorized = Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     render(
@@ -179,6 +202,10 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
     })
 
     expect(await screen.findByTestId('error-card')).toBeInTheDocument()
+    // PB-036：轮次失败卡与正文同栅格（不超出正文左缘）
+    expect(screen.getByTestId('error-card').parentElement?.className).toContain(
+      'pl-[calc(1rem+var(--chat-reading-indent))]'
+    )
     expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
 
     await act(async () => {
