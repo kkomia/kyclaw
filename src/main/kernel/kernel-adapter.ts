@@ -37,6 +37,7 @@ import {
   type KernelCommandResult
 } from './kernel-commands'
 import { startKernelProcess } from './kernel-process'
+import { kernelExitMessage } from './kernel-startup'
 import { KernelRpcClient } from './kernel-rpc'
 import { KernelSseMapper, appendEffectiveFrames, type KernelFollowValue, type RendererSseFrame } from './sse-map'
 import type { KernelGoalState } from './goal-projection'
@@ -49,6 +50,10 @@ export interface KernelAdapterOptions {
   appDataDir: string
   /** B3.4：显式指定 DSH_HOME（默认 appDataDir/dsh-kernel-home；两个 adapter 共享时用于冲突/writer-held 测试） */
   dshHome?: string
+  /** PB-043：内核启动日志落点（运行期崩溃的错误文案要把绝对路径带给用户） */
+  logFile?: string
+  /** PB-043：ready 之后内核进程退出（运行期崩溃）——供上层写 kernel.crashed */
+  onKernelExit?: (info: { exitCode: number | null; signal: NodeJS.Signals | null }) => void
   extraEnv?: Readonly<Record<string, string>>
   readyTimeoutMs?: number
   turnTimeoutMs?: number
@@ -273,12 +278,18 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
    */
   const resolveCwd = (threadId?: string): string =>
     options.resolveCwd?.(threadId) ?? options.appDataDir
+  /** PB-043：运行期崩溃信息（ready 之后 exit 才有值；之后所有写路径据此给可诊断错误） */
+  let kernelExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined
   const kernel = await startKernelProcess({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,
     dshHome,
     ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv }),
-    ...(options.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: options.readyTimeoutMs })
+    ...(options.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: options.readyTimeoutMs }),
+    onExit: (info) => {
+      kernelExit = info
+      options.onKernelExit?.(info)
+    }
   })
 
   let ws: WebSocketClient | undefined
@@ -590,6 +601,9 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       port: Number(new URL(kernel.baseUrl).port),
       async startTurn(text: string, startOptions: StartTurnOptions = {}): Promise<KernelTurnResult> {
         if (stopped) throw new Error('kernel adapter: adapter is stopped')
+        // PB-043：内核进程已退出（运行期崩溃）→ 立刻给可诊断错误（退出码/signal + 日志绝对路径），
+        // 不让用户看到"连接中断"那种把内核崩溃误报成网络问题的文案。
+        if (kernelExit !== undefined) throw new Error(kernelExitMessage(kernelExit, options.logFile))
         if (startOptions.threadId === undefined && defaultState.dead === true) {
           defaultState = await openFollow(defaultSessionId)
           states.set(defaultSessionId, defaultState)
@@ -624,7 +638,11 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
             }
           })
         } catch (error) {
-          settleTurn(state, kernelUserError(error))
+          // PB-043：如果这期间内核进程已经退出，用崩溃文案而不是原生的 fetch 错误
+          settleTurn(
+            state,
+            kernelExit === undefined ? kernelUserError(error) : new Error(kernelExitMessage(kernelExit, options.logFile))
+          )
         }
         return promise
       },

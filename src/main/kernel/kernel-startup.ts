@@ -124,3 +124,23 @@ export function kernelFailureText(error: unknown, logFile?: string): string {
     ? failure.message
     : `${failure.message}\n日志：${logFile}`
 }
+
+/**
+ * PB-043：**运行期**内核进程退出（ready 之后）的用户可见文案。
+ *
+ * 与启动期不同：这时服务与 renderer 都在跑，没有"启动失败"的错误卡可挂；
+ * 用户下一次动作（发消息/翻会话）才会撞上它。文案必须回答三件事：
+ * **是内核进程没了（不是网络）**、**退出码/signal**、**日志在哪**。
+ * 没有日志落点（测试/纯诊断）时不编造路径，只少那一句。
+ */
+export function kernelExitMessage(
+  exit: { exitCode: number | null; signal?: string | null },
+  logFile?: string
+): string {
+  const how =
+    exit.exitCode === null || exit.exitCode === undefined
+      ? `signal ${exit.signal ?? 'unknown'}`
+      : `exitCode=${String(exit.exitCode)}`
+  const base = `内核进程已退出（${how}）：内核不再响应，请重启应用。`
+  return logFile === undefined || logFile === '' ? base : `${base}\n日志：${logFile}`
+}

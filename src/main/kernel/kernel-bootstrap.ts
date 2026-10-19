@@ -74,7 +74,18 @@ export async function maybeStartKernelAdapter(
     const adapter = await startKernelAdapter({
       ...adapterOptions,
       asarPath: layout.versionDir,
-      dshHome
+      dshHome,
+      // PB-043：运行期崩溃的可诊断面——日志写 kernel.crashed（退出码/signal/时间），
+      // 并把日志路径交给 adapter，让后续错误卡能带出绝对路径（用户拍板的验收点）。
+      ...(logFile === undefined ? {} : { logFile }),
+      onKernelExit: (info) => {
+        log?.event('kernel.crashed', {
+          exitCode: info.exitCode,
+          signal: info.signal,
+          at: new Date().toISOString(),
+          log: logFile ?? null
+        })
+      }
     })
     log?.event('kernel.ready', {
       kind: layout.kind,

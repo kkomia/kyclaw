@@ -21,6 +21,11 @@ export interface StartKernelProcessOptions {
   readyTimeoutMs?: number
   /** stderr 只用于诊断（会去掉可能的 URL/token 行） */
   onStderr?: (chunk: string) => void
+  /**
+   * PB-043：ready **之后**进程退出（运行期崩溃）的回调。
+   * 启动期的 exit 由 ready 的 Promise 自己接；这一条是给「用着用着内核没了」留的观察点。
+   */
+  onExit?: (info: { exitCode: number | null; signal: NodeJS.Signals | null }) => void
 }
 
 export interface KernelProcessHandle {
@@ -159,6 +164,12 @@ export async function startKernelProcess(
   child.on('error', (error: Error) => {
     console.warn('[kyclaw] 内核进程运行期错误（已建立的服务不受影响；持续出现请重启应用）', error)
   })
+  // PB-043：ready 之后保留 exit 监听（不改变任何状态，只上报——用户可见面由上层决定）。
+  if (options.onExit !== undefined) {
+    child.once('exit', (code, signal) => {
+      options.onExit?.({ exitCode: code, signal })
+    })
+  }
 
   let stopped = false
   const stop = async (): Promise<void> => {
