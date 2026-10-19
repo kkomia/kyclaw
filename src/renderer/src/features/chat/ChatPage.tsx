@@ -55,6 +55,10 @@ import type { ChatView } from './ChatHeader'
 import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
+import { GoalCommandCard } from './GoalCommandCard'
+import { parseGoalCommand, type GoalCommandAction } from './goal-command'
+import { fetchGoal, postGoalWithRetry } from './goal-api'
+import type { GoalActivation, GoalState, GoalView } from '@shared/goal'
 import { MessageList } from './MessageList'
 import { WelcomeHeatmap } from './parts/WelcomeHeatmap'
 import { ProjectChip } from './ProjectChip'
@@ -605,6 +609,12 @@ function ActiveChat({
   const [usageVersion, setUsageVersion] = useState(0)
   /** 发送预检进行中（取用量 → 也许压缩）的防抖锁：status 更新前的小窗口里防连按双发 */
   const sending = useRef(false)
+  /** PB-039：`/goal` 结果卡片（V1 不进历史；只挂在输入框上方，可关闭） */
+  const [goalCommandResult, setGoalCommandResult] = useState<{
+    goal: GoalView | null
+    activation: GoalActivation
+    error?: string
+  } | null>(null)
 
   const {
     messages,
@@ -1179,9 +1189,72 @@ function ActiveChat({
    * 会话…」）。这里再守一道是为了防任何旁路 —— 未就绪时发出去只会打到占位 Chat 上当场抛。
    * 也**不排队**：排队意味着"稍后一定发"，而那时连会话是谁都还不知道（占位 id 上排队等于丢）。
    */
+  /** PB-039：`/goal` 执行（真 GET/POST；409 stale → 重 GET 再试一次由 postGoalWithRetry 负责） */
+  const runGoalCommand = useCallback(
+    async (action: GoalCommandAction, objective?: string) => {
+      try {
+        const current = await fetchGoal(threadId)
+        if (action === 'status') {
+          setGoalCommandResult({ goal: current.goal, activation: current.activation })
+          return
+        }
+        const goal = current.goal
+        const ref = goal === null ? null : { id: goal.id, revision: goal.revision }
+        if (action !== 'create' && ref === null) {
+          setGoalCommandResult({
+            goal: null,
+            activation: current.activation,
+            error: 'No goal is currently set; /goal <action> requires one.'
+          })
+          return
+        }
+        let next: GoalState
+        if (action === 'create') {
+          next = await postGoalWithRetry(
+            { threadId, action: 'create', objective: objective ?? '' },
+            threadId
+          )
+        } else if (action === 'edit') {
+          next = await postGoalWithRetry(
+            { threadId, action: 'edit', ref: ref!, objective: objective ?? '' },
+            threadId
+          )
+        } else if (action === 'pause') {
+          next = await postGoalWithRetry({ threadId, action: 'pause', ref: ref! }, threadId)
+        } else if (action === 'resume') {
+          next = await postGoalWithRetry({ threadId, action: 'resume', ref: ref! }, threadId)
+        } else {
+          next = await postGoalWithRetry({ threadId, action: 'clear', ref: ref! }, threadId)
+        }
+        setGoalCommandResult({ goal: next.goal, activation: next.activation })
+      } catch (cause) {
+        setGoalCommandResult({
+          goal: null,
+          activation: 'disarmed',
+          error: cause instanceof Error ? cause.message : String(cause)
+        })
+      }
+    },
+    [threadId]
+  )
+
   const submit = useCallback(
     (message: OutgoingMessage) => {
       if (!ready) return
+      // PB-039：`/goal` 命令走命令通道（不进历史）；invalid → 报错不发送
+      if (message.text.trimStart().startsWith('/goal')) {
+        const parsed = parseGoalCommand(message.text)
+        if (parsed.kind === 'invalid') {
+          setGoalCommandResult({ goal: null, activation: 'disarmed', error: parsed.message })
+          return
+        }
+        if (parsed.kind === 'action') {
+          // TODO(PB-039 V1)：附件只随 create/edit 的 followup 提交，这块还没接；
+          // 本轮先把命令本体跑通（附件策略见交付报告的 TODO 清单）。
+          void runGoalCommand(parsed.action, parsed.objective)
+          return
+        }
+      }
       if (isLocked()) {
         useSessionsStore.getState().enqueueMessage(threadId, message)
         return
@@ -1461,6 +1534,17 @@ function ActiveChat({
         className={cn('relative shrink-0', hero && 'animate-message-in [animation-delay:80ms]')}
       >
         <WelcomeHero active={hero} />
+        {/* PB-039：/goal 结果卡片（V1 不进历史，只挂在输入框上方；可关闭） */}
+        {goalCommandResult === null ? null : (
+          <div className="pt-2">
+            <GoalCommandCard
+              goal={goalCommandResult.goal}
+              activation={goalCommandResult.activation}
+              error={goalCommandResult.error}
+              onClose={() => setGoalCommandResult(null)}
+            />
+          </div>
+        )}
         {error ? (
           // PB-036：轮次失败卡与消息正文同栅格——先与消息列同宽居中，再进 18px 阅读缩进，
           // 卡片左缘 = 正文文本左缘（不再横跨整个页脚、不超出正文左基线）
