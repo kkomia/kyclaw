@@ -392,6 +392,20 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       }
     }
 
+    /**
+     * PB-030：**读路径专用**——只回"已知会话"的 sessionId；未知返回 `undefined`，**绝不 session/create**。
+     *
+     * 为什么：renderer 在还没有真实会话时用占位 threadId（`kyclaw-pending`）轮询投影/命令，
+     * 读接口懒建会话会在内核里堆出幽灵 `session-<uuid>`（Nia 的 e2e：侧栏 2 行变 3 行）。
+     * 写路径（`executeCommand` / `startTurn`）仍可懒建——那是用户真的要在该 thread 上动作。
+     */
+    const sessionIdIfKnown = (threadId?: string): string | undefined => {
+      if (threadId === undefined) return defaultSessionId
+      const existing = states.get(threadId)
+      if (existing !== undefined) return existing.sessionId
+      return cwdBySession.has(threadId) ? threadId : undefined
+    }
+
     /** 同一 threadId（= sessionId）复用同一条 follow；流已死的重新 follow，不新建 session */
     const ensureSession = async (threadId: string): Promise<SessionState> => {
       const existing = states.get(threadId)
@@ -625,7 +639,10 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         }
       },
       async listCommands(threadId?: string) {
-        return listCommandsInternal(await sessionIdFor(threadId))
+        // PB-030：读路径不建会话（未知 thread → 空命令列表；UI 等真实会话起来再取）
+        const sessionId = sessionIdIfKnown(threadId)
+        if (sessionId === undefined) return []
+        return listCommandsInternal(sessionId)
       },
       async executeCommand(line: string, threadId?: string): Promise<KernelCommandResult | unknown> {
         // PB-005-F2：内核 `commands/execute` 对未识别行静默丢弃（返回 undefined、无 event），
@@ -652,15 +669,21 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         })
       },
       async readGoalState(threadId?: string): Promise<KernelGoalState | null> {
+        // PB-030：读路径不建会话
+        const sessionId = sessionIdIfKnown(threadId)
+        if (sessionId === undefined) return null
         const projections = await rpc.call<{
           values?: { goal?: KernelGoalState | null }
-        }>('session/projections', { request: { sessionId: await sessionIdFor(threadId) } })
+        }>('session/projections', { request: { sessionId } })
         return projections.values?.goal ?? null
       },
       async readPlanState(threadId?: string) {
+        // PB-030：读路径不建会话
+        const sessionId = sessionIdIfKnown(threadId)
+        if (sessionId === undefined) return null
         const projections = await rpc.call<{
           values?: { plan?: { active?: boolean; pending?: boolean } }
-        }>('session/projections', { request: { sessionId: await sessionIdFor(threadId) } })
+        }>('session/projections', { request: { sessionId } })
         const plan = projections.values?.plan
         if (plan === undefined) return null
         return { active: plan.active === true, pending: plan.pending === true }
@@ -692,8 +715,11 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       },
       /** PB-025：continued（timed 到期仍可答）的提问补答 → `userQuestions/answer` */
       async answerContinuedQuestion(threadId, callId, answer): Promise<boolean> {
+        // PB-030：未知 thread 不建会话——没有会话就没有可补答的问题，直接回 false（不是"已结算"）
+        const sessionId = sessionIdIfKnown(threadId)
+        if (sessionId === undefined) return false
         const result = await rpc.call<boolean>('userQuestions/answer', {
-          agentId: await sessionIdFor(threadId),
+          agentId: sessionId,
           callId,
           answer
         })

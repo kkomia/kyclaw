@@ -13,6 +13,14 @@
  *   **接口**，只能等超时/放弃——这一点在报告里注明，不假装取消了内核请求）；
  * - `GET /kernel/interactions?threadId=`：hub 快照（审批 pending/results + 提问 + continued 投影），
  *   给 PB-027 / Cyrus 的 renderer 接线用；**不下发内核 token/cookie**。
+ *
+ * ⚠️ **`/ask-user/resume` 已不再提供**（不是漏实现，别去补）：旧实现在 Mastra 服务里
+ * （把回答塞回 Mastra run），内核路径没有该语义。替代通道是 `$events/result`（阻塞式提问，见
+ * `kernel-adapter.respondInteraction`）与 `userQuestions/answer`（continued 补答，见
+ * `answerContinuedQuestion`）；renderer 侧的提交换通道归 PB-027/Cyrus。
+ *
+ * ⚠️ PB-030：本路由的**读**路径（pending / 快照）只读 hub，对未知/占位 threadId 返回空态，
+ * **不得触发内核 `session/create`**——否则会堆出幽灵会话（侧栏多一行、`/api/threads` 也带出来）。
  */
 
 import { Hono } from 'hono'

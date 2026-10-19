@@ -39,6 +39,12 @@ export interface KernelThreadsRouterOptions {
   defaultSessionId?: string
   /** 可选列表过滤（例如只显示当前 workspace）；默认过滤 subagent + archived。 */
   sessionFilter?: (summary: KernelSessionSummary) => boolean
+  /**
+   * PB-030：是否从列表里剔除 **blank（还没发过消息）** 的内核会话，默认 `true`。
+   * 语义判定（blank + 非默认 + 非 archived），不是 id 白名单——读路径占位 thread 留下的空会话
+   * 不该出现在侧栏（Nia 的 e2e：`kyclaw-pending` 被读路径建出后侧栏 2 行变 3 行）。
+   */
+  excludeBlank?: boolean
 }
 
 function errorBody(error: string, detail?: string): { error: string; detail?: string } {
@@ -117,6 +123,8 @@ export function createKernelThreadsRouter(options: KernelThreadsRouterOptions): 
         .filter((session) => session.origin !== 'subagent')
         .filter((session) => session.sessionId !== options.defaultSessionId)
         .filter((session) => !archivedSet.has(session.sessionId))
+        // PB-030：blank（没发过消息）的内核会话不进列表——占位/懒建的空会话不该出现在侧栏
+        .filter((session) => options.excludeBlank === false || session.blank !== true)
         .filter((session) => options.sessionFilter?.(session) ?? true)
         .map(summaryJson)
       return context.json(threadListResponseSchema.parse({ threads }))

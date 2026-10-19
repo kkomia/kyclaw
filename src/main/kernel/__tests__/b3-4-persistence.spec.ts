@@ -770,6 +770,11 @@ describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手�
 
   it('continued 补答：userQuestions/answer 带 agentId/callId/answer，返回内核 boolean', async () => {
     const adapter = await startAdapter(tempDir('a'))
+    // PB-030 之后：补答要求 thread 已物化（读/写都不许为未知 thread 懒建会话）
+    const turn = adapter.startTurn('先建会话', { threadId: 'thread-A' })
+    await waitReady('thread-A')
+    kernel.finishTurn('thread-A', '答', 'completed')
+    await turn
     const stillContinued = await adapter.answerContinuedQuestion('thread-A', 'call-1', {
       answers: [{ id: 'q1', selected: ['A'], custom: '其它' }]
     })
@@ -866,7 +871,39 @@ describe('PB-024 cwd 钩子与 defaultSessionId', () => {
   })
 })
 
-describe('sameCwd（冲突预检的比较归一化）', () => {  it('分隔符与大小写差异视为同一目录；真不同目录判 false', () => {
+/**
+ * PB-030：**读路径不得建会话**。
+ * renderer 在没有真实会话时用占位 threadId（`kyclaw-pending`）轮询投影/命令；读接口若懒建会话，
+ * 内核里会多出幽灵 `session-<uuid>`（侧栏多一行、`/api/threads` 带出来）。
+ */
+describe('PB-030 读路径不建会话', () => {
+  it('未知 thread 的 goal/plan/commands/补答都返回空态，且内核 create 计数不变', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const before = kernel.state.creates.length
+    expect(await adapter.readGoalState('kyclaw-pending')).toBeNull()
+    expect(await adapter.readPlanState('kyclaw-pending')).toBeNull()
+    expect(await adapter.listCommands('kyclaw-pending')).toEqual([])
+    expect(
+      await adapter.answerContinuedQuestion('kyclaw-pending', 'call-1', { answers: [] })
+    ).toBe(false)
+    // 内核侧零新增：既没有 session/create，也没有这个 id 的会话
+    expect(kernel.state.creates.length).toBe(before)
+    expect(kernel.state.creates.some((item) => item.sessionId === 'kyclaw-pending')).toBe(false)
+  })
+
+  it('已知 thread（物化过的）读路径照常工作（不因为防懒建而丢能力）', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const turn = adapter.startTurn('建会话', { threadId: 'thread-known' })
+    await waitReady('thread-known')
+    kernel.finishTurn('thread-known', '答', 'completed')
+    await turn
+    expect(await adapter.readPlanState('thread-known')).toEqual({ active: false, pending: false })
+    expect((await adapter.listCommands('thread-known')).map((c) => c.name)).toContain('goal')
+  })
+})
+
+describe('sameCwd（冲突预检的比较归一化）', () => {
+  it('分隔符与大小写差异视为同一目录；真不同目录判 false', () => {
     expect(sameCwd('C:\\Users\\me\\app', 'c:/users/ME/app/', true)).toBe(true)
     expect(sameCwd('C:\\Users\\me\\app', 'C:\\Users\\me\\app')).toBe(true)
     expect(sameCwd('/home/me/app', '/home/me/app/', false)).toBe(true)
@@ -912,18 +949,23 @@ describe('PB-004 命令/投影面 threadId：不传走默认会话，传了不�
     expect(kernel.state.executes.map((item) => item.agentId)).toContain('thread-B')
   })
 
-  it('listCommands(threadId) 与缺省都走内核清单；thread 只建会话、不额外挂 follow', async () => {
+  it('listCommands(threadId)：未知 thread 空清单且不建会话；物化后走内核清单；不额外挂 follow', async () => {
     const adapter = await startAdapter(tempDir('a'))
+    // PB-030：读路径不建会话 → 未知 thread 返回空清单
+    expect(await adapter.listCommands('thread-menu')).toEqual([])
+    expect(kernel.state.creates.some((item) => item.sessionId === 'thread-menu')).toBe(false)
+
+    // 物化（真实会话起来了）之后：读命令走内核清单
+    const turn = adapter.startTurn('建会话', { threadId: 'thread-menu' })
+    await waitReady('thread-menu')
+    kernel.finishTurn('thread-menu', '答', 'completed')
+    await turn
     const names = (await adapter.listCommands('thread-menu')).map((command) => command.name)
     expect(names).toContain('goal')
     expect(names).toContain('plan')
-    // 命令面用的 thread 不需要流：只有默认会话那一条 follow
-    expect(kernel.state.streams.size).toBe(1)
-    expect(kernel.state.creates).toContainEqual({
-      cwd: expect.any(String),
-      sessionId: 'thread-menu'
-    })
-    // 缺省调用行为不变
+    // 命令面不额外开 follow：默认会话 + thread-menu 各一条，共 2
+    expect(kernel.state.streams.size).toBe(2)
+    // 缺省调用仍走默认会话（行为不变）
     expect((await adapter.listCommands()).map((command) => command.name)).toEqual(names)
   })
 })

@@ -60,7 +60,9 @@ function fakeOps(): FakeOps {
     summary('t2', null),
     { ...summary('t3'), origin: 'subagent' },
     summary('archived'),
-    summary('session-default')
+    summary('session-default'),
+    // PB-030：blank（还没发过消息）的内核会话——占位/读路径懒建留下的幽灵行，不该出现在列表
+    { ...summary('session-kyclaw-pending'), blank: true }
   ]
   const events: Record<string, KernelSessionEventLike[]> = {
     t1: [userEvent('你好'), assistantEvent('你好，在。')],
@@ -122,7 +124,7 @@ async function jsonOf<T>(response: Response): Promise<T> {
 }
 
 describe('kernel-threads：9 个端点', () => {
-  it('GET /api/threads：过滤 archived + subagent + adapter 默认会话（R2）', async () => {
+  it('GET /api/threads：过滤 archived + subagent + adapter 默认会话（R2）+ blank 幽灵会话（PB-030）', async () => {
     const app = createKernelThreadsRouter({
       ops: fakeOps(),
       defaultCwd: '/workspace',
@@ -136,6 +138,20 @@ describe('kernel-threads：9 个端点', () => {
     expect(body.threads.map((thread) => thread.id)).toEqual(['t1', 't2'])
     expect(body.threads[0]).toMatchObject({ id: 't1', title: '标题一' })
     expect(body.threads[0]?.updatedAt).toBe('2023-11-14T22:13:20.000Z')
+    // 语义判定：blank 那条（session-kyclaw-pending）不是靠 id 白名单挡掉的
+    expect(body.threads.some((thread) => thread.id === 'session-kyclaw-pending')).toBe(false)
+  })
+
+  it('excludeBlank:false 时保留 blank 会话（需要"刚建未发消息"也显示的场景）', async () => {
+    const app = createKernelThreadsRouter({
+      ops: fakeOps(),
+      defaultCwd: '/workspace',
+      defaultSessionId: 'session-default',
+      excludeBlank: false
+    })
+    const response = await app.request('/')
+    const body = await jsonOf<{ threads: Array<{ id: string }> }>(response)
+    expect(body.threads.map((thread) => thread.id)).toEqual(['t1', 't2', 'session-kyclaw-pending'])
   })
 
   it('POST /api/threads：cwdOf 优先，返回 summary', async () => {
