@@ -6,6 +6,7 @@
  */
 import { spawn } from 'node:child_process'
 import { planKernelLaunch } from './kernel-entry'
+import { KernelStartupError, assertKernelLaunchConfigured } from './kernel-startup'
 
 export interface StartKernelProcessOptions {
   electronExecutable: string
@@ -49,17 +50,27 @@ export function redactKernelDiagnostics(text: string): string {
 export async function startKernelProcess(
   options: StartKernelProcessOptions
 ): Promise<KernelProcessHandle> {
+  // PB-017：spawn 之前先校验（空串交给 spawn 会同步抛 TypeError；见 kernel-startup.ts）
+  assertKernelLaunchConfigured({
+    electronExecutable: options.electronExecutable,
+    kernelRoot: options.asarPath
+  })
   const plan = planKernelLaunch({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,
     dshHome: options.dshHome,
     ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv })
   })
-  const child = spawn(plan.executable, [...plan.args], {
-    env: { ...process.env, ...plan.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true
-  })
+  let child: ReturnType<typeof spawn>
+  try {
+    child = spawn(plan.executable, [...plan.args], {
+      env: { ...process.env, ...plan.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    })
+  } catch (error) {
+    throw spawnFailedError(error, plan.scriptPath)
+  }
   const stdout = child.stdout
   const stderr = child.stderr
   if (stdout === null || stderr === null) {
@@ -80,8 +91,10 @@ export async function startKernelProcess(
     const timer = setTimeout(() => {
       cleanup()
       reject(
-        new Error(
-          `kernel process: not ready after ${String(timeoutMs)}ms${stderrTail === '' ? '' : `; stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`
+        new KernelStartupError(
+          'KERNEL_NOT_READY',
+          `内核进程就绪超时（KERNEL_NOT_READY）：${String(timeoutMs)}ms 内没有打印回环 URL；入口：${plan.scriptPath}${stderrTail === '' ? '' : `；stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`,
+          { scriptPath: plan.scriptPath }
         )
       )
     }, timeoutMs)
@@ -97,18 +110,32 @@ export async function startKernelProcess(
     const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
       cleanup()
       reject(
-        new Error(
-          `kernel process: exited before ready (code=${String(code)}, signal=${String(signal)})${stderrTail === '' ? '' : `; stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`
+        new KernelStartupError(
+          'KERNEL_EXITED',
+          `内核进程提前退出（KERNEL_EXITED）：exitCode=${String(code)}，signal=${String(signal)}；入口：${plan.scriptPath}${stderrTail === '' ? '' : `；stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`,
+          {
+            exitCode: code,
+            signal,
+            ...(stderrTail === '' ? {} : { stderrTail: redactKernelDiagnostics(stderrTail) }),
+            scriptPath: plan.scriptPath
+          }
         )
       )
+    }
+    // spawn 的异步失败（ENOENT/EACCES…）走 'error' 事件：不接会把主进程直接带崩。
+    const onError = (error: Error): void => {
+      cleanup()
+      reject(spawnFailedError(error, plan.scriptPath))
     }
     const cleanup = (): void => {
       clearTimeout(timer)
       stdout.off('data', onData)
       child.off('exit', onExit)
+      child.off('error', onError)
     }
     stdout.on('data', onData)
     child.once('exit', onExit)
+    child.once('error', onError)
   }).catch(async (error: unknown) => {
     await stopChild(child, 2_000)
     throw error
@@ -126,6 +153,16 @@ export async function startKernelProcess(
     pid: child.pid,
     stop
   }
+}
+
+/** spawn 失败（同步抛或 'error' 事件）统一成带 code 的可诊断错误（PB-017/PB-006） */
+function spawnFailedError(error: unknown, scriptPath: string): KernelStartupError {
+  const detail = error instanceof Error ? error.message : String(error)
+  return new KernelStartupError(
+    'KERNEL_SPAWN_FAILED',
+    `内核进程启动失败（KERNEL_SPAWN_FAILED）：${detail}；入口：${scriptPath}`,
+    { scriptPath }
+  )
 }
 
 /** 先 SIGTERM，宽限期内没退就强杀；无论哪种都不留句柄 */

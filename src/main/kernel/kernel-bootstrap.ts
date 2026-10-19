@@ -8,6 +8,7 @@
  */
 import { isKernelPortEnabled } from './feature-flag'
 import { startKernelAdapter, type KernelAdapter, type KernelAdapterOptions } from './kernel-adapter'
+import { assertKernelLaunchConfigured } from './kernel-startup'
 
 export interface KernelBootstrapOptions extends KernelAdapterOptions {
   env?: Readonly<Record<string, string | undefined>>
@@ -21,5 +22,12 @@ export async function maybeStartKernelAdapter(
   if (!isKernelPortEnabled(env)) return null
   const { env: _ignored, ...adapterOptions } = options
   void _ignored
+  // PB-017：flag 开但没注入内核参数（service.ts 把缺省值兜成空串）时，spawn('') 会同步抛
+  // TypeError。必须在 spawn 之前 fail fast，给「内核入口未配置」+ 配置来源的可诊断错误。
+  // 注意：上面 flag 关的早退不碰这里 —— flag 关路径字节级不变。
+  assertKernelLaunchConfigured({
+    electronExecutable: adapterOptions.electronExecutable,
+    kernelRoot: adapterOptions.asarPath
+  })
   return startKernelAdapter(adapterOptions)
 }
