@@ -2,15 +2,23 @@
  * PB-039 goal HTTP API（`/api/goal`）：GET 读状态，POST 做 create/edit/pause/resume/complete/
  * block/clear/disarm。
  *
+ * 为什么是 **Hono 子路由**而不是 Mastra 的 `registerApiRoute` 自定义路由：
+ * `@mastra/server` 明确拒绝以 `/api` 开头的自定义路由（"that path is reserved for built-in
+ * Mastra routes"），而我们的约定是 `/api/goal`（与 `/api/threads` / `/api/tasks` 同一条前缀、
+ * 同一个 token 闸门）。所以照 threads 的做法挂在主进程的 Hono app 上（`service.ts`）。
+ *
  * 语义全部在 `session-goal.ts`（照抄 DSH `dsh-goal`）；这层只做三件事：
  *   1. 入参过 zod（`src/shared/goal.ts`，与渲染端同一个 schema）；
  *   2. 领域错误 → `{ error: 'GOAL_*', message: 中文 }` + 对应状态码；
  *   3. 未知存储异常 → 500 `GOAL_STORAGE_ERROR`（不把栈/内部 id 暴露给前端）。
  */
-import type { ApiRoute } from '@mastra/core/server'
+import { Hono } from 'hono'
 import { z } from '../../shared/zod'
 import { goalRequestSchema, goalThreadIdSchema, type GoalRequest } from '../../shared/goal'
 import { SessionGoalError, type SessionGoalStore } from '../session-goal'
+
+/** 路由前缀（与其它 `/api/*` 一致；service.ts 用它挂载） */
+export const GOAL_ROUTE_PREFIX = '/api/goal'
 
 function errorResponse(code: string, message: string, status: number): Response {
   return Response.json({ error: code, message }, { status })
@@ -60,30 +68,24 @@ export async function applyGoalRequest(
   }
 }
 
-export async function createGoalRoutes(store: SessionGoalStore): Promise<ApiRoute[]> {
-  const { registerApiRoute } = await import('@mastra/core/server')
-  return [
-    registerApiRoute('/goal', {
-      method: 'GET',
-      handler: async (context) => {
-        try {
-          const threadId = goalThreadIdSchema.parse(context.req.query('threadId'))
-          return Response.json(await store.state(threadId))
-        } catch (error) {
-          return failure(error)
-        }
-      }
-    }),
-    registerApiRoute('/goal', {
-      method: 'POST',
-      handler: async (context) => {
-        try {
-          const body = goalRequestSchema.parse(await context.req.json().catch(() => null))
-          return Response.json(await applyGoalRequest(store, body))
-        } catch (error) {
-          return failure(error)
-        }
-      }
-    })
-  ]
+/** `/api/goal` 子路由（GET 读 / POST 写） */
+export function createGoalRouter(store: SessionGoalStore): Hono {
+  const router = new Hono()
+  router.get('/', async (context) => {
+    try {
+      const threadId = goalThreadIdSchema.parse(context.req.query('threadId'))
+      return Response.json(await store.state(threadId))
+    } catch (error) {
+      return failure(error)
+    }
+  })
+  router.post('/', async (context) => {
+    try {
+      const body = goalRequestSchema.parse(await context.req.json().catch(() => null))
+      return Response.json(await applyGoalRequest(store, body))
+    } catch (error) {
+      return failure(error)
+    }
+  })
+  return router
 }

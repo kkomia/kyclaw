@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mastra 实例装配：kyclaw agent + libsql storage + agent 级 Memory + AI SDK 兼容的 chat 路由。
  *
  * - storage 落 `dataDir/kyclaw.db`（生产即 %APPDATA%/kyclaw/kyclaw.db）：thread / resource 等
@@ -94,7 +94,6 @@ import { createSessionPlanStore, type SessionPlanStore } from './session-plan'
 import { createSessionGoalStore, type SessionGoalStore } from './session-goal'
 import { createPlanRuntime, planRefOf, type PlanRuntime, type PlanSuspension } from './plan-runtime'
 import { createPlanRoutes } from './routes/plans'
-import { createGoalRoutes } from './routes/goal'
 import { planRefSchema } from '../shared/plan'
 import { createRulesProcessor, type RulesProcessorDependencies } from './rules'
 import {
@@ -543,6 +542,8 @@ export async function createKyclawMastra(options: {
     tasks,
     tasksContext,
     planRuntime,
+    // PB-039：goal 三件套读写同一份权威状态（与 /api/goal 是同一个 store 实例）
+    goals,
     workspaces: options.workspaces,
     defaultWorkspace: options.defaultWorkspace,
     projects: options.projects,
@@ -609,7 +610,6 @@ export async function createKyclawMastra(options: {
       apiRoutes: [
         ...askUserRoutes.routes,
         ...(await createPlanRoutes(planRuntime)),
-        ...(await createGoalRoutes(goals)),
         {
           ...registerApiRoute(CHAT_ROUTE_PATH, {
             method: 'POST',
@@ -690,4 +690,5 @@ export async function createKyclawMastra(options: {
     recall
   }
 }
+
 

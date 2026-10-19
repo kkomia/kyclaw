@@ -106,11 +106,13 @@ export const GOAL_ERROR_CODES = [
   /** 工具专用：blocked 轮数不到阈值 */
   'GOAL_TOOL_BLOCK_THRESHOLD',
   /** 工具专用：模型不能 resume paused（恢复路径归用户） */
-  'GOAL_TOOL_RESUME_PAUSED'
+  'GOAL_TOOL_RESUME_PAUSED',
+  /** 工具专用：create/edit/pause/resume 只允许人类直发轮（goal round 里不行） */
+  'GOAL_TOOL_HUMAN_ONLY'
 ] as const
 export type GoalErrorCode = (typeof GOAL_ERROR_CODES)[number]
 
-/** 错误码 → HTTP 状态（工具专用的两个不会出现在 HTTP 路由上） */
+/** 错误码 → HTTP 状态（工具专用的几个不会出现在 HTTP 路由上） */
 export const GOAL_ERROR_STATUS: Readonly<Record<GoalErrorCode, 400 | 404 | 409 | 500>> = {
   GOAL_INVALID_ACTION: 400,
   GOAL_INVALID_EDIT: 400,
@@ -120,7 +122,8 @@ export const GOAL_ERROR_STATUS: Readonly<Record<GoalErrorCode, 400 | 404 | 409 |
   GOAL_INVALID_TRANSITION: 409,
   GOAL_STORAGE_ERROR: 500,
   GOAL_TOOL_BLOCK_THRESHOLD: 409,
-  GOAL_TOOL_RESUME_PAUSED: 409
+  GOAL_TOOL_RESUME_PAUSED: 409,
+  GOAL_TOOL_HUMAN_ONLY: 409
 }
 
 /** 错误码 → 用户可读中文（HTTP 回包与工具输出共用；不暴露内部 id/revision） */
@@ -133,7 +136,8 @@ export const GOAL_ERROR_TEXT: Readonly<Record<GoalErrorCode, string>> = {
   GOAL_INVALID_TRANSITION: '当前状态不允许这个操作（例如已激活又恢复、或暂停一个非进行中的 goal）。',
   GOAL_STORAGE_ERROR: 'goal 状态读写失败（存储异常），请重试；持续失败请重启应用。',
   GOAL_TOOL_BLOCK_THRESHOLD: `连续轮数还不够，暂时不能标记为阻塞（至少 ${GOAL_BLOCK_AFTER_CONSECUTIVE_ROUNDS} 轮）。`,
-  GOAL_TOOL_RESUME_PAUSED: '模型不能恢复已暂停的 goal —— 恢复要由用户在界面上确认。'
+  GOAL_TOOL_RESUME_PAUSED: '模型不能恢复已暂停的 goal —— 恢复要由用户在界面上确认。',
+  GOAL_TOOL_HUMAN_ONLY: '这个 goal 动作只能由用户直接发起（自动续跑的轮里不能建/改/暂停/恢复 goal）。'
 }
 
 /** 服务端动作（与 HTTP `action` 同名字，`disarm` 也在内） */
@@ -154,3 +158,43 @@ export const GOAL_PHASE_LABEL: Readonly<Record<GoalPhase, string>> = {
   blocked: '已阻塞',
   complete: '已完成'
 }
+
+/**
+ * 请求上下文里的 goal round 标记：阶段③在 chat 入口**准入成功**后写进这一轮的 requestContext，
+ * 工具侧（`goal` 三件套）读它判断"这次调用来自自动续跑轮还是人类直发轮"。
+ * driver 侧的用户消息 metadata 字段名是 `goalRound`（同一份数据），两个名字别混。
+ */
+export const GOAL_ROUND_CONTEXT_KEY = 'kyclawGoalRound'
+
+export const goalRoundMarkerSchema = z.strictObject({
+  goalId: goalIdSchema,
+  revision: goalRevisionSchema,
+  round: z.number().int().positive()
+})
+export type GoalRoundMarker = z.infer<typeof goalRoundMarkerSchema>
+
+export function parseGoalRoundMarker(value: unknown): GoalRoundMarker | null {
+  const parsed = goalRoundMarkerSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+/**
+ * 从 Mastra 的 requestContext 里取 goal round 标记。两种形态都认：
+ *   - 真正的 `RequestContext`（有 `.get(key)`）；
+ *   - 被摊平成 plain object 的那份（审批回调实测形态，见 `guard.ts` 的注释）。
+ * 取不到 / 结构不对一律回 null（= 人类直发轮），不让坏数据把工具打崩。
+ */
+export function goalRoundOf(requestContext: unknown): GoalRoundMarker | null {
+  if (requestContext === null || requestContext === undefined) return null
+  const holder = requestContext as { get?: (key: string) => unknown }
+  if (typeof holder.get === 'function') {
+    return parseGoalRoundMarker(holder.get(GOAL_ROUND_CONTEXT_KEY))
+  }
+  if (typeof requestContext === 'object') {
+    return parseGoalRoundMarker(
+      (requestContext as Record<string, unknown>)[GOAL_ROUND_CONTEXT_KEY]
+    )
+  }
+  return null
+}
+

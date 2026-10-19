@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 内嵌 agent 服务（链路原型①）：Mastra（@mastra/hono 适配器）挂在 Node http 上，只监听 127.0.0.1。
  *
  * 边界就两条：
@@ -13,6 +13,7 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
+import { createGoalRouter, GOAL_ROUTE_PREFIX } from '../../mastra/routes/goal'
 import { createMcpRouter } from '../../mastra/routes/mcp'
 import { createMemoryRouter } from '../../mastra/routes/memory'
 import { createProjectsRouter } from '../../mastra/routes/projects'
@@ -463,7 +464,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     recall,
     rules,
     tasks,
-    plans
+    plans,
+    goals
   } = await createKyclawMastra({
     dataDir: options.dataDir,
     resolveModel: resolveModelFor,
@@ -582,6 +584,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   )
 
   // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）
+  // PB-039：goal（/api/goal）与 threads/tasks 同一条 token 闸门；路由见 mastra/routes/goal.ts
+  app.route(GOAL_ROUTE_PREFIX, createGoalRouter(goals))
   app.route(PROJECTS_ROUTE_PREFIX, createProjectsRouter({ store: sessionProjects }))
 
   // round 66：会话↔PPT 模板映射 API（对话页「PPT」胶囊的读/写；create_ppt 的缺省模板读同一份镜像）
@@ -672,3 +676,4 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     }
   }
 }
+

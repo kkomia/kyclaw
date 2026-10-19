@@ -87,6 +87,8 @@ import { createSubmitPlanTool } from '../tools/submit-plan'
 import type { PlanRuntime } from '../plan-runtime'
 import { createTodoTool } from '../tools/todo'
 import type { SessionTaskStore } from '../session-tasks'
+import type { SessionGoalStore } from '../session-goal'
+import { createGoalTools } from '../tools/goal'
 import type { TasksContext } from '../tasks-context'
 import { createCreateSkillTool, createDeleteSkillTool } from '../tools/skill-admin'
 import { createWebSearchTool } from '../tools/web-search'
@@ -112,6 +114,8 @@ export interface KyclawAgentTools {
   tasks?: SessionTaskStore
   tasksContext?: TasksContext
   planRuntime?: PlanRuntime
+  /** PB-039：每会话一个 goal 的权威状态（工具三件套用它读写） */
+  goals?: SessionGoalStore
   /** 授权工作区（缺省 = 没有工作区：文件工具会明确报"先去设置里添加"） */
   workspaces?: () => readonly Workspace[]
   /** T18：默认工作区（缺省 = 没指认：没项目的会话用整份授权列表；指认了就用它下面的会话子目录） */
@@ -484,6 +488,8 @@ export async function createKyclawAgent(
     ...(toolOptions?.tasks === undefined
       ? {}
       : { todo: await createTodoTool(toolOptions.tasks, toolOptions.tasksContext) }),
+    // PB-039：goal 三件套（get_goal / create_goal / update_goal）；没传 store 就不暴露（单测/老装配不变）
+    ...(toolOptions?.goals === undefined ? {} : await createGoalTools(toolOptions.goals)),
     read: await createReadTool(ctx),
     write: await createWriteTool(ctx),
     edit: await createEditTool(ctx),
@@ -595,3 +601,4 @@ export async function createKyclawAgent(
     ...(memory === undefined ? {} : { memory })
   })
 }
+
