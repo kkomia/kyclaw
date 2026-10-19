@@ -262,6 +262,9 @@ async function expectWidth(
 test.describe.configure({ mode: 'serial' })
 
 test('走查A · 深色壳与聊天页（0.2.0 几何 / 四角 / 缝 / 导览轨 / composer / 工具流 / Tooltip）', async () => {
+  // 旧 mock 的 `[[write:…]]` 内联工具触发已随旧 mock 下架；0.2.0 内核 stub 无此语法 → 工具流/审批卡无法造。
+  // 证据：trace 最后一步等 `approval-card`（nia/walkthrough-180s.log）；按 a 组显式 skip，见 PB-021。
+  test.skip(true, '旧 mock 内联工具触发（[[write:…]]）已下架，0.2.0 内核无此语法，见 PB-021')
   const rootDir = mkdtempSync(join(tmpdir(), 'kyclaw-walk-a-'))
   const workspace = join(rootDir, '走查工作区')
   mkdirSync(workspace, { recursive: true })
