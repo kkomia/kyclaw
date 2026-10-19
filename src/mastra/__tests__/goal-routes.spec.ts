@@ -154,7 +154,10 @@ describe('goal 路由：读与动作', () => {
         threadId: 't1',
         action: 'block',
         ref,
-        blocked: { code: 'round-limit', message: 'Goal reached its configured limit of 256 rounds.' }
+        blocked: {
+          code: 'round-limit',
+          message: 'Goal reached its configured limit of 256 rounds.'
+        }
       })
     ).json()) as GoalState
     expect(blocked.goal?.phase).toBe('blocked')
@@ -164,11 +167,8 @@ describe('goal 路由：读与动作', () => {
     const fresh = (await (
       await post({ threadId: 't2', action: 'create', objective: '第二个会话' })
     ).json()) as GoalState
-    const disarmed = (await (
-      await post({ threadId: 't2', action: 'disarm' })
-    ).json()) as GoalState
+    const disarmed = (await (await post({ threadId: 't2', action: 'disarm' })).json()) as GoalState
     expect(disarmed.activation).toBe('disarmed')
     expect(disarmed.goal).toMatchObject({ revision: fresh.goal?.revision, phase: 'active' })
   })
 })
-

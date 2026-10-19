@@ -400,4 +400,3 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
     )
   }
 )
-

@@ -93,8 +93,7 @@ function observe(state: CaptureState, chunk: unknown): void {
     const id = typeof item.id === 'string' ? item.id : ''
     const text = state.texts.get(id) ?? ''
     if (id !== '') state.texts.delete(id)
-    if (text !== '')
-      state.parts.push({ type: 'text', text, createdAt: Date.now() })
+    if (text !== '') state.parts.push({ type: 'text', text, createdAt: Date.now() })
     return
   }
   if (type === 'tool-input-available' || type === 'tool-call') {
@@ -279,5 +278,3 @@ export function createFailedRoundFilter(): InputProcessor {
     }
   }
 }
-
-

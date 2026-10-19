@@ -60,7 +60,10 @@ describe('withUsageFallbackFetch（PB-027 方案 A 的 400 降级）', () => {
       {
         status: 400,
         body: JSON.stringify({
-          error: { message: 'Unrecognized request argument: stream_options', type: 'invalid_request_error' }
+          error: {
+            message: 'Unrecognized request argument: stream_options',
+            type: 'invalid_request_error'
+          }
         })
       },
       { status: 200, body: '{}' }

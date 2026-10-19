@@ -520,4 +520,3 @@ export async function resolveModel(
 
   return { model: await buildLanguageModel(config, apiKey, env), source: config.type }
 }
-

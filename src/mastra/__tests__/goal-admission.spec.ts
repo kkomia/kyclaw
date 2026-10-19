@@ -110,11 +110,13 @@ describe('goalRoundFromChatBody（纯函数）', () => {
 describe('chat 入口的 goal round 准入（真服务端 + 真 HTTP）', () => {
   it('带 metadata.goalRound：准入计数 +1（revision 同步 +1）；陈旧 revision → 409 且不计数', async () => {
     const threadId = 'thread-goal-admission'
-    const created = (await (await post('/api/goal', {
-      threadId,
-      action: 'create',
-      objective: '把迁移做完'
-    })).json()) as GoalState
+    const created = (await (
+      await post('/api/goal', {
+        threadId,
+        action: 'create',
+        objective: '把迁移做完'
+      })
+    ).json()) as GoalState
     const goalId = created.goal?.id ?? ''
     expect(created.goal?.roundsStarted).toBe(0)
 

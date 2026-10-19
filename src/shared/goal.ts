@@ -89,7 +89,11 @@ export const goalRequestSchema = z.discriminatedUnion('action', [
   scope.extend({ action: z.literal('resume'), ref: goalRefSchema }),
   scope.extend({ action: z.literal('complete'), ref: goalRefSchema }),
   scope.extend({ action: z.literal('clear'), ref: goalRefSchema }),
-  scope.extend({ action: z.literal('block'), ref: goalRefSchema, blocked: goalBlockedReasonSchema }),
+  scope.extend({
+    action: z.literal('block'),
+    ref: goalRefSchema,
+    blocked: goalBlockedReasonSchema
+  }),
   scope.extend({ action: z.literal('disarm') })
 ])
 export type GoalRequest = z.infer<typeof goalRequestSchema>
@@ -133,23 +137,18 @@ export const GOAL_ERROR_TEXT: Readonly<Record<GoalErrorCode, string>> = {
   GOAL_NOT_FOUND: '当前会话还没有 goal；先用 /goal <目标> 建一个。',
   GOAL_ALREADY_EXISTS: '这个会话已有一个未完成的 goal；先完成或清除它，才能新建。',
   GOAL_STALE_REVISION: '这个 goal 在别处被改过（revision 不一致），请刷新后再试。',
-  GOAL_INVALID_TRANSITION: '当前状态不允许这个操作（例如已激活又恢复、或暂停一个非进行中的 goal）。',
+  GOAL_INVALID_TRANSITION:
+    '当前状态不允许这个操作（例如已激活又恢复、或暂停一个非进行中的 goal）。',
   GOAL_STORAGE_ERROR: 'goal 状态读写失败（存储异常），请重试；持续失败请重启应用。',
   GOAL_TOOL_BLOCK_THRESHOLD: `连续轮数还不够，暂时不能标记为阻塞（至少 ${GOAL_BLOCK_AFTER_CONSECUTIVE_ROUNDS} 轮）。`,
   GOAL_TOOL_RESUME_PAUSED: '模型不能恢复已暂停的 goal —— 恢复要由用户在界面上确认。',
-  GOAL_TOOL_HUMAN_ONLY: '这个 goal 动作只能由用户直接发起（自动续跑的轮里不能建/改/暂停/恢复 goal）。'
+  GOAL_TOOL_HUMAN_ONLY:
+    '这个 goal 动作只能由用户直接发起（自动续跑的轮里不能建/改/暂停/恢复 goal）。'
 }
 
 /** 服务端动作（与 HTTP `action` 同名字，`disarm` 也在内） */
 export type GoalAction =
-  | 'create'
-  | 'edit'
-  | 'pause'
-  | 'resume'
-  | 'complete'
-  | 'clear'
-  | 'block'
-  | 'disarm'
+  'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear' | 'block' | 'disarm'
 
 /** `phase` → 中文（前端展示与 `/goal` 输出共用） */
 export const GOAL_PHASE_LABEL: Readonly<Record<GoalPhase, string>> = {
@@ -191,9 +190,7 @@ export function goalRoundOf(requestContext: unknown): GoalRoundMarker | null {
     return parseGoalRoundMarker(holder.get(GOAL_ROUND_CONTEXT_KEY))
   }
   if (typeof requestContext === 'object') {
-    return parseGoalRoundMarker(
-      (requestContext as Record<string, unknown>)[GOAL_ROUND_CONTEXT_KEY]
-    )
+    return parseGoalRoundMarker((requestContext as Record<string, unknown>)[GOAL_ROUND_CONTEXT_KEY])
   }
   return null
 }
@@ -219,4 +216,3 @@ export function goalRoundFromChatBody(body: unknown): GoalRoundMarker | null {
   }
   return null
 }
-

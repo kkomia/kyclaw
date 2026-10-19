@@ -76,13 +76,16 @@ describe('withFailedRoundCapture：失败轮 parts 补进已存在的 assistant 
       { type: 'text-delta', id: 't1', delta: '第一部分' },
       { type: 'text-delta', id: 't1', delta: '正文。' },
       { type: 'text-end', id: 't1' },
-      { type: 'tool-input-available', toolCallId: 'call-1', toolName: 'read', input: { path: 'a.ts' } },
+      {
+        type: 'tool-input-available',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        input: { path: 'a.ts' }
+      },
       { type: 'tool-output-available', toolCallId: 'call-1', output: { text: 'ok' } },
       { type: 'error', errorText: '上游断开' }
     ]
-    const passed = await drain(
-      withFailedRoundCapture(streamOf(chunks), { memory, threadId: 't1' })
-    )
+    const passed = await drain(withFailedRoundCapture(streamOf(chunks), { memory, threadId: 't1' }))
     expect(passed).toHaveLength(chunks.length) // 旁路不改变流
     await sleep(20)
 
@@ -135,7 +138,9 @@ describe('withFailedRoundCapture：失败轮 parts 补进已存在的 assistant 
     )
     await sleep(20)
     expect(saved).toHaveLength(1)
-    expect((saved[0] as { content: { parts: Array<Record<string, unknown>> } }).content.parts).toEqual(
+    expect(
+      (saved[0] as { content: { parts: Array<Record<string, unknown>> } }).content.parts
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'text', text: '半截' }),
         expect.objectContaining({ type: 'error' })
@@ -227,4 +232,3 @@ describe('createFailedRoundFilter：下一轮上下文过滤', () => {
     expect(result).toEqual(messages)
   })
 })
-

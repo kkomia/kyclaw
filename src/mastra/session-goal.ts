@@ -102,8 +102,7 @@ function decodeRow(row: Record<string, unknown>): StoredRow {
 
 function assertRef(goal: GoalView | null, ref: GoalRef): GoalView {
   if (goal === null) throw goalError('GOAL_NOT_FOUND')
-  if (goal.id !== ref.id || goal.revision !== ref.revision)
-    throw goalError('GOAL_STALE_REVISION')
+  if (goal.id !== ref.id || goal.revision !== ref.revision) throw goalError('GOAL_STALE_REVISION')
   return goal
 }
 
@@ -161,8 +160,7 @@ export function createSessionGoalStore(storage: LibSQLStore): SessionGoalStore {
     }
   }
 
-  const activationOf = (threadId: string): GoalActivation =>
-    activation.get(threadId) ?? 'disarmed'
+  const activationOf = (threadId: string): GoalActivation => activation.get(threadId) ?? 'disarmed'
 
   const stateOf = async (threadId: string): Promise<GoalState> => {
     const thread = goalThreadIdSchema.parse(threadId)
@@ -181,7 +179,12 @@ export function createSessionGoalStore(storage: LibSQLStore): SessionGoalStore {
     const nextRevision = expectedRevision + 1
     const result = await tx.execute({
       sql: `UPDATE "${SESSION_GOAL_TABLE}" SET revision = ?, goal_json = ? WHERE thread_id = ? AND revision = ?`,
-      args: [nextRevision, goal === null ? null : JSON.stringify({ ...goal, revision: nextRevision }), threadId, expectedRevision]
+      args: [
+        nextRevision,
+        goal === null ? null : JSON.stringify({ ...goal, revision: nextRevision }),
+        threadId,
+        expectedRevision
+      ]
     })
     if (result.rowsAffected !== 1) throw goalError('GOAL_STALE_REVISION')
   }
@@ -296,7 +299,10 @@ export function createSessionGoalStore(storage: LibSQLStore): SessionGoalStore {
       const reason = goalBlockedReasonSchema.parse(blocked)
       return transition(threadId, ref, (goal) => {
         assertActive(goal) // DSH `:720-728`：仅 active
-        return { goal: { ...goal, phase: 'blocked', blockedReason: reason }, activation: 'disarmed' }
+        return {
+          goal: { ...goal, phase: 'blocked', blockedReason: reason },
+          activation: 'disarmed'
+        }
       })
     },
 
@@ -336,8 +342,7 @@ export function createSessionGoalStore(storage: LibSQLStore): SessionGoalStore {
         if (current.roundsStarted >= current.maxGoalRounds)
           throw goalError('GOAL_INVALID_TRANSITION')
         // 预留的轮号必须正好是下一轮（防重放/并发跳号）
-        if (admission.round !== current.roundsStarted + 1)
-          throw goalError('GOAL_STALE_REVISION')
+        if (admission.round !== current.roundsStarted + 1) throw goalError('GOAL_STALE_REVISION')
         const admitted = goalViewSchema.parse({
           ...current,
           roundsStarted: current.roundsStarted + 1,
@@ -351,4 +356,3 @@ export function createSessionGoalStore(storage: LibSQLStore): SessionGoalStore {
     }
   }
 }
-

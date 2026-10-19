@@ -17,8 +17,7 @@ export interface XlsxFindMatch {
 }
 
 export type XlsxFindOutcome =
-  | { ok: true; matches: XlsxFindMatch[]; truncated: boolean }
-  | { ok: false; message: string }
+  { ok: true; matches: XlsxFindMatch[]; truncated: boolean } | { ok: false; message: string }
 
 export interface XlsxFindBarProps {
   open: boolean
@@ -57,15 +56,13 @@ export function XlsxFindBar({
     if (!open) return
     const query = text
     if (query === '') {
+      // 空输入不查、也不在 effect 里同步 setState（避免级联渲染）；显示由 text 派生
       queryToken.current += 1
-      setOutcome(null)
-      setActive(0)
-      setBusy(false)
       return
     }
     const token = (queryToken.current += 1)
-    setBusy(true)
     const timer = setTimeout(() => {
+      setBusy(true)
       void search(query)
         .then((result) => {
           if (queryToken.current !== token) return
@@ -80,28 +77,31 @@ export function XlsxFindBar({
     return () => clearTimeout(timer)
   }, [text, open, search, onNavigate])
 
+  /** 空输入时一律当作"没有结果"（不在 effect 里清 state，派生即可） */
+  const current = text === '' ? null : outcome
+
   const step = useCallback(
     (delta: number) => {
-      if (outcome === null || !outcome.ok || outcome.matches.length === 0) return
-      const count = outcome.matches.length
-      const next = ((active + delta) % count + count) % count
+      if (current === null || !current.ok || current.matches.length === 0) return
+      const count = current.matches.length
+      const next = (((active + delta) % count) + count) % count
       setActive(next)
-      onNavigate(outcome.matches[next], next)
+      onNavigate(current.matches[next], next)
     },
-    [active, onNavigate, outcome]
+    [active, current, onNavigate]
   )
 
   if (!open) return null
 
-  const total = outcome !== null && outcome.ok ? outcome.matches.length : null
+  const total = current !== null && current.ok ? current.matches.length : null
   const countText =
-    outcome === null
+    current === null
       ? ''
-      : outcome.ok
+      : current.ok
         ? total === 0
           ? '无结果'
-          : `${String(active + 1)}/${String(total)}${outcome.truncated ? '（仅前 1000 条）' : ''}`
-        : outcome.message
+          : `${String(active + 1)}/${String(total)}${current.truncated ? '（仅前 1000 条）' : ''}`
+        : current.message
 
   return (
     <div
@@ -159,11 +159,14 @@ export function XlsxFindBar({
         aria-live="polite"
         style={{
           minWidth: 44,
-          color: outcome !== null && !outcome.ok ? 'var(--danger, #d33)' : 'var(--text-tertiary, #6b7075)',
+          color:
+            current !== null && !current.ok
+              ? 'var(--danger, #d33)'
+              : 'var(--text-tertiary, #6b7075)',
           fontVariantNumeric: 'tabular-nums'
         }}
       >
-        {busy && countText === '' ? '查找中…' : countText}
+        {busy && text !== '' ? '查找中…' : countText}
       </span>
       <button
         type="button"

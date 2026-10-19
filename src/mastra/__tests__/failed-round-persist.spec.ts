@@ -20,11 +20,12 @@ const usage = {
   outputTokens: { total: 3, text: 3, reasoning: 0 }
 }
 
-type Part = Awaited<ReturnType<MockLanguageModelV4['doStream']>> extends {
-  stream: ReadableStream<infer T>
-}
-  ? T
-  : never
+type Part =
+  Awaited<ReturnType<MockLanguageModelV4['doStream']>> extends {
+    stream: ReadableStream<infer T>
+  }
+    ? T
+    : never
 
 function textChunks(text: string): Part[] {
   return [
@@ -118,9 +119,7 @@ async function history(threadId: string): Promise<{
 it('失败轮：parts 补进已存在的 assistant 行；下一轮上下文不含失败内容且请求合法', async () => {
   const threadId = 'thread-pb035-c'
   const first = await postChat({
-    messages: [
-      { id: 'u1', role: 'user', parts: [{ type: 'text', text: '写一段话，然后断掉' }] }
-    ],
+    messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '写一段话，然后断掉' }] }],
     ...threadMemoryBody(threadId)
   })
   expect(first.status).toBe(200)
@@ -175,4 +174,3 @@ it('失败轮：parts 补进已存在的 assistant 行；下一轮上下文不�
     )
   ).toBe(true)
 }, 60_000)
-

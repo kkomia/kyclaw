@@ -64,7 +64,11 @@ test('P0：xlsx 打开不再崩（commands 模式断言消失）+ 查找两条�
   const userDataDir = mkdtempSync(join(tmpdir(), 'kyclaw-xlsx-find-'))
   const fixture = join(userDataDir, 'find-fixture.xlsx')
   writeFileSync(fixture, buildMinimalXlsx())
-  writeFileSync(join(userDataDir, 'settings.json'), `${JSON.stringify({ theme: 'system' })}\n`, 'utf8')
+  writeFileSync(
+    join(userDataDir, 'settings.json'),
+    `${JSON.stringify({ theme: 'system' })}\n`,
+    'utf8'
+  )
   const app = await electron.launch({
     args: [repoRoot, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
@@ -136,9 +140,12 @@ test('P0：xlsx 打开不再崩（commands 模式断言消失）+ 查找两条�
     // ③ 输入存在的文本 → 1/N（真查询 + 定位）
     await surface.locator('[data-testid="xlsx-find-input"]').fill('预算')
     await expect
-      .poll(async () => (await surface.locator('[data-testid="xlsx-find-count"]').innerText()).trim(), {
-        timeout: 15_000
-      })
+      .poll(
+        async () => (await surface.locator('[data-testid="xlsx-find-count"]').innerText()).trim(),
+        {
+          timeout: 15_000
+        }
+      )
       .toMatch(/^\d+\/\d+$/)
     expect(await surface.locator('[data-testid="xlsx-find-count"]').innerText()).toBe('1/1')
     await page.screenshot({ path: join(EVIDENCE, 'real-xlsx-find-results.png') })
@@ -146,7 +153,9 @@ test('P0：xlsx 打开不再崩（commands 模式断言消失）+ 查找两条�
     // ④ 关闭后 Ctrl+F 再开
     await surface.locator('[data-testid="xlsx-find-close"]').click()
     await expect(surface.locator('[data-testid="xlsx-find-bar"]')).toHaveCount(0)
-    await surface.locator('[data-testid="surface-xlsx-editor"]').click({ position: { x: 220, y: 220 } })
+    await surface
+      .locator('[data-testid="surface-xlsx-editor"]')
+      .click({ position: { x: 220, y: 220 } })
     await page.keyboard.press('Control+f')
     await expect(surface.locator('[data-testid="xlsx-find-bar"]')).toBeVisible({ timeout: 10_000 })
     await page.screenshot({ path: join(EVIDENCE, 'real-xlsx-find-ctrl-f.png') })

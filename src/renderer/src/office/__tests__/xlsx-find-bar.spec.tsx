@@ -17,7 +17,11 @@ const MATCHES: XlsxFindMatch[] = [
   { a1: 'D9', text: '预算表', sheetId: 's1', row: 8, col: 3 }
 ]
 
-function setup(outcome: XlsxFindOutcome = { ok: true, matches: MATCHES, truncated: false }) {
+function setup(outcome: XlsxFindOutcome = { ok: true, matches: MATCHES, truncated: false }): {
+  search: ReturnType<typeof vi.fn>
+  onNavigate: ReturnType<typeof vi.fn>
+  onClose: ReturnType<typeof vi.fn>
+} {
   const search = vi.fn(async () => outcome)
   const onNavigate = vi.fn()
   const onClose = vi.fn()

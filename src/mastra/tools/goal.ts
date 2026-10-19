@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PB-039 模型侧 goal 工具三件套：`get_goal` / `create_goal` / `update_goal`。
  *
  * schema 字段名照抄 DSH `@deepseek-ai/dsh-tool-goal`（0.2.1-rc.2）：
@@ -28,6 +28,7 @@ import {
   goalRoundOf,
   type GoalRoundMarker
 } from '../../shared/goal'
+import type { Tool } from '@mastra/core/tools'
 import { SessionGoalError, type SessionGoalStore } from '../session-goal'
 
 /** 工具执行上下文里我们用到的那几项（Mastra 传进来的是大对象，这里只取需要的） */
@@ -90,7 +91,13 @@ const updateGoalInputSchema = z.strictObject({
 
 const goalToolOutputSchema = z.string()
 
-export async function createGetGoalTool(store: SessionGoalStore) {
+type GetGoalInput = z.infer<typeof getGoalInputSchema>
+type CreateGoalInput = z.infer<typeof createGoalInputSchema>
+type UpdateGoalInput = z.infer<typeof updateGoalInputSchema>
+
+export async function createGetGoalTool(
+  store: SessionGoalStore
+): Promise<Tool<GetGoalInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
   return createTool({
     id: 'get_goal',
@@ -107,13 +114,15 @@ export async function createGetGoalTool(store: SessionGoalStore) {
   })
 }
 
-export async function createCreateGoalTool(store: SessionGoalStore) {
+export async function createCreateGoalTool(
+  store: SessionGoalStore
+): Promise<Tool<CreateGoalInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
   return createTool({
     id: 'create_goal',
     description:
       'Create the goal for this session (one goal per session; only a completed goal can be replaced). ' +
-      "Requires a human turn (not an automatic goal round). Default max rounds is " +
+      'Requires a human turn (not an automatic goal round). Default max rounds is ' +
       `${String(DEFAULT_MAX_GOAL_ROUNDS)}. Returns compact JSON \`{goal, activation}\`.`,
     inputSchema: createGoalInputSchema,
     outputSchema: goalToolOutputSchema,
@@ -134,7 +143,9 @@ export async function createCreateGoalTool(store: SessionGoalStore) {
   })
 }
 
-export async function createUpdateGoalTool(store: SessionGoalStore) {
+export async function createUpdateGoalTool(
+  store: SessionGoalStore
+): Promise<Tool<UpdateGoalInput, string>> {
   const { createTool } = await import('@mastra/core/tools')
   return createTool({
     id: 'update_goal',

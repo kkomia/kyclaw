@@ -24,12 +24,15 @@ const human = { agent: { threadId: 't1' }, requestContext: {} }
 function goalRound(goal: GoalState, round = 1): unknown {
   return {
     agent: { threadId: 't1' },
-    requestContext: { [GOAL_ROUND_CONTEXT_KEY]: { goalId: goal.goal?.id, revision: goal.goal?.revision, round } }
+    requestContext: {
+      [GOAL_ROUND_CONTEXT_KEY]: { goalId: goal.goal?.id, revision: goal.goal?.revision, round }
+    }
   }
 }
 
 const run = async (tool: unknown, input: unknown, context: unknown = human): Promise<string> => {
-  const execute = (tool as { execute?: (input: unknown, context?: unknown) => Promise<unknown> }).execute
+  const execute = (tool as { execute?: (input: unknown, context?: unknown) => Promise<unknown> })
+    .execute
   if (execute === undefined) throw new Error('tool has no execute')
   return String(await execute(input, context))
 }
@@ -105,7 +108,12 @@ describe('goal 工具：update 动作与权限', () => {
         max_goal_rounds: 5
       })
     )
-    expect(edited.goal).toMatchObject({ objective: '新目标', maxGoalRounds: 5, phase: 'active', revision: 2 })
+    expect(edited.goal).toMatchObject({
+      objective: '新目标',
+      maxGoalRounds: 5,
+      phase: 'active',
+      revision: 2
+    })
     const stale = JSON.parse(
       await run(tools.update_goal, {
         goal_id: created.goal?.id,
@@ -142,12 +150,16 @@ describe('goal 工具：update 动作与权限', () => {
     const context = goalRound(created)
     for (const action of ['pause', 'edit'] as const) {
       const output = JSON.parse(
-        await run(tools.update_goal, {
-          goal_id: created.goal?.id,
-          revision: created.goal?.revision,
-          action,
-          ...(action === 'edit' ? { objective: '改' } : {})
-        }, context)
+        await run(
+          tools.update_goal,
+          {
+            goal_id: created.goal?.id,
+            revision: created.goal?.revision,
+            action,
+            ...(action === 'edit' ? { objective: '改' } : {})
+          },
+          context
+        )
       ) as { error: { code: string } }
       expect(output.error.code, action).toBe('GOAL_TOOL_HUMAN_ONLY')
     }
@@ -224,4 +236,3 @@ describe('goal 工具：update 动作与权限', () => {
     expect(tooEarly.error.code).toBe('GOAL_TOOL_BLOCK_THRESHOLD')
   })
 })
-

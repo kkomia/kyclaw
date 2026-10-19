@@ -309,7 +309,6 @@ export function usageStreamPartOf(
   }
 }
 
-
 export interface ThreadUsageTotals {
   rounds: number
   modelCalls: number
@@ -364,14 +363,18 @@ export function summarizeThreadUsage(rows: readonly UsageRun[]): ThreadUsageSumm
     }
   }
   // 没回 usage 的轮：数值一律 null（UI 显示「—」），但 totals 与轮数照算（轮次不丢）
-  const valueRow = last.reported === false ? [...rows].reverse().find((row) => row.reported !== false) : last
+  const valueRow =
+    last.reported === false ? [...rows].reverse().find((row) => row.reported !== false) : last
   const baselineRow = first?.reported === false ? rows.find((row) => row.reported !== false) : first
   return {
-    lastInput: valueRow === undefined ? null : contextOrTurn(valueRow.contextInput, valueRow.tokens.input),
+    lastInput:
+      valueRow === undefined ? null : contextOrTurn(valueRow.contextInput, valueRow.tokens.input),
     lastCachedInput:
       valueRow === undefined ? null : (valueRow.contextCachedInput ?? valueRow.cachedInput),
     baselineInput:
-      baselineRow === undefined ? null : contextOrTurn(baselineRow.contextInput, baselineRow.tokens.input),
+      baselineRow === undefined
+        ? null
+        : contextOrTurn(baselineRow.contextInput, baselineRow.tokens.input),
     usageReported: last.reported !== false,
     totals
   }
@@ -611,4 +614,3 @@ export function createUsageRecorder(options: {
     }
   }
 }
-
