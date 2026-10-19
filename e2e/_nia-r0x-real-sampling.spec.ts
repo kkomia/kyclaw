@@ -268,11 +268,14 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
   test('R08 长流：可达 stage label 逐字、data-motion、轮换约 10s', async () => {
     test.setTimeout(240_000)
     const slowTool = (id: string): ScriptResponse => ({
-      preDelayMs: 800,
+      preDelayMs: 600,
       deltas: [
         { text: '先查一下。' },
-        { text: '读取中…', delayMs: 700 },
-        { text: '…', delayMs: 700 },
+        { text: '读取中…', delayMs: 1200 },
+        { text: '…', delayMs: 1200 },
+        { text: '…', delayMs: 1200 },
+        { text: '…', delayMs: 1200 },
+        { text: '…', delayMs: 1200 },
         { tool: { id, name: 'get_goal', input: {} }, delayMs: 500 }
       ],
       stop: 'tool_use'
@@ -281,7 +284,7 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       slowTool('toolu_r08_1'),
       slowTool('toolu_r08_2'),
       slowTool('toolu_r08_3'),
-      { preDelayMs: 800, deltas: [{ text: '最终回答。' }], stop: 'end_turn' }
+      { preDelayMs: 800, deltas: [{ text: '最终回答。' }, { text: '完成。', delayMs: 800 }], stop: 'end_turn' }
     ])
     const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
     const samples: Array<Record<string, unknown>> = []
@@ -316,7 +319,14 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         const key = String(item.stage)
         if (key === 'idle' && item.label === '暂未响应') continue
         expect(LABELS[key], `R08 未知 stage=${key}（${file}）`).toBeDefined()
-        if (LABELS[key] !== undefined) expect(item.label, `R08 stage=${key} 文案不符（${file}）`).toBe(LABELS[key])
+      }
+      // 文案有 1s 说法锁（STATUS_LOCK_MS）：stage 变了 label 最多晚 ~1s 才换。
+      // 只在「同一 stage 已稳定 ≥1.2s（6×200ms）」的采样上要求 label 逐字一致，避免把锁的过渡帧误判成文案错。
+      for (let i = 0; i + 6 < samples.length; i += 1) {
+        const key = String(samples[i]?.stage ?? '')
+        const stable = [1, 2, 3, 4, 5, 6].every((offset) => String(samples[i + offset]?.stage ?? '') === key)
+        if (!stable || key === '' || LABELS[key] === undefined) continue
+        expect(samples[i]?.label, `R08 stage=${key} 稳定 1.2s 后文案不符（${file}）`).toBe(LABELS[key])
       }
       const modes = samples.map((item) => item.mode).filter((mode) => typeof mode === 'string')
       expect(modes.every((mode) => mode === 'full' || mode === 'reduced'), `R08 data-mode 非法（${file}）`).toBe(true)
@@ -434,8 +444,12 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       await launched.page.waitForTimeout(900)
       const result = await launched.page.evaluate(() => {
         const probe = (window as unknown as { __r16: { added: number; removed: number; firstHtml: string | null; shikiAtFirst: boolean } }).__r16
+        const code = document.querySelector('[data-testid="code-block"] pre code')
+        const codeHtml = code?.innerHTML ?? ''
         return {
           ...probe,
+          finalCodeHtml: codeHtml.slice(0, 300),
+          finalCodeHighlighted: /shiki|data-shiki|class="[^"]*shiki/u.test(codeHtml),
           dom: {
             messageText:
               (document.querySelector('[data-testid="message-text"]') as HTMLElement | null)?.innerText ?? '',
