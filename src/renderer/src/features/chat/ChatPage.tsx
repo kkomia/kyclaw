@@ -61,6 +61,9 @@ import { GoalDockContainer } from './GoalDockContainer'
 import { useUsageStream } from './useUsageStream'
 import { pushUsage } from './usage-live'
 import { fetchKernelCatalog, kernelEnabled, runKernelCommand } from './kernel-command-api'
+import { KernelInteractionDock } from './b3-5/KernelInteractionDock'
+import { KernelInteractionResults } from './b3-5/KernelInteractionResults'
+import { useKernelInteractions } from './b3-5/use-kernel-interactions'
 import type {
   KernelCommandSummary,
   KernelGoalProjection,
@@ -488,6 +491,7 @@ export function ChatSession({
         <ActiveChat
           chat={chat}
           threadId={sessionThreadId}
+          hasRealThread={threadId !== null}
           interactionsEnabled={runtime === undefined || runtime.refreshInteractions === true}
           pending={pending}
           turnNotice={turnNotice}
@@ -513,6 +517,8 @@ export type ActiveChatPending =
 interface ActiveChatProps {
   chat: Chat<UIMessage>
   threadId: string
+  /** PB-030 配合：threadId 是否真会话（false = PENDING_THREAD_ID 占位；交互/投影请求一律不打） */
+  hasRealThread: boolean
   interactionsEnabled: boolean
   /** 实例就绪之前的那一档；null = 就绪（正常发消息） */
   pending: ActiveChatPending | null
@@ -561,6 +567,7 @@ interface PendingSync {
 function ActiveChat({
   chat,
   threadId,
+  hasRealThread,
   interactionsEnabled,
   pending,
   turnNotice,
@@ -702,6 +709,21 @@ function ActiveChat({
   const realThread = useSessionsStore((state) =>
     state.threads.some((thread) => thread.id === threadId)
   )
+  /**
+   * PB-026：内核交互快照/应答。只在 **kernelMode + 真会话** 时开——占位/未物化的本地 thread
+   * 不能拿去打交互路由（否则 main 会 session/create，侧栏冒幽灵会话，PB-030）。
+   */
+  const kernelInteractions = useKernelInteractions({
+    threadId,
+    enabled: kernelMode && hasRealThread,
+    active: busy
+  })
+  const kernelInteractionPending =
+    kernelMode &&
+    realThread &&
+    (kernelInteractions.snapshot?.approvals.pending.length ?? 0) +
+      (kernelInteractions.snapshot?.questions.pending.length ?? 0) >
+      0
   const refreshPlan = useCallback(() => {
     void rendererPlansStore
       .getState()
@@ -765,6 +787,8 @@ function ActiveChat({
     [threadId, busy, askState.pending.length, waitingApproval]
   )
   const refreshQuestions = useCallback(() => {
+    // PB-030 配合：未物化的本地 thread / 占位 id 不能打 /ask-user/pending（main 会 session/create）
+    if (!hasRealThread) return
     void useAskUserStore
       .getState()
       .refresh(threadId)
@@ -784,17 +808,18 @@ function ActiveChat({
           }))
         }
       })
-  }, [threadId, chat, replaceHistoryFromServer])
+  }, [threadId, chat, replaceHistoryFromServer, hasRealThread])
   useEffect(() => {
-    if (!ready || !interactionsEnabled) return
+    if (!ready || !interactionsEnabled || !hasRealThread) return
     refreshQuestions()
     const onFocus = (): void => refreshQuestions()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [ready, refreshQuestions, interactionsEnabled])
+  }, [ready, refreshQuestions, interactionsEnabled, hasRealThread])
   const waitingInteraction =
     waitingApproval ||
     waitingPlan ||
+    kernelInteractionPending ||
     (planActionError !== null && plan.state !== null && plan.state.mode !== 'normal') ||
     ((!interactionsEnabled || !askState.loaded || askState.error !== null) &&
       hasPendingAskUser(messages[messages.length - 1])) ||
@@ -806,7 +831,7 @@ function ActiveChat({
         askState.error !== null ||
         askState.pending.length > 0))
   const stopInteraction = useCallback(() => {
-    if (!interactionsEnabled) {
+    if (!interactionsEnabled || !hasRealThread) {
       void stop()
       return
     }
@@ -838,7 +863,15 @@ function ActiveChat({
         }
       }
     )
-  }, [threadId, stop, replaceHistoryFromServer, interactionsEnabled, kernelMode, realThread])
+  }, [
+    threadId,
+    stop,
+    replaceHistoryFromServer,
+    interactionsEnabled,
+    kernelMode,
+    hasRealThread,
+    realThread
+  ])
   /**
    * PB-018：探活 + 取内核命令目录。失败/flag 关一律回旧路径（`kernelEnabled` 内部吞错），
    * 不因为网关不可用把对话页推到错误态。
@@ -1651,6 +1684,14 @@ function ActiveChat({
             compaction={hero ? null : compaction}
             compacting={compacting}
             compactionIndex={compactionIndex}
+            interactionResults={
+              kernelMode && hasRealThread ? (
+                <KernelInteractionResults
+                  results={kernelInteractions.snapshot?.approvals.results ?? []}
+                  settled={kernelInteractions.snapshot?.askUser.settled ?? []}
+                />
+              ) : undefined
+            }
           />
         ) : (
           <PendingNotice pending={pending} />
@@ -1809,52 +1850,76 @@ function ActiveChat({
                 />
               </div>
             ) : null}
-            {/* round 29（用户口径）：待审批统一停靠在输入框正上方（主列宽度内、与输入卡同宽） */}
-            {askState.error ? (
-              <ErrorCard error={new Error(askState.error)} onRetry={refreshQuestions} />
+            {/* PB-026：内核模式挂起在 dock；结果在消息流（MessageList 的 interactionResults）。
+                flag 关 / 未物化会话保持旧 AskUserDock + ApprovalDock 一行不动。 */}
+            {kernelMode && hasRealThread ? (
+              <KernelInteractionDock
+                snapshot={kernelInteractions.snapshot}
+                error={kernelInteractions.error}
+                notice={kernelInteractions.notice}
+                submittingEventId={kernelInteractions.submittingEventId}
+                onRespondApproval={(eventId, outcome) => {
+                  void kernelInteractions.respondApproval(eventId, outcome)
+                }}
+                onRespondQuestion={(eventId, answers) => {
+                  void kernelInteractions.respondQuestion(eventId, answers)
+                }}
+                onClearNotice={kernelInteractions.clearNotice}
+              />
+            ) : (
+              <>
+                {askState.error ? (
+                  <ErrorCard error={new Error(askState.error)} onRetry={refreshQuestions} />
+                ) : null}
+                <AskUserDock
+                  requests={askState.pending.map((request) => {
+                    const key = askUserCallKey({ threadId, ...request })
+                    return {
+                      ...request,
+                      threadId,
+                      draft: askDrafts.get(key) ?? {},
+                      submitting: busy || askState.submitting || askState.refreshing,
+                      stopping: askState.stopping,
+                      error: askState.error,
+                      onDraftChange: (draft) => useAskUserStore.getState().changeDraft(key, draft),
+                      /* 0.1.2 / 001：把"服务端已接收"回执随请求带上（transport 在响应到手时响它，
+                         见 lib/agent 的 `AskUserAccepted`）—— 收卡挂在"请求被受理"上，不挂在"整轮跑完"上。
+                         但**这一轮到底成没成**必须如实往上抛：AI SDK 把失败吞进 `chat.error`
+                         （`sendMessage` 照样 resolve），不回抛 store 就分不清"响应没到手"与"跑完了"。 */
+                      onSubmit: (answer) => {
+                        if (busy) return
+                        void useAskUserStore
+                          .getState()
+                          .submit(threadId, request, answer, (accepted) =>
+                            sendMessage(undefined, {
+                              body: { askUserResume: askUserResumeBody(threadId, request, answer) },
+                              metadata: askUserAcceptedMetadata(accepted)
+                            }).then(() => {
+                              if (chat.error) throw chat.error
+                            })
+                          )
+                      },
+                      onStop: stopInteraction
+                    }
+                  })}
+                />
+                <ApprovalDock
+                  requests={dockApprovals}
+                  workspaces={workspaces}
+                  onDecide={decideApproval}
+                />
+              </>
+            )}
+            {/* PB-039：goal 条排在「审批/提问」之后、「海獭」（在输入卡里）之前；
+                PB-030 配合：未物化/占位会话不打内核投影（否则 main 会 session/create 冒幽灵会话） */}
+            {realThread ? (
+              <GoalDockContainer
+                threadId={threadId}
+                onHasGoalChange={setHasGoal}
+                onPlanChange={setKernelPlan}
+                refreshKey={goalRefresh}
+              />
             ) : null}
-            <AskUserDock
-              requests={askState.pending.map((request) => {
-                const key = askUserCallKey({ threadId, ...request })
-                return {
-                  ...request,
-                  threadId,
-                  draft: askDrafts.get(key) ?? {},
-                  submitting: busy || askState.submitting || askState.refreshing,
-                  stopping: askState.stopping,
-                  error: askState.error,
-                  onDraftChange: (draft) => useAskUserStore.getState().changeDraft(key, draft),
-                  /* 0.1.2 / 001：把"服务端已接收"回执随请求带上（transport 在响应到手时响它，
-                     见 lib/agent 的 `AskUserAccepted`）—— 收卡挂在"请求被受理"上，不挂在"整轮跑完"上。
-                     但**这一轮到底成没成**必须如实往上抛：AI SDK 把失败吞进 `chat.error`
-                     （`sendMessage` 照样 resolve），不回抛 store 就分不清"响应没到手"与"跑完了"。 */
-                  onSubmit: (answer) => {
-                    if (busy) return
-                    void useAskUserStore.getState().submit(threadId, request, answer, (accepted) =>
-                      sendMessage(undefined, {
-                        body: { askUserResume: askUserResumeBody(threadId, request, answer) },
-                        metadata: askUserAcceptedMetadata(accepted)
-                      }).then(() => {
-                        if (chat.error) throw chat.error
-                      })
-                    )
-                  },
-                  onStop: stopInteraction
-                }
-              })}
-            />
-            <ApprovalDock
-              requests={dockApprovals}
-              workspaces={workspaces}
-              onDecide={decideApproval}
-            />
-            {/* PB-039：goal 条排在「审批/提问」之后、「海獭」（在输入卡里）之前 */}
-            <GoalDockContainer
-              threadId={threadId}
-              onHasGoalChange={setHasGoal}
-              onPlanChange={setKernelPlan}
-              refreshKey={goalRefresh}
-            />
           </div>
           {/* round 66：「选择项目」在输入卡**上方**单独一行（用户口径："放到对话框上面，
               不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片内容同一口径），
