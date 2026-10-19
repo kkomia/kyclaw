@@ -21,8 +21,8 @@ import { startKernelAdapter, type KernelAdapter } from '../kernel-adapter'
 import type { KernelFollowValue } from '../sse-map'
 
 const ENABLED = process.env.KYCLAW_KERNEL_E2E === '1'
-/** 红态复现：把 image 用例强制跑在 text-only catalog 上（期望断言 1 红）。 */
-const FORCE_TEXT_ONLY = process.env.KYCLAW_R14_FORCE_TEXT_ONLY === '1'
+/** 红态复现：只把 **vision=false 负向用例** 强制放在 image-capable catalog 上（期望断言②精确红）。 */
+const FORCE_VISION_ON = process.env.KYCLAW_R14_FORCE_VISION_ON === '1'
 const ELECTRON = process.env.KYCLAW_KERNEL_ELECTRON ?? 'F:\\deepseekharness\\DeepSeek Harness.exe'
 const ASAR = process.env.KYCLAW_KERNEL_ASAR ?? 'E:\\gitlab\\kyclaw\\resources\\kernel\\rc.2'
 const HTML_MARKER = 'R14_HTML_MARKER'
@@ -212,7 +212,7 @@ async function runRead(
 }> {
   const root = mkdtempSync(join(tmpdir(), 'kyclaw-r14-'))
   const appDataDir = join(root, 'appdata')
-  const textOnlyModel = options.textOnlyModel ?? FORCE_TEXT_ONLY
+  const textOnlyModel = options.textOnlyModel ?? false
   if (textOnlyModel) {
     const profileDir = join(appDataDir, 'dsh-kernel-home', 'profiles', 'web')
     mkdirSync(profileDir, { recursive: true })
@@ -323,7 +323,7 @@ describe.runIf(ENABLED)('R14 内核 read 工具探针', () => {
     writeFileSync(file, PNG_BYTES)
     try {
       const result = await runRead(file, {
-        textOnlyModel: true,
+        textOnlyModel: !FORCE_VISION_ON,
         toolName: 'read_image',
         allowEmptyToolResult: true
       })
