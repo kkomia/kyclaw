@@ -1249,8 +1249,15 @@ function ActiveChat({
           return
         }
         if (parsed.kind === 'action') {
-          // TODO(PB-039 V1)：附件只随 create/edit 的 followup 提交，这块还没接；
-          // 本轮先把命令本体跑通（附件策略见交付报告的 TODO 清单）。
+          // 附件只随 create/edit 的 followup 提交；V1 followup 未接 → 明确报错，不许静默丢弃
+          if (message.files.length > 0) {
+            setGoalCommandResult({
+              goal: null,
+              activation: 'disarmed',
+              error: '/goal 附件提交（followup）尚未接入：请先移除附件再执行命令。'
+            })
+            return
+          }
           void runGoalCommand(parsed.action, parsed.objective)
           return
         }
