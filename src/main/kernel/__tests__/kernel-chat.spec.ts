@@ -23,6 +23,9 @@ function fakeAdapter(
   const adapter: KernelAdapter = {
     sessionId: 'session-test',
     defaultSessionId: 'session-test',
+    cwdOf() {
+      return undefined
+    },
     pid: 1,
     port: 1,
     async startTurn(text, startOptions = {}) {

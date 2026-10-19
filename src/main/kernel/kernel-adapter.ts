@@ -138,6 +138,14 @@ export interface KernelAdapter {
    * 默认会话的创建时机不变（B3.4 行为）。
    */
   readonly defaultSessionId: string
+  /**
+   * PB-024/PB-020：**同步**取某个 thread 的内核 cwd；未知返回 `undefined`。
+   *
+   * 只返回"我们真的见过"的 cwd：来自 `createSession`（含默认会话）与 `listKernelSessions()`
+   * 的返回。**不发 RPC、不加缓存层、不回落默认值**——调用方要知道该 thread 是否已被内核物化，
+   * 回落 `appDataDir` 会把"未知"伪装成"已知"（Kai 的 projectIdOf 就靠这个区分）。
+   */
+  cwdOf(threadId: string): string | undefined
   /** B3.4：刷新重接（同一进程内重新 follow）；返回 opening 的 startedAfterSeq/nextIndex */
   reattach(threadId: string): Promise<KernelSessionOpening>
   /**
@@ -281,6 +289,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
 
     const states = new Map<string, SessionState>()
     const byStream = new Map<string, SessionState>()
+    /** PB-024：sessionId → cwd（只记"见过"的；`cwdOf` 同步读它，不发 RPC） */
+    const cwdBySession = new Map<string, string>()
     let closed = false
     /** PB-025：`$events` 流的身份（ready 帧给的 clientId；回执要带） */
     let interactionsStreamId: string | undefined
@@ -306,12 +316,15 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       const result = await rpc.call<{ items?: Array<Record<string, unknown>> }>('session/list', {
         _request: {}
       })
-      return (result.items ?? []).map((item) => ({
+      const items = (result.items ?? []).map((item) => ({
         sessionId: String(item.sessionId),
         ...(typeof item.cwd === 'string' ? { cwd: item.cwd } : {}),
         ...(typeof item.running === 'boolean' ? { running: item.running } : {}),
         ...(typeof item.blank === 'boolean' ? { blank: item.blank } : {})
       }))
+      // PB-024：list 是 cwd 的另一个来源（thread 可能由别的路径物化），顺手记进内存映射
+      for (const item of items) if (item.cwd !== undefined) cwdBySession.set(item.sessionId, item.cwd)
+      return items
     }
 
     const openFollow = async (sessionId: string): Promise<SessionState> => {
@@ -372,6 +385,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         const created = await rpc.call<{ sessionId: string }>('session/create', {
           request: { cwd, ...(sessionId === undefined ? {} : { sessionId }) }
         })
+        cwdBySession.set(created.sessionId, cwd)
         return created.sessionId
       } catch (error) {
         throw kernelUserError(error)
@@ -555,6 +569,10 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     return {
       sessionId: defaultSessionId,
       defaultSessionId,
+      /** PB-024：同步读内存里见过的 cwd；未知 = `undefined`（不回落默认值、不发 RPC） */
+      cwdOf(threadId: string): string | undefined {
+        return cwdBySession.get(threadId)
+      },
       pid: kernel.pid,
       port: Number(new URL(kernel.baseUrl).port),
       async startTurn(text: string, startOptions: StartTurnOptions = {}): Promise<KernelTurnResult> {

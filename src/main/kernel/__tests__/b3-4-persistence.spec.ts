@@ -799,6 +799,24 @@ describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手�
 
 /** PB-024（Eve P0）：cwd 唯一来源 + 默认会话 id 只读暴露 */
 describe('PB-024 cwd 钩子与 defaultSessionId', () => {
+  it('cwdOf：create 过的 thread 同步取到 cwd；list 过的也记；未知返回 undefined（不发 RPC）', async () => {
+    const appDir = tempDir('a')
+    const adapter = await startAdapter(appDir)
+    // 默认会话在启动时 create 过 → 已记录
+    expect(adapter.cwdOf(adapter.defaultSessionId)).toBe(appDir)
+    // 未见过 → undefined（不回落 appDir）
+    expect(adapter.cwdOf('thread-never-seen')).toBeUndefined()
+
+    // 内核侧多出一个会话（直接 rpcCall 建，不经过 adapter 的 createSession）→ list 后应能取到
+    const extra = await adapter.rpcCall<{ sessionId: string }>('session/create', {
+      request: { cwd: join(appDir, 'extra'), sessionId: 'thread-listed' }
+    })
+    expect(extra.sessionId).toBe('thread-listed')
+    expect(adapter.cwdOf('thread-listed')).toBeUndefined()
+    await adapter.listKernelSessions()
+    expect(adapter.cwdOf('thread-listed')).toBe(join(appDir, 'extra'))
+  })
+
   it('resolveCwd 给 workspace cwd：create/startTurn 都走它，不再 conflict', async () => {
     const appDir = tempDir('a')
     const workspace = tempDir('ws')
