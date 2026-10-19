@@ -1,0 +1,331 @@
+[
+  {
+    "type": "event",
+    "event": {
+      "type": "assistant/message",
+      "seq": 17,
+      "time": 1792399451521,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "先读一下目标。"
+            },
+            {
+              "type": "tool-call",
+              "id": "toolu_1",
+              "name": "get_goal",
+              "arguments": "{}"
+            }
+          ],
+          "source": {
+            "kind": "model",
+            "provider": "deepseek-official",
+            "model": "deepseek-flash",
+            "replayState": {
+              "response": {
+                "kind": "deepseek-messages",
+                "version": 1,
+                "model": "deepseek-flash"
+              },
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "tool-call"
+                }
+              ]
+            }
+          },
+          "id": "af6847a9-912b-42ee-ad73-5df3ee964b3d"
+        },
+        "usage": {
+          "inputTokens": 12,
+          "outputTokens": 8,
+          "totalTokens": 20
+        },
+        "stream": [
+          {
+            "type": "chunk",
+            "time": 1792399451518,
+            "chunk": {
+              "type": "block-start",
+              "index": 0,
+              "blockType": "text"
+            }
+          },
+          {
+            "type": "text-chunks",
+            "time0": 1792399451518,
+            "index": 0,
+            "dt": [],
+            "texts": ["先读一下目标。"]
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451519,
+            "chunk": {
+              "type": "block-end",
+              "index": 0,
+              "block": {
+                "type": "text",
+                "text": "先读一下目标。"
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451519,
+            "chunk": {
+              "type": "block-start",
+              "index": 1,
+              "blockType": "tool-call"
+            }
+          },
+          {
+            "type": "tool-call-chunks",
+            "time0": 1792399451519,
+            "index": 1,
+            "dt": [],
+            "id": "toolu_1",
+            "name": "get_goal",
+            "args": [""]
+          },
+          {
+            "type": "tool-call-chunks",
+            "time0": 1792399451519,
+            "index": 1,
+            "dt": [],
+            "id": "toolu_1",
+            "args": [""]
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451519,
+            "chunk": {
+              "type": "block-end",
+              "index": 1,
+              "block": {
+                "type": "tool-call",
+                "id": "toolu_1",
+                "name": "get_goal",
+                "arguments": "{}"
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451519,
+            "chunk": {
+              "type": "usage",
+              "usage": {
+                "inputTokens": 12,
+                "outputTokens": 8,
+                "totalTokens": 20
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451519,
+            "chunk": {
+              "type": "finish",
+              "reason": {
+                "kind": "tool-calls"
+              },
+              "replayState": {
+                "response": {
+                  "kind": "deepseek-messages",
+                  "version": 1,
+                  "model": "deepseek-flash"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  },
+                  {
+                    "type": "tool-call"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "surfaceOp": "append"
+    }
+  },
+  {
+    "type": "event",
+    "event": {
+      "type": "tool/call",
+      "seq": 18,
+      "time": 1792399451521,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "callId": "toolu_1",
+        "name": "get_goal",
+        "arguments": "{}"
+      }
+    }
+  },
+  {
+    "type": "event",
+    "event": {
+      "type": "tool/result",
+      "seq": 21,
+      "time": 1792399451654,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {
+          "role": "tool",
+          "source": {
+            "kind": "tool",
+            "callId": "toolu_1"
+          },
+          "toolCallId": "toolu_1",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"goal\":null}"
+            }
+          ],
+          "isError": false,
+          "id": "cfdd3f3d-eb86-4a55-acda-bade668ccdf0"
+        }
+      },
+      "sourceEventSeqs": [18],
+      "surfaceOp": "append"
+    }
+  },
+  {
+    "type": "event",
+    "event": {
+      "type": "assistant/message",
+      "seq": 25,
+      "time": 1792399451676,
+      "data": {
+        "turn": 1,
+        "step": 2,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "工具已完成。"
+            }
+          ],
+          "source": {
+            "kind": "model",
+            "provider": "deepseek-official",
+            "model": "deepseek-flash",
+            "replayState": {
+              "response": {
+                "kind": "deepseek-messages",
+                "version": 1,
+                "model": "deepseek-flash"
+              },
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "id": "c000fc60-86d1-4cd8-a559-5e04f5eeb8f1"
+        },
+        "usage": {
+          "inputTokens": 12,
+          "outputTokens": 8,
+          "totalTokens": 20
+        },
+        "stream": [
+          {
+            "type": "chunk",
+            "time": 1792399451676,
+            "chunk": {
+              "type": "block-start",
+              "index": 0,
+              "blockType": "text"
+            }
+          },
+          {
+            "type": "text-chunks",
+            "time0": 1792399451676,
+            "index": 0,
+            "dt": [],
+            "texts": ["工具已完成。"]
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451676,
+            "chunk": {
+              "type": "block-end",
+              "index": 0,
+              "block": {
+                "type": "text",
+                "text": "工具已完成。"
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451676,
+            "chunk": {
+              "type": "usage",
+              "usage": {
+                "inputTokens": 12,
+                "outputTokens": 8,
+                "totalTokens": 20
+              }
+            }
+          },
+          {
+            "type": "chunk",
+            "time": 1792399451676,
+            "chunk": {
+              "type": "finish",
+              "reason": {
+                "kind": "stop"
+              },
+              "replayState": {
+                "response": {
+                  "kind": "deepseek-messages",
+                  "version": 1,
+                  "model": "deepseek-flash"
+                },
+                "blocks": [
+                  {
+                    "type": "text"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "surfaceOp": "append"
+    }
+  },
+  {
+    "type": "event",
+    "event": {
+      "type": "turn/end",
+      "seq": 27,
+      "time": 1792399451677,
+      "data": {
+        "turn": 1,
+        "reason": {
+          "kind": "completed"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,13 @@
+[
+  {
+    "type": "tool-input-available",
+    "toolCallId": "<id>",
+    "toolName": "<tool>",
+    "input": "<input>"
+  },
+  {
+    "type": "tool-output-available",
+    "toolCallId": "<id>",
+    "output": "<output>"
+  }
+]

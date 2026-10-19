@@ -1,0 +1,51 @@
+[
+  {
+    "type": "event",
+    "event": {
+      "type": "tool/call",
+      "seq": 18,
+      "time": 1792399454089,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "callId": "toolu_1",
+        "name": "not_a_tool",
+        "arguments": "{}"
+      }
+    }
+  },
+  {
+    "type": "event",
+    "event": {
+      "type": "tool/result",
+      "seq": 21,
+      "time": 1792399454252,
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {
+          "role": "tool",
+          "source": {
+            "kind": "tool",
+            "callId": "toolu_1"
+          },
+          "toolCallId": "toolu_1",
+          "content": [
+            {
+              "type": "text",
+              "text": "Error: unknown tool \"not_a_tool\""
+            }
+          ],
+          "isError": true,
+          "id": "623a3b34-7815-4f86-a9bd-ab0e7eb829c1"
+        },
+        "error": {
+          "name": "ToolNotFoundError",
+          "code": "UNKNOWN_TOOL"
+        }
+      },
+      "sourceEventSeqs": [18],
+      "surfaceOp": "append"
+    }
+  }
+]

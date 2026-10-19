@@ -1,4 +1,4 @@
-/**
+﻿/**
  * B3.1a：内核 assistant-stream / 会话事件 → **现有 renderer 吃的 SSE 帧**。
  *
  * 目标：字段级等价，不是"看着差不多"。基准来自
@@ -33,6 +33,10 @@ export type RendererSseFrame =
     }
   | { type: 'finish'; finishReason: string }
   | { type: 'error'; errorText: string }
+  /** B3.2 工具卡：与旧 Mastra 路径的 AI SDK UI chunk 同形 */
+  | { type: 'tool-input-available'; toolCallId: string; toolName: string; input: unknown }
+  | { type: 'tool-output-available'; toolCallId: string; output: unknown }
+  | { type: 'tool-output-error'; toolCallId: string; errorText: string }
 
 /** `session/follow` 的 item.value 里我们用到的子集（字段照 rc.2 原样） */
 export interface KernelAssistantChunk {
@@ -106,6 +110,8 @@ export class KernelSseMapper {
   }
 
   private onEvent(event: { type: string; data?: Record<string, unknown> }): RendererSseFrame[] {
+    if (event.type === 'tool/call') return this.onToolCall(event.data)
+    if (event.type === 'tool/result') return this.onToolResult(event.data)
     if (event.type !== 'turn/end') return []
     const reason = event.data?.reason as
       { kind?: string; error?: { code?: string; message?: string } } | undefined
@@ -113,11 +119,62 @@ export class KernelSseMapper {
     return this.errorFrames(reason)
   }
 
+  /** `tool/call` 事件 → 旧路径的 `tool-input-available`（参数从 JSON 字符串还原成对象） */
+  private onToolCall(data: Record<string, unknown> | undefined): RendererSseFrame[] {
+    const callId = typeof data?.callId === 'string' ? data.callId : undefined
+    const name = typeof data?.name === 'string' ? data.name : undefined
+    if (callId === undefined || name === undefined) return []
+    const raw = data?.arguments
+    let input: unknown = raw
+    if (typeof raw === 'string') {
+      try {
+        input = JSON.parse(raw) as unknown
+      } catch {
+        input = raw
+      }
+    }
+    return [{ type: 'tool-input-available', toolCallId: callId, toolName: name, input }]
+  }
+
+  /** `tool/result` 事件 → `tool-output-available` / `tool-output-error`（字段级对齐旧路径） */
+  private onToolResult(data: Record<string, unknown> | undefined): RendererSseFrame[] {
+    const message = data?.message as
+      | {
+          toolCallId?: unknown
+          isError?: unknown
+          content?: unknown
+        }
+      | undefined
+    const toolCallId = typeof message?.toolCallId === 'string' ? message.toolCallId : undefined
+    if (toolCallId === undefined) return []
+    const text = Array.isArray(message?.content)
+      ? message.content
+          .flatMap((part) =>
+            typeof part === 'object' &&
+            part !== null &&
+            (part as { type?: unknown }).type === 'text'
+              ? [(part as { text?: unknown }).text]
+              : []
+          )
+          .filter((value): value is string => typeof value === 'string')
+          .join('')
+      : ''
+    if (message?.isError === true)
+      return [{ type: 'tool-output-error', toolCallId, errorText: text }]
+    let output: unknown = text
+    try {
+      output = JSON.parse(text) as unknown
+    } catch {
+      // 非 JSON 输出按文本给
+    }
+    return [{ type: 'tool-output-available', toolCallId, output }]
+  }
+
   /**
    * 错误帧：**不重排、不丢弃**之前已产出的文本帧；错误只追加在末尾。
    * 内核工具错误码（`TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` / `ABORTED_BEFORE_DISPATCH`）
    * 以 `[CODE] message` 形式进现有 errorText（renderer 直接展示）。
-   * ⚠️ 工具调用事件本身（tool/call、tool/result 映射）**本批未覆盖**，见 evidence 文档。
+   * 工具调用事件（tool/call、tool/result）见 onToolCall/onToolResult。
    */
   private errorFrames(reason?: {
     error?: { code?: string; message?: string }

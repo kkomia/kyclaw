@@ -1,4 +1,4 @@
-/**
+﻿/**
  * B3.1a：真内核适配层（**只在 feature flag 开启时才会被实例化**）。
  *
  * 一次流程：
@@ -28,6 +28,8 @@ export interface KernelAdapterOptions {
   extraEnv?: Readonly<Record<string, string>>
   readyTimeoutMs?: number
   turnTimeoutMs?: number
+  /** 诊断/测试：每条 follow value 原样回调（不含 token/cookie） */
+  onFollowValue?: (value: KernelFollowValue) => void
 }
 
 export interface KernelTurnResult {
@@ -41,13 +43,18 @@ export interface KernelTurnResult {
   cancelled?: boolean
 }
 
+export interface StartTurnOptions {
+  /** 增量送出：每产生一帧立刻回调（B3.2 边收边发；不传 = 只返回整轮结果） */
+  onFrame?: (frame: RendererSseFrame) => void
+}
+
 export interface KernelAdapter {
   readonly sessionId: string
   /** 诊断用：内核进程 pid（不含 token/cookie） */
   readonly pid: number | undefined
   /** 诊断用：内核回环端口（不含 token/cookie） */
   readonly port: number
-  startTurn(text: string): Promise<KernelTurnResult>
+  startTurn(text: string, options?: StartTurnOptions): Promise<KernelTurnResult>
   /** 取消当前轮（协作式；文本保留，由内核 `session/cancel` 结算） */
   cancelTurn(): Promise<void>
   stop(): Promise<void>
@@ -62,6 +69,7 @@ interface TurnState {
   resolve: (result: KernelTurnResult) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
+  onFrame?: (frame: RendererSseFrame) => void
 }
 
 export async function startKernelAdapter(options: KernelAdapterOptions): Promise<KernelAdapter> {
@@ -130,6 +138,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       if (parsed.type !== 'item' || parsed.streamId !== streamId || parsed.value === undefined)
         return
       const value = parsed.value
+      options.onFollowValue?.(value)
       if (value.type === 'snapshot') {
         snapshot?.()
         return
@@ -137,6 +146,16 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       if (turn === undefined) return
       const frames = mapper.push(value)
       turn.frames.push(...frames)
+      // 增量：到一帧发一帧（B3.2）；回调异常不能打断内核流
+      if (turn.onFrame !== undefined) {
+        for (const frame of frames) {
+          try {
+            turn.onFrame(frame)
+          } catch {
+            // 下游（HTTP 客户端）已断开：忽略，等 cancel/stop 收尾
+          }
+        }
+      }
       if (value.type === 'event' && value.event.type === 'turn/end') {
         const reason = value.event.data?.reason as
           { kind?: string; error?: { code?: string; message?: string } } | undefined
@@ -181,7 +200,10 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       sessionId,
       pid: kernel.pid,
       port: Number(new URL(kernel.baseUrl).port),
-      async startTurn(text: string): Promise<KernelTurnResult> {
+      async startTurn(
+        text: string,
+        startOptions: StartTurnOptions = {}
+      ): Promise<KernelTurnResult> {
         if (stopped) throw new Error('kernel adapter: adapter is stopped')
         if (turn !== undefined) throw new Error('kernel adapter: a turn is already running')
         mapper = new KernelSseMapper()
@@ -190,7 +212,13 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           const timer = setTimeout(() => {
             settleTurn(new Error(`kernel adapter: turn timed out after ${String(timeoutMs)}ms`))
           }, timeoutMs)
-          turn = { frames: [], resolve, reject, timer }
+          turn = {
+            frames: [],
+            resolve,
+            reject,
+            timer,
+            ...(startOptions.onFrame === undefined ? {} : { onFrame: startOptions.onFrame })
+          }
         })
         try {
           await rpc.call('session/prompt', {

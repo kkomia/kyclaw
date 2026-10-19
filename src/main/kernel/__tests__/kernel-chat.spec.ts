@@ -17,9 +17,10 @@ function fakeAdapter(
     sessionId: 'session-test',
     pid: 1,
     port: 1,
-    async startTurn(text) {
+    async startTurn(text, startOptions = {}) {
       seen.push(text)
       if (options.fail !== undefined) throw options.fail
+      for (const frame of frames) startOptions.onFrame?.(frame)
       return {
         frames,
         sse: frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''),
