@@ -80,17 +80,18 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
     skills: [{ dir: 'demo-p1-s1', name: '整理笔记' }]
   }
 
-  it('分区只在非空时出现；顺序 命令 → 插件 → 技能；选中行带引用 label', () => {
+  it('分区只在非空时出现；顺序 指令 → 插件 → 技能；选中行带引用 label', () => {
     const groups = slashGroups(INPUTS, '')
-    expect(groups.map((group) => group.title)).toEqual(['命令', '插件', '技能'])
+    expect(groups.map((group) => group.title)).toEqual(['指令', '插件', '技能'])
     expect(flattenGroups(groups).map((row) => row.label)).toEqual([
       '压缩上下文',
+      '目标',
       '知识库',
       '天气',
       '整理笔记'
     ])
-    expect(flattenGroups(groups)[1].reference).toEqual({ kind: '插件', label: '知识库' })
-    expect(flattenGroups(groups)[3].reference).toEqual({ kind: '技能', label: '整理笔记' })
+    expect(flattenGroups(groups)[2].reference).toEqual({ kind: '插件', label: '知识库' })
+    expect(flattenGroups(groups)[4].reference).toEqual({ kind: '技能', label: '整理笔记' })
   })
 
   it('过滤（大小写不敏感）：命中为零的分区整组不出现', () => {
@@ -113,7 +114,7 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
       ''
     )
     expect(groups).toHaveLength(1)
-    expect(groups[0]?.title).toBe('命令')
+    expect(groups[0]?.title).toBe('指令')
     expect(groups[0]?.rows[0]).toEqual({
       id: 'command:compact',
       label: '压缩上下文',
@@ -166,8 +167,9 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
       },
       ''
     )
-    expect(groups.map((group) => group.title)).toEqual(['命令', '插件'])
+    expect(groups.map((group) => group.title)).toEqual(['指令', '插件'])
     // 首选顺序照旧：压缩在第一条（默认高亮 = 平铺第一行），模式入口排它后面
+    // PB-039：命令分区固定多一条「目标」（goal），位置在压缩之后、模式入口之前
     expect(groups[0]?.rows).toEqual([
       {
         id: 'command:compact',
@@ -176,7 +178,8 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
         disabled: false,
         command: 'compact'
       },
-      { id: 'command:plan', label: '进入规划模式', disabled: false, command: 'plan' }
+      { id: 'command:plan', label: '进入规划模式', disabled: false, command: 'plan' },
+      { id: 'command:goal', label: '目标', hint: '设置 / 查看 goal', command: 'goal' }
     ])
     // 关键词过滤各认各的：打「规划」只剩模式入口，打「压缩」只剩压缩
     const onlyPlan = slashGroups({ plugins: [], skills: [], plan: { disabled: false } }, '规划')
@@ -189,7 +192,11 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
 
   it('命令分区：plan.disabled（正在跑 / 等审批 / 压缩中）→ 行还在但按不动', () => {
     const groups = slashGroups({ plugins: [], skills: [], plan: { disabled: true } }, '')
-    expect(groups[0]?.rows.map((row) => row.id)).toEqual(['command:compact', 'command:plan'])
+    expect(groups[0]?.rows.map((row) => row.id)).toEqual([
+      'command:compact',
+      'command:plan',
+      'command:goal'
+    ])
     expect(groups[0]?.rows[1]).toMatchObject({
       id: 'command:plan',
       disabled: true,
@@ -197,9 +204,9 @@ describe('slashGroups · 命令 / 插件 / 技能分区', () => {
     })
   })
 
-  it('没有 plan 输入（已在规划里 / 未就绪）：命令分区照旧只有压缩，不留一条点不动的门', () => {
+  it('没有 plan 输入（已在规划里 / 未就绪）：命令分区照旧只有压缩+目标，不留一条点不动的门', () => {
     const groups = slashGroups({ plugins: [], skills: [] }, '')
-    expect(groups[0]?.rows.map((row) => row.id)).toEqual(['command:compact'])
+    expect(groups[0]?.rows.map((row) => row.id)).toEqual(['command:compact', 'command:goal'])
     // 只匹配模式入口的关键词 → 整个命令分区不出现（不是留一条空的）
     expect(slashGroups({ plugins: [], skills: [] }, '规划')).toEqual([])
   })

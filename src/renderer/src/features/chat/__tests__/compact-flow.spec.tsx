@@ -543,7 +543,7 @@ describe('「/」命令分区（手动入口）', () => {
     const row = await screen.findByTestId('suggest-command:compact')
     expect(row).toHaveTextContent('压缩上下文')
     expect(row).toHaveTextContent('已使用 50%')
-    expect(screen.getByText('命令')).toBeInTheDocument()
+    expect(screen.getByText('指令')).toBeInTheDocument()
 
     fireEvent.keyDown(screen.getByTestId('composer-input'), { key: 'Enter' })
 

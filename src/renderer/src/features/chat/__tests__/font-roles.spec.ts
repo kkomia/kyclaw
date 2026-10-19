@@ -26,7 +26,8 @@ describe('AI 回复 = 阅读声部', () => {
     expect(messageTsx).toContain('message-reading-lane')
     expect(messageTsx).toContain('data-font-role="reading"')
     expect(messageTsx).not.toMatch(/border-l border-\(--hairline-soft\)/)
-    expect(messageTsx).toContain('pl-[18px]')
+    // PB-028：缩进从写死 18px 改成读 --chat-reading-indent（随字号档缩放），期望值按当前实现
+    expect(messageTsx).toContain('pl-[var(--chat-reading-indent)]')
   })
 
   it('Markdown 正文容器 = 阅读车道 + 书生气衬线（--font-prose，2026-10-18 task-51）', () => {
