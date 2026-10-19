@@ -1,0 +1,522 @@
+/**
+ * PB-032 · 装载指示器样式（照抄 dsh-claude-style 的 chat-wait loader 数值）。
+ *
+ * 容器 18×14、点 4px、accent、点位 0/7/14；三种 motion 的周期/延迟/路径见下。
+ * 不写 font-size / 行高：只占 18×14 的位置，与状态行 12/18 的 baseline 无关。
+ * reduced：两层（媒体查询 + [data-motion='reduced']）静态兜底。
+ */
+.chase-loader {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 14px;
+}
+
+.chase-lane {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.chase-lane--active {
+  opacity: 1;
+  animation: chase-lane-in 150ms ease-out 30ms both;
+}
+
+.chase-lane--leaving {
+  opacity: 0;
+  animation: chase-lane-out 120ms ease-out both;
+}
+
+.chase-dot {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  opacity: 0;
+  transform-origin: 50% 100%;
+}
+
+/* ── bounce：3 点，0.5s alternate，落点压扁 1.7×.25、抬起 8px ─────────────── */
+.chase-lane--bounce .chase-dot,
+.chase-lane--line .chase-dot {
+  left: 0;
+  opacity: 1;
+}
+
+.chase-lane--bounce .chase-dot:nth-child(2),
+.chase-lane--line .chase-dot:nth-child(2) {
+  left: 7px;
+}
+
+.chase-lane--bounce .chase-dot:nth-child(3),
+.chase-lane--line .chase-dot:nth-child(3) {
+  left: 14px;
+}
+
+/* bounce/line 只用 3 点；orbit 的第 4 点在这两种 lane 里不占位 */
+.chase-lane--bounce .chase-dot:nth-child(4),
+.chase-lane--line .chase-dot:nth-child(4) {
+  display: none;
+}
+
+.chase-lane--bounce .chase-dot {
+  animation: chase-bounce 500ms ease infinite alternate;
+}
+
+.chase-lane--bounce .chase-dot:nth-child(1) {
+  animation-delay: -500ms;
+}
+
+.chase-lane--bounce .chase-dot:nth-child(2) {
+  animation-delay: -300ms;
+}
+
+.chase-lane--bounce .chase-dot:nth-child(3) {
+  animation-delay: -200ms;
+}
+
+@keyframes chase-bounce {
+  0% {
+    translate: 0 0;
+    scale: 1.7 0.25;
+    animation-timing-function: linear;
+  }
+
+  40% {
+    translate: 0 -3.2px;
+    scale: 1 1;
+    animation-timing-function: linear;
+  }
+
+  60% {
+    translate: 0 -4.8px;
+    scale: 1 1;
+    animation-timing-function: ease;
+  }
+
+  to {
+    translate: 0 -8px;
+  }
+}
+
+/* ── line：3 点各沿一条 120° 线穿过中心；1.25s linear ───────────────────── */
+.chase-lane--line .chase-dot {
+  --chase-centre: 0px;
+  --chase-line-x: 0;
+  --chase-line-y: -1;
+  --chase-end-x: calc(var(--chase-centre) + var(--chase-line-x) * 8px);
+  --chase-end-y: calc((var(--chase-line-y) - 1) * 8px);
+  animation: chase-line 1250ms linear infinite;
+}
+
+.chase-lane--line .chase-dot:nth-child(1) {
+  --chase-centre: 7px;
+}
+
+.chase-lane--line .chase-dot:nth-child(2) {
+  --chase-line-x: -0.866;
+  --chase-line-y: -0.5;
+  animation-delay: -416.667ms;
+}
+
+.chase-lane--line .chase-dot:nth-child(3) {
+  --chase-centre: -7px;
+  --chase-line-x: -0.866;
+  --chase-line-y: 0.5;
+  animation-delay: -833.333ms;
+}
+
+@keyframes chase-line {
+  0%,
+  50%,
+  to {
+    translate: var(--chase-centre) -8px;
+    scale: 0.55 0.55;
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+
+  25% {
+    translate: var(--chase-end-x) var(--chase-end-y);
+    scale: 1 1;
+    animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
+  }
+
+  75% {
+    translate: calc(2 * var(--chase-centre) - var(--chase-end-x)) calc(-16px - var(--chase-end-y));
+    scale: 1 1;
+    animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
+  }
+}
+
+/* ── orbit：4 点，椭圆 ±4.75 / ±5.8px；2.4s linear ───────────────────────── */
+.chase-lane--orbit .chase-dot {
+  top: 50%;
+  bottom: auto;
+  left: 50%;
+  margin: -2px 0 0 -2px;
+  opacity: 1;
+  animation: chase-orbit-1 2400ms linear infinite;
+}
+
+.chase-lane--orbit .chase-dot:nth-child(2) {
+  animation-name: chase-orbit-2;
+}
+
+.chase-lane--orbit .chase-dot:nth-child(3) {
+  animation-name: chase-orbit-4;
+}
+
+.chase-lane--orbit .chase-dot:nth-child(4) {
+  animation-name: chase-orbit-3;
+}
+
+@keyframes chase-orbit-1 {
+  0% {
+    translate: -4.75px -5.8px;
+  }
+
+  0.46% {
+    translate: -4.57px -3.54px;
+  }
+
+  0.97% {
+    translate: -4.03px -1.36px;
+  }
+
+  1.55% {
+    translate: -3.15px 0.64px;
+  }
+
+  2.26% {
+    translate: -1.97px 2.4px;
+  }
+
+  3.21% {
+    translate: -0.53px 3.85px;
+  }
+
+  4.6% {
+    translate: 1.11px 4.92px;
+  }
+
+  7.09% {
+    translate: 2.9px 5.58px;
+  }
+
+  16.67%,
+  25%,
+  50% {
+    translate: 4.75px 5.8px;
+  }
+
+  50.46% {
+    translate: 4.57px 3.54px;
+  }
+
+  50.97% {
+    translate: 4.03px 1.36px;
+  }
+
+  51.55% {
+    translate: 3.15px -0.64px;
+  }
+
+  52.26% {
+    translate: 1.97px -2.4px;
+  }
+
+  53.21% {
+    translate: 0.53px -3.85px;
+  }
+
+  54.6% {
+    translate: -1.11px -4.92px;
+  }
+
+  57.09% {
+    translate: -2.9px -5.58px;
+  }
+
+  66.67%,
+  75%,
+  to {
+    translate: -4.75px -5.8px;
+  }
+}
+
+@keyframes chase-orbit-2 {
+  0%,
+  25% {
+    translate: 4.75px -5.8px;
+  }
+
+  25.46% {
+    translate: 4.57px -3.54px;
+  }
+
+  25.97% {
+    translate: 4.03px -1.36px;
+  }
+
+  26.55% {
+    translate: 3.15px 0.64px;
+  }
+
+  27.26% {
+    translate: 1.97px 2.4px;
+  }
+
+  28.21% {
+    translate: 0.53px 3.85px;
+  }
+
+  29.6% {
+    translate: -1.11px 4.92px;
+  }
+
+  32.09% {
+    translate: -2.9px 5.58px;
+  }
+
+  41.67%,
+  50%,
+  75% {
+    translate: -4.75px 5.8px;
+  }
+
+  75.46% {
+    translate: -4.57px 3.54px;
+  }
+
+  75.97% {
+    translate: -4.03px 1.36px;
+  }
+
+  76.55% {
+    translate: -3.15px -0.64px;
+  }
+
+  77.26% {
+    translate: -1.97px -2.4px;
+  }
+
+  78.21% {
+    translate: -0.53px -3.85px;
+  }
+
+  79.6% {
+    translate: 1.11px -4.92px;
+  }
+
+  82.09% {
+    translate: 2.9px -5.58px;
+  }
+
+  91.67%,
+  to {
+    translate: 4.75px -5.8px;
+  }
+}
+
+@keyframes chase-orbit-3 {
+  0%,
+  25% {
+    translate: -4.75px 5.8px;
+  }
+
+  25.46% {
+    translate: -4.57px 3.54px;
+  }
+
+  25.97% {
+    translate: -4.03px 1.36px;
+  }
+
+  26.55% {
+    translate: -3.15px -0.64px;
+  }
+
+  27.26% {
+    translate: -1.97px -2.4px;
+  }
+
+  28.21% {
+    translate: -0.53px -3.85px;
+  }
+
+  29.6% {
+    translate: 1.11px -4.92px;
+  }
+
+  32.09% {
+    translate: 2.9px -5.58px;
+  }
+
+  41.67%,
+  50%,
+  75% {
+    translate: 4.75px -5.8px;
+  }
+
+  75.46% {
+    translate: 4.57px -3.54px;
+  }
+
+  75.97% {
+    translate: 4.03px -1.36px;
+  }
+
+  76.55% {
+    translate: 3.15px 0.64px;
+  }
+
+  77.26% {
+    translate: 1.97px 2.4px;
+  }
+
+  78.21% {
+    translate: 0.53px 3.85px;
+  }
+
+  79.6% {
+    translate: -1.11px 4.92px;
+  }
+
+  82.09% {
+    translate: -2.9px 5.58px;
+  }
+
+  91.67%,
+  to {
+    translate: -4.75px 5.8px;
+  }
+}
+
+@keyframes chase-orbit-4 {
+  0% {
+    translate: 4.75px 5.8px;
+  }
+
+  0.46% {
+    translate: 4.57px 3.54px;
+  }
+
+  0.97% {
+    translate: 4.03px 1.36px;
+  }
+
+  1.55% {
+    translate: 3.15px -0.64px;
+  }
+
+  2.26% {
+    translate: 1.97px -2.4px;
+  }
+
+  3.21% {
+    translate: 0.53px -3.85px;
+  }
+
+  4.6% {
+    translate: -1.11px -4.92px;
+  }
+
+  7.09% {
+    translate: -2.9px -5.58px;
+  }
+
+  16.67%,
+  25%,
+  50% {
+    translate: -4.75px -5.8px;
+  }
+
+  50.46% {
+    translate: -4.57px -3.54px;
+  }
+
+  50.97% {
+    translate: -4.03px -1.36px;
+  }
+
+  51.55% {
+    translate: -3.15px 0.64px;
+  }
+
+  52.26% {
+    translate: -1.97px 2.4px;
+  }
+
+  53.21% {
+    translate: -0.53px 3.85px;
+  }
+
+  54.6% {
+    translate: 1.11px 4.92px;
+  }
+
+  57.09% {
+    translate: 2.9px 5.58px;
+  }
+
+  66.67%,
+  75%,
+  to {
+    translate: 4.75px 5.8px;
+  }
+}
+
+@keyframes chase-lane-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes chase-lane-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+/* reduced：两层静态兜底（不排 10s 定时器由组件层保证） */
+.chase-loader--reduced .chase-lane,
+.chase-loader--reduced .chase-dot {
+  animation: none !important;
+}
+
+.chase-loader--reduced .chase-dot {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chase-lane,
+  .chase-dot {
+    animation: none !important;
+  }
+
+  .chase-dot {
+    opacity: 1;
+  }
+}
+
+[data-motion='reduced'] .chase-lane,
+[data-motion='reduced'] .chase-dot {
+  animation: none !important;
+}
+
+[data-motion='reduced'] .chase-dot {
+  opacity: 1;
+}
