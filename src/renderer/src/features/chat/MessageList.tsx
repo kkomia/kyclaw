@@ -198,8 +198,6 @@ export function MessageList({
     viewRef,
     tail,
     enabled: motion.chatScroll,
-    // PB-044：终态不再弹簧追赶（轮末正文首次上屏时瞬时锚定，见 use-chat-follow）
-    running: status === 'streaming',
     resetKey: followResetKey
   })
 
