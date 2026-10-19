@@ -57,6 +57,9 @@ function fakeAdapter(
     async reattach() {
       return {}
     },
+    async rpcCall<T = unknown>(): Promise<T> {
+      return {} as T
+    },
     async cancelTurn(threadId) {
       cancels.push(threadId)
       await Promise.resolve()

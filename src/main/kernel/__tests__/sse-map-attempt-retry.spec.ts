@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest'
 import {
   KernelSseMapper,
   appendEffectiveFrames,
+  type KernelAssistantChunk,
   type KernelFollowValue,
   type RendererSseFrame
 } from '../sse-map'
@@ -80,7 +81,7 @@ function attemptStart(attemptId: string): KernelFollowValue {
   return { type: 'assistant-stream', frame: { type: 'start', attemptId } }
 }
 
-function chunk(attemptId: string, body: Record<string, unknown>): KernelFollowValue {
+function chunk(attemptId: string, body: KernelAssistantChunk): KernelFollowValue {
   return { type: 'assistant-stream', frame: { type: 'chunk', attemptId, chunk: body } }
 }
 

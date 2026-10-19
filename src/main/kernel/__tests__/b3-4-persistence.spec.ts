@@ -205,6 +205,11 @@ const kernel = vi.hoisted(() => {
           }
         }
       }
+      case 'test/echo':
+        // PB-024：裸 rpcCall 透传用（原样回显 method 收到的 payload）
+        return { received: args }
+      case 'test/boom':
+        throw new Error('kernel rpc: test/boom failed (gateway/internal): boom')
       case 'commands/list': {
         if (state.listCommandsFails)
           throw new Error('kernel rpc: commands/list failed (gateway/internal): boom')
@@ -578,8 +583,30 @@ describe('B3.4 占用/冲突文案（当一等错误，不吞）', () => {
   })
 })
 
-describe('sameCwd（冲突预检的比较归一化）', () => {
-  it('分隔符与大小写差异视为同一目录；真不同目录判 false', () => {
+/**
+ * PB-024：`rpcCall` 是**裸透传**（只给 main 侧模块用）。
+ * 只验证两条：method/payload 原样到内核、内核错误原样抛出（不吞成 undefined）。
+ */
+describe('PB-024 rpcCall 透传', () => {
+  it('method/payload 原样转发，返回值原样拿回', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const echoed = await adapter.rpcCall<{ received: Record<string, unknown> }>('test/echo', {
+      kind: 'session',
+      sessionId: 'thread-x'
+    })
+    expect(echoed.received).toEqual({ kind: 'session', sessionId: 'thread-x' })
+    // 不传 payload 时给空对象（不透传 undefined 让内核自己炸）
+    const empty = await adapter.rpcCall<{ received: Record<string, unknown> }>('test/echo')
+    expect(empty.received).toEqual({})
+  })
+
+  it('内核错误原样抛出（不吞成 undefined）', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    await expect(adapter.rpcCall('test/boom')).rejects.toThrow(/test\/boom failed/u)
+  })
+})
+
+describe('sameCwd（冲突预检的比较归一化）', () => {  it('分隔符与大小写差异视为同一目录；真不同目录判 false', () => {
     expect(sameCwd('C:\\Users\\me\\app', 'c:/users/ME/app/', true)).toBe(true)
     expect(sameCwd('C:\\Users\\me\\app', 'C:\\Users\\me\\app')).toBe(true)
     expect(sameCwd('/home/me/app', '/home/me/app/', false)).toBe(true)

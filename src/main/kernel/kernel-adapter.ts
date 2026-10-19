@@ -100,6 +100,14 @@ export interface KernelAdapter {
   listKernelSessions(): Promise<KernelSessionInfo[]>
   /** B3.4：刷新重接（同一进程内重新 follow）；返回 opening 的 startedAfterSeq/nextIndex */
   reattach(threadId: string): Promise<KernelSessionOpening>
+  /**
+   * PB-024：**main 进程内部专用**的裸 RPC 透传（给 main 侧模块直接调内核端点用）。
+   *
+   * 只做透传：不加 list-first、不加 id 判定、不加缓存——那些业务判断归调用方
+   * （如 `kernel-session-ops.ts`）。**不下发 renderer**：不进 preload/IPC 白名单，
+   * 错误原样抛出（不吞成 undefined）。
+   */
+  rpcCall<T = unknown>(method: string, payload?: unknown): Promise<T>
 }
 
 export function framesToSse(frames: readonly RendererSseFrame[]): string {
@@ -533,6 +541,13 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       },
       async listKernelSessions() {
         return listKernelSessions()
+      },
+      /**
+       * PB-024：裸 RPC 透传，只给 main 侧模块用（不进 preload/IPC 白名单）。
+       * 原样转发 method/payload；内核错误由 KernelRpcClient 原样抛出（不吞成 undefined）。
+       */
+      rpcCall<T = unknown>(method: string, payload?: unknown): Promise<T> {
+        return rpc.call<T>(method, (payload ?? {}) as Record<string, unknown>)
       },
       async reattach(threadId: string): Promise<KernelSessionOpening> {
         const current = states.get(threadId)
