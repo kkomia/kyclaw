@@ -6,6 +6,8 @@ import type {
   KernelQuestionAnswer,
   KernelQuestionItem
 } from '@shared/kernel-interactions'
+import { PlanReviewCard } from './PlanReviewCard'
+import { planReviewOfPending } from './plan-review'
 
 /**
  * PB-026：内核交互 **挂起 dock**（composer 上方；结果行在消息流，见 KernelInteractionResults）。
@@ -249,14 +251,27 @@ export function KernelInteractionDock({
           )}
         </div>
       ))}
-      {questions.map((question) => (
-        <QuestionForm
-          key={question.eventId}
-          question={question}
-          submitting={submittingEventId === question.eventId}
-          onSubmit={(answers) => onRespondQuestion(question.eventId, answers)}
-        />
-      ))}
+      {questions.map((question) => {
+        const review = planReviewOfPending(question)
+        if (review !== null) {
+          return (
+            <PlanReviewCard
+              key={question.eventId}
+              review={review}
+              submitting={submittingEventId === question.eventId}
+              onSubmit={(answers) => onRespondQuestion(question.eventId, answers)}
+            />
+          )
+        }
+        return (
+          <QuestionForm
+            key={question.eventId}
+            question={question}
+            submitting={submittingEventId === question.eventId}
+            onSubmit={(answers) => onRespondQuestion(question.eventId, answers)}
+          />
+        )
+      })}
       {continued.map((item) => (
         <div
           key={item.callId}

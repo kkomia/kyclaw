@@ -223,6 +223,80 @@ describe('PB-026 KernelInteractionDock：提问', () => {
   })
 })
 
+describe('PB-044 KernelInteractionDock：计划评审卡（第三种卡）', () => {
+  const planQuestion = {
+    id: 'plan-review',
+    question: 'Approve this plan and leave plan mode?',
+    header: 'Plan review',
+    detail: '# 三步计划\n\n1. 读配置\n2. 探针\n3. 截图',
+    options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+    intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-plan-1' }
+  }
+
+  it('plan-review 问题走 PlanReviewCard，不再走通用 QuestionForm', () => {
+    const { onRespondQuestion } = renderDock(
+      snapshot({
+        questions: {
+          pending: [
+            {
+              threadId: 'thread-1',
+              eventId: 'evt-plan',
+              suspendedAt: new Date().toISOString(),
+              questions: [planQuestion]
+            }
+          ]
+        }
+      })
+    )
+    expect(screen.getByTestId('plan-review-card')).toHaveTextContent('三步计划')
+    expect(screen.queryByTestId('kernel-question-card')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('plan-review-approve'))
+    expect(onRespondQuestion).toHaveBeenCalledWith('evt-plan', [
+      { id: 'plan-review', selected: ['Approve'] }
+    ])
+  })
+
+  it('与 asked+waterfall 双审批共存：1 张可操作审批 + 1 条审计 + 1 张计划评审（不互吞）', () => {
+    const { container } = renderDock(
+      snapshot({
+        approvals: {
+          pending: [
+            {
+              threadId: 'thread-1',
+              id: 'evt-audit',
+              source: 'asked',
+              respondable: false,
+              toolName: 'write'
+            },
+            {
+              threadId: 'thread-1',
+              id: 'evt-action',
+              source: 'waterfall',
+              respondable: true,
+              toolName: 'write'
+            }
+          ],
+          results: []
+        },
+        questions: {
+          pending: [
+            {
+              threadId: 'thread-1',
+              eventId: 'evt-plan',
+              suspendedAt: new Date().toISOString(),
+              questions: [planQuestion]
+            }
+          ]
+        }
+      })
+    )
+    expect(container.querySelectorAll('[data-testid=kernel-approval-allow]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-testid=kernel-approval-readonly]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-testid=plan-review-card]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-testid=kernel-question-card]')).toHaveLength(0)
+  })
+})
+
 describe('PB-026 KernelInteractionDock：continued / 空态', () => {
   it('continued 只读：有明确提示、无任何提交按钮', () => {
     const { container } = renderDock(
