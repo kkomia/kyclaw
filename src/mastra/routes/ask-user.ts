@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto'
+﻿import { randomUUID } from 'node:crypto'
 import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { LibSQLStore } from '@mastra/libsql'
 import type { ApiRoute, MiddlewareHandler } from '@mastra/core/server'
-import { AskUserHttpError, AskUserRuntime, type StreamLease } from '../ask-user-runtime'
+import { AskUserHttpError, AskUserRuntime, askUserErrorText, type StreamLease } from '../ask-user-runtime'
 import { ownStream } from '../stream-lifecycle'
 import { validateTaskChatBody } from '../tasks-chat'
 import { KYCLAW_AGENT_ID } from '../agents/kyclaw'
@@ -120,7 +120,7 @@ export async function createAskUserRoutes(options: {
     } catch (error) {
       lease?.release()
       if (error instanceof AskUserHttpError)
-        return context.json({ error: error.message }, error.status)
+        return context.json({ error: error.message, message: askUserErrorText(error.message) }, error.status)
       throw error
     }
   }
@@ -135,7 +135,7 @@ export async function createAskUserRoutes(options: {
           return context.json(await runtimeFor(context.get('mastra')).pending(threadId))
         } catch (error) {
           if (error instanceof AskUserHttpError)
-            return context.json({ error: error.message }, error.status)
+            return context.json({ error: error.message, message: askUserErrorText(error.message) }, error.status)
           return context.json({ error: 'interaction-storage-error' }, 500)
         }
       }
@@ -156,7 +156,7 @@ export async function createAskUserRoutes(options: {
           )
         } catch (error) {
           if (error instanceof AskUserHttpError)
-            return context.json({ error: error.message }, error.status)
+            return context.json({ error: error.message, message: askUserErrorText(error.message) }, error.status)
           return context.json({ error: 'interaction-storage-error' }, 500)
         }
       }
@@ -187,7 +187,7 @@ export async function createAskUserRoutes(options: {
         } catch (error) {
           release?.()
           if (error instanceof AskUserHttpError)
-            return context.json({ error: error.message }, error.status)
+            return context.json({ error: error.message, message: askUserErrorText(error.message) }, error.status)
           return context.json({ error: 'interaction-storage-error' }, 500)
         }
       }
@@ -200,3 +200,4 @@ export async function createAskUserRoutes(options: {
     resumedRunId: (request: Request): string | undefined => resumedRuns.get(request)
   }
 }
+

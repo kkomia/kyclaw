@@ -18,6 +18,38 @@ export class AskUserHttpError extends Error {
   }
 }
 
+/**
+ * PB-034：长任务的续跑请求可能**比「run 已持久化为 suspended」早到一点**（用户实测 38s / 66 次工具
+ * 的 one-shot 任务报 `{"error":"stale-run"}`）。查不到目标 run 时给一个很短的宽限窗口，窗口内一直
+ * 查不到才判 stale-run —— 把"时序竞态"和"真的没有这一轮"分开。
+ */
+const STALE_RUN_GRACE_MS = 1500
+const STALE_RUN_POLL_MS = 150
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** 内部错误码 → **用户可读中文**（429/409 的响应里会随 `error` 一起给 `message`，见 routes） */
+export function askUserErrorText(code: string): string {
+  switch (code) {
+    case 'stale-run':
+      return '这次续跑对应的运行已经结束或状态过期（任务跑得久、或上一次请求已经把这一步处理掉了）。内容通常还在，重新发送一次即可继续。'
+    case 'stale-thread':
+      return '这个会话不存在或不属于当前用户，请回会话列表重新打开。'
+    case 'thread-busy':
+      return '这个会话正忙（还有一轮在跑），等它结束再试。'
+    case 'run-busy':
+      return '这一步正在被另一次请求处理，请稍等一秒再试。'
+    case 'pending-interaction':
+      return '这个会话还有待处理的审批 / 提问，先处理它再继续。'
+    case 'cancelled-run':
+      return '这一轮已经被取消，不能再用旧的问题继续。'
+    case 'wrong-tool':
+      return '续跑参数与挂起的工具对不上（可能来自过期界面），请刷新后重试。'
+    default:
+      return '这次请求没能继续：服务端返回了内部错误码，请重试一次。'
+  }
+}
+
 const runtimes = new WeakMap<MastraMemory, AskUserRuntime>()
 export function askUserRuntimeFor(memory: MastraMemory): AskUserRuntime | undefined {
   return runtimes.get(memory)
@@ -298,8 +330,21 @@ export class AskUserRuntime {
                 consumed.add(consumedKey(runId, invocation.toolCallId))
           }
         }
+      // PB-034：目标 run 一个都查不到时给一段很短的宽限窗口 —— 长任务的续跑请求可能在
+      // 「run 持久化为 suspended」之前到达；窗口内一直查不到才按 stale-run 处理。
+      let current = runs
+      if (!current.some((item) => ids.includes(item.runId))) {
+        const deadline = Date.now() + STALE_RUN_GRACE_MS
+        while (Date.now() < deadline) {
+          await delay(STALE_RUN_POLL_MS)
+          current = await this.runs(threadId)
+          if (current.some((item) => ids.includes(item.runId))) break
+        }
+      }
       const selected = targets.flatMap((target) => {
-        const run = runs.find((item) => item.runId === target.runId)
+        const run = current.find((item) => item.runId === target.runId)
+        // 宽限窗口结束后仍查不到该 run：按设计判 stale-run（已有测试钉住：历史里的审批证据
+        // 不足以证明"这一轮还能续"——放行会让过期请求重新起一条流，风险更大）。
         if (!run) throw new AskUserHttpError(409, 'stale-run')
         const tool = run.toolCalls.find((item) => item.toolCallId === target.toolCallId)
         if (!tool) {

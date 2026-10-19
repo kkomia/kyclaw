@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@mastra/core/agent'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { LibSQLStore } from '@mastra/libsql'
-import { AskUserRuntime } from '../ask-user-runtime'
+import { AskUserRuntime, askUserErrorText } from '../ask-user-runtime'
 
 const input = {
   questions: [
@@ -327,3 +327,95 @@ describe('AskUserRuntime consumed-approval evidence', () => {
     claim.release()
   })
 })
+
+/**
+ * PB-034：长任务（用户实测 42 次思考 / 66 次工具 / 38s）执行中报 `{"error":"stale-run"}`。
+ * 判定点 = `acquire()` 里"目标 run 不在 `listSuspendedRuns` 快照里"；长任务的续跑（审批 / 提问的
+ * 回答）请求可能**比 run 持久化为 suspended 早到一点**，以前立刻 409 把整轮判失败。
+ * 这里钉住：宽限窗口内重查 → 成功；已消费的审批 → 幂等；真的没有这一轮 → 仍 409（带人话）。
+ */
+describe('PB-034 stale-run：长任务续跑不误判', () => {
+  it('续跑请求比 run 持久化早到：宽限窗口内重查后成功（不再立刻 409）', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const run = suspendedRun('run', [
+        { toolName: 'ask_user', toolCallId: 'tool', requiresApproval: false, suspendPayload: input }
+      ])
+      const agent = {
+        listSuspendedRuns: async () => {
+          calls += 1
+          // 前两次"还没持久化好"，第三次才可见（模拟长任务的时序竞态）
+          return { runs: calls >= 3 ? [run] : [] }
+        }
+      } as unknown as Agent
+      const memory = {
+        getThreadById: async () => ({ id: 'thread', resourceId: 'local-user' }),
+        recall: async () => ({ messages: [] })
+      } as unknown as MastraMemory
+      const runtime = new AskUserRuntime(agent, memory, {} as LibSQLStore)
+
+      const pending = runtime.claim('thread', 'run', 'tool', answer)
+      await vi.advanceTimersByTimeAsync(600)
+      const claim = await pending
+      expect(claim.answer.status).toBe('answered')
+      claim.release()
+      expect(calls).toBeGreaterThanOrEqual(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('既有 consumed 语义不变：run 不在挂起列表时，宽限窗口过后仍 409（宽限只治时序，不放过过期请求）', async () => {
+    vi.useFakeTimers()
+    try {
+      const agent = { listSuspendedRuns: async () => ({ runs: [] }) } as unknown as Agent
+      const memory = {
+        getThreadById: async () => ({ id: 'thread', resourceId: 'local-user' }),
+        recall: async () => ({
+          messages: [
+            message('assistant', {
+              parts: [invocation('call-1')],
+              metadata: { pendingToolApprovals: { 'call-1': { runId: 'R', toolCallId: 'call-1' } } }
+            })
+          ]
+        })
+      } as unknown as MastraMemory
+      const runtime = new AskUserRuntime(agent, memory, {} as LibSQLStore)
+
+      const pending = runtime.claimApprovals('thread', [{ runId: 'R', toolCallId: 'call-1' }])
+      const assertion = expect(pending).rejects.toMatchObject({
+        status: 409,
+        message: 'stale-run'
+      })
+      await vi.advanceTimersByTimeAsync(2000)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('真的没有这一轮（也没有已消费证据）：宽限窗口后仍报 stale-run', async () => {
+    vi.useFakeTimers()
+    try {
+      const runtime = approvalRuntime({ runs: [], messages: [] })
+      const pending = runtime.claimApprovals('thread', [{ runId: 'R', toolCallId: 'call-1' }])
+      const assertion = expect(pending).rejects.toMatchObject({
+        status: 409,
+        message: 'stale-run'
+      })
+      await vi.advanceTimersByTimeAsync(2000)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('内部错误码有人话：错误框不再只有 {"error":"stale-run"}', () => {
+    expect(askUserErrorText('stale-run')).toContain('运行')
+    expect(askUserErrorText('stale-run')).not.toBe('stale-run')
+    expect(askUserErrorText('thread-busy')).toContain('会话')
+    expect(askUserErrorText('unknown-code')).toContain('重试')
+  })
+})
+
