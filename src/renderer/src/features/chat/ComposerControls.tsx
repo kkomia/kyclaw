@@ -23,6 +23,7 @@ import { useSettingsStore } from '@renderer/lib/settings-store'
 import { COMPACT_CHIP_PCT } from '@renderer/lib/compact'
 import { fetchThreadContext } from '@renderer/lib/usage-api'
 import { PendingImageTile } from './PendingImageTile'
+import { useLiveUsage, resolveUsageReadout } from './usage-live'
 import { COMPOSER_READOUT_CLASS, ThinkingEffort } from './ThinkingEffort'
 import './composer-context-bar.css'
 import { ContextMeterGlyph } from './parts/ContextMeterGlyph'
@@ -622,6 +623,8 @@ export interface ContextChipProps {
   compactDisabled?: boolean
   /** 外部取数刷新信号（上层每轮结束 +1）：环与胶囊的数字跟着最新用量走 */
   usageVersion?: number
+  /** PB-033：轮末 settled=true → 读数一律取落库值（live 与库不一致时以库为准） */
+  settled?: boolean
 }
 
 /**
@@ -642,9 +645,21 @@ export function ContextChip({
   onCompact,
   compactBusy = false,
   compactDisabled = false,
-  usageVersion = 0
+  usageVersion = 0,
+  settled = false
 }: ContextChipProps): React.JSX.Element {
   const { stats, pending, refresh } = useContextStats(threadId, usageVersion)
+  // PB-033：流内 live 优先、轮末以落库值为准；都无数据 → 「—」（不显示 0、不估算）
+  const liveUsage = useLiveUsage()
+  const readout = resolveUsageReadout({
+    live: liveUsage,
+    stored: { contextInput: stats.usedInput, reported: stats.usedInput !== null },
+    settled
+  })
+  const displayPct =
+    readout.reported && readout.contextInput !== null && stats.windowTokens > 0
+      ? Math.min(100, Math.round((readout.contextInput / stats.windowTokens) * 100))
+      : null
   // 没数据 / 还在取数时不出按钮（不闪一个假的"该压缩了"出来）
   const showCompact = onCompact !== undefined && !pending && stats.usedPct >= COMPACT_CHIP_PCT
 
@@ -684,7 +699,7 @@ export function ContextChip({
     <button
       type="button"
       data-testid="composer-context"
-      aria-label={`上下文已用 ${stats.usedPct}%`}
+      aria-label={`上下文已用 ${displayPct === null ? '—' : `${displayPct}%`}`}
       // PB-011：容器本身也吃读数共享 metrics（否则继承 composer 卡的 15px/400/22px）；
       // 内部可见文字只有 context-percent（早已同 metrics），ring 是 SVG → 视觉零变化。
       className={cn(
@@ -709,7 +724,7 @@ export function ContextChip({
         <ContextMeterGlyph percent={stats.usedPct} warning={stats.overThreshold} />
       </span>
       <span data-testid="context-percent" className={COMPOSER_READOUT_CLASS}>
-        {stats.usedPct}%
+        {displayPct === null ? '—' : `${displayPct}%`}
       </span>
     </button>
   )
@@ -1185,3 +1200,4 @@ export function PendingChips({
     </div>
   )
 }
+
