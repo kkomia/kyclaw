@@ -689,6 +689,9 @@ test('走查C · 窄窗三档（720/900/1280）+ W7 自动收起 + 工作台铺�
  *   - 切模块（笔记/知识库/Office）与设置往返：同一个 ChatPage 节点、草稿保留
  */
 test('走查E · 顶栏标签栏 + 设置往返草稿保留（W7 真机验收）', async () => {
+  // `primary-nav-notes` 在 0.2.0 壳里是 hidden 入口（data-hidden-entry=true），旧走查直接点可见元素 → 假设过时。
+  // 按 a 组 skip（旧壳导航入口隐藏），见 PB-048-a；笔记入口另走新壳口径验证。
+  test.skip(true, '旧壳 primary-nav-notes 入口在 0.2.0 已隐藏，见 PB-048-a')
   const launched = await launchApp({ settings: { theme: 'light' } })
   const { app, page } = launched
   const metrics: Metrics = {}
@@ -795,6 +798,9 @@ test('走查E · 顶栏标签栏 + 设置往返草稿保留（W7 真机验收）
 })
 
 test('走查D · 换机解密失败抽查（密文解不开 → 需要重新录入，不崩不泄）', async () => {
+  // 旧 mock/密钥假设：0.2.0 默认内核 stub 不依赖 API key，发消息会得到离线回复而不是"密钥失败 error-card"。
+  // 按 a 组 skip（旧 mock 密钥流程已下架），见 PB-021；解密失败本身由单测/真机另验。
+  test.skip(true, '旧 mock 密钥失败流程已下架（0.2.0 stub 离线回复），见 PB-021')
   const launched = await launchApp({
     settings: {
       theme: 'dark',
