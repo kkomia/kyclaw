@@ -134,7 +134,7 @@ describe('TitleBar', () => {
     expect(screen.getByTestId('app-tabbar-spacer').closest('.no-drag')).toBeNull()
   })
 
-  it('窗控三键：图标 18 的 lucide 图标（R10）', () => {
+  it('PB-029：窗控三键只缩图标本身（10px token，细线），36×36 热区不动', () => {
     renderTitleBar()
 
     for (const testId of ['window-minimize', 'window-maximize', 'window-close']) {
@@ -142,9 +142,14 @@ describe('TitleBar', () => {
       const icon = button.querySelector('span')
       const svg = icon?.querySelector('svg')
 
-      expect(icon, testId).toHaveClass('size-(--icon-size-md)')
+      // 热区仍是 IconButton 的 36（没有因缩图标而变小）
+      expect(button, testId).toHaveClass('size-(--icon-button-size)')
+      expect(icon, testId).toHaveClass('size-(--icon-size-window-control)')
+      expect(icon, testId).not.toHaveClass('size-(--icon-size-md)')
       expect(svg, testId).not.toBeNull()
       expect(svg?.getAttribute('class'), testId).toMatch(/lucide/)
+      // 10px 字形用细线，光学重心仍居中（flex 居中 + stroke 1.5）
+      expect(svg?.getAttribute('stroke-width'), testId).toBe('1.5')
     }
   })
 

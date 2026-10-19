@@ -147,6 +147,10 @@
   --icon-size-sm: calc(16px * var(--ui-scale, 1));
   --icon-size-md: calc(18px * var(--ui-scale, 1));
   --icon-size-lg: calc(20px * var(--ui-scale, 1));
+  /* PB-029：窗口控制图标（最小化/最大化/关闭）单独一档 —— 只缩图标本身，36×36 热区不动。
+     参考 dsh-claude-style（docs/STYLE.md §Windows titlebar：三键坐在系统 caption 上，
+     字形是系统窗口按钮的 10px 级细线），比正文图标小一档。 */
+  --icon-size-window-control: calc(10px * var(--ui-scale, 1));
   --icon-opacity: 0.56;
   --icon-opacity-hover: 0.84;
   --icon-opacity-disabled: 0.26;

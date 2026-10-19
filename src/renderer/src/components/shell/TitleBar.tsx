@@ -91,21 +91,24 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: TitleBarProps): 
         <IconButton
           data-testid="window-minimize"
           label="最小化"
-          icon={<Minus />}
+          icon={<Minus strokeWidth={1.5} />}
+          iconClassName="size-(--icon-size-window-control)"
           className="border-transparent hover:bg-hover"
           onClick={() => window.kyclaw?.window.minimize()}
         />
         <IconButton
           data-testid="window-maximize"
           label={maximized ? '还原' : '最大化'}
-          icon={maximized ? <Copy /> : <Square />}
+          icon={maximized ? <Copy strokeWidth={1.5} /> : <Square strokeWidth={1.5} />}
+          iconClassName="size-(--icon-size-window-control)"
           className="border-transparent hover:bg-hover"
           onClick={() => window.kyclaw?.window.maximize()}
         />
         <IconButton
           data-testid="window-close"
           label="关闭"
-          icon={<X />}
+          icon={<X strokeWidth={1.5} />}
+          iconClassName="size-(--icon-size-window-control)"
           className="border-transparent hover:bg-danger hover:text-(--button-danger-fg)"
           onClick={() => window.kyclaw?.window.close()}
         />

@@ -5,6 +5,8 @@ export interface IconButtonProps extends ComponentProps<'button'> {
   /** 无障碍名（也是画 tooltip 时的文案来源；要 tooltip 就用 Tooltip 把本组件包一层） */
   label: string
   icon: ReactNode
+  /** 只改图标盒尺寸（热区/间距不动）：如窗口控制用 --icon-size-window-control */
+  iconClassName?: string
 }
 
 /**
@@ -15,6 +17,7 @@ export interface IconButtonProps extends ComponentProps<'button'> {
 export function IconButton({
   label,
   icon,
+  iconClassName,
   type = 'button',
   disabled,
   className,
@@ -34,7 +37,10 @@ export function IconButton({
     >
       <span
         aria-hidden="true"
-        className="size-(--icon-size-md) shrink-0 opacity-(--icon-opacity) transition-opacity duration-(--motion-fast) ease-main group-hover:opacity-(--icon-opacity-hover) group-data-disabled:opacity-(--icon-opacity-disabled) [&>svg]:size-full"
+        className={cn(
+          'size-(--icon-size-md) shrink-0 opacity-(--icon-opacity) transition-opacity duration-(--motion-fast) ease-main group-hover:opacity-(--icon-opacity-hover) group-data-disabled:opacity-(--icon-opacity-disabled) [&>svg]:size-full',
+          iconClassName
+        )}
       >
         {icon}
       </span>
