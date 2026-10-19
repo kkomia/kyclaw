@@ -105,7 +105,7 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
       // round 59 / task-107：最近一轮、首轮基线与全会话合计都走 usage.ts 的 summarizeThreadUsage
       // （同一份 rows、同一个口径；压缩记录的 tokensBefore 也走同一处，不能各算一套）
       const summary = summarizeThreadUsage(await options.store.listByThread(threadId))
-      const { lastInput, lastCachedInput, baselineInput, totals } = summary
+      const { lastInput, lastCachedInput, baselineInput, totals, usageReported } = summary
       const today = await options.store.listSince(rangeStart('today', now()))
 
       let todayInput = 0
@@ -121,6 +121,7 @@ export function createUsageRouter(options: UsageRouterOptions): Hono {
           lastInput,
           lastCachedInput,
           baselineInput,
+          usageReported,
           todayInput,
           todayCachedInput,
           totals,

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 模型解析（R3 离线优先 + T8 provider 定稿）：把 settings.providers + 密钥翻译成 AI SDK 模型。
  *
  * 四种口径：
@@ -406,6 +406,52 @@ export function withSystemFirstPrompt(model: KyclawModel): KyclawModel {
  * 顶层 `system` 参数、且逐条带自己的 `providerOptions.anthropic`（cache_control 等），在边界归并
  * 会抹掉这些元数据；DeepSeek 官方端点自带归并口径，本次故障端点也不是它 —— 都不动。
  */
+/**
+ * PB-027：流式 usage 的「先请求、被拒降级」补丁（只作用于**通用兼容层**：
+ * `@ai-sdk/openai-compatible` 的 `includeUsage` 开关 = 请求体里的 `stream_options.include_usage`）。
+ *
+ * - DeepSeek 官方包（`@ai-sdk/deepseek`）**本身就固定发** `stream_options:{include_usage:true}`
+ *   （node_modules/@ai-sdk/deepseek/dist/index.js:848-849），不需要也不应该再包一层；
+ * - 自建网关/部分兼容服务不认这个字段会直接 **400** —— 不能让对话挂：把 provider 记成
+ *   「不支持流式 usage」，**丢掉 stream_options 重试一次**（此后该 provider 不再带该字段）。
+ *
+ * 只发一次额外请求（就是那次被 400 的请求本身）→ 不新增高频远程请求。
+ */
+const usageUnsupportedProviders = new Set<string>()
+
+export function withUsageFallbackFetch(providerId: string): typeof fetch {
+  const patched: typeof fetch = async (input, init) => {
+    const first = await fetch(input, init)
+    if (first.status !== 400 || usageUnsupportedProviders.has(providerId)) return first
+    // 只在"看起来是 stream_options/unknown field"的 400 上降级；其它 400 原样交给上层（真错误不吞）
+    let text = ''
+    try {
+      text = await first.clone().text()
+    } catch {
+      return first
+    }
+    if (!/stream_options|include_usage|unknown|unrecognized|unsupported/i.test(text)) return first
+    usageUnsupportedProviders.add(providerId)
+    if (process.env.KYCLAW_USAGE_DEBUG === '1') {
+      console.warn(
+        `[usage-debug] provider「${providerId}」不支持 stream_options.include_usage（400），已降级为不带该字段`
+      )
+    }
+    let body = init?.body
+    if (typeof body === 'string') {
+      try {
+        const parsed = JSON.parse(body) as Record<string, unknown>
+        delete parsed.stream_options
+        body = JSON.stringify(parsed)
+      } catch {
+        // body 不是 JSON：原样重试（理论上不会发生：AI SDK 发的是 JSON）
+      }
+    }
+    return fetch(input, { ...init, body })
+  }
+  return patched
+}
+
 export async function buildLanguageModel(
   config: ProviderConfig,
   apiKey: string,
@@ -431,6 +477,10 @@ export async function buildLanguageModel(
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: baseUrl,
     ...keyOption,
+    // PB-027：请求流式 usage（OpenAI 语义 `stream_options.include_usage:true`）；被网关 400 时
+    // 由 withUsageFallbackFetch 降级重试一次（不再带该字段），见上面的注释
+    includeUsage: !usageUnsupportedProviders.has(config.id),
+    fetch: withUsageFallbackFetch(config.id),
     // 不开这一项，工具结果里的图片会被 JSON.stringify 成字符串**静默丢掉**（见文件头注）
     supportsMultiPartToolContent: toolMedia
   }).chatModel(config.model)
@@ -470,3 +520,4 @@ export async function resolveModel(
 
   return { model: await buildLanguageModel(config, apiKey, env), source: config.type }
 }
+

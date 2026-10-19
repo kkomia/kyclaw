@@ -68,6 +68,12 @@ export interface UsageRun {
   contextCachedInput: number | null
   /** round 67：这一轮一共调了几次模型（AI SDK 的 steps 数）；拿不到 → null */
   stepCount: number | null
+  /**
+   * PB-027：这一轮 provider **有没有回精确 usage**。
+   * false = 没回（流式端点不带 usage）：行仍然落（轮次不被吞），但 tokens 全 0，读数侧读它显示「—」
+   * —— **绝不估算**。老记录没有这一列 → 视为 true（那时能写进库的都是有 usage 的轮）。
+   */
+  reported?: boolean
   /** ISO 时间串（写入时刻） */
   createdAt: string
 }
@@ -132,6 +138,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           "context_input_tokens" INTEGER,
           "context_cached_input_tokens" INTEGER,
           "step_count" INTEGER,
+          "reported" INTEGER NOT NULL DEFAULT 1,
           "cost" REAL,
           "created_at" TEXT NOT NULL
         )`
@@ -150,13 +157,14 @@ export function createUsageStore(client: SqliteClient): UsageStore {
         'thread_id',
         'context_input_tokens',
         'context_cached_input_tokens',
-        'step_count'
+        'step_count',
+        'reported'
       ]) {
         if (existing.has(column)) continue
         await client.execute(
           `ALTER TABLE "${USAGE_TABLE}" ADD COLUMN "${column}" ${
             column === 'thread_id' ? 'TEXT' : 'INTEGER'
-          }`
+          }${column === 'reported' ? ' NOT NULL DEFAULT 1' : ''}`
         )
       }
       await client.execute(
@@ -178,8 +186,8 @@ export function createUsageStore(client: SqliteClient): UsageStore {
       await ensureTable()
       await client.execute({
         sql: `INSERT OR REPLACE INTO "${USAGE_TABLE}"
-          ("id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "cost", "created_at")
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ("id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "reported", "cost", "created_at")
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           run.id,
           run.runId,
@@ -193,6 +201,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
           run.contextInput,
           run.contextCachedInput,
           run.stepCount,
+          run.reported === false ? 0 : 1,
           // cost：历史列，保留兼容 —— 产品不再记账，固定写 NULL（"没记"比写 0 诚实：
           // 0 会被读成"这次没花钱"）
           null,
@@ -222,7 +231,7 @@ export function createUsageStore(client: SqliteClient): UsageStore {
 }
 
 /** usage_runs 的列清单（读回用；round 67 加了三列上下文口径。`cost` 是历史列，不读） */
-const USAGE_COLUMNS = `"id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "created_at"`
+const USAGE_COLUMNS = `"id", "run_id", "thread_id", "model", "provider", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "context_input_tokens", "context_cached_input_tokens", "step_count", "reported", "created_at"`
 
 /** libsql 行 → UsageRun（列名映射只写这一处） */
 function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
@@ -244,6 +253,7 @@ function rowOfUsageRun(row: Record<string, unknown>): UsageRun {
     contextInput: toNullableNumber(row.context_input_tokens),
     contextCachedInput: toNullableNumber(row.context_cached_input_tokens),
     stepCount: toNullableNumber(row.step_count),
+    reported: Number(row.reported ?? 1) !== 0,
     createdAt: String(row.created_at)
   }
 }
@@ -267,12 +277,38 @@ export interface ThreadTokenReadout {
   lastInput: number | null
   lastCachedInput: number | null
   baselineInput: number | null
+  /** PB-027：最近一轮 provider 有没有回精确 usage（false = UI 应显示「—」，而不是 0） */
+  usageReported: boolean
 }
 
 /** 取"上下文口径"的数字：新记录用 contextInput，老记录（NULL）退回整轮合计 */
 function contextOrTurn(contextValue: number | null, turnValue: number): number {
   return contextValue ?? turnValue
 }
+
+/**
+ * PB-033 方案 C：把**一步**模型调用的 provider usage 变成流内直推的精确数据。
+ * 输入/输出都为 0（没回 usage）→ null：**不推假数据**（渲染端据此显示「—」，绝不估算）。
+ */
+export function usageStreamPartOf(
+  usage: unknown,
+  stepIndex: number
+): import('../shared/usage').UsageStreamPart | null {
+  const record = usage as Record<string, unknown> | null | undefined
+  const input = tokenNumber(record?.inputTokens) ?? 0
+  const output = tokenNumber(record?.outputTokens) ?? 0
+  if (input + output <= 0) return null
+  return {
+    stepIndex,
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: tokenNumber(record?.totalTokens) ?? null,
+    cachedInputTokens: cachedOf(record ?? null),
+    // 这一步的输入就是"此刻的上下文大小"；轮末落库用的 lastStepUsage 与它同源
+    contextInput: input
+  }
+}
+
 
 export interface ThreadUsageTotals {
   rounds: number
@@ -319,13 +355,24 @@ export function summarizeThreadUsage(rows: readonly UsageRun[]): ThreadUsageSumm
     hitRate: input === 0 ? null : Math.round((cachedInput / input) * 100)
   }
   if (last === undefined) {
-    return { lastInput: null, lastCachedInput: null, baselineInput: null, totals }
+    return {
+      lastInput: null,
+      lastCachedInput: null,
+      baselineInput: null,
+      usageReported: false,
+      totals
+    }
   }
+  // 没回 usage 的轮：数值一律 null（UI 显示「—」），但 totals 与轮数照算（轮次不丢）
+  const valueRow = last.reported === false ? [...rows].reverse().find((row) => row.reported !== false) : last
+  const baselineRow = first?.reported === false ? rows.find((row) => row.reported !== false) : first
   return {
-    lastInput: contextOrTurn(last.contextInput, last.tokens.input),
-    lastCachedInput: last.contextCachedInput ?? last.cachedInput,
+    lastInput: valueRow === undefined ? null : contextOrTurn(valueRow.contextInput, valueRow.tokens.input),
+    lastCachedInput:
+      valueRow === undefined ? null : (valueRow.contextCachedInput ?? valueRow.cachedInput),
     baselineInput:
-      first === undefined ? null : contextOrTurn(first.contextInput, first.tokens.input),
+      baselineRow === undefined ? null : contextOrTurn(baselineRow.contextInput, baselineRow.tokens.input),
+    usageReported: last.reported !== false,
     totals
   }
 }
@@ -338,7 +385,8 @@ export async function threadTokenReadout(
   return {
     lastInput: summary.lastInput,
     lastCachedInput: summary.lastCachedInput,
-    baselineInput: summary.baselineInput
+    baselineInput: summary.baselineInput,
+    usageReported: summary.usageReported
   }
 }
 
@@ -523,14 +571,20 @@ export function createUsageRecorder(options: {
       const usage = (event.totalUsage ?? event.usage) as Record<string, unknown> | null | undefined
       const input = tokenNumber(usage?.inputTokens) ?? 0
       const output = tokenNumber(usage?.outputTokens) ?? 0
-      if (input + output <= 0) return
+      // PB-027：拿不到精确 usage 时**不写假数据（不填 0 冒充）**，但这一轮也不能被吞掉 ——
+      // 落一行 reported=false：轮数还在（统计不丢轮），读数侧读到它显示「—」。
+      const reported = input + output > 0
+      // 一次性排查开关：把流里收到的 usage 事件原样打出来（默认关；真机验证 provider 能力用）
+      if (process.env.KYCLAW_USAGE_DEBUG === '1') {
+        console.log('[usage-debug] finish usage =', JSON.stringify(usage ?? null))
+      }
       const reportedTotal = tokenNumber(usage?.totalTokens) ?? 0
       const cachedInput = cachedOf(usage ?? null)
       const model = firstText(event.model?.modelId, event.response?.modelId) ?? 'unknown'
       const provider = firstText(event.model?.provider) ?? null
       // round 67：末一个 step 的 usage = 这一轮结束时的真实上下文（见 UsageRun.contextInput）
       const finalUsage = lastStepUsage(event)
-      const contextInput = tokenNumber(finalUsage?.inputTokens) ?? null
+      const contextInput = reported ? (tokenNumber(finalUsage?.inputTokens) ?? null) : null
       const contextCachedInput = cachedOf(finalUsage)
 
       await options.store.insert({
@@ -539,7 +593,12 @@ export function createUsageRecorder(options: {
         threadId: threadIdOf(event),
         model,
         provider,
-        tokens: { input, output, total: reportedTotal > 0 ? reportedTotal : input + output },
+        tokens: {
+          input,
+          output,
+          total: reported ? (reportedTotal > 0 ? reportedTotal : input + output) : 0
+        },
+        reported,
         cachedInput: cachedInput ?? null,
         contextInput,
         contextCachedInput,
@@ -552,3 +611,4 @@ export function createUsageRecorder(options: {
     }
   }
 }
+

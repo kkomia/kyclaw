@@ -29,6 +29,7 @@ import {
   createUsageStore,
   rangeStart,
   summarizeCalendar,
+  summarizeThreadUsage,
   summarizeUsage,
   threadTokenReadout,
   usageSqlClient,
@@ -235,6 +236,66 @@ describe('记账钩子：从 onFinish 事件取"上下文口径"（round 67）',
     expect(row?.cachedInput).toBe(480)
     expect(row?.contextInput).toBe(300)
     expect(row?.contextCachedInput).toBe(290)
+    expect(row?.reported).toBe(true)
+  })
+
+  it('PB-027：provider 没回 usage 时**不吞轮**——落一行 reported=false、tokens 全 0、不填假数', async () => {
+    const row = await record({
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      model: { modelId: 'deepseek-flash' }
+    })
+    expect(row).not.toBeNull()
+    expect(row?.reported).toBe(false)
+    expect(row?.tokens).toEqual({ input: 0, output: 0, total: 0 })
+    expect(row?.contextInput).toBeNull()
+    expect(row?.contextCachedInput).toBeNull()
+    expect(row?.stepCount).toBeNull()
+
+    // 读数：最近一轮无 usage → lastInput null（UI 显示 —），但轮数照算
+    const summary = summarizeThreadUsage([row as UsageRun])
+    expect(summary.lastInput).toBeNull()
+    expect(summary.lastCachedInput).toBeNull()
+    expect(summary.baselineInput).toBeNull()
+    expect(summary.usageReported).toBe(false)
+    expect(summary.totals.rounds).toBe(1)
+    expect(summary.totals.input).toBe(0)
+  })
+
+  it('PB-027：最后一轮无 usage、前一轮有 → 数值用前一轮真值（不拿 0 冒充），usageReported=false', async () => {
+    const reported: UsageRun = {
+      id: 'r1',
+      runId: null,
+      threadId: 't1',
+      model: 'deepseek-flash',
+      provider: null,
+      tokens: { input: 1_000, output: 50, total: 1_050 },
+      cachedInput: 900,
+      contextInput: 800,
+      contextCachedInput: 700,
+      stepCount: 1,
+      createdAt: '2026-10-19T00:00:00.000Z'
+    }
+    const unreported: UsageRun = {
+      id: 'r2',
+      runId: null,
+      threadId: 't1',
+      model: 'deepseek-flash',
+      provider: null,
+      tokens: { input: 0, output: 0, total: 0 },
+      cachedInput: null,
+      contextInput: null,
+      contextCachedInput: null,
+      stepCount: null,
+      reported: false,
+      createdAt: '2026-10-19T00:01:00.000Z'
+    }
+    const summary = summarizeThreadUsage([reported, unreported])
+    expect(summary.lastInput).toBe(800)
+    expect(summary.lastCachedInput).toBe(700)
+    expect(summary.baselineInput).toBe(800)
+    expect(summary.usageReported).toBe(false)
+    expect(summary.totals.rounds).toBe(2)
+    expect(summary.totals.input).toBe(1_000)
   })
 })
 
@@ -256,14 +317,16 @@ describe('会话 token 读数（round 59 / round 67）', () => {
     expect(await threadTokenReadout(store, 't')).toEqual({
       lastInput: 400,
       lastCachedInput: 300,
-      baselineInput: 100
+      baselineInput: 100,
+      usageReported: true
     })
 
     const empty = { listByThread: async () => [] } as unknown as UsageStore
     expect(await threadTokenReadout(empty, 't')).toEqual({
       lastInput: null,
       lastCachedInput: null,
-      baselineInput: null
+      baselineInput: null,
+      usageReported: false
     })
   })
 
@@ -294,7 +357,8 @@ describe('会话 token 读数（round 59 / round 67）', () => {
     expect(await threadTokenReadout(store, 't')).toEqual({
       lastInput: 30_000,
       lastCachedInput: 29_000,
-      baselineInput: 11_000
+      baselineInput: 11_000,
+      usageReported: true
     })
   })
 
@@ -316,7 +380,8 @@ describe('会话 token 读数（round 59 / round 67）', () => {
     expect(await threadTokenReadout(store, 't')).toEqual({
       lastInput: 250,
       lastCachedInput: 240,
-      baselineInput: 100
+      baselineInput: 100,
+      usageReported: true
     })
   })
 })
@@ -452,6 +517,7 @@ describe('用量路由：窗口过滤（真 libsql，注入 now）', () => {
       lastInput: 400,
       lastCachedInput: 300,
       baselineInput: 100,
+      usageReported: true,
       todayInput: 560,
       todayCachedInput: 300,
       // task-107：全会话合计（两条 run：input 100+400 / cached 300 / output 5+5）
@@ -602,7 +668,7 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
     })
   }
 
-  async function chat(threadId: string, text: string): Promise<void> {
+  async function chat(threadId: string, text: string): Promise<string> {
     const response = await fetch(`${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${server.token}` },
@@ -612,7 +678,7 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
       })
     })
     expect(response.status).toBe(200)
-    await response.text()
+    return response.text()
   }
 
   async function usage(range: 'today' | 'month'): Promise<UsageResponse> {
@@ -653,7 +719,26 @@ describe('记账钩子（真服务：一轮对话 → usage_runs → /api/usage�
   })
 
   it('已知模型：token 从 chat 流进表（记账只记 token，不算钱）', async () => {
-    await chat('thread-usage-known', '你好')
+    const streamText = await chat('thread-usage-known', '你好')
+
+    // PB-033 方案 C：流里要能**直推**每步精确 usage（`data-usage` part），不做估算
+    const usageLines = streamText.split('\n').filter((line) => line.includes('data-usage'))
+    expect(usageLines.length).toBeGreaterThan(0)
+    const parts = usageLines.map(
+      (line) =>
+        JSON.parse(line.replace(/^data:\s*/, '')) as {
+          type: string
+          data: Record<string, number>
+        }
+    )
+    expect(parts[0].type).toBe('data-usage')
+    expect(parts[0].data).toMatchObject({
+      stepIndex: 0,
+      inputTokens: 1,
+      outputTokens: 3,
+      contextInput: 1
+    })
+
     const today = await waitForRuns(1)
 
     expect(today.tokens).toEqual({ input: 1, output: 3, total: 4 })
@@ -910,3 +995,4 @@ describe('task-127 /api/usage/calendar 路由（注入 now + 假 store）', () =
     }
   })
 })
+

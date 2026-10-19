@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Mastra 实例装配：kyclaw agent + libsql storage + agent 级 Memory + AI SDK 兼容的 chat 路由。
  *
  * - storage 落 `dataDir/kyclaw.db`（生产即 %APPDATA%/kyclaw/kyclaw.db）：thread / resource 等
@@ -109,8 +109,31 @@ import {
   createUsageStore,
   threadTokenReadout,
   usageSqlClient,
+  usageStreamPartOf,
   type UsageStore
 } from './usage'
+import type { UsageStreamPart } from '../shared/usage'
+
+/**
+ * PB-033 方案 C：把每步模型调用的**精确** usage 作为 `data-usage` part 插进 UI 流。
+ * 只读队列直推（不写库、不改 totals）；没有 usage 的步不推（不造假数据）。
+ */
+function withUsageStreamParts<T>(
+  stream: ReadableStream<T>,
+  queue: UsageStreamPart[]
+): ReadableStream<T> {
+  return stream.pipeThrough(
+    new TransformStream<T, T>({
+      transform(chunk, controller) {
+        controller.enqueue(chunk)
+        while (queue.length > 0) {
+          const part = queue.shift()
+          if (part !== undefined) controller.enqueue({ type: 'data-usage', data: part } as T)
+        }
+      }
+    })
+  )
+}
 
 /** libsql 库文件名（落在 dataDir 下） */
 export const AGENT_DB_FILE = 'kyclaw.db'
@@ -646,6 +669,10 @@ export async function createKyclawMastra(options: {
                 params.requestContext
               )
               const guard = planRuntime.guardFor(request.requestContext)
+              // PB-033 方案 C：每步模型调用的**精确** usage 通过 `data-usage` part 流内直推
+              // （轮末仍按整轮落一行 usage_runs，totals 口径不变、不污染）
+              const usageParts: UsageStreamPart[] = []
+              let usageStepIndex = 0
               const stream = await handleChatStream({
                 mastra: context.get('mastra'),
                 agentId: KYCLAW_AGENT_ID,
@@ -654,7 +681,12 @@ export async function createKyclawMastra(options: {
                 defaultOptions: {
                   ...chatOptions,
                   hooks: guard.hooks,
-                  inputProcessors: [...chatOptions.inputProcessors, guard.processor]
+                  inputProcessors: [...chatOptions.inputProcessors, guard.processor],
+                  onStepFinish: (event: { usage?: unknown }) => {
+                    const part = usageStreamPartOf(event?.usage, usageStepIndex)
+                    usageStepIndex += 1
+                    if (part !== null) usageParts.push(part)
+                  }
                 },
                 params: { ...params, ...request, abortSignal: context.req.raw.signal }
               })
@@ -662,7 +694,7 @@ export async function createKyclawMastra(options: {
                 // 这一轮的 runId：续跑（审批 / ask_user）用挂起时那一轮的 runId；新的一轮用
                 // `prepareTaskChatParams` 刚产出的那个（任务处理链按它校验每一步）
                 stream: tapStreamFailures(
-                  stream,
+                  withUsageStreamParts(stream, usageParts) as typeof stream,
                   noteFailure(memoryScope.thread, resumedRunId ?? preparedRunId(params))
                 )
               })

@@ -96,6 +96,8 @@ export const usageThreadContextSchema = z.strictObject({
   lastInput: z.number().int().min(0).nullable(),
   lastCachedInput: z.number().int().min(0).nullable(),
   baselineInput: z.number().int().min(0).nullable(),
+  /** PB-027：最近一轮有没有拿到精确 usage；false 时 last* 为 null，UI 显示「—」（不估算） */
+  usageReported: z.boolean().optional(),
   todayInput: z.number().int().min(0),
   todayCachedInput: z.number().int().min(0),
   /** 全会话合计（Token 用量四格 + 会话统计的数据面） */
@@ -135,3 +137,24 @@ export type UsageCalendar = z.infer<typeof usageCalendarSchema>
 
 /** 查询参数：年份缺省由路由取当前年；脏值 400，不静默回落 */
 export const usageCalendarYearSchema = z.coerce.number().int().min(2000).max(2100)
+
+/**
+ * PB-033 方案 C：**流内直推**的一步用量（chat SSE 里的 `data-usage` part）。
+ *
+ * 服务端在每步模型调用结束时把 provider 报的**精确** usage 原样推给渲染端（不估算、不累加第二轮），
+ * 轮末仍按整轮落一行 usage_runs（历史 totals 口径不变，**不污染**）。
+ * 渲染端消费点另派（本次后端只保证数据面）。
+ */
+export const usageStreamPartSchema = z.strictObject({
+  /** 这一轮里的第几次模型调用（从 0 起） */
+  stepIndex: z.number().int().min(0),
+  inputTokens: z.number().int().min(0),
+  outputTokens: z.number().int().min(0),
+  totalTokens: z.number().int().min(0).nullable(),
+  cachedInputTokens: z.number().int().min(0).nullable(),
+  /** 该次的输入即"此刻的上下文大小"（最后一次 = 本轮的 lastInput） */
+  contextInput: z.number().int().min(0).nullable()
+})
+
+export type UsageStreamPart = z.infer<typeof usageStreamPartSchema>
+
