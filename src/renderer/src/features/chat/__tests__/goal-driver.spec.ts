@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it, vi } from 'vitest'
-import type { GoalView } from '@shared/goal'
+import type { GoalRequest, GoalState, GoalView } from '@shared/goal'
 import { GOAL_DRIVER_ENABLED, blockGoalRoundLimit, disarmGoalOnAbort, planGoalRound, type GoalRoundGateInput } from '../goal-driver'
 
 /**
@@ -97,7 +97,7 @@ describe('goal-driver 骨架', () => {
 })
 
 describe('goal-driver round-limit / disarm（2)3)）', () => {
-  const state = (g: unknown) => ({ goal: g, activation: 'armed' as const })
+  const state = (g: GoalView | null): GoalState => ({ goal: g, activation: 'armed' })
   const maxed = { ...goal, roundsStarted: goal.maxGoalRounds }
 
   it('轮尽 → POST block(round-limit) 一次；重复调用（已 blocked）不再发', async () => {
@@ -108,23 +108,23 @@ describe('goal-driver round-limit / disarm（2)3)）', () => {
       .mockResolvedValueOnce(state({ ...maxed, phase: 'blocked' }))
     const deps = { fetchGoal, postGoal }
 
-    expect(await blockGoalRoundLimit('t1', deps)).toBe(true)
+    expect(await blockGoalRoundLimit('t1', deps as never)).toBe(true)
     expect(postGoal).toHaveBeenCalledTimes(1)
-    expect(postGoal.mock.calls[0]?.[0]).toMatchObject({
+    expect((postGoal.mock.calls as unknown as [GoalRequest][])[0]?.[0]).toMatchObject({
       action: 'block',
       ref: { id: 'g1', revision: 4 },
       blocked: { code: 'round-limit' }
     })
 
     // 第二次：GET 看到已 blocked → 不发（幂等）
-    expect(await blockGoalRoundLimit('t1', deps)).toBe(false)
+    expect(await blockGoalRoundLimit('t1', deps as never)).toBe(false)
     expect(postGoal).toHaveBeenCalledTimes(1)
   })
 
   it('未轮尽 → 不发 block；block 失败只记日志不抛', async () => {
     const postGoal = vi.fn(async () => state(goal))
     const deps = { fetchGoal: vi.fn(async () => state(goal)), postGoal }
-    expect(await blockGoalRoundLimit('t2', deps)).toBe(false)
+    expect(await blockGoalRoundLimit('t2', deps as never)).toBe(false)
     expect(postGoal).not.toHaveBeenCalled()
 
     const failing = {
@@ -134,13 +134,13 @@ describe('goal-driver round-limit / disarm（2)3)）', () => {
       }),
       log: vi.fn()
     }
-    await expect(blockGoalRoundLimit('t3', failing)).resolves.toBe(false)
+    await expect(blockGoalRoundLimit('t3', failing as never)).resolves.toBe(false)
     expect(failing.log).toHaveBeenCalled()
   })
 
   it('disarm：成功发一次；失败被吞掉（不抛）并记日志', async () => {
     const postGoal = vi.fn(async () => state(goal))
-    await disarmGoalOnAbort('t4', { fetchGoal: vi.fn(), postGoal })
+    await disarmGoalOnAbort('t4', { fetchGoal: vi.fn(), postGoal } as never)
     expect(postGoal).toHaveBeenCalledWith({ threadId: 't4', action: 'disarm' })
 
     const failing = {
@@ -150,8 +150,9 @@ describe('goal-driver round-limit / disarm（2)3)）', () => {
       }),
       log: vi.fn()
     }
-    await expect(disarmGoalOnAbort('t5', failing)).resolves.toBeUndefined()
+    await expect(disarmGoalOnAbort('t5', failing as never)).resolves.toBeUndefined()
     expect(failing.log).toHaveBeenCalled()
   })
 })
+
 
