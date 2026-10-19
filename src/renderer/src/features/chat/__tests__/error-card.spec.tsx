@@ -202,10 +202,13 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
     })
 
     expect(await screen.findByTestId('error-card')).toBeInTheDocument()
-    // PB-036：轮次失败卡与正文同栅格（不超出正文左缘）
+    // PB-036：轮次失败卡与正文同栅格（消息列同宽居中 + 18px 阅读缩进）
     expect(screen.getByTestId('error-card').parentElement?.className).toContain(
-      'pl-[calc(1rem+var(--chat-reading-indent))]'
+      'pl-[var(--chat-reading-indent)]'
     )
+    expect(
+      screen.getByTestId('error-card').parentElement?.parentElement?.className
+    ).toContain('max-w-[calc(var(--chat-content-width)+32px)]')
     expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
 
     await act(async () => {

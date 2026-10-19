@@ -1462,9 +1462,12 @@ function ActiveChat({
       >
         <WelcomeHero active={hero} />
         {error ? (
-          // PB-036：轮次失败卡与消息正文同栅格（同一 --chat-reading-indent 左基线），不超出正文左缘
-          <div className="px-4 pt-2 pl-[calc(1rem+var(--chat-reading-indent))]">
-            <ErrorCard error={toError(error)} onRetry={retry} />
+          // PB-036：轮次失败卡与消息正文同栅格——先与消息列同宽居中，再进 18px 阅读缩进，
+          // 卡片左缘 = 正文文本左缘（不再横跨整个页脚、不超出正文左基线）
+          <div className="mx-auto w-full max-w-[calc(var(--chat-content-width)+32px)] px-4 pt-2">
+            <div className="pl-[var(--chat-reading-indent)]">
+              <ErrorCard error={toError(error)} onRetry={retry} />
+            </div>
           </div>
         ) : null}
         {syncError ? (
