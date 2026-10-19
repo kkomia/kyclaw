@@ -308,14 +308,19 @@ describe('冷启动：端点还没回来', () => {
     expect(input()).toHaveValue('先写着')
     expect(screen.getByTestId('composer-send')).toBeDisabled()
 
-    // 重试：端点这次通了 → 错误卡退场，输入卡与草稿都在
-    endpoint.mockResolvedValue({ baseUrl: 'http://127.0.0.1:9', token: 'tok' })
+    // PB-038 契约：startup 失败档的按钮是「重启应用」→ app.relaunch()；
+    // ok 后**保持卡片 + disabled + 「正在重启…」**（窗口即将关闭），不清错误、不假装恢复可操作。
+    expect(screen.getByTestId('error-retry')).toHaveTextContent('重启应用')
+    const relaunch = vi.spyOn(window.kyclaw.app, 'relaunch')
     await act(async () => {
       fireEvent.click(screen.getByTestId('error-retry'))
     })
     await waitFor(() => {
-      expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
+      expect(relaunch).toHaveBeenCalledTimes(1)
     })
+    expect(screen.getByTestId('error-card')).toBeInTheDocument()
+    expect(screen.getByTestId('error-retry')).toHaveTextContent('正在重启…')
+    expect(screen.getByTestId('error-retry')).toBeDisabled()
     expect(input()).toHaveValue('先写着')
   }, 15_000)
 })
