@@ -488,3 +488,116 @@ describe('read：读图片不审（round 75 用户口径）', () => {
     expect(typeof out).toBe('object')
   })
 })
+
+/**
+ * PB-038：read 不能读 .html（用户实测）。根因是文本档把 `sniffFormat` 的**预览标记**
+ * `'html' / 'image-svg'` 当二进制；这里钉住「HTML/SVG/XML 等文本档能读」「行窗口正确」
+ * 「真二进制仍然拒」「编码嗅探（UTF-8 BOM / UTF-16 / GB18030）」。
+ */
+describe('read：文本档（PB-038 html / svg / xml + 编码嗅探 + 真二进制）', () => {
+  const HTML = [
+    '<!doctype html>',
+    '<html lang="zh-CN">',
+    '  <head><meta charset="utf-8"><title>部署页</title></head>',
+    '  <body>',
+    '    <h1>构建产物</h1>',
+    '    <p>这是纯文本部署页。</p>',
+    '  </body>',
+    '</html>'
+  ].join('\n')
+
+  it('.html 按文本读：整文件原样返回（不再被当二进制拒绝）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    writeText(join(bed.root, 'index.html'), HTML)
+    const out = String(await callTool(tool, { path: 'index.html' }))
+    expect(out).toBe(HTML)
+    expect(out).not.toContain('二进制')
+  })
+
+  it('.html 行窗口正确（offset/limit + 范围注记）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    writeText(join(bed.root, 'index.html'), HTML)
+    const out = String(await callTool(tool, { path: 'index.html', offset: 2, limit: 2 }))
+    expect(out).toContain('<html lang="zh-CN">')
+    expect(out).toContain('<head><meta charset="utf-8"><title>部署页</title></head>')
+    expect(out).toContain('[只显示第 2-3 行，文件共 8 行]')
+  })
+
+  it('.svg / .xml / .css 这些文本族都能读（预览标记不再当二进制）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    writeText(join(bed.root, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')
+    writeText(join(bed.root, 'feed.xml'), '<?xml version="1.0"?><rss><channel/></rss>')
+    writeText(join(bed.root, 'app.css'), '.a { color: red }')
+    await expect(callTool(tool, { path: 'logo.svg' })).resolves.toContain('<rect/>')
+    await expect(callTool(tool, { path: 'feed.xml' })).resolves.toContain('<rss>')
+    await expect(callTool(tool, { path: 'app.css' })).resolves.toBe('.a { color: red }')
+  })
+
+  it('真二进制仍然拒（png / zip / exe / wasm / pdf / mp4），且给可读原因', async () => {
+    const tool = await createReadTool(bed.ctx)
+    const png = Buffer.from(PNG_32x24, 'base64')
+    writeBytes(join(bed.root, 'shot.html'), png) // 扩展名是文本，内容是真 PNG：魔数优先
+    writeBytes(join(bed.root, 'bundle.zip'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]))
+    writeBytes(join(bed.root, 'tool.exe'), Buffer.from('MZ\x90\x00', 'latin1'))
+    writeBytes(join(bed.root, 'mod.wasm'), Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0]))
+    writeBytes(join(bed.root, 'doc.pdf'), Buffer.from('%PDF-1.7\n', 'latin1'))
+    writeBytes(
+      join(bed.root, 'clip.mp4'),
+      Buffer.concat([
+        Buffer.from([0, 0, 0, 0x18]),
+        Buffer.from('ftypisom', 'latin1'),
+        Buffer.from([0, 0, 0, 0])
+      ])
+    )
+    for (const name of ['shot.html', 'bundle.zip', 'tool.exe', 'mod.wasm', 'clip.mp4']) {
+      const out = String(await callTool(tool, { path: name }))
+      expect(out, name).toContain('二进制')
+      expect(out, name).toContain('下一步：')
+    }
+    // PDF 走的是 PDF 档（按扩展名分派）：内容是二进制的，结论同样是"拒 + 可读原因"，
+    // 只是文案是「打不开这份 PDF / 读不出」而不是"二进制"
+    const pdfOut = String(await callTool(tool, { path: 'doc.pdf' }))
+    expect(pdfOut).toMatch(/打不开这份 PDF|读不出/)
+    expect(pdfOut).toContain('下一步：')
+  })
+
+  it('UTF-8 BOM：去掉 BOM 后按文本读（不把 BOM 当内容）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    writeBytes(
+      join(bed.root, 'bom.html'),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('<p>你好</p>', 'utf8')])
+    )
+    const out = String(await callTool(tool, { path: 'bom.html' }))
+    expect(out).toBe('<p>你好</p>')
+    expect(out.startsWith('\uFEFF')).toBe(false)
+  })
+
+  it('UTF-16LE（带 BOM）：能解出来，不乱码', async () => {
+    const tool = await createReadTool(bed.ctx)
+    const body = '记得保存\n第二行'
+    writeBytes(
+      join(bed.root, 'note16.txt'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(body, 'utf16le')])
+    )
+    const out = String(await callTool(tool, { path: 'note16.txt' }))
+    expect(out).toBe(body)
+  })
+
+  it('GB18030 文本：解出中文并**标明是推测**（不是二进制）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    // “中文测试” 的 GB18030 字节
+    writeBytes(join(bed.root, 'gbk.txt'), Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0xb2, 0xe2, 0xca, 0xd4]))
+    const out = String(await callTool(tool, { path: 'gbk.txt' }))
+    expect(out).toContain('中文测试')
+    expect(out).toContain('编码按内容推测为 GB18030')
+    expect(out).not.toContain('\uFFFD')
+  })
+
+  it('带 NUL 的 .txt：仍判二进制（不吐乱码）', async () => {
+    const tool = await createReadTool(bed.ctx)
+    writeBytes(join(bed.root, 'nul.txt'), Buffer.from('前一半\n\u0000后一半\n', 'utf8'))
+    const out = String(await callTool(tool, { path: 'nul.txt' }))
+    expect(out).toContain('二进制')
+    expect(out).not.toContain('前一半')
+  })
+})

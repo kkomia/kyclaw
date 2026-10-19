@@ -7,7 +7,7 @@
  * （生产代码只走 `globalThis.TextDecoder`，所以替得掉）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { decodeTextBytes, describeEncoding } from '../text-encoding'
+import { decodeTextBytes, decodeTextFileBytes, describeEncoding, isKnownTextPath } from '../text-encoding'
 
 /** UTF-16LE 字节（可选 BOM）：`Buffer.from(text, 'utf16le')` 就是不带 BOM 的 LE */
 function utf16le(text: string, bom = false): Buffer {
@@ -150,5 +150,70 @@ describe('describeEncoding：回执里报的编码名', () => {
     expect(describeEncoding('utf-16le')).toBe('UTF-16LE')
     expect(describeEncoding('utf-16be')).toBe('UTF-16BE')
     expect(describeEncoding('gb18030')).toContain('GB18030')
+  })
+})
+
+/**
+ * PB-038：普通文本档的「扩展名白名单」+「截断点尾部半个多字节字符」。
+ * 白名单只回答"这份文件名按不按文本读"（**不在名单里的仍按文本读**，保持 read 原行为），
+ * 真二进制由 read 侧的文件头判定，不在这里。
+ */
+describe('isKnownTextPath：文本扩展名白名单（PB-038）', () => {
+  it('代码 / 标记 / 配置这些文本扩展名命中（大小写不敏感）', () => {
+    for (const name of [
+      'index.html',
+      'INDEX.HTML',
+      'a.htm',
+      'app.css',
+      'main.ts',
+      'x.tsx',
+      'comp.jsx',
+      'data.json',
+      'pnpm-lock.yaml',
+      'notes.md',
+      'logo.svg',
+      'feed.xml',
+      'table.csv',
+      'run.sh',
+      'script.ps1',
+      'main.py',
+      'lib.rs',
+      'a.cpp'
+    ])
+      expect(isKnownTextPath(name), name).toBe(true)
+  })
+
+  it('无扩展名的公认文本文件名命中（含 Dockerfile.dev 这类前缀）', () => {
+    expect(isKnownTextPath('Makefile')).toBe(true)
+    expect(isKnownTextPath('Dockerfile')).toBe(true)
+    expect(isKnownTextPath('Dockerfile.dev')).toBe(true)
+    expect(isKnownTextPath('LICENSE')).toBe(true)
+  })
+
+  it('二进制扩展名不命中（真二进制由 read 的文件头判定兜底）', () => {
+    for (const name of ['a.png', 'a.zip', 'a.exe', 'a.wasm', 'a.pdf', 'a.mp4']) {
+      expect(isKnownTextPath(name), name).toBe(false)
+    }
+  })
+})
+
+describe('decodeTextFileBytes：普通文本档的解码口吻与截断尾部（PB-038）', () => {
+  it('ICU 不可用时给"另存为 UTF-8"的人话（不说成二进制）', () => {
+    vi.stubGlobal('TextDecoder', IcuLessDecoder)
+    const result = decodeTextFileBytes(GB18030_ZHONGWEN)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.message).toContain('另存为 UTF-8')
+    expect(result.message).not.toContain('二进制')
+  })
+
+  it('allowPartialTail：UTF-8 刀口落在汉字中间时丢掉半个字符（不产 U+FFFD）', () => {
+    const full = Buffer.from('好'.repeat(10), 'utf8') // 每字 3 字节
+    const cut = full.subarray(0, full.length - 1) // 切掉最后 1 字节 → 尾部半个"好"
+    const result = decodeTextFileBytes(cut, { allowPartialTail: true })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.text).toBe('好'.repeat(9))
+    expect(result.text).not.toContain('\uFFFD')
   })
 })

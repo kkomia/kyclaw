@@ -66,7 +66,6 @@
  * （字符串档，或哪儿冒出来的错误对象）一律不做映射 —— 以前是"只要不是字符串就当图片"，
  * 会把错误对象当成图片档去读盘、附字节。
  */
-import { StringDecoder } from 'node:string_decoder'
 import { basename, extname } from 'node:path'
 import type { Tool } from '@mastra/core/tools'
 import { z } from '../../shared/zod'
@@ -78,7 +77,7 @@ import {
 } from '../../shared/attachments'
 import { PREVIEW_OFFICE_MAX_BYTES } from '../../shared/workbench'
 import { extractPdfText } from '../../main/pdf'
-import { decodeTextBytes, describeEncoding } from '../../main/text-encoding'
+import { decodeTextBytes, decodeTextFileBytes, describeEncoding } from '../../main/text-encoding'
 import { sniffFormat } from '../../main/workbench-files'
 import {
   extractDocx,
@@ -243,7 +242,7 @@ const SNIFF_MEDIA_TYPE: Readonly<Record<string, string>> = {
   'image-webp': 'image/webp'
 }
 
-/** 二进制档在人话里怎么称呼（键 = `sniffFormat` 的结论，外加 OLE） */
+/** 二进制档在人话里怎么称呼（键 = `sniffFormat` 的结论 / 本文件的魔数判定，外加 OLE） */
 const BINARY_NAME: Readonly<Record<string, string>> = {
   pdf: 'PDF',
   ooxml: 'OOXML 容器（.docx / .xlsx / .pptx / .zip 这类）',
@@ -252,7 +251,39 @@ const BINARY_NAME: Readonly<Record<string, string>> = {
   'image-gif': 'GIF 图片',
   'image-webp': 'WebP 图片',
   'image-bmp': 'BMP 图片',
-  ole: '旧版 Office 二进制（.doc / .xls / .ppt）'
+  ole: '旧版 Office 二进制（.doc / .xls / .ppt）',
+  'image-ico': 'ICO 图标',
+  exe: 'Windows 可执行文件（.exe / .dll）',
+  elf: 'Linux 可执行文件（ELF）',
+  wasm: 'WebAssembly 模块（.wasm）',
+  mp4: '视频文件（.mp4 / .mov 这类）'
+}
+
+/**
+ * `sniffFormat` 里两个**文本族**结论（PB-038）：`'html'` / `'image-svg'` 是给工作台预览
+ * "找哪个渲染器"用的标记 —— HTML 与 SVG 本身都是纯文本，不是二进制。read 的文本档以前把它们
+ * 当二进制拒掉（`read 没读这个文件：… 是二进制（文件头是 html）`），用户实测 .html 读不了。
+ * 这里显式排除；**不改 `sniffFormat` 本身**（工作台预览的语义不动）。
+ */
+const TEXT_FAMILY_SNIFF: ReadonlySet<string> = new Set(['html', 'image-svg'])
+
+/**
+ * `sniffFormat` 覆盖不到的常见二进制魔数（read 专用，工作台预览不需要）：可执行 / wasm / 视频。
+ * 只认**明确的文件头**，认不出返回 null（真文本不会被误判）。
+ */
+function binaryMagicKindOf(bytes: Buffer): string | null {
+  if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) return 'exe' // "MZ"
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x61 &&
+    bytes[2] === 0x73 &&
+    bytes[3] === 0x6d
+  )
+    return 'wasm' // "\0asm"
+  if (bytes.length >= 8 && bytes.toString('latin1', 4, 8) === 'ftyp') return 'mp4'
+  if (bytes.length >= 4 && bytes[0] === 0x7f && bytes.toString('latin1', 1, 4) === 'ELF') return 'elf'
+  return null
 }
 
 /**
@@ -284,8 +315,10 @@ function looksLikeBmp(bytes: Buffer): boolean {
 function binaryKindOf(bytes: Buffer): string | null {
   const sniffed = sniffFormat(bytes)
   if (sniffed === 'image-bmp') return looksLikeBmp(bytes) ? sniffed : null
-  if (sniffed !== null) return sniffed
-  return isOle(bytes) ? 'ole' : null
+  // PB-038：'html' / 'image-svg' 是**文本族**（预览标记），不是二进制 —— 按文本读
+  if (sniffed !== null) return TEXT_FAMILY_SNIFF.has(sniffed) ? null : sniffed
+  if (isOle(bytes)) return 'ole'
+  return binaryMagicKindOf(bytes)
 }
 
 /**
@@ -591,7 +624,15 @@ function binaryMessage(target: string, kind: string): string {
       'BMP 我看不了：让用户另存成 PNG / JPEG（或别的常见图片格式）再读 —— 那几种我能直接看。',
     ole:
       '这是旧版 Office 二进制（.doc / .xls / .ppt）：把扩展名改对再读，read 会用随包的 ' +
-      'LibreOffice 把它转成现代格式后抽取（原件不会被改动）。'
+      'LibreOffice 把它转成现代格式后抽取（原件不会被改动）。',
+    exe:
+      '这是可执行文件：read 不读它，也不会把它的字节交给模型。要分析就用 bash 看文件属性/签名，' +
+      '或让用户提供对应源码。',
+    elf: '这是 Linux 可执行文件：read 不读它。要分析就用 bash 看文件属性，或让用户提供对应源码。',
+    wasm:
+      '这是 WebAssembly 模块（编译产物，不是源码）：read 不读它。要看逻辑请读生成它的源文件。',
+    mp4: '这是视频文件：read 只处理文本 / 文档 / 图片，视频内容我看不到。',
+    'image-ico': '这是 ICO 图标：read 看不了这种图片格式；让用户另存为 PNG / JPEG 再读。'
   }
   return (
     `read 没读这个文件：${target} 是二进制（文件头是 ${what}），按文本解出来只会是乱码。\n` +
@@ -615,9 +656,21 @@ async function readPlainText(
     return binaryMessage(target, binaryKind)
   }
 
-  const text = new StringDecoder('utf8').write(bytes)
-  const notes = clipped ? [`[已截断：文件共 ${size} 字节，只显示前 ${READ_MAX_BYTES} 字节]`] : []
-  return windowText(text, target, input, { notes, truncated: clipped })
+  // PB-038：文本档不再"UTF-8 硬解"——BOM / UTF-16 / 严格 UTF-8 / GB18030 一路嗅探；
+  // 解不开（ICU 不完整）给可读中文（不是"这是二进制"，文件本身没坏）。
+  const decoded = decodeTextFileBytes(bytes, { allowPartialTail: clipped })
+  if (!decoded.ok) return decoded.message
+  // 解码后仍有 NUL：真二进制（或没有 BOM 的极端二进制）。不吐乱码。
+  if (decoded.text.includes('\u0000')) return binaryMessage(target, 'unknown')
+
+  const notes: string[] = []
+  if (clipped) notes.push(`[已截断：文件共 ${size} 字节，只显示前 ${READ_MAX_BYTES} 字节]`)
+  if (decoded.inferred) {
+    notes.push(
+      `[编码按内容推测为 ${describeEncoding(decoded.encoding)}；如需精确结果，请另存为 UTF-8 再读]`
+    )
+  }
+  return windowText(decoded.text, target, input, { notes, truncated: clipped })
 }
 
 /** PDF 档：文字层抽取（与附件那条路同一份实现）；没有文字层/打不开都给人话 + 下一步 */

@@ -20,6 +20,76 @@
 /** 认得出的编码（回执照这个说） */
 export type TextEncoding = 'utf-8' | 'utf-8-bom' | 'utf-16le' | 'utf-16be' | 'gb18030'
 
+/**
+ * **文本扩展名白名单**（PB-038）：这些扩展名按"文本文件"读，不需要先猜字节。
+ *
+ * 为什么要这份名单：read 的文本档以前只按 UTF-8 硬解，且把"内容嗅探到 HTML/SVG"当成二进制
+ * （那是工作台预览找渲染器的标记）。名单把"确定是文本"的路由钉住；**不在名单里的扩展名仍按文本读**
+ * （保持 read 原有行为：`.conf` / `.env` / 无扩展名脚本不该因为没登记就变二进制），真二进制由文件头判定。
+ */
+export const TEXT_EXTENSIONS: readonly string[] = [
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.tsx',
+  '.jsx',
+  '.json',
+  '.jsonc',
+  '.yml',
+  '.yaml',
+  '.toml',
+  '.ini',
+  '.md',
+  '.markdown',
+  '.txt',
+  '.svg',
+  '.xml',
+  '.csv',
+  '.tsv',
+  '.log',
+  '.sql',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.ps1',
+  '.bat',
+  '.cmd',
+  '.py',
+  '.java',
+  '.go',
+  '.rs',
+  '.c',
+  '.h',
+  '.cpp',
+  '.hpp',
+  '.rb',
+  '.php',
+  '.lua',
+  '.kt',
+  '.swift',
+  '.dockerfile',
+  '.gitignore',
+  '.env'
+]
+
+/** 无扩展名但公认是文本的文件名（大小写不敏感；`Dockerfile.dev` 这类前缀也认） */
+const TEXT_BARE_NAMES: readonly string[] = ['Makefile', 'Dockerfile', 'LICENSE', 'NOTICE', 'README', 'CHANGELOG']
+
+/** 这份文件名是不是"已知文本"（按扩展名/常见无扩展名规则；不读内容） */
+export function isKnownTextPath(pathOrName: string): boolean {
+  const name = pathOrName.replace(/\\/g, '/').split('/').pop() ?? ''
+  if (name === '') return false
+  const lower = name.toLowerCase()
+  if (TEXT_EXTENSIONS.some((extension) => lower.endsWith(extension))) return true
+  return TEXT_BARE_NAMES.some(
+    (bare) => lower === bare.toLowerCase() || lower.startsWith(`${bare.toLowerCase()}.`)
+  )
+}
+
 export interface DecodedText {
   text: string
   encoding: TextEncoding
@@ -97,7 +167,7 @@ function guessUtf16(bytes: Uint8Array): 'le' | 'be' | null {
   return null
 }
 
-/** ICU 不完整时的统一人话（调用方原样用） */
+/** ICU 不完整时的统一人话（表格档：调用方原样用） */
 function unsupportedMessage(what: string): string {
   return (
     `本机的 Node 没有带 ${what} 解码能力（ICU 不完整），这份文件又不是 UTF-8，所以解不出来。` +
@@ -106,25 +176,41 @@ function unsupportedMessage(what: string): string {
 }
 
 /**
- * 一份表格文本的字节 → 文本 + **实际用的编码**。见文件头注。
+ * ICU 不完整时的统一人话（普通文本档）：不写成"这是二进制"（它不是——只是这台机器的
+ * TextDecoder 没带这种编码），给出可执行的下一步。
  */
-export function decodeTextBytes(bytes: Uint8Array): TextDecodeResult {
+function unsupportedMessageFile(what: string): string {
+  return (
+    `read 暂时解不开这份文本：它不是 UTF-8，而本机 Node 没带 ${what} 解码能力（ICU 不完整）。` +
+    '下一步：请用户把它另存为 UTF-8（记事本「另存为」里可选）再读；这不影响文件本身。'
+  )
+}
+
+/**
+ * 一份文本字节 → 文本 + **实际用的编码**。`unsupported` 决定"ICU 不可用"时那句人话的口吻
+ * （表格档 / 普通文本档各一份，见下面两个导出）。见文件头注。
+ */
+function decodeTextWith(
+  bytes: Uint8Array,
+  unsupported: (what: string) => string,
+  options?: { allowPartialTail?: boolean }
+): TextDecodeResult {
   if (bytes.length === 0) return { ok: true, text: '', encoding: 'utf-8', inferred: false }
 
   // ① BOM 说了算
   if (startsWith(bytes, [0xff, 0xfe])) {
     const decoded = decodeWith('utf-16le', bytes.subarray(2))
-    if ('unsupported' in decoded) return { ok: false, message: unsupportedMessage('UTF-16LE') }
+    if ('unsupported' in decoded) return { ok: false, message: unsupported('UTF-16LE') }
     return { ok: true, text: decoded.text, encoding: 'utf-16le', inferred: false }
   }
   if (startsWith(bytes, [0xfe, 0xff])) {
     const decoded = decodeWith('utf-16be', bytes.subarray(2))
-    if ('unsupported' in decoded) return { ok: false, message: unsupportedMessage('UTF-16BE') }
+    if ('unsupported' in decoded) return { ok: false, message: unsupported('UTF-16BE') }
     return { ok: true, text: decoded.text, encoding: 'utf-16be', inferred: false }
   }
   if (startsWith(bytes, [0xef, 0xbb, 0xbf])) {
     const decoded = decodeWith('utf-8', bytes.subarray(3))
-    if ('unsupported' in decoded) return { ok: false, message: unsupportedMessage('UTF-8') }
+    if ('unsupported' in decoded) return { ok: false, message: unsupported('UTF-8') }
     return { ok: true, text: decoded.text, encoding: 'utf-8-bom', inferred: false }
   }
 
@@ -147,9 +233,43 @@ export function decodeTextBytes(bytes: Uint8Array): TextDecodeResult {
   // ③ 严格 UTF-8：过得去就是它（有非法字节返回 null，不塞 U+FFFD）
   const strict = decodeStrictUtf8(bytes)
   if (strict !== null) return { ok: true, text: strict, encoding: 'utf-8', inferred: false }
+  // 被截断的读法（>256KB 只读前 256KB）：刀口可能落在多字节字符中间 —— 逐字节回退，
+  // 找到「截掉尾部半个字符后仍是合法 UTF-8」的那个点（老实现靠 StringDecoder 丢尾部，同口径）。
+  if (options?.allowPartialTail === true) {
+    for (let trim = 1; trim <= 3 && trim < bytes.length; trim += 1) {
+      const partial = decodeStrictUtf8(bytes.subarray(0, bytes.length - trim))
+      if (partial !== null) return { ok: true, text: partial, encoding: 'utf-8', inferred: false }
+    }
+  }
 
   // ④ 回退 GB18030（中文本地文件的兜底；这一步同样是**猜**）
   const gb = decodeWith('gb18030', bytes)
-  if ('unsupported' in gb) return { ok: false, message: unsupportedMessage('GB18030') }
+  if ('unsupported' in gb) return { ok: false, message: unsupported('GB18030') }
+  if (options?.allowPartialTail === true && gb.text.includes('\uFFFD')) {
+    // 截断点切坏了末尾一个双字节字符：截掉 1-2 字节再试，挑一个没有替换符的
+    for (let trim = 1; trim <= 2 && trim < bytes.length; trim += 1) {
+      const partial = decodeWith('gb18030', bytes.subarray(0, bytes.length - trim))
+      if (!('unsupported' in partial) && !partial.text.includes('\uFFFD'))
+        return { ok: true, text: partial.text, encoding: 'gb18030', inferred: true }
+    }
+  }
   return { ok: true, text: gb.text, encoding: 'gb18030', inferred: true }
 }
+
+/** 表格档（CSV / TSV）字节 → 文本：ICU 不可用时按「表格另存 UTF-8」给下一步 */
+export function decodeTextBytes(bytes: Uint8Array): TextDecodeResult {
+  return decodeTextWith(bytes, unsupportedMessage)
+}
+
+/**
+ * 普通文本档（read 的 text 分支）字节 → 文本：UTF-8 / BOM / UTF-16 / GB18030 一路嗅探；
+ * ICU 不可用时给**可读中文**（不写成"这是二进制"——文件本身没坏）。
+ * `allowPartialTail`：读满上限被截断时允许丢掉尾部半个多字节字符（不产出 U+FFFD）。
+ */
+export function decodeTextFileBytes(
+  bytes: Uint8Array,
+  options?: { allowPartialTail?: boolean }
+): TextDecodeResult {
+  return decodeTextWith(bytes, unsupportedMessageFile, options)
+}
+
