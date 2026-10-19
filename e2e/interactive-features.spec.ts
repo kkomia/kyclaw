@@ -674,8 +674,11 @@ test.describe('interactive features — production UI functional evidence', () =
       const expanded = await settledShell()
       expect(expanded.panelSource).toBe('auto')
       expect(expanded.panelSource).toBe(expectedSource(expanded))
+      // 侧栏展开：面板从 rail+sidebar 后起铺满 → 宽 = innerWidth − rail(56) − sidebar(240) − edge-gap(6)
       expect(
-        Math.abs(expanded.panelWidth - (expanded.innerWidth - sidebarWidth - edgeGap))
+        Math.abs(
+          expanded.panelWidth - (expanded.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
+        )
       ).toBeLessThanOrEqual(8)
 
       // 收面板 → 回聊天：走 800 里唯一有意义的那个动作（"返回对话"），中列回来、草稿还在（一直挂着，不是重挂）
