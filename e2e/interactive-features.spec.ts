@@ -739,9 +739,10 @@ test.describe('interactive features — production UI functional evidence', () =
       }
       await page.mouse.up()
       expect(crossing, '拖宽到聊天不足最小可读宽时应立刻转 auto').not.toBeNull()
-      // 越界阈值同样含 primary-nav-rail：800 − 56 − 240 − 6 = 498（旧 554 是漏 rail 的算法）
+      // 越界阈值 = innerWidth − rail(56) − sidebar(240) − 最小可读宽(480)（1280 下 ≈ 504；
+      // 旧 554 是漏 rail 的算法）。crossing 处的 panelPreference 应略高于该阈值。
       expect(Number.parseFloat(crossing!.panelPreference)).toBeGreaterThan(
-        crossing!.innerWidth - primaryNavRail - sidebarWidth - edgeGap
+        crossing!.innerWidth - primaryNavRail - sidebarWidth - minChatWidth
       )
       expect(crossing!.mainDisplay).toBe('none')
       expect(crossing!.panelSource).toBe(expectedSource(crossing!))
