@@ -379,15 +379,23 @@
 }
 
 /* 间距与外框都在 shell 上（这条要压过正文的 .markdown-body table）；
-   宽度占满外壳：内容短的表也把外壳填满，内容长则由单元格的 min-content 撑出滚动。 */
+   宽度占满外壳：内容短的表也把外壳填满。PB-025（0.1.6）：内容长时**由单元格折行**消化，
+   不再用 min-content 撑出横向滚动（见下面 th/td 那条）。 */
 .markdown-body .markdown-table-scroll > table {
   width: 100%;
   margin: 0;
 }
 
+/* PB-025（0.1.6，用户口径「极端宽表也强制全部折行到可视宽度，允许表变高，不允许横向滚动」）：
+   原来是 white-space: nowrap —— 它让整段文本的 min-content = 不折行全长，table-layout:auto
+   据此把表格撑得比容器还宽，外层 overflow-x:auto 于是出横滚条；.markdown-body 上的
+   overflow-wrap:anywhere 被 nowrap 直接压掉。
+   改成 normal + 显式 anywhere：anywhere（区别于 break-word）**会压缩 intrinsic min-content 宽度**，
+   所以 auto 布局能把列压到放得下，表格不再超宽。overflow-x:auto 保留作兜底。 */
 .markdown-table-scroll th,
 .markdown-table-scroll td {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* 整圈边框的归属：外框 = shell 那一圈 hairline，表格只留内部网格。

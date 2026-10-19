@@ -862,7 +862,7 @@ export function Message({
         <div
           data-testid="message-reading-lane"
           data-font-role="reading"
-          className="flex w-full flex-col gap-2 pl-[18px]"
+          className="flex w-full flex-col gap-2 pl-[var(--chat-reading-indent)]"
         >
           {hasTurnProcess ? (
             <TurnProcess
@@ -907,7 +907,8 @@ export function Message({
           <SourcesPanel sources={sources} open={sourcesOpen} listId={sourcesListId} />
         )}
         {showActions ? (
-          <MessageActions>
+          // PB-028：动作行与正文同一左基线（同一 token，几何一致；按钮仍在行内，hover 胶囊不变）
+          <MessageActions className="pl-[var(--chat-reading-indent)]">
             {text === '' ? null : (
               <MessageAction
                 testId="message-copy"

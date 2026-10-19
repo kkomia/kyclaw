@@ -366,10 +366,13 @@ describe('markdown.css 的表格口径（jsdom 不套样式表，这里钉规则
     expect(body).toMatch(/\.markdown-table-shell\s*\{[^}]*overflow:\s*hidden/)
   })
 
-  it('横向滚动 + 单元格不折行', () => {
+  it('横滚口保留作兜底 + 单元格折行（PB-025：极端宽表也强制折行到可视宽度）', () => {
     expect(body).toMatch(/\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/)
     expect(body).toMatch(
-      /\.markdown-table-scroll th,\s*\.markdown-table-scroll td\s*\{[^}]*white-space:\s*nowrap/
+      /\.markdown-table-scroll th,\s*\.markdown-table-scroll td\s*\{[^}]*white-space:\s*normal/
+    )
+    expect(body).toMatch(
+      /\.markdown-table-scroll th,\s*\.markdown-table-scroll td\s*\{[^}]*overflow-wrap:\s*anywhere/
     )
   })
 

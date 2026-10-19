@@ -214,6 +214,8 @@
   /* 对话输入卡（T7）：DSH 公式 = 内容宽 + 32px，夹在 712–952（见 features/chat/chat-width.css；
      chat 页内由 --chat-content-width 驱动；这里给不在 chat 页时的兜底：680+32=712） */
   --chat-input-max-width: clamp(712px, calc(var(--chat-content-width, 680px) + 32px), 952px);
+  /* PB-028：AI 回复的阅读缩进（正文、动作行、轮次错误框共用同一左基线，误差 ≤1px） */
+  --chat-reading-indent: calc(18px * var(--ui-scale, 1));
 
   /* ── 按钮（章程 §3.5/§3.7/D-07）：主按钮 = 陶土橙实心 + #faf9f5 字（全产品唯一实心按钮）；
      次按钮/ghost 走透明底 + hairline；危险按钮用 danger 档 ── */

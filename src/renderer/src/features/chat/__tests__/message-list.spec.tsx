@@ -59,6 +59,27 @@ describe('消息列渲染', () => {
     expect(screen.getByTestId('message-a1')).toHaveAttribute('data-role', 'assistant')
   })
 
+  it('PB-028：AI 消息动作行与正文同一左基线（共用 --chat-reading-indent）', () => {
+    render(
+      <MessageList
+        messages={[
+          { id: 'u1', role: 'user', parts: [{ type: 'text', text: '帮我看看' }] },
+          assistantWith('好的，先读一下。')
+        ]}
+        status="ready"
+      />
+    )
+
+    const lane = screen.getByTestId('message-reading-lane')
+    const actions = screen.getByTestId('message-actions')
+    // 同一个 CSS 变量 ⇒ 左边缘几何一致；动作行不再从 article 左缘（0）起
+    expect(lane.className).toContain('pl-[var(--chat-reading-indent)]')
+    expect(actions.className).toContain('pl-[var(--chat-reading-indent)]')
+    // hover 胶囊规则不变：按钮本身仍是 32×32 圆形热区、行内 gap-1
+    expect(actions.className).toContain('gap-1')
+    expect(screen.getByTestId('message-copy')).toHaveClass('size-8', 'rounded-full')
+  })
+
   it('空会话：消息列为空，不留提示小字（雷点 2：不靠小字补设计）', () => {
     render(<MessageList messages={[]} status="ready" />)
 
@@ -246,7 +267,7 @@ describe('消息声部（P1a）', () => {
     // task-83：去左竖线；assistant 与用户消息同内容列（右缘对齐），保留左缩进
     expect(lane).not.toHaveClass('border-l')
     expect(lane).not.toHaveClass('max-w-[calc(var(--prose-measure)+18px)]')
-    expect(lane).toHaveClass('w-full', 'pl-[18px]')
+    expect(lane).toHaveClass('w-full', 'pl-[var(--chat-reading-indent)]')
 
     const text = screen.getByTestId('message-text')
     expect(text).toHaveAttribute('data-font-role', 'reading')
