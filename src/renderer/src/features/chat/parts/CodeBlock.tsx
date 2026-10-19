@@ -49,13 +49,50 @@ export interface CodeBlockProps {
   language?: string
 }
 
+/**
+ * PB-041 P0-B：Shiki 高亮结果模块级缓存（lang+code → html）。
+ * 组件重挂时惰性初始化直接从缓存取，不再出现「纯文本 → 高亮」整块替换的闪帧。
+ * 上限 500 条，超出按插入序淘汰最旧（够大、不会无界增长）。
+ */
+const HIGHLIGHT_CACHE = new Map<string, string>()
+const HIGHLIGHT_CACHE_LIMIT = 500
+
+function cacheKey(language: string, code: string): string {
+  return `${language}\u0000${code}`
+}
+
+function readCache(key: string): string | undefined {
+  const hit = HIGHLIGHT_CACHE.get(key)
+  if (hit !== undefined) {
+    // 命中即刷新为最新（LRU 的读提升）
+    HIGHLIGHT_CACHE.delete(key)
+    HIGHLIGHT_CACHE.set(key, hit)
+  }
+  return hit
+}
+
+function writeCache(key: string, html: string): void {
+  HIGHLIGHT_CACHE.delete(key)
+  HIGHLIGHT_CACHE.set(key, html)
+  if (HIGHLIGHT_CACHE.size > HIGHLIGHT_CACHE_LIMIT) {
+    const oldest = HIGHLIGHT_CACHE.keys().next().value
+    if (oldest !== undefined) HIGHLIGHT_CACHE.delete(oldest)
+  }
+}
+
 export function CodeBlock({ code, language }: CodeBlockProps): React.JSX.Element {
-  const [html, setHtml] = useState<string | null>(null)
+  const key = language === undefined ? null : cacheKey(language, code)
+  // 惰性初始化：命中缓存 → 首帧就是高亮 HTML（重挂不闪）
+  const [html, setHtml] = useState<string | null>(() =>
+    key === null ? null : (readCache(key) ?? null)
+  )
   const [copied, setCopied] = useState(false)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!language) return
+    // 缓存命中：首帧已高亮，不重复跑 Shiki（重挂时也不会闪纯文本）
+    if (key !== null && readCache(key) !== undefined) return
     let alive = true
     loadHighlighter()
       .then((highlighter) => {
@@ -63,7 +100,10 @@ export function CodeBlock({ code, language }: CodeBlockProps): React.JSX.Element
         return highlighter.codeToHtml(code, { lang: language, theme: 'css-variables' })
       })
       .then((next) => {
-        if (alive && next) setHtml(next)
+        if (alive && next) {
+          if (key !== null) writeCache(key, next)
+          setHtml(next)
+        }
       })
       .catch((cause) => {
         // 高亮失败不该吃掉内容：留着纯文本，日志里说一声
@@ -72,7 +112,7 @@ export function CodeBlock({ code, language }: CodeBlockProps): React.JSX.Element
     return () => {
       alive = false
     }
-  }, [code, language])
+  }, [code, key, language])
 
   useEffect(() => {
     return () => {

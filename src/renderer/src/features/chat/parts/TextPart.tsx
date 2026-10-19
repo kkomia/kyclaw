@@ -386,11 +386,9 @@ export function TextPart({
           data-streaming={live ? 'true' : undefined}
           className="markdown-body font-prose"
         >
-          {live ? (
-            <StreamingMarkdown text={shown} tables={withTables} />
-          ) : (
-            <MarkdownBody text={shown} tables={withTables} />
-          )}
+          {/* PB-041 P0-A：流式与结束态**同一棵分块树**（StreamingMarkdown 内部在 splitBlocks 为 null 时
+              自己退回整篇 MarkdownBody）——结束态不再换组件类型，CodeBlock/Table 不重挂 */}
+          <StreamingMarkdown text={shown} tables={withTables} />
           {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
           {live && text === '' ? (
             <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />
