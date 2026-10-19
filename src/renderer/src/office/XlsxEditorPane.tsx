@@ -32,6 +32,7 @@ import {
   type XlsxEditorApi
 } from '@betteroffice/xlsx-react'
 import zhCN from '@betteroffice/xlsx-i18n/zh-CN'
+import { XlsxFindBar, type XlsxFindMatch, type XlsxFindOutcome } from './components/XlsxFindBar'
 import type { SurfaceTheme } from './bridge-protocol'
 import {
   OFFICE_CAPABILITY_NOTE,
@@ -87,9 +88,9 @@ declare global {
 }
 
 /** 明确不出现保存/导出/打印/演示的工具栏（D16：sandbox 不放宽，能力收口） */
-function xlsxToolbar(): ReactNode {
+function xlsxToolbar(onSearchMenus: () => void): ReactNode {
   return (
-    <EditorToolbar mode="commands">
+    <EditorToolbar mode="commands" onSearchMenus={onSearchMenus}>
       <EditorToolbar.Toolbar>
         <ToolbarGroup label="撤销">
           <ToolbarCommandButton id="undo" />
@@ -152,6 +153,9 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
     const [capabilityNoteVisible, setCapabilityNoteVisible] = useState(() =>
       shouldShowCapabilityNote('xlsx')
     )
+    // PB-020：上游 searchMenus 只回调宿主（onSearchMenus），查找 UI 由我们出；findText 是上游真 API
+    const [findOpen, setFindOpen] = useState(false)
+    const sheetIndexRef = useRef<Map<string, number> | null>(null)
 
     useEffect(() => {
       setFile(props.bytes)
@@ -244,6 +248,61 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
       propsRef.current.onChanged()
     }, [])
 
+    /** 查找：走上游 api.findText（区分大小写的精确子串，最多 1000 条）；顺带缓存 sheetId → 序号 */
+    const searchForFind = useCallback(async (query: string): Promise<XlsxFindOutcome> => {
+      const api = apiRef.current
+      if (api === null) return { ok: false, message: '文档还没准备好' }
+      try {
+        const result = await api.findText({ text: query, limit: 1000 })
+        if (result.ok !== true)
+          return { ok: false, message: `查找失败（${String(result.failure?.code ?? 'unknown')}）` }
+        const sheets = await api.readCells({ ranges: [] })
+        const indexOf = new Map<string, number>()
+        if (sheets.ok === true)
+          sheets.sheets.forEach((sheet, index) => indexOf.set(sheet.sheetId, index))
+        sheetIndexRef.current = indexOf
+        return {
+          ok: true,
+          truncated: result.truncated,
+          matches: result.matches.map((match) => ({
+            a1: match.cell.a1,
+            text: match.text,
+            sheetId: match.cell.sheetId,
+            row: match.cell.row,
+            col: match.cell.col
+          }))
+        }
+      } catch (error) {
+        return { ok: false, message: messageOf(error) }
+      }
+    }, [])
+
+    /** 定位：selectCells(sheetIndex, {anchor,focus}) = 选中并滚动到该格（高亮即选中框） */
+    const navigateFind = useCallback((match: XlsxFindMatch) => {
+      const api = apiRef.current
+      if (api === null) return
+      const sheet = sheetIndexRef.current?.get(match.sheetId)
+      if (sheet === undefined) return
+      api.selectCells(sheet, {
+        anchor: { row: match.row, col: match.col },
+        focus: { row: match.row, col: match.col }
+      })
+    }, [])
+
+    // Ctrl/Cmd+F 打开查找；Esc 关闭（焦点在查找框里时由查找条自己处理）
+    useEffect(() => {
+      const onKeyDown = (event: KeyboardEvent): void => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+          event.preventDefault()
+          setFindOpen(true)
+          return
+        }
+        if (event.key === 'Escape' && findOpen) setFindOpen(false)
+      }
+      window.addEventListener('keydown', onKeyDown)
+      return () => window.removeEventListener('keydown', onKeyDown)
+    }, [findOpen])
+
     const handleSave = useCallback(() => {
       // 不传 onSave 会触发浏览器下载（sandbox 无 allow-downloads）；这里改走宿主状态机。
       // 宿主保存时会经 surface 的 doc:save → 本 pane save() 重新生成字节，所以不透传 bytes。
@@ -309,11 +368,18 @@ export const XlsxEditorPane = forwardRef<XlsxEditorPaneHandle, XlsxEditorPanePro
             onChange={handleChange}
             onSave={handleSave}
             onReady={handleReady}
-            toolbar={xlsxToolbar()}
+            toolbar={xlsxToolbar(() => setFindOpen(true))}
             className="office-xlsx-editor"
+          />
+          <XlsxFindBar
+            open={findOpen}
+            onClose={() => setFindOpen(false)}
+            search={searchForFind}
+            onNavigate={navigateFind}
           />
         </div>
       </div>
     )
   }
 )
+

@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
+﻿import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Ref } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { XlsxEditorPane, type XlsxEditorPaneHandle } from '../XlsxEditorPane'
 
@@ -227,4 +227,55 @@ describe('XlsxEditorPane：M4-X 接线', () => {
     expect(kernel.renderCount).toBe(before + 1)
     expect(kernel.props?.file).toEqual(new Uint8Array([8, 8]))
   })
+
+  it('PB-020：Ctrl+F 打开查找条；输入走 api.findText，命中走 selectCells（真查找通道）', async () => {
+    const pane = renderPane()
+    await pane.waitReady()
+    const findText = vi.fn(async () => ({
+      ok: true as const,
+      version: 'v1',
+      truncated: false,
+      matches: [
+        { cell: { sheetId: 'sheet-2', row: 4, col: 1, a1: 'B5' }, text: '预算' },
+        { cell: { sheetId: 'sheet-2', row: 9, col: 2, a1: 'C10' }, text: '预算表' }
+      ]
+    }))
+    const selectCells = vi.fn(() => true)
+    const api = {
+      version: vi.fn(async () => 'v1'),
+      save: vi.fn(() => new Uint8Array([1])),
+      findText,
+      readCells: vi.fn(async () => ({
+        ok: true as const,
+        version: 'v1',
+        calculation: { status: 'done' },
+        ranges: [],
+        sheets: [
+          { sheetId: 'sheet-1', name: 'Sheet1', editable: true },
+          { sheetId: 'sheet-2', name: 'Sheet2', editable: true }
+        ]
+      })),
+      selectCells
+    }
+    act(() => {
+      ;(kernel.props?.onReady as (value: unknown) => void)(api)
+    })
+
+    // Ctrl+F → 查找条出现（此前点击工具栏 searchMenus 无反应 = 没接 onSearchMenus）
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+    const input = await screen.findByTestId('xlsx-find-input')
+    fireEvent.change(input, { target: { value: '预算' } })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 220))
+    })
+
+    expect(findText).toHaveBeenCalledWith({ text: '预算', limit: 1000 })
+    // 自动跳到第 1 条：sheetId → 序号（sheet-2 = index 1），选中该格
+    expect(selectCells).toHaveBeenCalledWith(1, {
+      anchor: { row: 4, col: 1 },
+      focus: { row: 4, col: 1 }
+    })
+    expect(screen.getByTestId('xlsx-find-count')).toHaveTextContent('1/2')
+  })
 })
+
