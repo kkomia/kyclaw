@@ -8,7 +8,7 @@
  * 关闭（`chatScroll=false`）或减弱（`reduced`）时直接写 scrollTop（P1b 原行为，零动画）。
  * 用户主动上滚 = reader-hold；回到贴底阈值内才恢复跟随；程序自己写的 scrollTop 不当用户滚动。
  */
-import { useEffect, useRef, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 
 export const CHAT_FOLLOW = {
   omega: 28,
@@ -119,6 +119,26 @@ export function useChatFollow({
     }
   }
 
+  /**
+   * PB-044：终态（running=false）不再弹簧追赶，改**瞬时锚定**。
+   *
+   * 背景：轮末正文首次上屏会让 scrollHeight 突增；旧实现即使 running=false 也仍由
+   * 下面的 tail effect 启动弹簧（距离 >1200 先跳到 target−1200 再滑），整视口大 diff
+   * 持续 ~1.7s（Eve 实测 23 帧 / 峰值 32.5k，PB-044 文档 §1–2）。
+   *
+   * 这里用 useLayoutEffect：DOM 突变后、浏览器绘制前写入 scrollTop，不会先画一帧
+   * 旧位置再跳（useEffect 会）；用户上滑（stickyRef=false）保持读者位置，不强制回底。
+   */
+  useLayoutEffect(() => {
+    if (running) return
+    if (!stickyRef.current) return
+    const view = viewRef.current
+    if (view === null) return
+    cancel()
+    view.scrollTop = Math.max(0, view.scrollHeight - view.clientHeight)
+    lastWrittenRef.current = view.scrollTop
+  }, [tail, running, enabled, viewRef])
+
   useEffect(() => {
     const view = viewRef.current
     if (view === null) return undefined
@@ -132,6 +152,9 @@ export function useChatFollow({
       }
       return undefined
     }
+
+    // 终态：瞬时锚定已由上面的 useLayoutEffect 完成，不再启动弹簧
+    if (!running) return undefined
 
     if (!stickyRef.current) return undefined
     cancel()
@@ -161,7 +184,7 @@ export function useChatFollow({
     frameRef.current = requestAnimationFrame(tick)
 
     return () => cancel()
-  }, [tail, enabled, viewRef])
+  }, [tail, enabled, running, viewRef])
 
   // 换会话 / 新发送：重置贴底（覆盖用户之前的上滚意图）
   useEffect(() => {
