@@ -614,6 +614,14 @@ export function Composer({
   const pickSuggestion = (row: SuggestionRow): void => {
     if (suggest === null || row.disabled === true) return
     if (row.command !== undefined) {
+      // PB-039 `/goal` 是 leadingInput：只把 `/goal ` 留在输入框，命令在提交时解析（不立即执行）
+      if (row.command === 'goal') {
+        const inserted = `${draft.slice(0, suggest.start)}/goal ${draft.slice(suggest.end)}`
+        setCaretToken(suggest.start + 6)
+        trackDraft(inserted)
+        setSuggest(null)
+        return
+      }
       // 命令行：不插引用标记 —— 触发词整段移除后立即执行
       const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
       setCaretToken(suggest.start)
@@ -926,6 +934,8 @@ export function Composer({
           groups={suggestionGroups}
           rowCount={suggestionRows.length}
           activeIndex={activeIndex}
+          // PB-039：镜像搜索行（只读、不聚焦）——把 DSH 的“面板内搜索”观感对上，搜索本身仍走 textarea
+          query={suggest?.query ?? ''}
           emptyText={
             suggest?.kind === 'file'
               ? '没有匹配的文件'

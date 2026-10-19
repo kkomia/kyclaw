@@ -1456,7 +1456,7 @@ describe('round 19 · / 命令分区（压缩上下文）与压缩 notice', () =
     setup({ onCompact })
     const input = typeAt('/')
 
-    expect(screen.getByText('命令')).toBeInTheDocument()
+    expect(screen.getByText('指令')).toBeInTheDocument()
     expect(screen.getByTestId('suggest-command:compact')).toHaveTextContent('压缩上下文')
 
     fireEvent.keyDown(input, { key: 'Enter' })

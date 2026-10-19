@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Check, FileText, Plug, Sparkles, Terminal } from 'lucide-react'
+import { Check, FileText, Plug, Search, Sparkles, Terminal } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import type { SuggestionGroup, SuggestionRow } from './suggestion-model'
 
@@ -18,6 +18,8 @@ export interface ComposerSuggestProps {
   activeIndex: number
   /** 无匹配 / 无数据时的一行说明 */
   emptyText: string
+  /** 镜像搜索词：只读展示当前 `/` 后的词；搜索本身仍由 textarea 驱动（不引入第二个焦点环） */
+  query?: string
   /** 数据取不到时的一行说明（优先于 emptyText） */
   notice?: string
   onPick: (row: SuggestionRow) => void
@@ -43,6 +45,7 @@ export function ComposerSuggest({
   rowCount,
   activeIndex,
   emptyText,
+  query,
   notice,
   onPick,
   onHover
@@ -69,6 +72,18 @@ export function ComposerSuggest({
         open ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0'
       )}
     >
+      {/* PB-039：镜像搜索行（DSH 观感）——不可聚焦、只读；搜索仍是 textarea 里 `/` 后的词 */}
+      {query === undefined ? null : (
+        <div
+          data-testid="composer-suggest-search"
+          aria-hidden="true"
+          className="mx-[2px] mt-[2px] mb-[3px] flex items-center gap-[6px] rounded-[6px] px-[7px] py-[5px] text-[12px] leading-4 text-ink-tertiary"
+        >
+          <Search aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{query === '' ? '搜索命令' : query}</span>
+        </div>
+      )}
+
       {notice !== undefined ? (
         <p
           data-testid="composer-suggest-notice"

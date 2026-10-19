@@ -38,8 +38,8 @@ export interface SuggestionRow {
   /** 不可用（如压缩命令在流式/等审批期间）：可见但点了没反应 */
   disabled?: boolean
   reference?: { kind: '文件' | '插件' | '技能'; label: string }
-  /** 命令行的动作标识（round 19 起「压缩上下文」；round 85 加「进入规划模式」） */
-  command?: 'compact' | 'plan'
+  /** 命令行的动作标识（round 19「压缩上下文」；round 85「进入规划模式」；PB-039 加「目标」） */
+  command?: 'compact' | 'plan' | 'goal'
 }
 
 export interface SuggestionGroup {
@@ -160,7 +160,11 @@ export function slashGroups(input: SlashInputs, query: string): SuggestionGroup[
       command: 'plan'
     })
   }
-  if (commands.length > 0) groups.push({ title: '命令', rows: commands })
+  // PB-039：`/goal` 是 leadingInput（选中只把 `/goal ` 留在输入框，由提交时的解析器执行）
+  if (hit('目标')) {
+    commands.push({ id: 'command:goal', label: '目标', hint: '设置 / 查看 goal', command: 'goal' })
+  }
+  if (commands.length > 0) groups.push({ title: '指令', rows: commands })
   const plugins = input.plugins.filter((plugin) => hit(plugin.name))
   if (plugins.length > 0) {
     groups.push({
