@@ -5,7 +5,7 @@ import { fetchGoal, postGoalWithRetry } from '../goal-api'
  * PB-039 goal API 客户端：409 `GOAL_STALE_REVISION` → 重新 GET → 用最新 revision 重发一次。
  * 契约见 `.superpowers/dev-verify/20261019-0.1.6/b1/goal-api-contract.md`。
  */
-const state = (revision: number) => ({
+const state = (revision: number): Record<string, unknown> => ({
   goal: {
     id: 'g1',
     revision,
@@ -66,10 +66,11 @@ describe('goal-api', () => {
   it('非 stale 错误直接抛出（不重发）', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ error: 'GOAL_INVALID_TRANSITION', message: '不能暂停' }), {
-          status: 409
-        })
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'GOAL_INVALID_TRANSITION', message: '不能暂停' }), {
+            status: 409
+          })
       )
     )
     await expect(

@@ -42,8 +42,26 @@ export function GoalDockContainer({
   }, [threadId, onHasGoalChange])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh, refreshKey])
+    // 不直接调 refresh()：它是 async，但调用发生在同步阶段，`react-hooks/set-state-in-effect`
+    // 会把它当成"effect 里同步 setState"。写成 promise 回调里的 setState —— 语义不变
+    // （挂载/换会话/refreshKey 变 → 取一次），并保证卸载后不再回写。
+    let cancelled = false
+    void fetchGoal(threadId).then(
+      (next) => {
+        if (cancelled) return
+        setState(next)
+        onHasGoalChange?.(next.goal !== null)
+      },
+      () => {
+        if (cancelled) return
+        setState(null)
+        onHasGoalChange?.(false)
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [threadId, onHasGoalChange, refreshKey])
 
   const act = useCallback(
     async (action: 'pause' | 'resume' | 'clear') => {

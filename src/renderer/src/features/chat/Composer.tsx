@@ -412,9 +412,14 @@ export function Composer({
   useEffect(() => {
     // CR-01：镜像层同时承载引用 chip 的覆盖层——即使自绘 caret 关闭（caret=off）或 IME 中，
     // 滚动条槽出现时也要把镜像宽度钉到 textarea.clientWidth，否则长文本 chip/量位都会漂 6px。
+    //
+    // react-hooks/immutability：这里写的是**测量出来再回写的布局值**（读 textarea 的真实 clientWidth，
+    // 同步给镜像层的内联样式），不是 React state，也没有"先渲染再做一次"之外的时机；
+    // 改成 state 反而会多一帧错位并在 effect 里 setState（另一条规则）。故就地豁免并说明。
     const textarea = textareaRef.current
     const mirror = mirrorRef.current?.firstElementChild as HTMLElement | null | undefined
     if (textarea !== null && mirror !== null && mirror !== undefined && textarea.clientWidth > 0) {
+      // eslint-disable-next-line react-hooks/immutability
       mirror.style.width = `${textarea.clientWidth}px`
     }
     if (!caretCustom) return

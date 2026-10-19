@@ -7,7 +7,10 @@ const usage = (
   input: number,
   output: number,
   extra: Record<string, unknown> = {}
-) => ({ type: 'data-usage', data: { stepIndex, inputTokens: input, outputTokens: output, ...extra } })
+): { type: string; data: Record<string, unknown> } => ({
+  type: 'data-usage',
+  data: { stepIndex, inputTokens: input, outputTokens: output, ...extra }
+})
 
 describe('collectUsage（PB-033 data-usage）', () => {
   it('无 data-usage → reported=false（UI 显示「—」，不显示 0）', () => {
@@ -28,7 +31,13 @@ describe('collectUsage（PB-033 data-usage）', () => {
     expect(result.steps).toEqual([
       { stepIndex: 0, input: 1, output: 3, total: 4, cached: null, contextInput: 1 }
     ])
-    expect(result.latest).toMatchObject({ input: 1, output: 3, total: 4, contextInput: 1, reported: true })
+    expect(result.latest).toMatchObject({
+      input: 1,
+      output: 3,
+      total: 4,
+      contextInput: 1,
+      reported: true
+    })
   })
 
   it('多步累加：steps 按 stepIndex 升序，latest = 最大 stepIndex', () => {

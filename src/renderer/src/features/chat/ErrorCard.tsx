@@ -38,8 +38,11 @@ function isAuthError(error: Error): boolean {
 /**
  * 给用户看的主文案（中文）；原始串仍保留在详情区。
  * 已经是中文的人话（如「agent 服务未启动」）原样显示，不改写事实。
+ *
+ * 只在文件内用（不 export）：`react-refresh/only-export-components` 要求组件文件只导出组件；
+ * 这个纯函数没有跨文件消费者，留在本文件里即可。
  */
-export function describeError(error: Error): string {
+function describeError(error: Error): string {
   const message = error.message ?? ''
   if (isAuthError(error)) return '模型密钥缺失或失效，请检查模型与 Key 后重试。'
   if (

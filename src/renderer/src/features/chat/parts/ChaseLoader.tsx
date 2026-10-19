@@ -57,10 +57,16 @@ export function ChaseLoader({ entryMotion, word, reduced }: ChaseLoaderProps): R
   const [mode, setMode] = useState<ChaseMotion>(entryMotion)
   const [leaving, setLeaving] = useState<ChaseMotion | null>(null)
   const modeRef = useRef<ChaseMotion>(entryMotion)
-  // 初始「最近一次换 motion」= 挂载时刻：否则 2s 站立窗口会被算成 0，阶段一切换就立刻换动画
-  const lastSwitchRef = useRef(Date.now())
+  // 初始「最近一次换 motion」= 挂载时刻：否则 2s 站立窗口会被算成 0，阶段一切换就立刻换动画。
+  // 不在 render 里读 Date.now()（react-hooks/purity）：改用挂载后的 effect 打点，
+  // 且声明在下面"阶段变化"effect 之前 —— effect 按声明顺序执行，读到的一定是挂载时刻。
+  const lastSwitchRef = useRef<number>(0)
   const wordAtRef = useRef(0)
   const leaveTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    lastSwitchRef.current = Date.now()
+  }, [])
 
   const switchTo = (next: ChaseMotion): void => {
     const current = modeRef.current

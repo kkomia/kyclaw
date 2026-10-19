@@ -13,7 +13,7 @@ import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kycl
  *   - 六行卡片渲染在输入框上方，关闭后状态不丢（再输入 `/goal` 还能查）；
  *   - 409 GOAL_STALE_REVISION → 重 GET → 用最新 revision 重发一次（卡片显示成功）。
  */
-const state = (revision: number) => ({
+const state = (revision: number): Record<string, unknown> => ({
   goal: {
     id: 'g1',
     revision,
@@ -94,7 +94,9 @@ describe('PB-039 /goal 提交路径', () => {
       // 首次 GET（ref revision=2）
       .mockResolvedValueOnce(goalResponse(state(2)))
       // 首次 POST 409
-      .mockResolvedValueOnce(goalResponse({ error: 'GOAL_STALE_REVISION', message: '旧 revision' }, 409))
+      .mockResolvedValueOnce(
+        goalResponse({ error: 'GOAL_STALE_REVISION', message: '旧 revision' }, 409)
+      )
       // 重 GET（fresh revision=5）
       .mockResolvedValueOnce(goalResponse(state(5)))
       // 重发成功（revision=6）
