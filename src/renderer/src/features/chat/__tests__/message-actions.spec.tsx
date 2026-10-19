@@ -312,7 +312,12 @@ describe('用户消息「撤回」', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText(/已取消撤回/)).toBeInTheDocument()
+      // PB-036 起错误卡把原始串也画在「详情」里，同一句话会出现两次 → 用 testid 收窄到主文案
+      expect(
+        screen
+          .getAllByTestId('error-message')
+          .some((node) => /已取消撤回/.test(node.textContent ?? ''))
+      ).toBe(true)
     })
     expect(screen.getByTestId('message-list')).toHaveTextContent('原始问题')
     expect(screen.getByTestId('composer-input')).toHaveValue('')

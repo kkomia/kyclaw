@@ -111,8 +111,10 @@ describe('AskUser ChatPage integration', () => {
     })
     // 这一轮还在跑：模型照常继续生成，文本进消息（"模型生成"由聊天自己的忙态表示）
     act(() => control.push('已收到你的选择。'))
-    expect(await screen.findByText('已收到你的选择。')).toBeInTheDocument()
+    // PB-031：流式中且本轮已有过程块（ask-user 工具行）→ 正文不上屏，轮末才一次全出
+    expect(screen.queryByText('已收到你的选择。')).toBeNull()
     act(() => control.finish())
+    expect(await screen.findByText('已收到你的选择。')).toBeInTheDocument()
   })
   it('响应没到手就不收卡：请求发出、卡与选择都留着，响应一到才收起', async () => {
     const control = mount()

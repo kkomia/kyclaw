@@ -480,10 +480,12 @@ describe('来源汇总面板', () => {
     ])
     const view = render(<MessageList messages={[message]} status="streaming" />)
 
-    expect(screen.getByTestId('citation-chip')).toBeInTheDocument()
+    // PB-031：流式中且已有过程块（webSearch 工具行）→ 正文不上屏，引用角标自然也不出现
+    expect(screen.queryByTestId('citation-chip')).toBeNull()
     expect(screen.queryByTestId('sources-toggle')).toBeNull()
 
     view.rerender(<MessageList messages={[message]} status="ready" />)
+    await waitFor(() => expect(screen.getByTestId('citation-chip')).toBeInTheDocument())
     await waitFor(() => expect(screen.getByTestId('sources-toggle')).toBeInTheDocument())
     expect(screen.getByTestId('sources-toggle')).toHaveAttribute('aria-label', '来源（1）')
   })

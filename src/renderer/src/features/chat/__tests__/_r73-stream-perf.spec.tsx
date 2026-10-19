@@ -40,8 +40,6 @@ import { TextPart } from '../parts/TextPart'
  */
 
 const DELTA_COUNT = 294
-/** 到达节奏（ms）：0 = 同步突发 */
-const PACED_MS = 4
 
 /** 造一条长回复：24 节 × （标题 + 正文 + 表格 + 列表）+ 每 8 节一个代码块。约 485 行 / 12KB。 */
 function buildReply(): string {
@@ -300,15 +298,27 @@ describe('探针：流式正文渲染成本（round 73）', () => {
     ])
   }, 120_000)
 
-  it(`到达节奏（每 ${PACED_MS}ms 一条 delta）`, async () => {
-    const legacy = await measureStream('legacy', steps, PACED_MS)
-    const gated = await measureStream('gated', steps, PACED_MS)
-    console.log(`[r73] 到达节奏：每 ${PACED_MS}ms 一条，共 ${steps.length} 条`)
-    console.table([
-      row('改前（每 delta 全量解析）', `每${PACED_MS}ms`, legacy, lines),
-      row('改后（按帧合流 + 按块增量）', `每${PACED_MS}ms`, gated, lines)
-    ])
-  }, 180_000)
+  /**
+   * PB-031 之后，流式中本来就**不渲染正文**（`Message.tsx` 的 filter：有过程块时整段留到轮末），
+   * 所以"每帧解析成本"的压测对象已经不存在了。压测口径跟着产品语义走：
+   * 改成**轮末一次性渲染成本** —— 整篇（约 485 行 / 12KB：24 节标题 + 24 张表 + 3 个代码块）
+   * 在 `streaming=false` 时首次渲染要多久，并给一个上限阈值防止劣化。
+   */
+  it('轮末一次性渲染成本（PB-031 后口径：结束态整篇渲染）', () => {
+    const started = performance.now()
+    const view = render(<TextPart text={reply} streaming={false} />)
+    const elapsed = performance.now() - started // 首屏 FCP 类：渲染在 WebKit/DOM 里同步发生
+    console.log(`[r73] 结束态一次性渲染：${lines} 行 / ${reply.length} 字符 → ${elapsed.toFixed(1)}ms`)
+
+    // 内容完整性：整篇都渲染出来了（标题 / 表格 / 代码块一个不少）
+    expect(view.getByTestId('message-text')).toBeInTheDocument()
+    expect(view.container.querySelectorAll('h2')).toHaveLength(24)
+    expect(view.container.querySelectorAll('table')).toHaveLength(24)
+
+    // 阈值依据：本机实测 **69.6ms**（485 行 / 12610 字符，jsdom）；取 **600ms ≈ 8.6×** 作为
+    // "数量级劣化"的报警线（jsdom 的 DOM 写入比 Chromium 慢一个量级，这里只防数量级回归）
+    expect(elapsed).toBeLessThan(600)
+  }, 60_000)
 
   it('拆解：一次全量渲染里"解析 + 元素"占多少、"写 DOM"占多少', () => {
     // components 全部返回 null → react-markdown 照样解析、照样建 React 元素、React 照样协调，

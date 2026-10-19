@@ -142,7 +142,8 @@ describe('思考块自动折叠（整条消息：正文到达）', () => {
     fireEvent.click(screen.getByTestId('trace-toggle'))
     expect(screen.getByTestId('trace-block')).toHaveAttribute('data-open', 'true')
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByTestId('message-text')).toHaveTextContent('答案在这里')
+    // PB-031：流式中且已有过程块 → 正文不上屏（轮末才一次全出），所以这里没有正文节点
+    expect(screen.queryByTestId('message-text')).not.toBeInTheDocument()
   })
 
   it('只有一段思考、后面什么都没有（还在写）→ 保持展开', () => {
@@ -163,9 +164,10 @@ describe('自动折叠的边界：空正文 / 空占位 / 手动重开', () => {
       />
     )
 
-    // 空正文不是"内容出现"：只有一个容器 + 流式光标，一个字都没有
-    expect(screen.getByTestId('streaming-cursor')).toBeInTheDocument()
-    expect(screen.getByTestId('message-text')).toHaveTextContent('')
+    // PB-031：流式中且已有过程块时，正文一律不渲染（避免中间正文闪现），所以这里没有正文节点；
+    // 空正文当然也不算"内容出现"，思考保持展开。
+    expect(screen.queryByTestId('message-text')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('streaming-cursor')).not.toBeInTheDocument()
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -191,6 +193,19 @@ describe('自动折叠的边界：空正文 / 空占位 / 手动重开', () => {
       />
     )
     expect(screen.getByTestId('reasoning-toggle')).toHaveAttribute('aria-expanded', 'false')
+    // PB-031：流式中正文不上屏（有过程块时整段留到轮末），所以这里断言"正文不渲染"；
+    // 轮末（streaming=false）再按原顺序一次全出 —— 下一段用 rerender 证内容没丢。
+    expect(screen.queryByTestId('message-text')).not.toBeInTheDocument()
+
+    rerender(
+      <Message
+        message={reasoningMessage([
+          { type: 'reasoning', text: ENGLISH },
+          { type: 'text', text: '答' }
+        ])}
+        streaming={false}
+      />
+    )
     // 正文按帧上屏（TextPart 的合流），断言等到那一帧
     await waitFor(() => expect(screen.getByTestId('message-text')).toHaveTextContent('答'))
   })

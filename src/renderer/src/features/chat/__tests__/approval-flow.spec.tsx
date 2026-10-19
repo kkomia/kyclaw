@@ -865,7 +865,14 @@ describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重
     await act(async () => {
       fireEvent.click(screen.getByTestId('message-edit-save'))
     })
-    await screen.findByText(/没能在服务端同步/)
+    // PB-036 起错误卡把原始串也画进「详情」，同一句话会出现两次 → 用 testid 收窄到主文案
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId('error-message')
+          .some((node) => /没能在服务端同步/.test(node.textContent ?? ''))
+      ).toBe(true)
+    )
     expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
 
     // 接着开一轮、挂在等审批上（旧卡片还在）
@@ -916,7 +923,14 @@ describe('待批闸门 × 错误卡旧重试（T13 N1：截断失败留下的重
     await act(async () => {
       fireEvent.click(screen.getAllByTestId('error-retry').at(-1) as HTMLElement)
     })
-    await screen.findByText(/没能在服务端同步/)
+    // PB-036 起错误卡把原始串也画进「详情」，同一句话会出现两次 → 用 testid 收窄到主文案
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId('error-message')
+          .some((node) => /没能在服务端同步/.test(node.textContent ?? ''))
+      ).toBe(true)
+    )
     expect(vi.mocked(truncateThread)).toHaveBeenCalledTimes(1)
 
     // 再来一轮、挂在等审批（流错误卡被新请求清掉，只剩 syncError 卡）
