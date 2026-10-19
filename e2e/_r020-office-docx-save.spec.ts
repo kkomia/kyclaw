@@ -13,8 +13,10 @@
  *   ④ 重开保存后的文件：新实例能打开、面内 sha 与磁盘一致；
  *   ⑤ 注入写失败（Windows 只读文件 → rename EPERM → write-locked）：dirty 保持 + 错误条；
  *      恢复可写后"重试"能成功（不丢用户修改）；
- *   ⑥ 产物验收：`out/renderer` 出现 4 wasm（30,073,417B）+ 5 otf（34,818,280B）+ BetterOffice 65 ttf
+ *   ⑥ 产物验收：`out/renderer` 出现 6 wasm（40,640,516B）+ 5 otf（34,818,280B）+ BetterOffice 65 ttf
  *      （14,876,000B；与既有 KaTeX 20 ttf 合计 15,389,664B）。
+ *      2026-10-19 PB-048：0.2.0 内核依赖（PB-040 sharp 等）使 wasm 4→6、字节 30,073,417→40,640,516；
+ *      otf/ttf 未变。基准已按实测更新（不是放宽断言）。
  *
  * fixture：产品 devDep `docx@9.9.0` 现场生成（含中文段落），只写临时目录，二进制不入 git。
  * 证据：`.superpowers/office-docx/s3/`（截图 + probe-result.json；本地，不入库）。
@@ -367,8 +369,8 @@ test.describe('M3-S3 · DocxEditor + 本地字体 + 保存链路（真机 previe
         ttfCount: assetFiles.filter((path) => path.endsWith('.ttf')).length,
         ttfBytes: ttfTotal
       }
-      expect(assets.wasmCount).toBe(4)
-      expect(assets.wasmBytes).toBe(30_073_417)
+      expect(assets.wasmCount).toBe(6)
+      expect(assets.wasmBytes).toBe(40_640_516)
       expect(assets.otfCount).toBe(5)
       expect(assets.otfBytes).toBe(34_818_280)
       // BetterOffice 65 ttf = 14,876,000B；既有 KaTeX 20 ttf = 513,664B → 合计 15,389,664B

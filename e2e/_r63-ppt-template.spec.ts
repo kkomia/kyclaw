@@ -36,6 +36,7 @@ async function newSession(page: Page): Promise<void> {
 }
 
 test('PPT 模板：画廊选 / 换 / 清，新会话回初始态', async () => {
+  test.skip(true, '0.2.0 下架 PPT 模板映射（501），见 PB-041')
   const launched = await launchApp()
   const { page } = launched
 
@@ -101,6 +102,7 @@ test('PPT 模板：画廊选 / 换 / 清，新会话回初始态', async () => {
 })
 
 test('PPT 模板：单独一行在卡片下方、只在初始页出现 —— 进了对话两行一起退场', async () => {
+  test.skip(true, '0.2.0 下架 PPT 模板映射（501），见 PB-041')
   const launched = await launchApp()
   const { page } = launched
 

@@ -150,6 +150,8 @@ async function clickOfficeTab(page: Page, index: number): Promise<void> {
 
 test.describe('S5-4 真机内存探针（preview 形态，真 Electron 44.7.0）', () => {
   test('dormant / 整面重载 / 关标签 的内存实测（6 个时点）', async () => {
+    // 需要 LibreOffice/低负载 preview 环境；本机不作为发版门禁（PB-048 b 组）
+    test.skip(process.env.KYCLAW_OFFICE_E2E !== '1', '需要 LibreOffice/低负载 preview 环境：KYCLAW_OFFICE_E2E=1')
     test.setTimeout(420_000)
     mkdirSync(EVIDENCE_DIR, { recursive: true })
     const fixtures = [

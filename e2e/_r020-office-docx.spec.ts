@@ -99,6 +99,7 @@ async function writeDocxFixture(): Promise<{
 test.describe('M3-S2 · Office 文档注册表 + 打开/读字节（真机 preview）', () => {
   // eslint-disable-next-line no-empty-pattern -- Playwright 要求首参是对象解构；本用例不用 fixtures
   test('打开/去重/读字节/absolutePath/面收到 doc:open/0 外请/深色主题', async ({}, testInfo) => {
+    test.skip(true, '0.2.0 下架 projects/session-ppt-templates（501），见 PB-041')
     test.setTimeout(240_000)
     mkdirSync(EVIDENCE_DIR, { recursive: true })
 

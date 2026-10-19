@@ -83,6 +83,7 @@ test.describe('interactive features — production UI functional evidence', () =
   }
 
   test('AskUser: single/multiple/other answers, durable pending after restart, submit and stop', async () => {
+    test.skip(true, '旧交互状态机，0.2.0 走内核交互，见 PB-026')
     const provider = await startInteractiveProvider()
     const app = await createInteractiveApp(provider.url)
     const questions = {
@@ -153,6 +154,7 @@ test.describe('interactive features — production UI functional evidence', () =
   })
 
   test('Todo and Rules: production todo progress persists across sessions/restart; saved rules reach next provider request', async () => {
+    test.skip(true, 'tasks/memory/rules 路由 0.2.0 下架，见 PB-022')
     const provider = await startInteractiveProvider()
     const app = await createInteractiveApp(provider.url)
     try {
@@ -298,6 +300,7 @@ test.describe('interactive features — production UI functional evidence', () =
   })
 
   test('Plan: enter/submit/revise/restart/approve does not bypass write approval; stop survives restart', async () => {
+    test.skip(true, '旧 plan 状态机→DSH plan mode，见 PB-044')
     const provider = await startInteractiveProvider()
     const app = await createInteractiveApp(provider.url)
     const state = async (
@@ -574,6 +577,9 @@ test.describe('interactive features — production UI functional evidence', () =
     }
 
     const sidebarWidth = 240
+    // 0.2.0 壳层：左侧还有 primary nav rail（--primary-nav-rail-width=56）；panel 的实际起点是 rail+sidebar。
+    // 800 宽实测：sidebar.x=56(w240) → panel.x=296(w498)，右缘 794=800−6；不再单独减 rail 会把期望算大 56。
+    const primaryNavRail = 56
     const edgeGap = 6
     const minChatWidth = 480
     const filesPanel = page.locator(
@@ -611,8 +617,11 @@ test.describe('interactive features — production UI functional evidence', () =
       expect(narrow.panelFullscreen).toBe('true')
       expect(narrow.mainCount).toBe(1)
       expect(narrow.mainDisplay).toBe('none')
+      // 铺满宽 = innerWidth − primary-nav-rail(56) − sidebar(240) − edge-gap(6)（含左侧 rail）
       expect(
-        Math.abs(narrow.panelWidth - (narrow.innerWidth - sidebarWidth - edgeGap))
+        Math.abs(
+          narrow.panelWidth - (narrow.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
+        )
       ).toBeLessThanOrEqual(8)
       // 铺满是算出来的布局结果，不是偏好：store 里的宽度没被动过
       expect(narrow.panelPreference).toBe('400px')

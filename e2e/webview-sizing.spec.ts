@@ -172,7 +172,14 @@ test.describe('内嵌浏览器 · 客人 viewport 跟住 webview 盒', () => {
       await setPanelOpen(false)
       await page.getByTestId('view-tab-chat').click()
       await page.keyboard.press('Control+t')
+      // 0.2.0 壳层：`work-panel-toggle` 只在 chat 路由且面板收起时渲染（AppShell.tsx:278）；
+      // 新标签页不是 chat → 必须先回 view-tab-chat 再开面板，不能在新标签页上等全局 toggle。
+      await page.getByTestId('view-tab-chat').click()
       await setPanelOpen(true)
+      if ((await page.getByTestId('browser-tool').count()) === 0) {
+        await page.getByTestId('workbench-new-tab').click()
+        await page.getByRole('menuitem', { name: '浏览器' }).click()
+      }
       await page.waitForSelector('webview')
 
       await page.getByTestId('browser-url').fill(origin)

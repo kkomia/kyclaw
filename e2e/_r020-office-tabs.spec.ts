@@ -139,6 +139,8 @@ async function expectSameDom(page: Page): Promise<{ iframes: number; workspaces:
 test.describe('M3-S4 · Office 模块保活 + 多 workspace 常驻（真机 preview）', () => {
   // eslint-disable-next-line no-empty-pattern -- Playwright 要求首参是对象解构；本用例不用 fixtures
   test('两个标签都常驻、切标签不重建 iframe、切聊天保活、非 Office Ctrl+W no-op、脏关闭三态', async ({}, testInfo) => {
+    // 需要 LibreOffice/低负载 preview 环境；本机不作为发版门禁（PB-048 b 组）
+    test.skip(process.env.KYCLAW_OFFICE_E2E !== '1', '需要 LibreOffice/低负载 preview 环境：KYCLAW_OFFICE_E2E=1')
     test.setTimeout(600_000)
     mkdirSync(EVIDENCE_DIR, { recursive: true })
     const fixtureA = await writeFixture('甲')
