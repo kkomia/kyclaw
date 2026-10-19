@@ -23,6 +23,10 @@ const MOTION_TOKENS = readFileSync(
   resolve(process.cwd(), 'src/renderer/src/styles/tokens/motion.css'),
   'utf8'
 )
+const TEXT_PART_TSX = readFileSync(
+  resolve(process.cwd(), 'src/renderer/src/features/chat/parts/TextPart.tsx'),
+  'utf8'
+)
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -54,7 +58,11 @@ describe('P1b：动效时长全部来自 motion.css 角色令牌', () => {
 
   it('9 个配方都有落点：chunk / caret / dots / sweep / swap / tool / fold / dock / send', () => {
     const css = stripComments(CHAT_MOTION_CSS)
-    expect(css).toContain('chat-chunk-in')
+    // PB-045 P1-C：chunk 淡入从 CSS `> :last-child` 改为 TextPart 的 Web Animations（只给新块一次）
+    expect(css).not.toContain('chat-chunk-in')
+    expect(TEXT_PART_TSX).toContain('previousBlockCountRef')
+    expect(TEXT_PART_TSX).toContain('{ opacity: 0.6 }')
+    expect(TEXT_PART_TSX).toContain('--motion-reveal')
     expect(css).toContain('chat-caret-blink-block')
     expect(css).toContain('chat-waiting-bounce')
     expect(css).toContain('chat-sweep')
@@ -64,7 +72,6 @@ describe('P1b：动效时长全部来自 motion.css 角色令牌', () => {
     expect(css).toContain('chat-dock-in')
     expect(css).toContain('chat-send-grow')
     expect(css).toContain('trace-wash')
-    expect(css).toContain('data-chat-reveal')
     expect(css).toContain('data-status-line')
     expect(css).toContain('data-motion=')
     // 扫光必须 steps(48, end) + 300ms 延迟组合

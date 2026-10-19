@@ -19,6 +19,23 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*; frame-src 'self' kyclaw-office: http://localhost:5173"
     />
     <!--
+      PB-045 / P2-E：CJK 预设字体的 **preload**（保留 ui-fonts.css 的 font-display: swap）。
+      目标机是内网慢盘、无系统 CJK 预设：8.33MB 的 NotoSansSC-Regular.otf 若等首次中文布局才请求，
+      swap 窗口 = 读取+解析（HDD 163–635ms），用户会在已开始阅读时看到整页换字/重排。
+      preload 把请求起点从"首次中文布局（≈150–300ms）"提前到 HTML 解析（≈10–30ms），不阻塞渲染
+      （不是 render-blocking），不拖 FCP。
+      ⚠️ 不加 crossorigin：打包态是 file://，Chromium 实测带 crossorigin（anonymous / use-credentials）
+      都会报 "preload ... is not used because the request mode/credentials mode does not match"
+      （preload 白费、字体仍等 CSS 才请求）；去掉后 preload 被 CSS 字体请求复用（见 pb-045 报告 §P2-E）。
+      构建后该 href 必须与 ui-fonts.css 的 url() 解析成**同一个 hashed 资产**。
+    -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/otf"
+      href="../../node_modules/@betteroffice/fonts-cjk/assets/NotoSansSC-Regular.otf"
+    />
+    <!--
       012（启动白屏，用户返工：要确定的百分比进度）：启动画面写死在 HTML 壳里，样式也内联 ——
       模块脚本是 defer 的，这段标记与样式会先画出来（窗口 ready-to-show 一露就是它），
       不用等 React bundle 解析/执行。

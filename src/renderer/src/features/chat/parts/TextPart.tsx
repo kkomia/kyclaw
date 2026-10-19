@@ -257,12 +257,15 @@ const MarkdownBlock = memo(function MarkdownBlock({
  */
 const StreamingMarkdown = memo(function StreamingMarkdown({
   text,
+  blocks,
   tables
 }: {
+  /** 当前上屏全文（`blocks === null` 时的整篇正文） */
   text: string
+  /** 已切好的块（`null` = 整篇一块）；切分提到 TextPart 层，P1-C 才能比较块数 */
+  blocks: readonly string[] | null
   tables: boolean
 }): React.JSX.Element {
-  const blocks = splitBlocks(text)
   if (blocks === null) return <MarkdownBody text={text} tables={tables} />
   return (
     <>
@@ -345,35 +348,59 @@ export function TextPart({
   // 回复流判据：调用点显式传了 `streaming`（Message.tsx 那条）＝ 聊天正文；显式 `tables` 优先
   const withTables = tables ?? streaming !== undefined
   const shown = useCadencedText(text, live)
+  /**
+   * P1-C（PB-045）：块边界提到组件层 —— 只有「块数增加」才知道有新块可以入场；
+   * StreamingMarkdown 不再自己切（避免同一份 splitBlocks 跑两次）。
+   */
+  const blocks = useMemo(() => splitBlocks(shown), [shown])
   const sources = knownSources ?? EMPTY_CITATION_HINTS
   // 工具结果缺 title/snippet 时的兜底：按 markdown 原文算引用所在句子（流式每帧文本变化才重算）
   const citationContexts = useMemo(() => citationContextsFromText(text, sources), [text, sources])
   /**
-   * P1b 配方 1：每个流式 chunk 到达时给**最后一块**补一次 120ms 淡入。
-   * 为什么不用 class：分块渲染的稳定前缀块会原地复用（round 73 的 DOM 逐字节约定），
-   * 换 class/重挂都会破坏"流式与整篇同构"；这里用 Web Animations 只挂临时效果，不动 DOM。
-   * 节流 120ms：真实 token 流比 120ms 密，连续重启会闪，按令牌节拍每 120ms 只补一次。
+   * PB-045 / P1-C：**只给新出现的块一次入场**（规格 `pb041-flicker-decisions.md §1.3`）。
+   *
+   * 旧实现每次 shown 变化都给最后一块 0.4→1 / 120ms，节流 120ms = 8.33Hz；被动画的是**同一段
+   * 正在读的文字**，整段反复变暗（肉眼闪烁，>3 次/秒且幅度 60%）。现在：
+   *   - 触发 = 块数增加（纯段落增长 / 整篇一块 / 首次挂载 / 非流式 一律不动）；
+   *   - 目标 = 最后一个新块，0.6→1 / 150ms（--motion-reveal）/ 项目 glide 曲线；
+   *   - 同一元素一生只动一次（WeakSet）；两次入场间隔 ≥250ms，超限直接出现（不排队不补演）。
+   * 用 Web Animations 只挂临时效果，不改 DOM/class（round 73 的流式与整篇同构约束）。
    */
   const markdownRef = useRef<HTMLDivElement>(null)
-  const lastChunkFadeRef = useRef(0)
+  const previousBlockCountRef = useRef<number | null>(null)
+  const firstFadeEffectRef = useRef(true)
+  const animatedBlocksRef = useRef(new WeakSet<Element>())
+  const lastBlockFadeRef = useRef(0)
   const motion = useEffectiveMotion()
   useEffect(() => {
-    if (!live || motion.reveal !== 'on') return
+    const count = blocks === null ? null : blocks.length
+    const previous = previousBlockCountRef.current
+    previousBlockCountRef.current = count
+    // 首次挂载不淡入（消息自身有入场动画）；此后 previous=null 表示"上一帧还没有块"，
+    // 现在首次切出块属于「新块出现」，要入场。
+    if (firstFadeEffectRef.current) {
+      firstFadeEffectRef.current = false
+      return
+    }
+    if (count === null || !live || motion.reveal !== 'on') return
+    if (previous !== null && count <= previous) return
     const last = markdownRef.current?.lastElementChild
     if (last === null || last === undefined || typeof last.animate !== 'function') return
+    if (animatedBlocksRef.current.has(last)) return
     const now = performance.now()
-    if (now - lastChunkFadeRef.current < 120) return
-    lastChunkFadeRef.current = now
-    // 时长读角色令牌（motion.css）；拿不到时退回配方里的 120ms，保证不退化成 0
+    if (now - lastBlockFadeRef.current < 250) return
+    lastBlockFadeRef.current = now
+    animatedBlocksRef.current.add(last)
+    // 时长读角色令牌（motion.css）；拿不到时退回规格里的 150ms
     const token = Number.parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue('--motion-feedback')
+      getComputedStyle(document.documentElement).getPropertyValue('--motion-reveal')
     )
-    last.animate([{ opacity: 0.4 }, { opacity: 1 }], {
-      duration: Number.isFinite(token) && token > 0 ? token : 120,
+    last.animate([{ opacity: 0.6 }, { opacity: 1 }], {
+      duration: Number.isFinite(token) && token > 0 ? token : 150,
       easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
       fill: 'none'
     })
-  }, [shown, live, motion.reveal])
+  }, [blocks, live, motion.reveal])
   return (
     <CitationHintsContext.Provider value={sources}>
       <CitationContextsContext.Provider value={citationContexts}>
@@ -386,9 +413,9 @@ export function TextPart({
           data-streaming={live ? 'true' : undefined}
           className="markdown-body font-prose"
         >
-          {/* PB-041 P0-A：流式与结束态**同一棵分块树**（StreamingMarkdown 内部在 splitBlocks 为 null 时
-              自己退回整篇 MarkdownBody）——结束态不再换组件类型，CodeBlock/Table 不重挂 */}
-          <StreamingMarkdown text={shown} tables={withTables} />
+          {/* PB-041 P0-A：流式与结束态**同一棵分块树**（blocks=null 时退回整篇 MarkdownBody）—
+              结束态不再换组件类型，CodeBlock/Table 不重挂。P1-C：blocks 由本组件切好，用于块数比较。 */}
+          <StreamingMarkdown text={shown} blocks={blocks} tables={withTables} />
           {/* 流刚开始、还没有内容时：光标单独出一个（有内容时由 CSS 伪元素跟在最后一段后面） */}
           {live && text === '' ? (
             <span data-testid="streaming-cursor" className="streaming-cursor" aria-hidden="true" />

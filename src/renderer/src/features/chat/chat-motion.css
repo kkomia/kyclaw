@@ -7,7 +7,7 @@
  * **无限循环**（光标/等待三点/扫光）显式停成静态终态（只靠 0.01ms 循环会闪）。
  *
  * 配方 → 类名：
- *   1 流式 chunk 淡入        .markdown-body[data-streaming] > :last-child（120ms，--motion-feedback）
+ *   1 流式 chunk 淡入        P1-C（PB-045）：由 TextPart 的 Web Animations 实现（只给新块一次，0.6→1/150ms；
  *   2 尾部自绘光标           .streaming-cursor / [data-streaming] > :last-child::after（1s 闪）
  *   3 输入框自绘 caret       .composer-caret（80ms 移动 + 1s 闪；IME composition 回原生）
  *   4 等待三点 + 扫光        .chat-waiting-dot / .trace-live（500ms / 1500ms steps(48) + 300ms 延迟）
@@ -32,21 +32,9 @@
 }
 
 /* ── 1) 流式 chunk 淡入 ─────────────────────────────────────────────── */
-/* 只动「最后一块」：流式每来一个新块就挂一次 animation；整篇重新渲染时 :last-child 也会是
-   同一个块，动画不会在旧的块上反复播。纯 opacity，不动行高/不触发重排。 */
-.markdown-body[data-streaming='true'] > :last-child {
-  animation: chat-chunk-in var(--motion-feedback) var(--motion-ease-glide) both;
-}
-
-@keyframes chat-chunk-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
+/* PB-045 P1-C：不再用 CSS 给 `> :last-child` 挂 animation（那会按 chunk 重新启动同一元素）。
+   入场只由 TextPart.tsx 的 Web Animations 触发：块数增加时给新块一次 0.6→1 / --motion-reveal，
+   同一元素一生一次、≤1 次/250ms；纯段落增长 / 结束态 / reduced / reveal=off 一律不动。 */
 
 /* ── 2) 尾部自绘光标（2px 主题色竖条，1s 闪；流式结束由 data-streaming/节点消失） ── */
 .markdown-body .streaming-cursor,
@@ -298,7 +286,6 @@
 
 /* ── reduced-motion 终态 ────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .markdown-body[data-streaming='true'] > :last-child,
   .chat-swap,
   .chat-tool-enter,
   .chat-dock-enter,
@@ -382,10 +369,6 @@
 }
 
 /* ── 动效 B：用户开关门控（聊天根 data-*，见 lib/motion.ts） ─────────── */
-[data-chat-reveal='off'] .markdown-body[data-streaming='true'] > :last-child {
-  animation: none !important;
-}
-
 [data-status-line='off'] .chat-waiting-dot {
   animation: none !important;
   opacity: 0.6;
@@ -416,7 +399,6 @@
 }
 
 /* ── mode=reduced（A 的语义：不依赖 OS 媒体查询也要静态） ─────────────── */
-[data-motion='reduced'] .markdown-body[data-streaming='true'] > :last-child,
 [data-motion='reduced'] .chat-swap,
 [data-motion='reduced'] .chat-tool-enter,
 [data-motion='reduced'] .chat-dock-enter,
