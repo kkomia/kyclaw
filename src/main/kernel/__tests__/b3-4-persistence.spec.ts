@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sameCwd, startKernelAdapter, type KernelAdapter } from '../kernel-adapter'
+import { InteractionHub, feedKernelEvent } from '../interaction-hub'
 
 const kernel = vi.hoisted(() => {
   interface FakeSession {
@@ -325,6 +326,13 @@ const kernel = vi.hoisted(() => {
         state.streams.delete(streamId)
       }
     },
+    /** 往某 session 的 follow 流推一条内核事件（审批/提问等） */
+    emitSessionEvent(
+      sessionId: string,
+      event: { type: string; seq?: number; data?: Record<string, unknown> }
+    ): void {
+      for (const streamId of openStreams(sessionId)) item(streamId, { type: 'event', event })
+    },
     reset(): void {
       state.sessions.clear()
       state.streams.clear()
@@ -379,13 +387,17 @@ function tempDir(label: string): string {
   return dir
 }
 
-async function startAdapter(appDataDir: string): Promise<KernelAdapter> {
+async function startAdapter(
+  appDataDir: string,
+  extras: { onSessionEvent?: (threadId: string, event: { type: string }) => void } = {}
+): Promise<KernelAdapter> {
   const adapter = await startKernelAdapter({
     electronExecutable: 'fake-electron',
     asarPath: 'fake.asar',
     appDataDir,
     dshHome: join(appDataDir, 'home'),
-    turnTimeoutMs: 5_000
+    turnTimeoutMs: 5_000,
+    ...extras
   })
   started.push(adapter)
   return adapter
@@ -445,8 +457,7 @@ describe('B3.4 threadId = 内核 sessionId', () => {
     expect(kernel.state.prompts.filter((prompt) => prompt.sessionId === 'thread-B')).toHaveLength(1)
   })
 
-  it('同一 thread 上一轮还在跑时再发一轮 → agent-busy 文案（不并发写同一会话）', async () => {
-    const adapter = await startAdapter(tempDir('a'))
+  it('同一 thread 上一轮还在跑时再发一轮 → agent-busy 文案（不并发写同一会话）', async () => {    const adapter = await startAdapter(tempDir('a'))
     const running = adapter.startTurn('第一问', { threadId: 'thread-A' })
     await waitReady('thread-A')
     await expect(adapter.startTurn('第二问', { threadId: 'thread-A' })).rejects.toThrow(
@@ -457,8 +468,42 @@ describe('B3.4 threadId = 内核 sessionId', () => {
   })
 })
 
-describe('B3.4 刷新重接（reattach）', () => {
-  it('opening 带内核自带的 startedAfterSeq/nextIndex；在跑的一轮挂到新流上且不重复', async () => {
+describe('PB-004 交互事件生产（adapter → InteractionHub）', () => {
+  it('内核 approval/asked + approval/decided 经 onSessionEvent 到 hub，四态成型', async () => {
+    const hub = new InteractionHub()
+    const adapter = await startAdapter(tempDir('a'), {
+      onSessionEvent: (threadId, event) => {
+        feedKernelEvent(hub, threadId, event)
+      }
+    })
+    const turn = adapter.startTurn('触发审批', { threadId: 'thread-A' })
+    await waitReady('thread-A')
+
+    kernel.emitSessionEvent('thread-A', {
+      type: 'approval/asked',
+      seq: 5,
+      data: { id: 'ap-1', toolName: 'bash', callId: 'call-1', reason: '需要写权限' }
+    })
+    expect(hub.hasPending('thread-A')).toBe(true)
+    expect(hub.snapshot('thread-A').approvals.pending[0]?.toolName).toBe('bash')
+
+    kernel.emitSessionEvent('thread-A', {
+      type: 'approval/decided',
+      seq: 6,
+      data: { id: 'ap-1', outcome: 'unavailable' }
+    })
+    const result = hub.snapshot('thread-A').approvals.results[0]
+    expect(result?.outcome).toBe('unavailable')
+    // 红线：自动拒绝不许写成「你拒绝」，且标记为系统发起
+    expect(`${result?.copy.title}${result?.copy.detail}`).not.toContain('你拒绝')
+    expect(result?.systemInitiated).toBe(true)
+
+    kernel.finishTurn('thread-A', '答', 'completed')
+    expect((await turn).text).toBe('答')
+  })
+})
+
+describe('B3.4 刷新重接（reattach）', () => {  it('opening 带内核自带的 startedAfterSeq/nextIndex；在跑的一轮挂到新流上且不重复', async () => {
     const adapter = await startAdapter(tempDir('a'))
     const running = adapter.startTurn('慢轮问题', { threadId: 'thread-A' })
     await waitReady('thread-A')

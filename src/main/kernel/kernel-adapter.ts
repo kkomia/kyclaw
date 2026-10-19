@@ -44,6 +44,14 @@ export interface KernelAdapterOptions {
   turnTimeoutMs?: number
   /** 诊断/测试：每条 follow value 原样回调（不含 token/cookie） */
   onFollowValue?: (value: KernelFollowValue) => void
+  /**
+   * B3.5/PB-004：内核 session 事件**原样**回调（main 侧 `InteractionHub` 的输入）。
+   * `sessionId` 就是 `threadId`（B3.4 口径）；回调异常不能打断内核流。
+   */
+  onSessionEvent?: (
+    threadId: string,
+    event: { type: string; seq?: number; data?: Record<string, unknown> }
+  ) => void
   /** B3.3b：goal 轮次安全阀（写进隔离 profile 的 cordis.patch.yml；默认 16） */
   goalMaxRounds?: number
 }
@@ -386,6 +394,14 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       if (state === undefined) return
       const value = parsed.value
       options.onFollowValue?.(value)
+      // PB-004：内核 session 事件原样喂给 main 侧（InteractionHub 的审批四态/提问状态都来自这里）
+      if (value.type === 'event' && options.onSessionEvent !== undefined) {
+        try {
+          options.onSessionEvent(state.sessionId, value.event)
+        } catch {
+          // 订阅方异常不能打断内核流
+        }
+      }
       if (value.type === 'snapshot') {
         const raw = value as unknown as Record<string, unknown>
         if (typeof raw.cursor === 'number') state.latestSeq = Math.max(state.latestSeq, raw.cursor)
