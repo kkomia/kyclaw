@@ -91,7 +91,8 @@ import { createTasksContext, type TasksContext } from './tasks-context'
 import { prepareTaskChatParams } from './tasks-chat'
 import { AskUserRuntime } from './ask-user-runtime'
 import { createSessionPlanStore, type SessionPlanStore } from './session-plan'
-import { createSessionGoalStore, type SessionGoalStore } from './session-goal'
+import { createSessionGoalStore, SessionGoalError, type SessionGoalStore } from './session-goal'
+import { GOAL_ROUND_CONTEXT_KEY, goalRoundFromChatBody } from '../shared/goal'
 import { createPlanRuntime, planRefOf, type PlanRuntime, type PlanSuspension } from './plan-runtime'
 import { createPlanRoutes } from './routes/plans'
 import { planRefSchema } from '../shared/plan'
@@ -625,6 +626,20 @@ export async function createKyclawMastra(options: {
                 memoryScope.thread,
                 resumedRunId
               )
+              // PB-039 阶段③：goal round 准入 —— 只有 driver 发的那一轮（metadata.goalRound）才计数；
+              // 陈旧 revision / 非 active / 轮数用尽都在这里 409（前端不重发同一轮，重新 GET 再判）。
+              const goalRound = goalRoundFromChatBody(body)
+              if (goalRound !== null) {
+                try {
+                  await goals.admitRound(memoryScope.thread, goalRound)
+                } catch (error) {
+                  if (error instanceof SessionGoalError)
+                    return context.json({ error: error.code, message: error.message }, error.status)
+                  throw error
+                }
+                // 工具侧（get_goal/create_goal/update_goal）靠这条标记判断来源是 goal round 还是人类轮
+                params.requestContext?.set(GOAL_ROUND_CONTEXT_KEY, goalRound)
+              }
               const request = planRuntime.prepareRequest(
                 memoryScope.thread,
                 params.runId,
@@ -690,5 +705,7 @@ export async function createKyclawMastra(options: {
     recall
   }
 }
+
+
 
 

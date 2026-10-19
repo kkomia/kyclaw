@@ -198,3 +198,25 @@ export function goalRoundOf(requestContext: unknown): GoalRoundMarker | null {
   return null
 }
 
+/**
+ * 从 chat 请求体里取 goal round 标记：**最后一条 user 消息**的 `metadata.goalRound`
+ * （driver 按契约 §3 写入）。取不到 / 结构不对 → null（= 人类直发轮）。
+ *
+ * 服务端在 chat 入口用它做「准入」（阶段③），工具侧用 `goalRoundOf(requestContext)` 读同一条。
+ */
+export function goalRoundFromChatBody(body: unknown): GoalRoundMarker | null {
+  if (typeof body !== 'object' || body === null) return null
+  const messages = (body as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return null
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (typeof message !== 'object' || message === null) continue
+    const record = message as { role?: unknown; metadata?: unknown }
+    if (record.role !== 'user') continue
+    const metadata = record.metadata
+    if (typeof metadata !== 'object' || metadata === null) return null
+    return parseGoalRoundMarker((metadata as Record<string, unknown>).goalRound)
+  }
+  return null
+}
+
