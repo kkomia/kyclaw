@@ -30,6 +30,7 @@ import { registerWorkbenchIpc } from './ipc/workbench'
 import { isKernelPortEnabled } from './kernel/feature-flag'
 import { defaultKernelRoot } from './kernel/kernel-layout'
 import { KernelStartupError, kernelFailureText } from './kernel/kernel-startup'
+import { ensureMcpHomePatch } from './kernel/mcp-profile'
 import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import {
@@ -239,6 +240,35 @@ if (!app.requestSingleInstanceLock()) {
         })
       : ''
     const kernelLogFile = join(userDataDir, 'logs', 'kernel.log')
+    /** 内核的隔离 home（PB-006 验收②；MCP home patch 也落这里，两处必须同一个路径） */
+    const kernelDshHome = join(userDataDir, 'dsh-home')
+    /**
+     * PB-023：MCP 改走 DSH 内核插件 —— 内核启动前把应用设置里的 `mcpServers` 写成
+     * `$DSH_HOME/cordis.patch.yml`（home patch；每个 enabled 的 server 一条 `@deepseek-ai/dsh-mcp-client`）。
+     * 语义：**改配置后需重启应用生效**（内核在 boot 时读 patch，没有 host 侧 reload 接口）。
+     * 写失败不挡内核启动：MCP 是加法能力，错误只记日志（内核日志/控制台）。
+     */
+    if (kernelEnabled) {
+      try {
+        const mcpPatch = ensureMcpHomePatch(
+          kernelDshHome,
+          readSettings(settingsPath(userDataDir)).mcpServers
+        )
+        if (mcpPatch.changed) {
+          console.info(
+            `[kyclaw] MCP 配置已写入内核 patch：${mcpPatch.file}（启用 ${String(mcpPatch.included.length)} 个 server）`
+          )
+        }
+        if (mcpPatch.skipped.length > 0) {
+          console.warn('[kyclaw] MCP 配置有跳过项（未写入内核 patch）', mcpPatch.skipped)
+        }
+      } catch (error) {
+        console.warn(
+          '[kyclaw] MCP 配置写入内核 patch 失败（MCP 本次不可用，不影响其它功能）',
+          error
+        )
+      }
+    }
     // 首轮设置/工作区 IPC 读取前补齐一次默认工作区；失败只记日志，不挡窗口启动。
     initializeDefaultWorkspace(userDataDir, app.getPath('home'))
 
@@ -452,7 +482,7 @@ if (!app.requestSingleInstanceLock()) {
             kernel: {
               electronExecutable: process.execPath,
               asarPath: kernelRoot,
-              dshHome: join(userDataDir, 'dsh-home'),
+              dshHome: kernelDshHome,
               logFile: kernelLogFile
             }
           }

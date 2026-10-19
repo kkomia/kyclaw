@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 内嵌 agent 服务（链路原型①）：Mastra（@mastra/hono 适配器）挂在 Node http 上，只监听 127.0.0.1。
  *
  * 边界就两条：
@@ -31,7 +31,6 @@ import type { LangfuseExportConfig } from '../../mastra/telemetry'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { readProjectRules } from '../project-rules'
 import type { RulesProcessorDependencies } from '../../mastra/rules'
-import { McpLifecycle } from '../mcp/lifecycle'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
@@ -444,21 +443,16 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     })
   // round 68：本部署事实（技能加载时拼在全文末尾）——现读；缺省从设置 + 本机渲染器探测算
   const skillFactsFor = options.skillRuntimeFacts ?? skillRuntimeFactsFor({ settings: settingsFor })
-  // MCP 连接的生命周期：stdio 子进程的持有者，随 agent 服务起停（stop 见 handle.stop）
-  const mcpLifecycle = new McpLifecycle({ servers: mcpServersFor })
   /**
    * MCP 配置的落盘口（round 65 抽出来给两处共用）：MCP 管理路由 `PUT /api/mcp/servers` 与
    * agent 侧的 add_mcp_server / remove_mcp_server **同一条路** —— 校验（路由/工具各自先跑
    * shared/mcp.ts 的 mcpServersProblems）+ updateSettings 落盘，不另起第二套写盘实现。
+   *
+   * PB-023：MCP 连接改由 DSH 内核插件 `@deepseek-ai/dsh-mcp-client` 负责（宿主不再持有 MCP 客户端），
+   * 落盘后不再有"当场对齐连接"这一步 —— 改动在下次应用启动时由 kernel 读 home patch 生效。
    */
   const saveMcpServers = (servers: McpServerConfig[]): readonly McpServerConfig[] =>
     updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers
-  /** 落盘成功后的连接对齐（尽力而为：失败只记日志，下一轮对话会再对齐） */
-  const onMcpServersChanged = (): void => {
-    mcpLifecycle.refresh().catch((error) => {
-      console.warn('[kyclaw] MCP 连接对齐失败（下一轮对话会再对齐）', error)
-    })
-  }
   /**
    * round 65：让模型自己落地技能 / MCP 的运行时（工具层只调这几个函数，见 shared/authoring.ts）。
    * 现读：skillsDir 是固定路径，插件技能目录与 MCP 列表每轮重新取（用户刚装的插件、刚改的配置
@@ -470,8 +464,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       builtinSkillsDir: options.builtinSkillsDir ?? null,
       installedSkillDirs: settingsFor().installedPlugins.flatMap((record) => record.skillDirs),
       readServers: mcpServersFor,
-      saveServers: saveMcpServers,
-      onServersChanged: onMcpServersChanged
+      saveServers: saveMcpServers
     })
   const {
     mastra,
@@ -498,7 +491,6 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     },
     permissionRules: permissionRulesFor,
     mcpServers: mcpServersFor,
-    mcpTools: (gate) => mcpLifecycle.tools(gate),
     langfuse: langfuseFor,
     semanticRecall: semanticRecallFor,
     embeddingKey: embeddingKeyFor,
@@ -620,16 +612,15 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     createSessionPptTemplatesRouter({ store: sessionPptTemplates })
   )
 
-  // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）；
-  // 写完立即让 lifecycle 对齐连接（启停/删除当场生效，子进程随之下线/上线）
-  // round 65：这里的 saveServers / onServersChanged 与 agent 侧 add_mcp_server / remove_mcp_server
-  // **是同一对函数**（上面抽出来的）—— 界面与模型两条入口共用一条写盘路，校验不会分叉
+  // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）。
+  // PB-023：MCP 连接已迁到 DSH 内核插件（下次启动读 home patch 生效），这里不再有 lifecycle 对齐；
+  // 路由本身在 PB-022 下架前保留（界面/模型的写盘入口不变，只是不再"写完即连"）。
+  // round 65：这里的 saveServers 与 agent 侧 add_mcp_server / remove_mcp_server **是同一个函数**
   app.route(
     MCP_ROUTE_PREFIX,
     createMcpRouter({
       readServers: mcpServersFor,
-      saveServers: saveMcpServers,
-      onServersChanged: onMcpServersChanged
+      saveServers: saveMcpServers
     })
   )
 
@@ -665,17 +656,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   if (!server) {
     // 起不来就不留半个服务：把已经建好的 Mastra/storage/连接收掉，再带着原因抛出去
     await kernelAdapter?.stop()
-    await mcpLifecycle.stop()
     await teardownQuietly(mastra, storage, memory)
     throw new Error(`agent 服务启动失败：${attempts} 次都没能监听 ${HOST} 的端口`, {
       cause: lastError
     })
   }
-
-  // 启动预热（round 54 首字延迟修复）：把 MCP 发现挪到应用启动后的后台做——可达的 server 在
-  // 用户敲字时已经就绪；不可达的在这里走完重试上限、标成暂停使用，不占任何一轮对话的等待预算。
-  // refresh 自己吞错（对齐失败只记日志），不会冒未处理 rejection。
-  void mcpLifecycle.refresh()
 
   let stopped = false
   return {
@@ -696,9 +681,9 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           server.close((error) => (error ? reject(error) : resolve()))
         })
       } finally {
-        // 内核子进程/WS 先收（不留孤儿）；MCP 子进程随连接断开而下线；再收 Mastra / memory / storage
+        // 内核子进程/WS 先收（不留孤儿）；MCP 由内核子进程及其插件连接持有，随内核一起下线；
+        // 再收 Mastra / memory / storage
         await kernelAdapter?.stop()
-        await mcpLifecycle.stop()
         await teardownQuietly(mastra, storage, memory)
       }
     }
