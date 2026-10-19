@@ -85,6 +85,13 @@ export const resolvedThemeSchema = z.enum(['light', 'dark'])
 export type ResolvedTheme = z.infer<typeof resolvedThemeSchema>
 
 export const IPC_CHANNELS = {
+  app: {
+    /**
+     * PB-038：重启应用（内核启动失败时唯一能真正恢复的动作）。
+     * 主进程侧：有未保存的 Office 文档 → 拒绝（不绕过退出守卫）；否则 `app.relaunch()+quit()`。
+     */
+    relaunch: 'app:relaunch'
+  },
   window: {
     /** 最小化窗口 */
     minimize: 'window:minimize',
@@ -1005,6 +1012,24 @@ export interface KyclawWindowApi {
   onStateChanged(listener: (state: WindowState) => void): () => void
 }
 
+/**
+ * PB-038：重启应用的回包。
+ * 有回包（而不是 fire-and-forget）是为了不制造"假承诺"：退出守卫可能拦下 quit，
+ * 那时必须让用户知道**没有**重启，而不是以为在重启。
+ */
+export type AppRelaunchResult =
+  | { ok: true }
+  | {
+      ok: false
+      /** unsaved-documents = 有未保存的 Office 文档（先保存再重启）；relaunch-failed = 极少数异常 */
+      reason: 'unsaved-documents' | 'relaunch-failed'
+    }
+
+/** preload 暴露给渲染端的应用级控制面（目前只有「重启应用」） */
+export interface KyclawAppApi {
+  relaunch(): Promise<AppRelaunchResult>
+}
+
 /** preload 暴露给渲染端的设置面（落盘在主进程，渲染端只经 IPC 读写） */
 export interface KyclawSettingsApi {
   get(): Promise<AppSettings>
@@ -1390,6 +1415,8 @@ export interface KyclawTerminalApi {
 
 /** `window.kyclaw` 的全部能力（后续任务按通道族追加） */
 export interface KyclawApi {
+  /** PB-038：应用级动作（重启应用；内核起不来时的唯一恢复入口） */
+  app: KyclawAppApi
   window: KyclawWindowApi
   settings: KyclawSettingsApi
   workspace: KyclawWorkspaceApi

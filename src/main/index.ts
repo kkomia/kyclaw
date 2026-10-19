@@ -25,6 +25,7 @@ import { registerTelemetryIpc } from './ipc/telemetry'
 import { registerTranslateIpc } from './ipc/translate'
 import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
+import { registerAppControlIpc } from './ipc/app-control'
 import { registerWorkspaceIpc } from './ipc/workspace'
 import { registerWorkbenchIpc } from './ipc/workbench'
 import { defaultKernelRoot } from './kernel/kernel-layout'
@@ -255,6 +256,8 @@ if (!app.requestSingleInstanceLock()) {
     initializeDefaultWorkspace(userDataDir, app.getPath('home'))
 
     registerWindowIpc()
+    // PB-038：内核起不来时的「重启应用」——有未保存文档就拒绝（不绕过退出守卫），否则 relaunch+quit。
+    registerAppControlIpc({ dirtyCount: () => quitGuard.dirtyCount() })
     // round 63：更新源写进设置后要当场生效，所以设置通道带一个回调（更新器本身是异步装配的，
     // 这里晚绑定取"当前那个"——回调只在渲染端保存设置时触发，那时下面的 updater 早就装配好了）
     registerSettingsIpc(userDataDir, {

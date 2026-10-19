@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   agentApiStub,
+  appApiStub,
   attachmentsApiStub,
   filesApiStub,
   knowledgeApiStub,
@@ -38,8 +39,10 @@ function stubWindowApi(overrides: Partial<KyclawWindowApi> = {}): KyclawWindowAp
   // updates / telemetry 面、round 28 起多了 memory 面、模块 3B 起多了 localModels 面、
   // 工作台起多了 workbench / terminal 面、round 32 起多了 translate 面、模块 2 起多了 attachments 面、
   // round 53 起多了 files 面（File → 绝对路径的小桥）、M5 起多了 notes / knowledge 面：
+  // PB-038 起多了 app 面（重启应用）；
   // 本文件只测窗口面，其余给桩即可
   window.kyclaw = {
+    app: appApiStub(),
     window: api,
     settings: settingsApiStub(),
     workspace: workspaceApiStub(),

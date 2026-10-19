@@ -29,8 +29,10 @@ import {
   workspaceListFilesResultSchema,
   workspaceOpenInExplorerResultSchema,
   type BundledReleaseNotes,
+  type AppRelaunchResult,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawAppApi,
   type KyclawAttachmentsApi,
   type KyclawFilesApi,
   type KyclawLocalModelsApi,
@@ -118,6 +120,20 @@ import {
   officeSessionRestoreResultSchema,
   officeSessionSyncArgsSchema
 } from '../shared/office-editor'
+
+/** PB-038：应用级动作（重启应用）。回包语义见 shared/ipc.ts 的 AppRelaunchResult。 */
+const appApi: KyclawAppApi = {
+  relaunch: async (): Promise<AppRelaunchResult> => {
+    const result = (await ipcRenderer.invoke(IPC_CHANNELS.app.relaunch)) as AppRelaunchResult
+    // 主进程是唯一权威：形状不认识就当作失败（不猜成成功，避免假重启）
+    if (result?.ok === true) return { ok: true }
+    const reason = result?.reason
+    return {
+      ok: false,
+      reason: reason === 'unsaved-documents' ? 'unsaved-documents' : 'relaunch-failed'
+    }
+  }
+}
 
 const windowApi: KyclawWindowApi = {
   minimize: () => {
@@ -876,6 +892,7 @@ const officeApi: KyclawOfficeApi = {
 }
 
 export const kyclawApi: KyclawApi = {
+  app: appApi,
   window: windowApi,
   settings: settingsApi,
   workspace: workspaceApi,

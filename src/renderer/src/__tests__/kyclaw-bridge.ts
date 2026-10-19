@@ -5,6 +5,7 @@ import {
   type ConnectionTestResult,
   type KyclawAgentApi,
   type KyclawApi,
+  type KyclawAppApi,
   type KyclawSettingsApi,
   type KyclawWindowApi,
   type LangfuseState,
@@ -405,6 +406,13 @@ export function windowApiStub(): KyclawWindowApi {
     close: () => {},
     isMaximized: async () => false,
     onStateChanged: () => () => {}
+  }
+}
+
+/** PB-038：应用级动作的桩——默认回 {ok:true}（要测"有未保存文档被拒"的分支自己替换） */
+export function appApiStub(): KyclawAppApi {
+  return {
+    relaunch: async () => ({ ok: true })
   }
 }
 
@@ -1020,6 +1028,7 @@ export function installKyclawBridge(initial: AppSettings = defaultSettings()): K
   const notes = notesApiStub()
   const knowledge = knowledgeApiStub()
   const api: KyclawApi = {
+    app: appApiStub(),
     window: windowApiStub(),
     settings,
     workspace,
