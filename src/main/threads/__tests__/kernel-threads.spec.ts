@@ -59,7 +59,8 @@ function fakeOps(): FakeOps {
     summary('t1', '标题一'),
     summary('t2', null),
     { ...summary('t3'), origin: 'subagent' },
-    summary('archived')
+    summary('archived'),
+    summary('session-default')
   ]
   const events: Record<string, KernelSessionEventLike[]> = {
     t1: [userEvent('你好'), assistantEvent('你好，在。')],
@@ -121,8 +122,12 @@ async function jsonOf<T>(response: Response): Promise<T> {
 }
 
 describe('kernel-threads：9 个端点', () => {
-  it('GET /api/threads：过滤 archived + subagent，title 投影', async () => {
-    const app = createKernelThreadsRouter({ ops: fakeOps(), defaultCwd: '/workspace' })
+  it('GET /api/threads：过滤 archived + subagent + adapter 默认会话（R2）', async () => {
+    const app = createKernelThreadsRouter({
+      ops: fakeOps(),
+      defaultCwd: '/workspace',
+      defaultSessionId: 'session-default'
+    })
     const response = await app.request('/')
     expect(response.status).toBe(200)
     const body = await jsonOf<{

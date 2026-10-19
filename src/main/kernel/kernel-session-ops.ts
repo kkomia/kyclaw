@@ -29,12 +29,16 @@ export function kernelSessionWireFromAdapter(adapter: KernelRpcAdapter): KernelS
   }
 }
 
-/** 生产 adapter 的最小接线结构（当前只需 rpcCall）。 */
-export interface KernelSessionAdapter extends KernelRpcAdapter {}
+/** 生产 adapter 的最小接线结构（rpcCall + reattach opening）。 */
+export interface KernelSessionAdapter extends KernelRpcAdapter {
+  reattach(threadId: string): Promise<{ cursor?: number }>
+}
 
-/** 接线版：不碰 kernel-adapter.ts，只消费 rpcCall；compact 直接走 commands/execute。 */
+/** 接线版：不碰 kernel-adapter.ts；page 用 reattach opening cursor，compact 走 raw commands/execute。 */
 export function createKernelSessionOpsForAdapter(adapter: KernelSessionAdapter): KernelSessionOps {
-  return createKernelSessionOps(kernelSessionWireFromAdapter(adapter))
+  return createKernelSessionOps(kernelSessionWireFromAdapter(adapter), {
+    openingOf: (threadId) => adapter.reattach(threadId)
+  })
 }
 
 /** `session/list` / `session/page` 里我们实际用到的事件形状（rc.2 原样） */
@@ -59,6 +63,8 @@ export interface KernelSessionSummary {
 }
 
 export interface KernelSessionOpsDeps {
+  /** 生产 = adapter.reattach(threadId)；page 的 throughSeq 必须来自内核 opening cursor。 */
+  openingOf?: (threadId: string) => Promise<{ cursor?: number }>
   /** 测试注入的 /compact 执行器；生产缺省直接用 raw commands/execute。 */
   executeCommand?: (line: string, threadId?: string) => Promise<unknown>
   /**
@@ -202,11 +208,14 @@ export function createKernelSessionOps(
   const readEvents = async (threadId: string): Promise<KernelSessionEventLike[]> => {
     const exists = (await listSessions()).some((session) => session.sessionId === threadId)
     if (!exists) return []
+    if (deps.openingOf === undefined) {
+      throw new KernelSessionOpsError('session/ops-unavailable', 'readEvents 需要 openingOf')
+    }
+    const opening = await deps.openingOf(threadId)
+    const cursor = opening.cursor
+    // R1：-1 不是哨兵，page 会“cut 到 -1”返回空页；必须用 follow opening 的真实 cursor。
+    if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor) || cursor < 0) return []
 
-    // `throughSeq: -1` 是内核的“当前 source cursor”哨兵（history.js:101）。
-    // 不能走 adapter.reattach(threadId) 取 cursor：reattach 会用 adapter 的固定 appDataDir
-    // 重新物化 session，遇到用 workspace cwd 创建的 thread 会报 session/conflict（真机实测）。
-    const throughSeq = -1
     const pages: KernelSessionEventLike[][] = []
     let beforeSeq: number | undefined
     for (let guard = 0; guard < 200; guard += 1) {
@@ -216,7 +225,7 @@ export function createKernelSessionOps(
       }>('session/page', {
         request: {
           address: { kind: 'session', sessionId: threadId },
-          throughSeq,
+          throughSeq: cursor,
           ...(beforeSeq === undefined ? {} : { beforeSeq }),
           maxMessages: 200
         }

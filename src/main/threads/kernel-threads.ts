@@ -35,6 +35,8 @@ export interface KernelThreadsRouterOptions {
   cwdOf?: (threadId: string) => string | undefined
   /** 兜底 cwd；生产 = 当前工作区，测试 = 临时目录。 */
   defaultCwd: string
+  /** adapter 启动时自建的默认会话 id；它不是用户 thread，列表必须排除（R2）。 */
+  defaultSessionId?: string
   /** 可选列表过滤（例如只显示当前 workspace）；默认过滤 subagent + archived。 */
   sessionFilter?: (summary: KernelSessionSummary) => boolean
 }
@@ -113,6 +115,7 @@ export function createKernelThreadsRouter(options: KernelThreadsRouterOptions): 
       const archivedSet = new Set([...archived, ...archivedInProcess])
       const threads = sessions
         .filter((session) => session.origin !== 'subagent')
+        .filter((session) => session.sessionId !== options.defaultSessionId)
         .filter((session) => !archivedSet.has(session.sessionId))
         .filter((session) => options.sessionFilter?.(session) ?? true)
         .map(summaryJson)

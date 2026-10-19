@@ -527,6 +527,22 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
 
   /**
+   * PB-024 R3：cwd 的唯一权威是 thread/workspace，不是 adapter.appDataDir。
+   * 同一个 resolver 同时喂给 adapter（create/reattach/startTurn）和 threads router（create），
+   * 避免“threads 用 workspace、chat 用 appDataDir”各写一份 cwd → session/conflict。
+   */
+  const resolveThreadCwd = (threadId?: string): string => {
+    if (threadId !== undefined) {
+      const projectId = sessionProjects.get(threadId)
+      if (projectId !== null) {
+        const project = projectsFor().find((item) => item.id === projectId)
+        if (project !== undefined) return project.path
+      }
+    }
+    return defaultWorkspaceFor() ?? options.dataDir
+  }
+
+  /**
    * B3.1b：**flag 判定的唯一入口**（回退只需关 `KYCLAW_KERNEL_PORT`）。
    * - flag 关 → `maybeStartKernelAdapter` 直接返回 null（不 spawn、不碰路径）；下面不注册 chat 路由，
    *   旧 Mastra chat 路径**一行未改**；
@@ -537,6 +553,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     electronExecutable: options.kernel?.electronExecutable ?? '',
     asarPath: options.kernel?.asarPath ?? '',
     appDataDir: options.dataDir,
+    resolveCwd: resolveThreadCwd,
     ...(options.kernel?.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
     ...(options.kernel?.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
     ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
@@ -580,9 +597,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   // 线程 API：0.2.0 例外项，直接走 DSH kernel session；不再注册旧 Mastra createThreadsRouter。
   // flag 关时也不回退旧实现：没有 kernel adapter 就返回 503 feature-disabled。
-  const threadsDefaultCwd = defaultWorkspaceFor() ?? options.dataDir
+  const threadsDefaultCwd = resolveThreadCwd()
   const kernelThreadsOps =
     kernelAdapter === null ? null : createKernelSessionOpsForAdapter(kernelAdapter)
+  const kernelThreadsDefaultSessionId = kernelAdapter?.defaultSessionId
   app.route(
     THREADS_ROUTE_PREFIX,
     kernelThreadsOps === null
@@ -590,8 +608,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
       : createKernelThreadsRouter({
           ops: kernelThreadsOps,
           defaultCwd: threadsDefaultCwd,
-          // 待接工作区：当前只知道默认工作区；project/thread 归属由后续 PB 接。
-          cwdOf: () => threadsDefaultCwd
+          ...(kernelThreadsDefaultSessionId === undefined
+            ? {}
+            : { defaultSessionId: kernelThreadsDefaultSessionId }),
+          cwdOf: resolveThreadCwd
         })
   )
 

@@ -124,7 +124,7 @@ describe('kernel-session-ops：list-first create / page / archive / compact', ()
     })
   })
 
-  it('readEvents：先 list 确认存在，再按 throughSeq=-1 翻页', async () => {
+  it('readEvents：先 list 确认存在，再用 opening cursor 翻页（R1）', async () => {
     const calls: Call[] = []
     const ops = createKernelSessionOps(
       wireWith((method, payload) => {
@@ -142,13 +142,14 @@ describe('kernel-session-ops：list-first create / page / archive / compact', ()
               }
         }
         throw new Error(`unexpected ${method}`)
-      }, calls)
+      }, calls),
+      { openingOf: async () => ({ cursor: 4 }) }
     )
     const events = await ops.readEvents('t1')
     expect(events.map((event) => event.seq)).toEqual([1, 4])
     const pages = calls.filter((call) => call.method === 'session/page')
     expect(pages).toHaveLength(2)
-    expect(pages[0]?.payload).toMatchObject({ request: { throughSeq: -1 } })
+    expect(pages[0]?.payload).toMatchObject({ request: { throughSeq: 4 } })
     expect(pages[1]?.payload).toMatchObject({ request: { beforeSeq: 4 } })
   })
 
@@ -235,6 +236,9 @@ describe('kernel-session-ops：list-first create / page / archive / compact', ()
           } as T
         }
         return {} as T
+      },
+      async reattach() {
+        return { cursor: 0 }
       }
     }
     const wire = kernelSessionWireFromAdapter(adapter)
