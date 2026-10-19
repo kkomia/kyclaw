@@ -1100,6 +1100,17 @@ export function Composer({
                   pickSuggestion(activeRow)
                   return
                 }
+                // PB-039：Tab 接受当前行；Shift+Tab 退出菜单并还焦点（DSH 同一套键盘）
+                if (event.key === 'Tab' && !event.shiftKey && activeRow !== null) {
+                  event.preventDefault()
+                  pickSuggestion(activeRow)
+                  return
+                }
+                if (event.key === 'Tab' && event.shiftKey) {
+                  event.preventDefault()
+                  setSuggest(null)
+                  return
+                }
                 if (event.key === 'Escape') {
                   event.preventDefault()
                   setSuggest(null)

@@ -1,13 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { FileText, Plug, Sparkles, Terminal } from 'lucide-react'
+import { Check, FileText, Plug, Sparkles, Terminal } from 'lucide-react'
 import { cn } from '@renderer/components/ui/cn'
 import type { SuggestionGroup, SuggestionRow } from './suggestion-model'
 
 /**
- * 输入框建议浮窗（`@` 文件 / `/` 命令）——task-61 按 claude-style 紧凑菜单重做：
- *   - 宽 min(360px, 100vw-24px)、内边距 6、圆角 12、hairline + `--shadow-overlay`、滚动上限；
- *   - 分组标题 11/500 tertiary；行高 44：icon + 中文名 + 英文/命令名(mono, 次级) + 右对齐描述；
- *   - 键盘（↑/↓/Enter/Esc）仍由 Composer textarea 驱动 activeIndex，这里只负责渲染/点击/悬停。
+ * 输入框建议浮窗（`@` 文件 / `/` 命令）——task-61 按 claude-style 紧凑菜单重做。
+ *
+ * PB-039（0.1.6，对标 DSH `client-ui-commands:1815`）：命令面板数值照抄——
+ * 容器 max-height 320 / padding 4；行 padding 5px 7px / 字号 12 / gap 6；详情 11；
+ * 选中行右侧 check 14；键盘（↑↓/Tab/Shift+Tab/Enter/Esc）由 Composer 的 textarea 驱动。
  */
 export interface ComposerSuggestProps {
   open: boolean
@@ -25,13 +26,13 @@ export interface ComposerSuggestProps {
 
 /** 分组 → 行图标（用现有数据的分组标题；文件分组没有标题，用文件图标） */
 function iconOfGroup(title: string): React.JSX.Element {
-  if (title === '命令') return <Terminal aria-hidden="true" />
+  if (title === '命令' || title === '指令') return <Terminal aria-hidden="true" />
   if (title === '插件') return <Plug aria-hidden="true" />
   if (title === '技能') return <Sparkles aria-hidden="true" />
   return <FileText aria-hidden="true" />
 }
 
-/** 命令行的英文/斜杠名：真实命令标识（`/compact` / `/plan`），不编造 */
+/** 命令行的英文/斜杠名：真实命令标识（`/compact` / `/plan` / `/goal`），不编造 */
 function secondaryOf(row: SuggestionRow): string | null {
   return row.command === undefined ? null : `/${row.command}`
 }
@@ -64,18 +65,24 @@ export function ComposerSuggest({
       data-open={open ? 'true' : undefined}
       aria-hidden={open ? undefined : true}
       className={cn(
-        'absolute bottom-full left-0 z-20 mb-2 w-[min(360px,calc(100vw-24px))] max-h-[min(360px,60vh)] overflow-y-auto rounded-[10px] border-(length:--hairline-width) border-hairline bg-menu p-1 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
+        'absolute bottom-full left-0 z-20 mb-1 max-h-[320px] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-[10px] border-(length:--hairline-width) border-hairline bg-menu p-1 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass) transition-[opacity,transform] duration-(--motion-fast) ease-main motion-reduce:transition-none',
         open ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0'
       )}
     >
       {notice !== undefined ? (
-        <p data-testid="composer-suggest-notice" className="px-2 py-1.5 text-b2 text-ink-secondary">
+        <p
+          data-testid="composer-suggest-notice"
+          className="px-[7px] py-[5px] text-[12px] leading-4 text-ink-secondary"
+        >
           {notice}
         </p>
       ) : null}
 
       {notice === undefined && rowCount === 0 ? (
-        <p data-testid="composer-suggest-empty" className="px-2 py-1.5 text-b2 text-ink-secondary">
+        <p
+          data-testid="composer-suggest-empty"
+          className="px-[7px] py-[5px] text-[12px] leading-4 text-ink-secondary"
+        >
           {emptyText}
         </p>
       ) : null}
@@ -84,7 +91,7 @@ export function ComposerSuggest({
         ? groups.map((group) => (
             <div key={group.title === '' ? 'files' : group.title}>
               {group.title === '' ? null : (
-                <p className="px-2 pt-1.5 pb-0.5 text-[11px] leading-4 font-medium text-ink-tertiary select-none">
+                <p className="px-[7px] pt-[5px] pb-[3px] text-[11px] leading-4 font-medium text-ink-tertiary select-none">
                   {group.title}
                 </p>
               )}
@@ -107,7 +114,7 @@ export function ComposerSuggest({
                     onClick={() => onPick(row)}
                     onMouseEnter={() => onHover(flatIndex)}
                     className={cn(
-                      'flex min-h-[32px] w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 py-0.5 text-left transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
+                      'flex min-h-[24px] w-full cursor-pointer items-center gap-[6px] rounded-[6px] px-[7px] py-[5px] text-left text-[12px] leading-4 transition-colors duration-(--motion-fast) ease-main motion-reduce:transition-none',
                       active ? 'bg-hover' : 'hover:bg-hover',
                       disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
@@ -118,17 +125,24 @@ export function ComposerSuggest({
                     >
                       {iconOfGroup(group.title)}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-b2 text-ink">{row.label}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{row.label}</span>
                     {secondary === null ? null : (
-                      <span className="max-w-[40%] shrink-0 truncate font-mono text-c1 text-ink-tertiary">
+                      <span className="max-w-[40%] shrink-0 truncate font-mono text-[11px] text-ink-tertiary">
                         {secondary}
                       </span>
                     )}
                     {row.hint === undefined ? null : (
-                      <span className="max-w-[45%] min-w-0 shrink-0 truncate text-c1 text-ink-tertiary">
+                      <span className="max-w-[45%] min-w-0 shrink-0 truncate text-[11px] text-ink-tertiary">
                         {row.hint}
                       </span>
                     )}
+                    {active ? (
+                      <Check
+                        aria-hidden="true"
+                        data-testid="suggest-check"
+                        className="size-3.5 shrink-0 text-ink-tertiary"
+                      />
+                    ) : null}
                   </button>
                 )
               })}
