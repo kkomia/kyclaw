@@ -664,9 +664,10 @@ test.describe('interactive features — production UI functional evidence', () =
       const collapsed = await settledShell()
       expect(collapsed.panelSource).toBe('auto')
       expect(collapsed.panelSource).toBe(expectedSource(collapsed))
-      expect(Math.abs(collapsed.panelWidth - (collapsed.innerWidth - edgeGap))).toBeLessThanOrEqual(
-        8
-      )
+      // 侧栏收起：面板从 rail(56) 后起铺满 → 宽 = innerWidth − primary-nav-rail − edge-gap
+      expect(
+        Math.abs(collapsed.panelWidth - (collapsed.innerWidth - primaryNavRail - edgeGap))
+      ).toBeLessThanOrEqual(8)
       // 展开回来：遮挡加回去，结论照旧
       await page.getByTestId('sidebar-toggle').click()
       await expect.poll(async () => (await shell()).sidebar).toBe('expanded')

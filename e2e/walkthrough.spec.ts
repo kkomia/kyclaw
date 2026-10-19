@@ -454,6 +454,9 @@ test('走查A · 深色壳与聊天页（0.2.0 几何 / 四角 / 缝 / 导览轨
 })
 
 test('走查B · 浅色菜单玻璃与主按钮 hover（R9 / R11）', async () => {
+  // `sidebar-menu-trigger` 已在 728aef9 的 0.1.x 壳重构里移除；0.2.0 无此入口。
+  // 按 PB-048 a 组显式 skip（旧壳入口已下架）；菜单玻璃/hover 走查另行补新骨架。
+  test.skip(true, '旧壳入口 sidebar-menu-trigger 已移除（728aef9），见 PB-048-a')
   const launched = await launchApp({ settings: { theme: 'light' } })
   const { page } = launched
   const metrics: Metrics = {}
