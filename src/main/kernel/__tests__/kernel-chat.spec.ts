@@ -27,6 +27,18 @@ function fakeAdapter(
         text: frames.flatMap((frame) => (frame.type === 'text-delta' ? [frame.delta] : [])).join('')
       }
     },
+    async listCommands() {
+      return [{ name: 'goal' }]
+    },
+    async executeCommand() {
+      return { ok: true }
+    },
+    async readGoalState() {
+      return null
+    },
+    async readPlanState() {
+      return null
+    },
     async cancelTurn() {
       await Promise.resolve()
     },
@@ -92,3 +104,4 @@ describe('kernel-chat：真实 HTTP 形状', () => {
     expect(await response.text()).toContain('"type":"error"')
   })
 })
+

@@ -114,12 +114,7 @@
             "maxMessageImageBytes": 209715200,
             "maxImagePixels": 64000000,
             "maxImageDimension": 8192,
-            "mediaTypes": [
-              "image/png",
-              "image/jpeg",
-              "image/webp",
-              "image/gif"
-            ]
+            "mediaTypes": ["image/png", "image/jpeg", "image/webp", "image/gif"]
           }
         }
       },
@@ -444,9 +439,7 @@
                                   "description": "One sentence explaining the tradeoff or impact."
                                 }
                               },
-                              "required": [
-                                "label"
-                              ]
+                              "required": ["label"]
                             }
                           },
                           "multi_select": {
@@ -454,16 +447,11 @@
                             "description": "Whether the user may select more than one option. Defaults to false."
                           }
                         },
-                        "required": [
-                          "id",
-                          "question"
-                        ]
+                        "required": ["id", "question"]
                       }
                     }
                   },
-                  "required": [
-                    "questions"
-                  ]
+                  "required": ["questions"]
                 }
               },
               {
@@ -481,9 +469,7 @@
                       "description": "Optional positive safe-integer limit on automatic continuation rounds."
                     }
                   },
-                  "required": [
-                    "objective"
-                  ]
+                  "required": ["objective"]
                 }
               },
               {
@@ -511,21 +497,14 @@
                     "sandbox_permissions": {
                       "type": "string",
                       "description": "The narrowest wider sandbox mode for a one-shot retry of the exact operation the sandbox just denied; the retry asks the user for approval.",
-                      "enum": [
-                        "workspace-write",
-                        "danger-full-access"
-                      ]
+                      "enum": ["workspace-write", "danger-full-access"]
                     },
                     "justification": {
                       "type": "string",
                       "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. Use the language of the user’s current request."
                     }
                   },
-                  "required": [
-                    "file_path",
-                    "old_string",
-                    "new_string"
-                  ]
+                  "required": ["file_path", "old_string", "new_string"]
                 }
               },
               {
@@ -539,9 +518,7 @@
                       "description": "The complete plan, as markdown, starting with a # heading that names it."
                     }
                   },
-                  "required": [
-                    "plan"
-                  ]
+                  "required": ["plan"]
                 }
               },
               {
@@ -567,9 +544,7 @@
                       "description": "Directory to search in. Defaults to the session workspace; a relative path resolves against it."
                     }
                   },
-                  "required": [
-                    "pattern"
-                  ]
+                  "required": ["pattern"]
                 }
               },
               {
@@ -591,9 +566,7 @@
                       "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported."
                     }
                   },
-                  "required": [
-                    "pattern"
-                  ]
+                  "required": ["pattern"]
                 }
               },
               {
@@ -607,9 +580,7 @@
                       "description": "The id of an agent created under you: your direct child or a deeper descendant."
                     }
                   },
-                  "required": [
-                    "agent_id"
-                  ]
+                  "required": ["agent_id"]
                 }
               },
               {
@@ -627,9 +598,7 @@
                       "description": "Optional short reason, recorded in the log and forwarded to the job."
                     }
                   },
-                  "required": [
-                    "job_id"
-                  ]
+                  "required": ["job_id"]
                 }
               },
               {
@@ -659,9 +628,7 @@
                       "description": "Max wait in milliseconds with wait: true. Defaults to and is capped by configuration."
                     }
                   },
-                  "required": [
-                    "job_id"
-                  ]
+                  "required": ["job_id"]
                 }
               },
               {
@@ -673,10 +640,7 @@
                     "scope": {
                       "type": "string",
                       "description": "children (default) lists direct children, which accept send_message in any status. descendants lists the whole tree below you with each entry's parent session id and depth; entries deeper than 1 accept only interrupt_agent.",
-                      "enum": [
-                        "children",
-                        "descendants"
-                      ]
+                      "enum": ["children", "descendants"]
                     }
                   }
                 }
@@ -703,15 +667,11 @@
                             "description": "Brief description for the user."
                           }
                         },
-                        "required": [
-                          "path"
-                        ]
+                        "required": ["path"]
                       }
                     }
                   },
-                  "required": [
-                    "files"
-                  ]
+                  "required": ["files"]
                 }
               },
               {
@@ -743,20 +703,14 @@
                     "sandbox_permissions": {
                       "type": "string",
                       "description": "The narrowest wider sandbox mode for a one-shot retry of the exact command the sandbox just denied; the retry asks the user for approval.",
-                      "enum": [
-                        "workspace-write",
-                        "danger-full-access"
-                      ]
+                      "enum": ["workspace-write", "danger-full-access"]
                     },
                     "justification": {
                       "type": "string",
                       "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access. Use the language of the user’s current request."
                     }
                   },
-                  "required": [
-                    "description",
-                    "command"
-                  ]
+                  "required": ["description", "command"]
                 }
               },
               {
@@ -778,9 +732,7 @@
                       "description": "Maximum number of lines to return. Defaults to 2000."
                     }
                   },
-                  "required": [
-                    "file_path"
-                  ]
+                  "required": ["file_path"]
                 }
               },
               {
@@ -794,9 +746,7 @@
                       "description": "Path to the image file, resolved by the filesystem backend."
                     }
                   },
-                  "required": [
-                    "file_path"
-                  ]
+                  "required": ["file_path"]
                 }
               },
               {
@@ -835,10 +785,7 @@
                           "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
                         }
                       },
-                      "required": [
-                        "time",
-                        "time_zone"
-                      ]
+                      "required": ["time", "time_zone"]
                     },
                     "weekly": {
                       "type": "object",
@@ -861,11 +808,7 @@
                           }
                         }
                       },
-                      "required": [
-                        "time",
-                        "time_zone",
-                        "weekdays"
-                      ]
+                      "required": ["time", "time_zone", "weekdays"]
                     },
                     "cron": {
                       "type": "object",
@@ -881,10 +824,7 @@
                           "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
                         }
                       },
-                      "required": [
-                        "expression",
-                        "time_zone"
-                      ]
+                      "required": ["expression", "time_zone"]
                     },
                     "at": {
                       "oneOf": [
@@ -905,20 +845,13 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "date",
-                            "time",
-                            "time_zone"
-                          ]
+                          "required": ["date", "time", "time_zone"]
                         }
                       ],
                       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
                     }
                   },
-                  "required": [
-                    "prompt",
-                    "title"
-                  ]
+                  "required": ["prompt", "title"]
                 }
               },
               {
@@ -932,9 +865,7 @@
                       "description": "Exact schedule id."
                     }
                   },
-                  "required": [
-                    "id"
-                  ]
+                  "required": ["id"]
                 }
               },
               {
@@ -981,10 +912,7 @@
                           "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
                         }
                       },
-                      "required": [
-                        "time",
-                        "time_zone"
-                      ]
+                      "required": ["time", "time_zone"]
                     },
                     "weekly": {
                       "type": "object",
@@ -1007,11 +935,7 @@
                           }
                         }
                       },
-                      "required": [
-                        "time",
-                        "time_zone",
-                        "weekdays"
-                      ]
+                      "required": ["time", "time_zone", "weekdays"]
                     },
                     "cron": {
                       "type": "object",
@@ -1027,10 +951,7 @@
                           "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
                         }
                       },
-                      "required": [
-                        "expression",
-                        "time_zone"
-                      ]
+                      "required": ["expression", "time_zone"]
                     },
                     "at": {
                       "oneOf": [
@@ -1051,19 +972,13 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "date",
-                            "time",
-                            "time_zone"
-                          ]
+                          "required": ["date", "time", "time_zone"]
                         }
                       ],
                       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
                     }
                   },
-                  "required": [
-                    "id"
-                  ]
+                  "required": ["id"]
                 }
               },
               {
@@ -1081,10 +996,7 @@
                       "description": "The message to deliver to the agent."
                     }
                   },
-                  "required": [
-                    "agent_id",
-                    "message"
-                  ]
+                  "required": ["agent_id", "message"]
                 }
               },
               {
@@ -1098,9 +1010,7 @@
                       "description": "The exact skill name from the available skills list."
                     }
                   },
-                  "required": [
-                    "name"
-                  ]
+                  "required": ["name"]
                 }
               },
               {
@@ -1122,10 +1032,7 @@
                       "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
                     }
                   },
-                  "required": [
-                    "description",
-                    "prompt"
-                  ]
+                  "required": ["description", "prompt"]
                 }
               },
               {
@@ -1147,10 +1054,7 @@
                       "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
                     }
                   },
-                  "required": [
-                    "description",
-                    "prompt"
-                  ]
+                  "required": ["description", "prompt"]
                 }
               },
               {
@@ -1173,23 +1077,14 @@
                           "status": {
                             "type": "string",
                             "description": "pending (not started) | in_progress (now) | completed (done).",
-                            "enum": [
-                              "pending",
-                              "in_progress",
-                              "completed"
-                            ]
+                            "enum": ["pending", "in_progress", "completed"]
                           }
                         },
-                        "required": [
-                          "content",
-                          "status"
-                        ]
+                        "required": ["content", "status"]
                       }
                     }
                   },
-                  "required": [
-                    "todos"
-                  ]
+                  "required": ["todos"]
                 }
               },
               {
@@ -1209,13 +1104,7 @@
                     "action": {
                       "type": "string",
                       "description": "edit, pause, and resume require a direct top-level human request. complete and blocked are also allowed during an automatic continuation of this goal; blocked is rejected before the configured minimum round count.",
-                      "enum": [
-                        "edit",
-                        "pause",
-                        "resume",
-                        "complete",
-                        "blocked"
-                      ]
+                      "enum": ["edit", "pause", "resume", "complete", "blocked"]
                     },
                     "objective": {
                       "type": "string",
@@ -1230,11 +1119,7 @@
                       "description": "Required only with action blocked: the concrete condition that persisted across rounds and blocks progress."
                     }
                   },
-                  "required": [
-                    "goal_id",
-                    "revision",
-                    "action"
-                  ]
+                  "required": ["goal_id", "revision", "action"]
                 }
               },
               {
@@ -1248,9 +1133,7 @@
                       "description": "The HTTP(S) URL to fetch."
                     }
                   },
-                  "required": [
-                    "url"
-                  ]
+                  "required": ["url"]
                 }
               },
               {
@@ -1267,9 +1150,7 @@
                       }
                     }
                   },
-                  "required": [
-                    "queries"
-                  ]
+                  "required": ["queries"]
                 }
               },
               {
@@ -1323,16 +1204,11 @@
                                 "description": "Optional model override this phase is expected to use."
                               }
                             },
-                            "required": [
-                              "title"
-                            ]
+                            "required": ["title"]
                           }
                         }
                       },
-                      "required": [
-                        "name",
-                        "description"
-                      ]
+                      "required": ["name", "description"]
                     },
                     "args": {
                       "type": "object",
@@ -1344,10 +1220,7 @@
                       "description": "Run as a background job: return a job id immediately instead of waiting; the return value arrives with the completion notice."
                     }
                   },
-                  "required": [
-                    "script",
-                    "meta"
-                  ]
+                  "required": ["script", "meta"]
                 }
               },
               {
@@ -1380,20 +1253,14 @@
                     "sandbox_permissions": {
                       "type": "string",
                       "description": "The narrowest wider sandbox mode for a one-shot retry of the exact operation the sandbox just denied; the retry asks the user for approval.",
-                      "enum": [
-                        "workspace-write",
-                        "danger-full-access"
-                      ]
+                      "enum": ["workspace-write", "danger-full-access"]
                     },
                     "justification": {
                       "type": "string",
                       "description": "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access. Use the language of the user’s current request."
                     }
                   },
-                  "required": [
-                    "file_path",
-                    "content"
-                  ]
+                  "required": ["file_path", "content"]
                 }
               }
             ]
@@ -1447,9 +1314,7 @@
         "time": 1792398228336,
         "data": {
           "title": "say hi",
-          "messageSeqs": [
-            8
-          ],
+          "messageSeqs": [8],
           "source": {
             "kind": "fallback"
           }
@@ -1468,9 +1333,7 @@
         "time": 1792398228338,
         "data": {
           "titleProvider": "session-title-first-prompt-llm",
-          "messageSeqs": [
-            8
-          ],
+          "messageSeqs": [8],
           "route": {
             "provider": "deepseek-official",
             "model": "deepseek-flash"
@@ -1687,9 +1550,7 @@
               "time0": 1792398228370,
               "index": 0,
               "dt": [],
-              "texts": [
-                "POC-OK：内核 RPC 与事件流可用。"
-              ]
+              "texts": ["POC-OK：内核 RPC 与事件流可用。"]
             },
             {
               "type": "chunk",
@@ -1805,9 +1666,7 @@
         "time": 1792398228376,
         "data": {
           "title": "POC-OK：内核 RPC 与事件流可用。",
-          "messageSeqs": [
-            8
-          ],
+          "messageSeqs": [8],
           "source": {
             "kind": "provider",
             "provider": "session-title-first-prompt-llm",

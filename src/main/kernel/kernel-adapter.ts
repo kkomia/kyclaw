@@ -18,6 +18,7 @@ import { connectKernelPeer } from './kernel-auth'
 import { startKernelProcess } from './kernel-process'
 import { KernelRpcClient } from './kernel-rpc'
 import { KernelSseMapper, type KernelFollowValue, type RendererSseFrame } from './sse-map'
+import type { KernelGoalState } from './goal-projection'
 import { connectWebSocket, type WebSocketClient } from './ws-mux'
 
 export interface KernelAdapterOptions {
@@ -54,6 +55,14 @@ export interface KernelAdapter {
   readonly pid: number | undefined
   /** 诊断用：内核回环端口（不含 token/cookie） */
   readonly port: number
+  /** B3.3：只读命令平面（内核已注册的命令，含 goal/plan） */
+  listCommands(): Promise<readonly { name: string; description?: string }[]>
+  /** B3.3：执行一条内核命令（不产生模型消息）；goal/plan 都由内核处理 */
+  executeCommand(line: string): Promise<unknown>
+  /** B3.3：读内核 goal 快照（内核权威；我方只投影，不写） */
+  readGoalState(): Promise<KernelGoalState | null>
+  /** B3.3：读内核 plan 状态（只读投影；真正 plan 模式由内核 /plan 命令/工具处理） */
+  readPlanState(): Promise<{ active: boolean; pending: boolean } | null>
   startTurn(text: string, options?: StartTurnOptions): Promise<KernelTurnResult>
   /** 取消当前轮（协作式；文本保留，由内核 `session/cancel` 结算） */
   cancelTurn(): Promise<void>
@@ -94,6 +103,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     ws = await connectWebSocket({ url: auth.muxUrl, cookie: auth.cookie })
     const streamId = `kyclaw-follow-${randomUUID()}`
     let mapper = new KernelSseMapper()
+    let latestSeq = 0
     let turn: TurnState | undefined
     let snapshot: (() => void) | undefined
     let closed = false
@@ -140,6 +150,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       const value = parsed.value
       options.onFollowValue?.(value)
       if (value.type === 'snapshot') {
+        if (typeof (value as { cursor?: unknown }).cursor === 'number')
+          latestSeq = Math.max(latestSeq, (value as { cursor: number }).cursor)
         snapshot?.()
         return
       }
@@ -156,6 +168,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           }
         }
       }
+      if (value.type === 'event' && typeof value.event.seq === 'number')
+        latestSeq = Math.max(latestSeq, value.event.seq)
       if (value.type === 'event' && value.event.type === 'turn/end') {
         const reason = value.event.data?.reason as
           { kind?: string; error?: { code?: string; message?: string } } | undefined
@@ -233,6 +247,36 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           settleTurn(error instanceof Error ? error : new Error(String(error)))
         }
         return promise
+      },
+      async listCommands() {
+        const result = await rpc.call<Array<{ name: string; description?: string }>>(
+          'commands/list',
+          {
+            agentId: sessionId
+          }
+        )
+        return result
+      },
+      async executeCommand(line: string) {
+        return rpc.call('commands/execute', {
+          agentId: sessionId,
+          line,
+          submittedAttachments: []
+        })
+      },
+      async readGoalState(): Promise<KernelGoalState | null> {
+        const projections = await rpc.call<{
+          values?: { goal?: KernelGoalState | null; plan?: { active?: boolean; pending?: boolean } }
+        }>('session/projections', { request: { sessionId } })
+        return projections.values?.goal ?? null
+      },
+      async readPlanState() {
+        const projections = await rpc.call<{
+          values?: { plan?: { active?: boolean; pending?: boolean } }
+        }>('session/projections', { request: { sessionId } })
+        const plan = projections.values?.plan
+        if (plan === undefined) return null
+        return { active: plan.active === true, pending: plan.pending === true }
       },
       async cancelTurn(): Promise<void> {
         if (stopped) return
