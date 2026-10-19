@@ -28,29 +28,6 @@ describe('AskUser API and transport', () => {
     expect(fetch.mock.calls[2][0]).toBe('http://localhost:1234/ask-user/cancel')
     expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({ threadId: 'thread', runId: 'run' })
   })
-  it('Plan marker 仅发送 threadId/ref 到 /plans/resume', async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response('data: {"type":"finish"}\n\ndata: [DONE]\n\n', {
-        headers: { 'content-type': 'text/event-stream' }
-      })
-    )
-    vi.stubGlobal('fetch', fetch)
-    const body = { threadId: 'thread', ref: { planId: 'plan', revision: 1, version: 2 } }
-    const stream = await transportFor({
-      baseUrl: 'http://localhost:1234',
-      token: 'test-token'
-    }).sendMessages({
-      chatId: 'thread',
-      messageId: undefined,
-      abortSignal: undefined,
-      messages: [],
-      trigger: 'submit-message',
-      body: { planResume: body }
-    })
-    await stream.getReader().read()
-    expect(fetch.mock.calls[0][0]).toBe('http://localhost:1234/plans/resume')
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual(body)
-  })
   it('resume 使用 SDK transport 路由和 SSE 解码，request 不夹带消息或内部标记', async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response('data: {"type":"finish"}\n\ndata: [DONE]\n\n', {

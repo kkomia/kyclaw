@@ -4,7 +4,6 @@ import type { Chat } from '@ai-sdk/react'
 import type { ChatTransport, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
 import { cn } from '@renderer/components/ui/cn'
-import { Button } from '@renderer/components/ui/button'
 import { resolveAgentEndpoint, threadRequestOptions, transportFor } from '@renderer/lib/agent'
 import {
   compactThread,
@@ -40,10 +39,7 @@ import { AskUserDock } from './AskUserDock'
 import { TaskDockSlot } from './TaskDockSlot'
 import { useStore } from 'zustand'
 import { PlanModeChip } from './PlanModeChip'
-import { PlanApprovalDock } from './PlanApprovalDock'
-import { planSession } from '@renderer/lib/plans-store'
-import { kernelPlanActive, planActiveOf } from './plan-ui'
-import { rendererPlansStore, settledPlan } from './plan-runtime'
+import { kernelPlanActive } from './plan-ui'
 import { EMPTY_ASK_USER_THREAD, useAskUserStore } from './ask-user-store'
 import { askUserCallKey } from './ask-user-ui'
 import { hasPendingAskUser, chatStreamActive } from './ask-user'
@@ -711,7 +707,6 @@ function ActiveChat({
   const failurePresentation = failurePresentationOf(messages, error ?? null)
   const askState = useAskUserStore((state) => state.threads.get(threadId) ?? EMPTY_ASK_USER_THREAD)
   const askDrafts = useAskUserStore((state) => state.drafts)
-  const plan = useStore(rendererPlansStore, (state) => planSession(state, threadId))
   const realThread = useSessionsStore((state) =>
     state.threads.some((thread) => thread.id === threadId)
   )
@@ -730,27 +725,6 @@ function ActiveChat({
     (kernelInteractions.snapshot?.approvals.pending.length ?? 0) +
       (kernelInteractions.snapshot?.questions.pending.length ?? 0) >
       0
-  const refreshPlan = useCallback(() => {
-    void rendererPlansStore
-      .getState()
-      .load(threadId)
-      .catch(() => {})
-  }, [threadId])
-  useEffect(() => {
-    if (!ready || !realThread || !interactionsEnabled) return
-    refreshPlan()
-    window.addEventListener('focus', refreshPlan)
-    return () => window.removeEventListener('focus', refreshPlan)
-  }, [ready, realThread, interactionsEnabled, refreshPlan])
-  const waitingPlan =
-    interactionsEnabled &&
-    realThread &&
-    (plan.busy ||
-      (plan.error !== null && plan.state !== null && plan.state.mode !== 'normal') ||
-      plan.state?.mode === 'awaiting_approval' ||
-      plan.state?.pendingRevision !== undefined)
-  const [planActionError, setPlanActionError] = useState<string | null>(null)
-  const [enteringPlan, setEnteringPlan] = useState(false)
   const enterPlanLock = useRef(false)
   /**
    * PB-027：用宿主旧线程库替换当前消息列 —— **只允许在确有数据时替换**。
@@ -768,30 +742,6 @@ function ActiveChat({
     setMessages(history)
     return true
   }, [kernelMode, threadId, setMessages])
-  const cancelPlan = useCallback(async (): Promise<void> => {
-    await stop()
-    await settledPlan(threadId)
-    await rendererPlansStore.getState().load(threadId)
-    const current = planSession(rendererPlansStore.getState(), threadId).state
-    if (current && current.mode !== 'normal' && current.mode !== 'cancelled') {
-      await rendererPlansStore.getState().cancel(threadId, current.version)
-    }
-    await replaceHistoryFromServer()
-  }, [replaceHistoryFromServer, stop, threadId])
-  const decidePlan = useCallback(
-    async (decision: 'approve' | 'revise'): Promise<void> => {
-      const current = planSession(rendererPlansStore.getState(), threadId)
-      if (!current.ref) throw new Error('计划版本未就绪')
-      if (busy || askState.pending.length > 0 || waitingApproval)
-        throw new Error('请先处理其它挂起交互')
-      if (decision === 'approve') await rendererPlansStore.getState().approve(threadId, current.ref)
-      else await rendererPlansStore.getState().revise(threadId, current.ref, current.feedback)
-      const next = planSession(rendererPlansStore.getState(), threadId).ref
-      if (!next) throw new Error('服务器未返回计划恢复版本')
-      await rendererPlansStore.getState().resume(threadId, next)
-    },
-    [threadId, busy, askState.pending.length, waitingApproval]
-  )
   const refreshQuestions = useCallback(() => {
     // PB-030 配合：未物化的本地 thread / 占位 id 不能打 /ask-user/pending（main 会 session/create）
     if (!hasRealThread) return
@@ -824,9 +774,7 @@ function ActiveChat({
   }, [ready, refreshQuestions, interactionsEnabled, hasRealThread])
   const waitingInteraction =
     waitingApproval ||
-    waitingPlan ||
     kernelInteractionPending ||
-    (planActionError !== null && plan.state !== null && plan.state.mode !== 'normal') ||
     ((!interactionsEnabled || !askState.loaded || askState.error !== null) &&
       hasPendingAskUser(messages[messages.length - 1])) ||
     (interactionsEnabled &&
@@ -845,21 +793,13 @@ function ActiveChat({
     // **绝不**走旧 ask-user cancel → 旧线程库 history 覆盖（内核轮次不写旧库 → 空数组清列）。
     // 内核侧挂起的 ask_user/审批由内核 session/cancel 结算（PB-025 接 UI 应答后在此补取消语义）。
     if (kernelMode) {
-      setPlanActionError(null)
       void stop()
       return
     }
-    setPlanActionError(null)
     void useAskUserStore.getState().cancel(
       threadId,
       async () => {
         await stop()
-        await settledPlan(threadId)
-        if (realThread) await rendererPlansStore.getState().load(threadId)
-        const current = planSession(rendererPlansStore.getState(), threadId).state
-        if (current && current.mode !== 'normal' && current.mode !== 'cancelled') {
-          await rendererPlansStore.getState().cancel(threadId, current.version)
-        }
       },
       async () => {
         try {
@@ -869,15 +809,7 @@ function ActiveChat({
         }
       }
     )
-  }, [
-    threadId,
-    stop,
-    replaceHistoryFromServer,
-    interactionsEnabled,
-    kernelMode,
-    hasRealThread,
-    realThread
-  ])
+  }, [threadId, stop, replaceHistoryFromServer, interactionsEnabled, kernelMode, hasRealThread])
   /**
    * PB-018：探活 + 取内核命令目录。失败/flag 关一律回旧路径（`kernelEnabled` 内部吞错），
    * 不因为网关不可用把对话页推到错误态。
@@ -944,7 +876,7 @@ function ActiveChat({
    * round 62：动作闸门只算一次。三档"状态忙"：流式中 / 挂起等审批 / 压缩中 —— 原来这一串在
    * 六处各写了一遍，加一条规则就得满文件找。**动作行的显隐看它**（渲染期的 state 就是它的全部）。
    */
-  const locked = busy || waitingInteraction || compacting || enteringPlan
+  const locked = busy || waitingInteraction || compacting
   /**
    * round 62：**执行时**的最后一道闸 = `locked` + `sending.current`。
    *
@@ -961,31 +893,15 @@ function ActiveChat({
    * 草稿会话（还没物化）与已有会话走同一个动作：先物化（草稿在服务端还不存在，规划状态没处读写），
    * 再读最新计划状态、按服务端 CAS 版本进入 —— 与旧的工具条按钮逐字同一套顺序，只是入口换了地方。
    * 闸门用 `isLocked()`（现读 ref）：正在跑 / 等审批 / 压缩中都不放行；失败不静默，落到
-   * `planActionError`（页脚那张错误卡 + 重试说清是这一步卡住了）。
+   * 命令结果卡（PB-041：旧 plans 状态机入口已下架，只走内核命令平面）。
    */
-  const enterPlan = useCallback(async (): Promise<void> => {
-    if (isLocked() || enterPlanLock.current) return
-    // PB-018：内核模式 /plan 归内核命令平面（不再走旧 plans 状态机）；两种投影形态都算进入规划。
-    if (kernelMode) {
-      void runCommandLine('/plan')
-      return
-    }
+  const enterPlan = useCallback((): void => {
+    if (!kernelMode || isLocked() || enterPlanLock.current) return
     enterPlanLock.current = true
-    setEnteringPlan(true)
-    setPlanActionError(null)
-    try {
-      if (!realThread) await useSessionsStore.getState().materialize(threadId)
-      await rendererPlansStore.getState().load(threadId)
-      const current = planSession(rendererPlansStore.getState(), threadId).state
-      if (!current || current.mode !== 'normal') throw new Error('计划状态未就绪，请刷新')
-      await rendererPlansStore.getState().enter(threadId, current.version)
-    } catch (failure) {
-      setPlanActionError(toError(failure).message)
-    } finally {
+    void runCommandLine('/plan').finally(() => {
       enterPlanLock.current = false
-      setEnteringPlan(false)
-    }
-  }, [isLocked, kernelMode, realThread, threadId, runCommandLine])
+    })
+  }, [isLocked, kernelMode, runCommandLine])
   /** 会话任务清单的收起状态（round 81：唯一来源是 tasks-store 的 collapsed；＋菜单那条也翻它） */
   const taskCollapsed = useStore(tasksStore, (state) => taskSession(state, threadId).collapsed)
   const toggleTasks = useCallback((): void => {
@@ -996,9 +912,8 @@ function ActiveChat({
    * round 86（用户实报 016 问题二的后半）：**进入规划模式的那一刻**把任务清单自动展开一次
    * （上一轮只做到"规划里这一格不消失 + 一键展开"）。
    *
-   * 只在"**读到过**非规划 → 规划"这一条上升沿动手：`active` 用三态 —— `null` = 这条会话的
-   * 计划状态还没读到过（`planSession` 对没缓存的 thread 回 `EMPTY_PLAN_SESSION`，`state` 是 null），
-   * `false` = 读到过且是普通模式。所以：
+   * 只在"**读到过**非规划 → 规划"这一条上升沿动手：`active` 用三态 —— `null` = 内核投影还没读到，
+   * `false` = 读到过且不在规划。
    *   - 主动进规划（`enterPlan`，普通模式 → 规划中）：`false → true`，展开；
    *   - 首次读到 / 切到（切回）一条**本来就在规划里**的会话、以及切会话本身：`null → true`
    *     或换了 threadId，都**不动** —— 那份 `collapsed` 是用户自己的（tasks-store 里持久留着），
@@ -1010,16 +925,14 @@ function ActiveChat({
    * 不另存平行状态）。
    */
   /**
-   * PB-018：规划中的**唯一判据**（内核模式看 kernel 投影，两种形态都算；旧路径看 plans 状态机）。
-   * `null` = 还没读到；下游只把 `true` 当"在规划里"。
+   * PB-041：规划中的**唯一判据**只剩内核投影（旧 plans 状态机入口已下架）。
+   * `null` = 还没读到；flag 关 = false（没有可用的规划通道）。
    */
   const planIsActive: boolean | null = kernelMode
     ? kernelPlan === null
       ? null
       : kernelPlanActive(kernelPlan)
-    : plan.state === null
-      ? null
-      : planActiveOf(plan.state)
+    : false
   const planExpandBaseline = useRef<{ threadId: string; active: boolean | null } | null>(null)
   useEffect(() => {
     const active = planIsActive
@@ -1039,12 +952,10 @@ function ActiveChat({
    */
   const modeMenu = useMemo<ComposerModeMenu | null>(() => {
     if (!ready || !interactionsEnabled) return null
-    // PB-018：内核模式按内核 plan 投影判断"是否已在规划里"；旧路径维持 plans 状态机口径。
-    const canEnterPlan = kernelMode
-      ? planIsActive !== true
-      : !realThread || plan.state?.mode === 'normal'
+    // PB-041：规划只走内核投影；旧 plans 入口已下架（不再有 flag 关的替代通道）。
+    const canEnterPlan = kernelMode && planIsActive !== true
     return {
-      plan: canEnterPlan ? { disabled: locked, onSelect: () => void enterPlan() } : null,
+      plan: canEnterPlan ? { disabled: locked, onSelect: () => enterPlan() } : null,
       tasks: { expanded: !taskCollapsed, onSelect: toggleTasks }
     }
   }, [
@@ -1052,8 +963,6 @@ function ActiveChat({
     interactionsEnabled,
     kernelMode,
     planIsActive,
-    realThread,
-    plan.state?.mode,
     locked,
     enterPlan,
     taskCollapsed,
@@ -1780,81 +1689,17 @@ function ActiveChat({
             {/* round 81：工具条那一行常驻模式按钮没了 —— 「进入规划模式」「任务清单」都在输入卡的
                 ＋ 菜单里（见 Composer 的 mode props / ComposerControls 的 PlusMenu）。这一格就只剩
                 任务清单本体：有任务给紧凑摘要、点摘要展开；没有任务且收起时整块不渲染。
-                round 85（016 问题二）：**在规划模式里这一格不收** —— 规划与任务清单是包含关系，
-                进了规划就该看得见那份清单（判据 planActiveOf 与模式摘要同一口径）。 */}
+                PB-041：规划状态只读内核投影；旧计划审批 / plans 状态机入口已下架。 */}
             <TaskDockSlot
               key={threadId}
               threadId={ready ? threadId : null}
               materialized={realThread}
               planActive={planIsActive === true}
             />
-            {/* 草稿会话进入规划失败（还没物化那一档）：原先是工具条里的一行，现在挂在清单上方同一列宽 */}
-            {planActionError && !realThread ? (
-              <p
-                data-testid="plan-action-error"
-                role="alert"
-                className="mx-auto mb-2 w-full max-w-(--chat-input-max-width) text-c1 text-warning"
-              >
-                {planActionError}
-              </p>
-            ) : null}
             {ready && (realThread || kernelMode) && interactionsEnabled ? (
               <div className="mx-auto mb-2 w-full max-w-(--chat-input-max-width)">
-                {/* 模式状态摘要（round 81）：只在真在规划里时露一行（普通模式不铺常驻件）；
-                    计划内容与批准/修订动作在下面的 PlanApprovalDock 里（默认收起、点开看全文） */}
-                <PlanModeChip state={plan.state} kernelPlan={kernelMode ? kernelPlan : undefined} />
-                {plan.error ? (
-                  <ErrorCard error={new Error(plan.error)} onRetry={refreshPlan} />
-                ) : null}
-                {(plan.state?.mode === 'awaiting_approval' && plan.state.approval) ||
-                plan.state?.pendingRevision ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy || plan.busy || waitingApproval || askState.pending.length > 0}
-                    onClick={() => {
-                      if (!plan.ref || waitingApproval || askState.pending.length > 0) return
-                      void rendererPlansStore
-                        .getState()
-                        .resume(threadId, plan.ref)
-                        .catch(() => {})
-                    }}
-                  >
-                    继续已确认的计划决定
-                  </Button>
-                ) : null}
-                {planActionError ? (
-                  <ErrorCard
-                    error={new Error(planActionError)}
-                    onRetry={() => {
-                      void cancelPlan().then(
-                        () => setPlanActionError(null),
-                        (failure) => setPlanActionError(toError(failure).message)
-                      )
-                    }}
-                  />
-                ) : null}
-                <PlanApprovalDock
-                  state={plan.state}
-                  planRef={plan.ref}
-                  busy={busy || plan.busy}
-                  error={plan.error ?? planActionError}
-                  feedback={plan.feedback}
-                  onFeedbackChange={(feedback) =>
-                    rendererPlansStore.getState().setFeedback(threadId, feedback)
-                  }
-                  onApprove={async () => decidePlan('approve')}
-                  onRevise={async () => decidePlan('revise')}
-                  onCancel={async () => {
-                    setPlanActionError(null)
-                    try {
-                      await cancelPlan()
-                    } catch (failure) {
-                      setPlanActionError(toError(failure).message)
-                      throw failure
-                    }
-                  }}
-                />
+                {/* 模式状态摘要（round 81）：只在真在规划里时露一行（普通模式不铺常驻件） */}
+                <PlanModeChip kernelPlan={kernelPlan} />
               </div>
             ) : null}
             {/* PB-026：内核模式挂起在 dock；结果在消息流（MessageList 的 interactionResults）。

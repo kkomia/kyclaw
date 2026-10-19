@@ -46,31 +46,6 @@ vi.mock('@renderer/lib/ask-user-api', async (original) => ({
   cancelAskUser: askApi.cancelAskUser
 }))
 
-/**
- * 本 spec 只验停止路径；计划状态不是被测对象。真实 plansApi 在 jsdom 里没有 `window.kyclaw`
- * 会抛 unhandled rejection（ChatPage 的放宽刷新），这里给一个正常的 normal 计划，避免噪声。
- */
-const plansApiMock = vi.hoisted(() => ({
-  get: vi.fn(async (threadId: string) => ({
-    state: {
-      threadId,
-      version: 0,
-      mode: 'normal' as const,
-      planId: null,
-      revision: 0,
-      body: null,
-      feedback: null,
-      approval: null,
-      updatedAt: new Date().toISOString()
-    },
-    ref: null
-  }))
-}))
-vi.mock('@renderer/lib/plans-api', async (original) => ({
-  ...(await original<typeof import('@renderer/lib/plans-api')>()),
-  plansApi: plansApiMock
-}))
-
 const kernelApi = vi.hoisted(() => ({
   kernelEnabled: vi.fn(async () => false),
   fetchKernelCatalog: vi.fn(async () => []),

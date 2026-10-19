@@ -231,15 +231,13 @@ describe('PB-018 plan：两种合法投影形态都接受', () => {
     { active: false, pending: true }
   ])('kernelPlanActive(%o) === true；PlanModeChip 显示「规划中」', (plan) => {
     expect(kernelPlanActive(plan)).toBe(true)
-    render(<PlanModeChip state={null} kernelPlan={plan} />)
+    render(<PlanModeChip kernelPlan={plan} />)
     expect(screen.getByTestId('plan-mode-chip')).toHaveTextContent('规划中')
   })
 
   it('裸的 {active:false,pending:false} 不算规划中（反向对照）', () => {
     expect(kernelPlanActive({ active: false, pending: false })).toBe(false)
-    const { container } = render(
-      <PlanModeChip state={null} kernelPlan={{ active: false, pending: false }} />
-    )
+    const { container } = render(<PlanModeChip kernelPlan={{ active: false, pending: false }} />)
     expect(container.querySelector('[data-testid=plan-mode-chip]')).toBeNull()
   })
 

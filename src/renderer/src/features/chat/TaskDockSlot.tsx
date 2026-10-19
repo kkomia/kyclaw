@@ -9,7 +9,7 @@ export interface TaskDockSlotProps {
   materialized?: boolean
   /**
    * 会话此刻**在规划模式里**（round 85，用户实报 016 问题二：进入规划后应当出现任务清单 ——
-   * 两者是包含关系）。判据是 `plan-ui` 的 `planActiveOf`（与模式状态摘要同一口径）。
+   * 两者是包含关系）。判据是 `plan-ui` 的 `kernelPlanActive`（与模式状态摘要同一口径）。
    *
    * 为什么需要它：任务清单平时是"有任务才铺、默认只给一行紧凑摘要"（入口在 ＋ 菜单），
    * 但**规划里那份清单是规划的工作面**，不该因为"还没写任务 + 收起"就整块消失 —— 规划中一律

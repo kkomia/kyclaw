@@ -90,10 +90,6 @@ export function transportFor(endpoint: AgentEndpoint): ChatTransport<UIMessage> 
       if (typeof resume === 'object' && resume !== null) {
         return { api: `${endpoint.baseUrl}/ask-user/resume`, body: resume }
       }
-      const plan = body?.planResume
-      if (typeof plan === 'object' && plan !== null) {
-        return { api: `${endpoint.baseUrl}/plans/resume`, body: plan }
-      }
       return { body: { ...body, id, messages, trigger, messageId } }
     }
   })

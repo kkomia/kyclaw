@@ -1,36 +1,13 @@
-import type { SessionPlan } from '@shared/plan'
 import type { KernelPlanProjection } from '@shared/kernel-ui'
 
 /**
- * 计划状态的展示文案（纯函数）：从 PlanModeChip.tsx 搬出来 —— 组件文件只该导出组件，
- * 常量 / 函数另开模块（react-refresh/only-export-components；同目录的 ask-user-ui.ts 是同一手法）。
- */
-export function planModeLabel(state: SessionPlan): string {
-  if (state.mode === 'awaiting_approval') return state.approval ? '已批准，待继续' : '等待批准'
-  return { normal: '普通模式', planning: '规划中', executing: '执行中', cancelled: '已取消' }[
-    state.mode
-  ]
-}
-
-/**
- * **真的在规划里**（round 85，唯一判据）：状态读到过、且不是普通模式。
- *
- * 为什么要收成一条：这句话现在有两个出口 —— 模式状态摘要（PlanModeChip）与任务清单的可见性
- * （TaskDockSlot 的 `planActive`：规划与任务清单是包含关系，进了规划就该看得见那份清单）。
- * 两个出口必须同一口径，所以判据只写在这里，两边都调它。
- * 返回值是**类型谓词**：判真即"状态读到过"，调用方（PlanModeChip）随之收窄掉 null。
- */
-export function planActiveOf(state: SessionPlan | null): state is SessionPlan {
-  return state !== null && state.mode !== 'normal'
-}
-
-/**
- * PB-018：内核 plan 投影的**唯一判据**（Eve verdict R1）。
+ * PB-018 / PB-041：内核 plan 投影的**唯一判据**（Eve verdict R1）。
  *
  * `/plan` 后内核可能给两种合法形态：
  *   - `{active:true, pending:false}` —— 空闲时当场生效；
  *   - `{active:false, pending:true}` —— 有在途 turn 时"下一步生效"。
  * 两者都表示"在规划里"；UI 与测试只准调这一个函数，禁止各自钉一种形态（F1 就是这么 flaky 的）。
+ * 旧 plans 状态机（`SessionPlan`）已随 PB-041 下架，这里不再有第二套判据。
  */
 export function kernelPlanActive(plan: KernelPlanProjection | null | undefined): boolean {
   return plan !== null && plan !== undefined && (plan.active || plan.pending)
@@ -41,28 +18,3 @@ export function kernelPlanActive(plan: KernelPlanProjection | null | undefined):
  * 各写一份迟早会长歪，所以只有这一个出处。
  */
 export const PLAN_ENTER_LABEL = '进入规划模式'
-
-/** 收起时那一行摘要最多铺多少个字（码点；超了加省略号） */
-const PLAN_SUMMARY_CHARS = 60
-
-/**
- * 计划正文的**一行摘要**（round 81）：收起状态下计划只铺这一行，点开才看完整 Markdown。
- * 取第一行非空文本，去掉行首的 Markdown 记号（`#` / `-` / `*` / 引用符），按**码点**截断
- * （不劈代理对）。没有正文时给一句实话（计划还没提交，不是"加载中"）。
- */
-export function planSummaryOf(body: string | null): string {
-  const line = (body ?? '')
-    .split('\n')
-    .map((text) => text.trim())
-    .find((text) => text !== '')
-  if (line === undefined) return '计划还没提交，提交后由你决定是否批准。'
-  const flat = line
-    .replace(/^[#>*\-\s]+/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  const text = flat === '' ? line : flat
-  const points = [...text]
-  return points.length <= PLAN_SUMMARY_CHARS
-    ? text
-    : `${points.slice(0, PLAN_SUMMARY_CHARS).join('')}…`
-}

@@ -31,13 +31,6 @@ import { fetchThreadMessages } from '../../lib/threads-api'
 import { tasksStore } from '../../lib/tasks-store'
 import { canResumeAfterApproval, hasPendingApproval } from './approval'
 import { askUserPending, askUserWaiting, useAskUserStore } from './ask-user-store'
-import {
-  registerPlanChat,
-  forgetPlanChat,
-  planWaiting,
-  rendererPlansStore,
-  settledPlan
-} from './plan-runtime'
 import { resetThreadRunStore, useThreadRunStore } from './thread-run-store'
 
 export interface TurnOutcome {
@@ -132,20 +125,12 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
         ) {
           await useAskUserStore.getState().refresh(threadId)
         }
-        if (runtime.refreshInteractions && rendererPlansStore.getState().sessions[threadId]) {
-          await settledPlan(threadId)
-          await rendererPlansStore
-            .getState()
-            .load(threadId)
-            .catch(() => {})
-        }
         const interaction = useAskUserStore.getState().threads.get(threadId)
         runtime.onTurnEnd(threadId, {
           isError,
           isAbort,
           awaitingApproval: hasPendingApproval(message),
-          ...(planWaiting(threadId) ||
-          askUserPending(threadId, message) ||
+          ...(askUserPending(threadId, message) ||
           (interaction !== undefined &&
             (interaction.pending.length > 0 || interaction.error !== null || interaction.stopping))
             ? { waitingInteraction: true }
@@ -162,10 +147,8 @@ export function threadChat(threadId: string, runtime: ThreadChatRuntime): Promis
       sendAutomaticallyWhen: ({ messages }) =>
         !askUserPending(threadId, messages[messages.length - 1]) &&
         !askUserWaiting(threadId) &&
-        !planWaiting(threadId) &&
         canResumeAfterApproval(messages)
     })
-    registerPlanChat(threadId, chat)
     return chat
   })()
 
@@ -186,7 +169,6 @@ export function dropThreadChat(threadId: string, options: { stop?: boolean } = {
   statusUnsubscribes.get(threadId)?.()
   statusUnsubscribes.delete(threadId)
   useThreadRunStore.getState().setRunning(threadId, false)
-  forgetPlanChat(threadId, options.stop === true)
   if (options.stop === true) tasksStore.getState().forget(threadId)
   if (options.stop === true && entry !== undefined) {
     // 取出实例再停：promise 还没解析（历史还在拉）时停不了，交给那句 catch 消化
@@ -207,7 +189,6 @@ export function createThreadChatRuntime(
 
 /** 测试用：清空注册表（模块级状态不随 render 重置）——订阅解注册与运行态一并清 */
 export function resetThreadChats(): void {
-  for (const threadId of chats.keys()) forgetPlanChat(threadId, true)
   for (const unsubscribe of statusUnsubscribes.values()) unsubscribe()
   statusUnsubscribes.clear()
   chats.clear()
