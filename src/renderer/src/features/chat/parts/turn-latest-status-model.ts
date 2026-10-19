@@ -1,5 +1,6 @@
 import { isToolPart } from './tool-part'
 import type { TurnProcessEntry } from './TurnProcess'
+import type { ApprovalOutcome } from '../b3-5/approval-outcome'
 
 export function formatChineseDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.round(ms / 1000))
@@ -38,6 +39,11 @@ export type StatusStageKey =
   | 'tool-result'
   | 'tool-error'
   | 'tool-denied'
+  /** B3.5：审批四态（结果行同源；只有 rejected 可表达「你拒绝」） */
+  | 'approval-allowed'
+  | 'approval-rejected'
+  | 'approval-cancelled'
+  | 'approval-unavailable'
   | 'goal-round'
   | 'idle'
 
@@ -70,6 +76,14 @@ const TOOL_STAGES: Record<string, StatusStage> = {
   'output-denied': { key: 'tool-denied', label: '工具被拒绝，正在继续', entryMotion: 'line' }
 }
 
+/** B3.5：内核审批四态 → 状态行阶段（结果行同源；只要 rejected 可出现「你拒绝」） */
+const APPROVAL_OUTCOME_STAGES: Record<ApprovalOutcome, StatusStage> = {
+  'allowed-once': { key: 'approval-allowed', label: '已允许一次', entryMotion: 'line' },
+  rejected: { key: 'approval-rejected', label: '你拒绝了这次操作', entryMotion: 'line' },
+  cancelled: { key: 'approval-cancelled', label: '审批已取消', entryMotion: 'line' },
+  unavailable: { key: 'approval-unavailable', label: '审批被自动拒绝', entryMotion: 'line' }
+}
+
 /** 工具 part 的状态（静态 `tool-*` 与 `dynamic-tool` 都有 state 字段） */
 function toolStateOf(part: TurnProcessEntry['part']): string | null {
   if (!isToolPart(part)) return null
@@ -87,12 +101,19 @@ export function latestStepStage(
   goalRound?: number
 ): StatusStage {
   if (goalRound !== undefined && goalRound > 0) {
-    return { key: 'goal-round', label: `目标续跑 · 第 ${String(goalRound)} 轮`, entryMotion: 'line' }
+    return {
+      key: 'goal-round',
+      label: `目标续跑 · 第 ${String(goalRound)} 轮`,
+      entryMotion: 'line'
+    }
   }
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const part = entries[index]?.part
     if (part === undefined) continue
     if (part.type === 'reasoning') return REASONING
+    // B3.5：审批结果优先于工具 state（同一 part 既有 outcome 又有 approval-responded）
+    const outcome = (part as { approvalOutcome?: ApprovalOutcome }).approvalOutcome
+    if (outcome !== undefined) return APPROVAL_OUTCOME_STAGES[outcome]
     const state = toolStateOf(part)
     if (state === null) continue
     return TOOL_STAGES[state] ?? TOOL_STAGES['input-available']!
@@ -111,8 +132,7 @@ export function latestStepLabel(entries: readonly TurnProcessEntry[]): string {
  */
 export function entriesSignature(entries: readonly TurnProcessEntry[]): string {
   const last = entries[entries.length - 1]?.part as
-    | { type?: string; text?: string; state?: string }
-    | undefined
+    { type?: string; text?: string; state?: string } | undefined
   const text = typeof last?.text === 'string' ? last.text.length : 0
   return `${String(entries.length)}:${last?.type ?? ''}:${last?.state ?? ''}:${String(text)}`
 }

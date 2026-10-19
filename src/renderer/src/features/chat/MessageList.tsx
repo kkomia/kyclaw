@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useRef } from 'react'
+import type { ReactNode } from 'react'
 import type { ChatStatus, UIMessage } from 'ai'
 import type { ThreadCompaction } from '@shared/threads'
 import { motionDataAttributes, useEffectiveMotion } from '@renderer/lib/motion'
@@ -67,6 +68,11 @@ export interface MessageListProps {
    * 压缩进行中不用它（进行中画在"现在"）。
    */
   compactionIndex?: number
+  /**
+   * PB-026：交互结果行（内核审批/提问结算）——挂在消息流末尾（不是 dock）。
+   * 由 ChatPage 传入；空/不传 = 不渲染。
+   */
+  interactionResults?: ReactNode
 }
 
 /** 贴底阈值（px）：离底超过它就算"用户在翻历史" */
@@ -162,7 +168,8 @@ export function MessageList({
   onQuoteSelection,
   compaction = null,
   compacting = false,
-  compactionIndex
+  compactionIndex,
+  interactionResults
 }: MessageListProps): React.JSX.Element {
   const lastMessage = messages[messages.length - 1]
   const lastAssistantId = lastMessage?.role === 'assistant' ? lastMessage.id : undefined
@@ -266,6 +273,8 @@ export function MessageList({
           {markerIndex === messages.length ? (
             <CompactionMarker compaction={compaction} compacting={compacting} />
           ) : null}
+          {/* PB-026：交互结果（审批/提问结算）属于消息时间线，不放 dock */}
+          {interactionResults}
           {waiting ? (
             <div
               data-testid="waiting-lane"

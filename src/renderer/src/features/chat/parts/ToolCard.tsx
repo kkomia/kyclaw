@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+﻿import { useState, type CSSProperties } from 'react'
 import {
   Brain,
   ChevronRight,
@@ -19,6 +19,10 @@ import { useEffectiveMotion } from '@renderer/lib/motion'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { useWorkbenchRoot } from '@renderer/features/workbench/use-workbench-root'
 import { formatToolName } from '@shared/mcp'
+import { ApprovalOutcomeRow } from '../b3-5/ApprovalOutcomeRow'
+import { approvalOutcomeView } from '../b3-5/approval-outcome'
+import { AskUserStateRow } from '../b3-5/AskUserStateRow'
+import { askUserStateView } from '../b3-5/ask-user-state'
 import { displayPath } from '../display-path'
 import { TraceFold } from './TraceFold'
 import { askUserResultLabel } from '../ask-user'
@@ -149,12 +153,18 @@ export interface ToolCardProps {
    * 不传 = 0（单独渲染 ToolCard 的旧用法立即出现）。
    */
   staggerIndex?: number
+  /** B3.5：自动拒绝/取消后的「重新发起」（由上层接；不传 = 按钮保留可访问入口但无动作） */
+  onApprovalRetry?: (toolName: string) => void
+  /** B3.5：提问侧「继续回答/重新提问」入口（由上层接） */
+  onAskUserPrimary?: (toolName: string) => void
 }
 
 export function ToolCard({
   part,
   running = false,
-  staggerIndex = 0
+  staggerIndex = 0,
+  onApprovalRetry,
+  onAskUserPrimary
 }: ToolCardProps): React.JSX.Element {
   const [override, setOverride] = useState<boolean | null>(null)
   const motion = useEffectiveMotion()
@@ -304,6 +314,32 @@ export function ToolCard({
           </pre>
         ) : null}
       </TraceFold>
+      {/* B3.5：内核审批四态结果行（有 outcome 才出现；旧消息无该字段 → 行为与现在一致） */}
+      {part.approvalOutcome === undefined ? null : (
+        <ApprovalOutcomeRow
+          view={approvalOutcomeView({
+            outcome: part.approvalOutcome,
+            toolName: part.toolName,
+            appClosed: part.approvalAppClosed,
+            cause: part.approvalCause,
+            at: part.approvalAt
+          })}
+          onRetry={onApprovalRetry === undefined ? undefined : () => onApprovalRetry(part.toolName)}
+        />
+      )}
+      {/* B3.5：提问侧结果行（等待/超时仍可答/迟到回答/已 settle） */}
+      {part.askUserState === undefined ? null : (
+        <AskUserStateRow
+          view={askUserStateView({
+            state: part.askUserState,
+            remainingMs: part.askUserRemainingMs,
+            answerSummary: part.askUserAnswerSummary
+          })}
+          onPrimary={
+            onAskUserPrimary === undefined ? undefined : () => onAskUserPrimary(part.toolName)
+          }
+        />
+      )}
     </div>
   )
 }

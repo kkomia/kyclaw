@@ -8,6 +8,8 @@
  * **被调用的真名与真入参**，壳由 `toToolCardPart` 剥掉（原读取逻辑原样留在 rawToolCardPart）。
  */
 import { resolveMcpToolCallInput, resolveMcpToolCallName } from '@shared/mcp'
+import type { ApprovalOutcome } from '../b3-5/approval-outcome'
+import type { AskUserState } from '../b3-5/ask-user-state'
 
 export interface ToolCardPart {
   toolName: string
@@ -15,6 +17,15 @@ export interface ToolCardPart {
   input?: unknown
   output?: unknown
   errorText?: string
+  /** B3.5：内核审批四态（有才渲染结果行；旧消息没有该字段 → 行为与现在一致） */
+  approvalOutcome?: ApprovalOutcome
+  approvalCause?: string
+  approvalAt?: number
+  approvalAppClosed?: boolean
+  /** B3.5：提问侧状态（等待/超时仍可答/迟到回答/已 settle） */
+  askUserState?: AskUserState
+  askUserRemainingMs?: number
+  askUserAnswerSummary?: string
 }
 
 /** 结果预览上限（文档《对话UI-工具链与显示口径 v0.1》§5.1：600 字，超了只切、不提示） */
@@ -98,6 +109,46 @@ type MessagePart = {
   input?: unknown
   output?: unknown
   errorText?: unknown
+  /** B3.5（内核 seam）：审批四态与提问状态由适配层塞进 part，旧 part 没有这些字段 */
+  approvalOutcome?: unknown
+  approvalCause?: unknown
+  approvalAt?: unknown
+  approvalAppClosed?: unknown
+  askUserState?: unknown
+  askUserRemainingMs?: unknown
+  askUserAnswerSummary?: unknown
+}
+
+const OUTCOME_VALUES = ['allowed-once', 'rejected', 'cancelled', 'unavailable'] as const
+const ASK_STATE_VALUES = ['waiting', 'timed-out', 'late-answer', 'settled', 'unavailable'] as const
+
+/** B3.5 可选字段透传（形状不对就当没有，不猜） */
+function b35FieldsOf(part: MessagePart): Partial<ToolCardPart> {
+  const fields: Partial<ToolCardPart> = {}
+  if (
+    typeof part.approvalOutcome === 'string' &&
+    (OUTCOME_VALUES as readonly string[]).includes(part.approvalOutcome)
+  ) {
+    fields.approvalOutcome = part.approvalOutcome as ToolCardPart['approvalOutcome']
+  }
+  if (typeof part.approvalCause === 'string' && part.approvalCause !== '')
+    fields.approvalCause = part.approvalCause
+  if (typeof part.approvalAt === 'number' && Number.isFinite(part.approvalAt))
+    fields.approvalAt = part.approvalAt
+  if (part.approvalAppClosed === true) fields.approvalAppClosed = true
+  if (
+    typeof part.askUserState === 'string' &&
+    (ASK_STATE_VALUES as readonly string[]).includes(part.askUserState)
+  ) {
+    fields.askUserState = part.askUserState as ToolCardPart['askUserState']
+  }
+  if (typeof part.askUserRemainingMs === 'number' && Number.isFinite(part.askUserRemainingMs)) {
+    fields.askUserRemainingMs = part.askUserRemainingMs
+  }
+  if (typeof part.askUserAnswerSummary === 'string' && part.askUserAnswerSummary !== '') {
+    fields.askUserAnswerSummary = part.askUserAnswerSummary
+  }
+  return fields
 }
 
 /** 静态工具 part（tool-<name>）与动态工具 part（dynamic-tool）都算工具调用 */
@@ -119,7 +170,8 @@ function rawToolCardPart(part: MessagePart): ToolCardPart | null {
       state: typeof part.state === 'string' ? part.state : 'unknown',
       input: part.input,
       output: part.output,
-      errorText: typeof part.errorText === 'string' ? part.errorText : undefined
+      errorText: typeof part.errorText === 'string' ? part.errorText : undefined,
+      ...b35FieldsOf(part)
     }
   }
   if (typeof part.type !== 'string' || !part.type.startsWith('tool-')) return null
@@ -128,7 +180,8 @@ function rawToolCardPart(part: MessagePart): ToolCardPart | null {
     state: typeof part.state === 'string' ? part.state : 'unknown',
     input: part.input,
     output: part.output,
-    errorText: typeof part.errorText === 'string' ? part.errorText : undefined
+    errorText: typeof part.errorText === 'string' ? part.errorText : undefined,
+    ...b35FieldsOf(part)
   }
 }
 
