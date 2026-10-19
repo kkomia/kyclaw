@@ -5,7 +5,8 @@
  * 这里只把 adapter 产出的帧原样写回（`kernel-chat` 不碰 token/cookie）。
  *
  * B3.2：增量流式（onFrame 边收边发）、工具事件帧、断流取消（reader cancel / request abort → cancelTurn）。
- * 线程/记忆：内核路径**不复用**现有 thread memory（内核自己管会话日志）；跨刷新 resume 未覆盖（见 evidence）。
+ * 线程/记忆（B3.4）：body.memory.thread 直接当内核 sessionId；同 thread 复用同一 session，刷新后 reattach 用内核 opening 的 startedAfterSeq/nextIndex 接上（不自造 cursor）。
+ * 旧 thread（SQLite 有、内核无）路径：本模块不迁移旧历史；由上层决定只读展示 + 新会话语义。
  */
 import type { Context } from 'hono'
 import type { KernelAdapter } from './kernel-adapter'
@@ -46,6 +47,15 @@ export function lastUserText(body: unknown): string | null {
   return null
 }
 
+/** B3.4：从现有 chat body 取 threadId（memory.thread），作为内核 sessionId */
+export function threadIdFromBody(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null
+  const memory = (body as { memory?: unknown }).memory
+  if (typeof memory !== 'object' || memory === null) return null
+  const thread = (memory as { thread?: unknown }).thread
+  return typeof thread === 'string' && thread.trim() !== '' ? thread : null
+}
+
 export function createKernelChatHandler(
   adapter: KernelAdapter
 ): (context: Context) => Promise<Response> {
@@ -58,6 +68,7 @@ export function createKernelChatHandler(
     }
     const text = lastUserText(body)
     if (text === null) return errorResponse('内核路径：缺少用户消息')
+    const threadId = threadIdFromBody(body) ?? undefined
 
     const signal = context.req.raw.signal
     const encoder = new TextEncoder()
@@ -84,11 +95,11 @@ export function createKernelChatHandler(
         }
         // 客户端断开 → 协作式取消（内核会结算，已交付文本保留）
         const onAbort = (): void => {
-          void adapter.cancelTurn()
+          void adapter.cancelTurn(threadId)
         }
         signal.addEventListener('abort', onAbort, { once: true })
         void adapter
-          .startTurn(text, { onFrame: writeFrame })
+          .startTurn(text, { onFrame: writeFrame, ...(threadId === undefined ? {} : { threadId }) })
           .then((result) => {
             // 防御：若调用方没收到 error 帧但结果带 error，补一条（不重复已有 error）
             if (
@@ -115,7 +126,7 @@ export function createKernelChatHandler(
       },
       cancel() {
         // 下游 reader 取消（HTTP 客户端断开）→ 内核侧取消，避免空转
-        void adapter.cancelTurn()
+        void adapter.cancelTurn(threadId)
       }
     })
     return new Response(stream, { status: 200, headers: SSE_HEADERS })
