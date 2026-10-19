@@ -96,7 +96,7 @@ describe('PB-034 失败轮投影', () => {
     }
   })
 
-  it('去重：已有 user/message 的轮不再从 inbox 补投影', () => {
+  it('已有可见 user/message 的轮：不重复投影正文，但**要**把 turnFailure 挂到该消息上', () => {
     const events: Event[] = [
       turnStart(1, 1),
       inboxSplice(2, [userText('已经落过 user/message 的那条', 'u-real')]),
@@ -116,10 +116,66 @@ describe('PB-034 失败轮投影', () => {
     ]
 
     const messages = projectThreadMessages(events)
+    // 正文不重复：仍然只有这一条
     expect(messages).toHaveLength(1)
     expect(messages[0]?.id).toBe('u-real')
-    // 真实 user/message 是成功落盘的那条，不该被贴上"失败轮"元数据
+    /**
+     * PB-034 扩展（Nia 真机）：真内核的失败轮**总有**可见 user/message（重启后也读得到），
+     * 若只在"没有 user/message"时才挂元数据，`TurnFailureCard` 在真机上永远不会出现。
+     * 成功轮的 user 消息不带这个键（见下一条用例）。
+     */
+    expect((messages[0]?.content as { metadata?: { turnFailure?: unknown } }).metadata?.turnFailure)
+      .toEqual({ turn: 1, kind: 'error', code: 'x', message: 'y' })
+  })
+
+  it('已有可见 user/message 的成功轮：不挂 turnFailure（completed 不算失败）', () => {
+    const events: Event[] = [
+      turnStart(1, 1),
+      {
+        type: 'user/message',
+        seq: 2,
+        time: T0 + 2,
+        data: {
+          id: 'u-ok',
+          role: 'user',
+          content: [{ type: 'text', text: '成功的轮' }],
+          source: { kind: 'user' }
+        },
+        surfaceOp: 'append'
+      },
+      turnEnd(1, 3, { kind: 'completed' })
+    ]
+
+    const messages = projectThreadMessages(events)
+    expect(messages).toHaveLength(1)
     expect((messages[0]?.content as { metadata?: unknown }).metadata).toBeUndefined()
+  })
+
+  it('幂等：同一失败轮的重复 turn/end（重放/重算）只挂一次 turnFailure', () => {
+    const events: Event[] = [
+      turnStart(1, 1),
+      {
+        type: 'user/message',
+        seq: 2,
+        time: T0 + 2,
+        data: {
+          id: 'u-dup',
+          role: 'user',
+          content: [{ type: 'text', text: '重复投影' }],
+          source: { kind: 'user' }
+        },
+        surfaceOp: 'append'
+      },
+      turnEnd(1, 3, { kind: 'error', error: { code: 'boom', message: '炸了' } }),
+      // 同一轮再来一条失败的 turn/end（模拟重放/重复事件）
+      turnEnd(1, 3, { kind: 'error', error: { code: 'boom', message: '炸了' } })
+    ]
+
+    const messages = projectThreadMessages(events)
+    expect(messages).toHaveLength(1)
+    const metadata = (messages[0]?.content as { metadata?: { turnFailure?: unknown } }).metadata
+    expect(Object.keys(metadata ?? {})).toEqual(['turnFailure'])
+    expect(metadata?.turnFailure).toEqual({ turn: 1, kind: 'error', code: 'boom', message: '炸了' })
   })
 
   it('成功轮不补投影（completed 不算失败）', () => {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PB-024：DSH `session/page` 原始事件 → 旧 `/api/threads` 回包形状的纯投影。
  *
  * 关键点（不是按到达顺序猜）：
@@ -163,16 +163,66 @@ function projectFailureTurnMessages(
     }
   }
 
+  /** 给一条已投影的 user 消息挂失败元数据（幂等：已有 turnFailure 就不动） */
+  const attachTurnFailure = (message: StoredMessage, failure: FailureTurn): void => {
+    const content = recordOf(message.content)
+    if (content === null) return
+    const metadata = isRecord(content.metadata) ? content.metadata : {}
+    if (metadata.turnFailure !== undefined) return
+    metadata.turnFailure = {
+      turn: failure.turn,
+      kind: failure.kind,
+      ...(failure.code === undefined ? {} : { code: failure.code }),
+      ...(failure.message === undefined ? {} : { message: failure.message })
+    }
+    content.metadata = metadata
+  }
+
+  const inFailureRange = (seq: number | undefined, startSeq: number, endSeq: number): boolean =>
+    seq !== undefined && seq > startSeq && seq < endSeq
+
   for (const failure of [...failures.values()].sort((left, right) => left.endSeq - right.endSeq)) {
     const startSeq = starts.get(failure.turn) ?? Number.NEGATIVE_INFINITY
-    const hasVisibleUser = surface.some((event) => {
-      if (event.type !== 'user/message') return false
-      const seq = seqOf(event)
-      if (!(seq > startSeq && seq < failure.endSeq)) return false
-      const source = recordOf(recordOf(event.data)?.source)
-      return VISIBLE_USER_SOURCES.has(typeof source?.kind === 'string' ? source.kind : '')
-    })
-    if (hasVisibleUser) continue
+    /**
+     * PB-034 扩展（Nia 真机 `0ca493f`）：真内核的失败轮**总有可见 user/message**（重开后也读得到），
+     * 旧规则"该轮有可见 user/message 就什么都不做"会让 `turnFailure` 永远挂不上 ——
+     * 消息内 `TurnFailureCard` 在真机上永远不会出现（dock 卡是 live 态，重开即失）。
+     * 现在：有可见 user/message → **正文不重复投影，只把元数据挂到该轮最后一条 user 消息上**；
+     * 成功轮 / 无 turn/end 的轮不进入这个分支（failures 只收 error/aborted/interrupted）。
+     */
+    const visibleUserSeqs = surface
+      .filter((event) => {
+        if (event.type !== 'user/message') return false
+        if (!inFailureRange(seqOf(event), startSeq, failure.endSeq)) return false
+        const source = recordOf(recordOf(event.data)?.source)
+        return VISIBLE_USER_SOURCES.has(typeof source?.kind === 'string' ? source.kind : '')
+      })
+      .map((event) => seqOf(event))
+    if (visibleUserSeqs.length > 0) {
+      const lastSeq = visibleUserSeqs[visibleUserSeqs.length - 1]
+      const target = [...messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === 'user' &&
+            inFailureRange(seqOfMessage.get(message), startSeq, failure.endSeq) &&
+            (lastSeq === undefined || seqOfMessage.get(message) === lastSeq)
+        )
+      if (target === undefined) {
+        // 兜底：按范围找最后一条（seq 对不上时也不丢元数据）
+        const fallback = [...messages]
+          .reverse()
+          .find(
+            (message) =>
+              message.role === 'user' &&
+              inFailureRange(seqOfMessage.get(message), startSeq, failure.endSeq)
+          )
+        if (fallback !== undefined) attachTurnFailure(fallback, failure)
+      } else {
+        attachTurnFailure(target, failure)
+      }
+      continue
+    }
 
     for (const splice of splices) {
       if (!(splice.seq > startSeq && splice.seq < failure.endSeq)) continue
