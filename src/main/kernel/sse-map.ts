@@ -112,6 +112,16 @@ export function appendEffectiveFrames(
       }
     }
     if (lastStepStart >= 0) target.splice(lastStepStart, target.length - lastStepStart)
+    /**
+     * PB-013 补充护栏（Lead 点名）：截断会把**被重试步骤的 `start-step` 标记一起删掉**。
+     * 如果就这么带着 `reset-step` 留在有效帧里，任何"把有效帧原样重放"的消费端（新消息状态）
+     * 看到的最后一个 step 标记会退回**上一步**，于是 reset-step 清掉的是上一步的正文
+     * （AI SDK 的 reset-step = 删 `getCurrentStepParts()`，即最后一个 start-step 之后的部件）。
+     * 这里在 reset-step 之前补一个空步骤标记：重放端 reset 到的就是这一段（空），
+     * 再往后的正文落到新的 step 里；有效帧的 reset-step 计数与实时语义保持不变。
+     */
+    const endsWithStepStart = target[target.length - 1]?.type === 'start-step'
+    if (!endsWithStepStart) target.push({ type: 'start-step' })
   }
   target.push(...incoming)
 }
@@ -182,7 +192,13 @@ export class KernelSseMapper {
       this.messageId = `kernel-${frame.attemptId}`
       // 每个 attempt 都是独立的正文边界：text id 从 0 重来，finish/usage/error 归属本次 attempt
       this.textIds.clear()
-      this.partSeq = 0
+      /**
+       * **序号不归零**（PB-013 返工补充，Lead 点名的自检）：`reset-step` 只清"当前步骤"的部件，
+       * 前面 step 的 text part 还在消息里；若重试把序号归零，重试正文会拿到一个**已存在的 id**
+       * （如第一步的 `text-0`）。AI SDK 对重复 id 不查错（`ai/dist/index.js` 的 `text-start`
+       * 直接 push 新 part 并覆盖 activeTextParts），结果是同一条消息里出现两个同 id part ——
+       * 选文/引用/再次 reset 都会指错。所以整轮单调递增，重试也只往后排。
+       */
       this.stepStarted = false
       this.pendingUsage = undefined
       this.finished = false
