@@ -417,12 +417,35 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       return cwdBySession.has(threadId) ? threadId : undefined
     }
 
-    /** 同一 threadId（= sessionId）复用同一条 follow；流已死的重新 follow，不新建 session */
+    /**
+     * 同一 threadId（= sessionId）复用同一条 follow；流已死的重新 follow。
+     *
+     * PB-047（P0）：内存里没见过 ≠ 会话不存在。重启后 `states` 为空，旧实现直接
+     * `createSession(threadId)`，内核会给"已存在且非空白"的 id **mint 新会话** → 重启后第一条消息
+     * 进新会话（上下文全丢 + 幽灵 session）。正确顺序：**先 list 判归属 → 存在就按 id follow →
+     * 内核确认不存在（冷会话/新 thread）才 create**。
+     * （list 只为冲突判定与"是否冷会话"，读路径不依赖它。
+     *   `isSessionNotFound` 留给 reattach/读路径用。）
+     */
     const ensureSession = async (threadId: string): Promise<SessionState> => {
       const existing = states.get(threadId)
       if (existing !== undefined && existing.dead !== true) return existing
-      const sessionId = existing?.sessionId ?? (await createSession(threadId))
-      const state = await openFollow(sessionId)
+      if (existing !== undefined) {
+        const state = await openFollow(existing.sessionId)
+        states.set(threadId, state)
+        return state
+      }
+      const listed = await listKernelSessions().catch(() => [] as KernelSessionInfo[])
+      const known = listed.find((item) => item.sessionId === threadId)
+      if (known !== undefined) {
+        if (known.cwd !== undefined && !sameCwd(known.cwd, resolveCwd(threadId))) {
+          throw kernelUserError(new Error('kernel: session/conflict'))
+        }
+        const state = await openFollow(threadId)
+        states.set(threadId, state)
+        return state
+      }
+      const state = await openFollow(await createSession(threadId))
       states.set(threadId, state)
       return state
     }
@@ -744,8 +767,13 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       },
       async reattach(threadId: string): Promise<KernelSessionOpening> {
         const current = states.get(threadId)
-        // 新 follow 先接上（拿到 opening 才算接上）；旧流在拿到前仍可收帧
-        const next = await openFollow(current?.sessionId ?? (await createSession(threadId)))
+        /**
+         * PB-047（P0）：重启后 `states` 为空，旧实现走 `createSession(threadId)` —— 内核对
+         * "同 id 已存在且非空白"的 session **会 mint 一个新 id**，于是读到的是新会话的 seed 事件
+         * （cursor=2、messages=[]），同时留下幽灵 `session-*`。读路径必须**按 id 直接接**（follow），
+         * 不存在就把内核的 not-found 原样抛给上层（`readEvents` 据此回空，不建会话）。
+         */
+        const next = await openFollow(current?.sessionId ?? threadId)
         if (current !== undefined) {
           // 旧流立刻摘掉映射：同一会话两条流会把同一帧推两次，宁可少一条重复
           byStream.delete(current.streamId)

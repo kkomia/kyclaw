@@ -54,6 +54,11 @@ export interface KernelSessionSummary {
   sessionId: string
   title: string | null
   updatedAt: number
+  /**
+   * PB-047：`session/list` 的 `projections.asOfSeq` —— 该会话"能读到哪"的水位，
+   * 可直接当 `session/page` 的 `throughSeq`（重启后没有 live follow opening 时的兜底 cursor）。
+   */
+  asOfSeq?: number
   running?: boolean
   blank?: boolean
   cwd?: string
@@ -121,10 +126,16 @@ function summaryOf(item: unknown): KernelSessionSummary | null {
   const rawTitle = values?.title
   const title = typeof rawTitle === 'string' && rawTitle.trim() !== '' ? rawTitle : null
   const updatedAt = typeof item.updatedAt === 'number' ? item.updatedAt : 0
+  // PB-047：list 的 `projections.asOfSeq` 是"这条会话能读到哪"的水位，可直接当 page 的 throughSeq。
+  const asOfSeq =
+    projections !== undefined && typeof projections.asOfSeq === 'number'
+      ? projections.asOfSeq
+      : undefined
   return {
     sessionId,
     title,
     updatedAt,
+    ...(asOfSeq === undefined ? {} : { asOfSeq }),
     ...(typeof item.running === 'boolean' ? { running: item.running } : {}),
     ...(typeof item.blank === 'boolean' ? { blank: item.blank } : {}),
     ...(typeof item.cwd === 'string' ? { cwd: item.cwd } : {}),
@@ -132,6 +143,14 @@ function summaryOf(item: unknown): KernelSessionSummary | null {
     ...(typeof item.origin === 'string' ? { origin: item.origin } : {}),
     ...(typeof item.formatStatus === 'string' ? { formatStatus: item.formatStatus } : {})
   }
+}
+
+/** follow 接不上时视为"该路径不可用"的错误（不吞其它错误） */
+function isSessionUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /session\/not-found|not\s*found|unknown session|session\/follow timeout|adapter is stopped/i.test(
+    message
+  )
 }
 
 function commandResultOf(value: unknown): { kind: 'success' | 'error'; text: string } | null {
@@ -206,42 +225,92 @@ export function createKernelSessionOps(
   }
 
   const readEvents = async (threadId: string): Promise<KernelSessionEventLike[]> => {
-    const exists = (await listSessions()).some((session) => session.sessionId === threadId)
-    if (!exists) return []
-    if (deps.openingOf === undefined) {
-      throw new KernelSessionOpsError('session/ops-unavailable', 'readEvents 需要 openingOf')
-    }
-    const opening = await deps.openingOf(threadId)
-    const cursor = opening.cursor
-    // R1：-1 不是哨兵，page 会“cut 到 -1”返回空页；必须用 follow opening 的真实 cursor。
-    if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor) || cursor < 0) return []
+    /**
+     * PB-047（P0）：**读历史不能依赖"活跃会话 / live follow"**。
+     * 重启后内存里没有 follow，`openingOf` 可能抛 not-found 或拿不到 cursor；旧实现在这里
+     * 静默 `return []`，于是所有会话在重启后都读不回（Nia 真机：磁盘日志在、`session/list` 也有）。
+     *
+     * cursor 来源（按优先级）：
+     *   1. live follow opening 的 cursor（follow 会按 id 接上历史会话）；
+     *   2. `session/list` 的 `projections.asOfSeq`（Nia 真机原始 RPC 验证：可直接当 throughSeq）；
+     *   3. 两条都没有：**会话存在就报错**（不许静默空）；会话不存在（list 里没有）才回空。
+     *
+     * 另：`asOfSeq` 是**缓存水位**，可能落后于内核真实末尾；读完一轮后**再取一次 list**，
+     * 水位前进了就补读（最多 3 轮，防"永远停在 21"）。
+     */
+    let listed = (await listSessions()).find((session) => session.sessionId === threadId)
+    if (listed === undefined) return [] // 真正的未知 thread：不是"读不出来"，是"没有"
 
-    const pages: KernelSessionEventLike[][] = []
-    let beforeSeq: number | undefined
-    for (let guard = 0; guard < 200; guard += 1) {
-      const page = await wire.rpc<{
-        records?: Array<{ type?: unknown; event?: unknown }>
-        hasMore?: unknown
-      }>('session/page', {
-        request: {
-          address: { kind: 'session', sessionId: threadId },
-          throughSeq: cursor,
-          ...(beforeSeq === undefined ? {} : { beforeSeq }),
-          maxMessages: 200
-        }
-      })
-      const records = Array.isArray(page.records) ? page.records : []
-      const events = records.flatMap((record) => {
-        if (!isRecord(record) || !isRecord(record.event)) return []
-        return [record.event as KernelSessionEventLike]
-      })
-      pages.unshift(events)
-      if (page.hasMore !== true || events.length === 0) break
-      const firstSeq = events[0]?.seq
-      if (typeof firstSeq !== 'number' || firstSeq <= 0) break
-      beforeSeq = firstSeq
+    let cursor: number | undefined
+    if (deps.openingOf !== undefined) {
+      try {
+        const opening = await deps.openingOf(threadId)
+        if (typeof opening.cursor === 'number') cursor = opening.cursor
+      } catch (error) {
+        // follow 接不上（不存在/内核不让接）不算致命：下面用 asOfSeq 兜底；未知错误继续抛。
+        if (!isSessionUnavailableError(error)) throw error
+      }
     }
-    return pages.flat()
+    if (cursor === undefined) cursor = listed.asOfSeq
+    // R1：-1 不是哨兵，page 会“cut 到 -1”返回空页；必须用真实 cursor。
+    if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor) || cursor < 0) {
+      throw new KernelSessionOpsError(
+        'session/history-unavailable',
+        `会话存在但拿不到可读水位（live opening / projections.asOfSeq 都没有）：${threadId}`
+      )
+    }
+
+    /** 从 throughSeq 往回翻完全部页（R1 的 beforeSeq 游标链） */
+    const readPages = async (throughSeq: number): Promise<KernelSessionEventLike[]> => {
+      const collected: KernelSessionEventLike[][] = []
+      let beforeSeq: number | undefined
+      for (let guard = 0; guard < 200; guard += 1) {
+        const page = await wire.rpc<{
+          records?: Array<{ type?: unknown; event?: unknown }>
+          hasMore?: unknown
+        }>('session/page', {
+          request: {
+            address: { kind: 'session', sessionId: threadId },
+            throughSeq,
+            ...(beforeSeq === undefined ? {} : { beforeSeq }),
+            maxMessages: 200
+          }
+        })
+        const records = Array.isArray(page.records) ? page.records : []
+        const events = records.flatMap((record) => {
+          if (!isRecord(record) || !isRecord(record.event)) return []
+          return [record.event as KernelSessionEventLike]
+        })
+        collected.unshift(events)
+        if (page.hasMore !== true || events.length === 0) break
+        const firstSeq = events[0]?.seq
+        if (typeof firstSeq !== 'number' || firstSeq <= 0) break
+        beforeSeq = firstSeq
+      }
+      return collected.flat()
+    }
+
+    // 按 seq 去重合并（水位补读会与首轮重叠）
+    const bySeq = new Map<number, KernelSessionEventLike>()
+    const merge = (events: readonly KernelSessionEventLike[]): void => {
+      for (const event of events) {
+        const seq = typeof event.seq === 'number' ? event.seq : undefined
+        if (seq === undefined) continue
+        bySeq.set(seq, event)
+      }
+    }
+    let waterline = cursor
+    merge(await readPages(waterline))
+    // asOfSeq 是缓存水位：补一次 list，水位前进就补读到新水位（防止停在旧值）。
+    for (let round = 0; round < 3; round += 1) {
+      const refreshed = (await listSessions()).find((session) => session.sessionId === threadId)
+      listed = refreshed ?? listed
+      const next = listed.asOfSeq
+      if (typeof next !== 'number' || next <= waterline) break
+      waterline = next
+      merge(await readPages(waterline))
+    }
+    return [...bySeq.entries()].sort((left, right) => left[0] - right[0]).map(([, event]) => event)
   }
 
   const archiveSession = async (threadId: string): Promise<void> => {
