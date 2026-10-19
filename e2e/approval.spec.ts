@@ -2,14 +2,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { MOCK_WRITE_CONTENT } from '../src/mastra/model'
 import { closeApp, launchApp, sendMessage, waitForChat } from './harness'
+
+/** 旧内置 mock 的写文件内容（逐字保留；0.2.0 该 mock 已随旧内核删除，本 spec 仅作历史断言常量） */
+const MOCK_WRITE_CONTENT = 'kyclaw 离线 mock 写下的内容。\n'
 
 /**
  * 审批冒烟（plan T16 Step 3）：write → 审批卡 → 允许一次 → 断言文件真落盘。
  *
- * 触发方式：`KYCLAW_FORCE_MOCK=1` 下 mock 看到正文里的 `[[write:<路径>]]` 就调一次 write
- * （口令与写入内容都 import 自 `src/mastra/model.ts` 的真身，不另抄一份）。
+ * 触发方式：旧内置 mock 看到正文里的 `[[write:<路径>]]` 就调一次 write
+ * （口令语义与写入内容逐字保留；0.2.0 该 mock 已随旧内核删除，本 spec 仅作历史断言常量）。
  * 授权面：临时目录当工作区（mode=ask）经 settings.json 预置 —— 写类必须先问。
  *
  * 顺带留证：两张截图落 `smoke-t16/`（审批卡、允许后落盘），报告直接引用。
