@@ -256,12 +256,14 @@ async function runTurn(session, text) {
     outcome: 'applied'
   })
   // PB-013 重试形态：前 N 次 attempt 先交付一段"将被作废"的正文，然后新 attempt 重来。
-  // 宿主 mapper 看到 attemptId 变化会发 reset-step（实时流），有效帧里只留最终 attempt 的正文。
+  // 真内核语义：重试在**同一个 step 内**发生（dsh-agent-loop 的 request 循环 continue，step 不变），
+  // 所以这里 step 恒为 1；只有工具执行后的下一步才会让 step 变（PB-013 返工 c6bf06f 的判据）。
+  // 宿主 mapper 看到同 (turn, step) 的 attemptId 变化 → 发 reset-step（实时流），有效帧只留最终 attempt 的正文。
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
     const retryAttemptId = `stub-attempt-${String(turnCounter)}-r${String(attempt)}`
     broadcast(session, {
       type: 'assistant-stream',
-      frame: { type: 'start', attemptId: retryAttemptId, revision: 0, turn: turnNumber, step: attempt }
+      frame: { type: 'start', attemptId: retryAttemptId, revision: 0, turn: turnNumber, step: 1 }
     })
     broadcast(session, {
       type: 'assistant-stream',
