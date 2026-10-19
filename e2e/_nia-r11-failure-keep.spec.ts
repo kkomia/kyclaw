@@ -97,6 +97,12 @@ test.describe('R11 · 失败轮数据保留（kernel stub error 场景）', () =
 
       // 数据侧断言（reload 后）
       assertFailureTurn(afterReload, 'reload')
+
+      // PB-037 UI：历史失败轮渲染（正文 + 消息卡；有消息卡时 dock 不再重复错误卡）
+      await expect(first.page.getByTestId('turn-failure-card')).toHaveCount(1, { timeout: 30_000 })
+      await expect(first.page.getByTestId('message-bubble').first()).toContainText('先别急着答')
+      await expect(first.page.getByTestId('error-card')).toHaveCount(0, { timeout: 10_000 })
+      await first.page.screenshot({ path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-stub-ui-after-reload.png') })
     } finally {
       await closeApp(first)
     }

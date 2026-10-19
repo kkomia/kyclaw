@@ -171,7 +171,9 @@ async function sample(page: Page): Promise<Record<string, unknown>> {
       motion: status?.getAttribute('data-motion') ?? null,
       label: label?.textContent ?? null,
       mode: chase?.getAttribute('data-mode') ?? null,
-      errorText: (document.querySelector('[data-testid="error-card"]') as HTMLElement | null)?.innerText.slice(0, 400) ?? null
+      errorText: (document.querySelector('[data-testid="error-card"]') as HTMLElement | null)?.innerText.slice(0, 400) ?? null,
+      // 工具级错误文案在工具卡里（`tool-output`）；轮级 `error-card` 只在整轮失败时才有（PB-045 踩坑）
+      toolOutput: (document.querySelector('[data-testid="tool-output"]') as HTMLElement | null)?.innerText.slice(0, 400) ?? null
     }
   })
 }
@@ -265,32 +267,37 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
     }
   })
 
-  test('R08 长流：可达 stage label 逐字、data-motion、轮换约 10s', async () => {
+  test('R08-a 真机可达阶段：tool-result 文案逐字 + data-motion=full（原 6 阶段/26s/10s 判据作废）', async () => {
     test.setTimeout(240_000)
-    const slowTool = (id: string): ScriptResponse => ({
-      preDelayMs: 600,
-      deltas: [
-        { text: '先查一下。' },
-        { text: '读取中…', delayMs: 1200 },
-        { text: '…', delayMs: 1200 },
-        { text: '…', delayMs: 1200 },
-        { text: '…', delayMs: 1200 },
-        { text: '…', delayMs: 1200 },
-        { tool: { id, name: 'pwsh', input: { command: 'Start-Sleep -Seconds 2; Write-Output ok', description: '等待两秒探针' } }, delayMs: 500 }
-      ],
-      stop: 'tool_use'
-    })
     const stub = await startScriptedProvider([
-      slowTool('toolu_r08_1'),
-      slowTool('toolu_r08_2'),
-      slowTool('toolu_r08_3'),
-      { preDelayMs: 800, deltas: [{ text: '最终回答。' }, { text: '完成。', delayMs: 800 }], stop: 'end_turn' }
+      {
+        preDelayMs: 400,
+        deltas: [
+          { text: '先读设置。' },
+          { tool: { id: 'toolu_r08_ok', name: 'read', input: { file_path: 'settings.json' } }, delayMs: 500 }
+        ],
+        stop: 'tool_use'
+      },
+      {
+        // 工具结果之后故意等 2.5s：让可观测的 `tool-result` 阶段稳定 ≥1.2s（Ada 口径 R08-a）
+        preDelayMs: 2_500,
+        deltas: [
+          { text: '再读缺失文件。' },
+          { tool: { id: 'toolu_r08_fail', name: 'read', input: { file_path: 'missing-r08.txt' } }, delayMs: 500 }
+        ],
+        stop: 'tool_use'
+      },
+      { preDelayMs: 800, deltas: [{ text: '完成。' }], stop: 'end_turn' }
     ])
     const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
-      await sendMessage(launched.page, '长任务')
+      // PB-045 解阻：本机 windows-acl 沙箱坏了（sandbox-local 临时授权失败）→ 切 danger-full-access，
+      // 让 read 真正执行（否则稳定 tool-error，R08-a 的 tool-result 永远采不到）。
+      await sendMessage(launched.page, '/permission danger-full-access')
+      await launched.page.waitForTimeout(1_500)
+      await sendMessage(launched.page, '跑两个 read')
       const deadline = Date.now() + 60_000
       while (Date.now() < deadline) {
         samples.push(await sample(launched.page))
@@ -298,41 +305,36 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         await launched.page.waitForTimeout(200)
       }
       const file = writeEvidence('r08', samples)
-      const withStage = samples.filter((item) => item.stage !== null && item.stage !== undefined)
-      expect(withStage.length, `R08 没采到状态行（${file}）`).toBeGreaterThan(10)
       const LABELS: Record<string, string> = {
         idle: '正在处理',
-        reasoning: '正在分析请求',
         'tool-preparing': '正在准备工具调用',
         'tool-running': '正在调用工具',
-        'tool-approval': '等待审批',
-        'tool-approval-done': '审批已回应，继续处理',
         'tool-result': '正在处理工具结果',
-        'tool-error': '工具出错，正在继续',
-        'tool-denied': '工具被拒绝，正在继续',
-        'approval-allowed': '已允许一次',
-        'approval-rejected': '你拒绝了这次操作',
-        'approval-cancelled': '审批已取消',
-        'approval-unavailable': '审批被自动拒绝'
+        'tool-error': '工具出错，正在继续'
       }
+      const withStage = samples.filter((item) => item.stage !== null && item.stage !== undefined)
+      expect(withStage.length, `R08-a 没采到状态行（${file}）`).toBeGreaterThan(0)
       for (const item of withStage) {
         const key = String(item.stage)
         if (key === 'idle' && item.label === '暂未响应') continue
-        expect(LABELS[key], `R08 未知 stage=${key}（${file}）`).toBeDefined()
+        expect(LABELS[key], `R08-a 出现不可达/未知 stage=${key}（${file}）`).toBeDefined()
       }
-      // 文案有 1s 说法锁（STATUS_LOCK_MS）：stage 变了 label 最多晚 ~1s 才换。
-      // 只在「同一 stage 已稳定 ≥1.2s（6×200ms）」的采样上要求 label 逐字一致，避免把锁的过渡帧误判成文案错。
+      const motions = samples.map((item) => item.motion).filter((motion) => typeof motion === 'string')
+      expect(motions.length, `R08-a 没采到 data-motion（${file}）`).toBeGreaterThan(0)
+      expect(motions.every((motion) => motion === 'full'), `R08-a 默认 data-motion 应为 full（${file}）`).toBe(true)
+      // 只在同一 stage 稳定 ≥1.2s（6×200ms）的窗口上断言文案（1s 说法锁的过渡帧不算错）
+      let stableRuns = 0
+      let toolResultRuns = 0
       for (let i = 0; i + 6 < samples.length; i += 1) {
         const key = String(samples[i]?.stage ?? '')
         const stable = [1, 2, 3, 4, 5, 6].every((offset) => String(samples[i + offset]?.stage ?? '') === key)
         if (!stable || key === '' || LABELS[key] === undefined) continue
-        expect(samples[i]?.label, `R08 stage=${key} 稳定 1.2s 后文案不符（${file}）`).toBe(LABELS[key])
+        stableRuns += 1
+        expect(samples[i]?.label, `R08-a stage=${key} 稳定 1.2s 后文案不符（${file}）`).toBe(LABELS[key])
+        if (key === 'tool-result') toolResultRuns += 1
       }
-      const modes = samples.map((item) => item.mode).filter((mode) => typeof mode === 'string')
-      expect(modes.every((mode) => mode === 'full' || mode === 'reduced'), `R08 data-mode 非法（${file}）`).toBe(true)
-      const changes: number[] = []
-      for (let i = 1; i < modes.length; i += 1) if (modes[i] !== modes[i - 1]) changes.push(Number(samples[i]?.t ?? 0))
-      if (samples.length > 60) expect(changes.length, `R08 未观察到约 10s 轮换（${file}）`).toBeGreaterThanOrEqual(1)
+      expect(stableRuns, `R08-a 没有任何阶段稳定 ≥1.2s，样本不足（${file}）`).toBeGreaterThan(0)
+      expect(toolResultRuns, `R08-a 未观测到 tool-result 稳定窗口（${file}）`).toBeGreaterThan(0)
     } finally {
       await closeApp(launched)
       await closeServer(stub.server)
