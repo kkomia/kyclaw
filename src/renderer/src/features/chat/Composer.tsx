@@ -9,6 +9,7 @@ import { thresholdTokensOf, usagePercentOf } from '@renderer/lib/compact'
 import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { STARTUP_FINAL_MARK, startupMark } from '@renderer/lib/startup-timing'
 import { probedKeyOf, visionOf } from '@shared/models'
+import type { KernelCommandSummary } from '@shared/kernel-ui'
 import { PixelOtter } from '@renderer/features/brand/PixelOtter'
 import { CHAT_MASCOT_STATE } from '@renderer/features/brand/otter-states'
 import { useChatMascotState } from '@renderer/features/brand/chat-mascot-state'
@@ -115,6 +116,13 @@ export interface ComposerProps {
   onStop: () => void
   /** round 19：「/」→「压缩上下文」被选中（立即压缩；进行中/不可用时命令行为禁用态） */
   onCompact?: () => void
+  /**
+   * PB-018：内核命令目录（`commands/list`）。给了 = `/` 菜单的命令分区只来自它；
+   * 不给 = flag 关的旧静态三行（0.1.6 菜单不变）。
+   */
+  kernelCommands?: readonly KernelCommandSummary[] | null
+  /** PB-018：菜单里选中一条内核命令 → 交给上层的内核命令平面执行（`line` 带 `/`） */
+  onKernelCommand?: (line: string) => void
   /** 压缩进行中（命令行 hint 显示「压缩中…」并禁用） */
   compactBusy?: boolean
   /** 压缩不可用（流式 / 等审批）：命令行可见但不可点 */
@@ -244,6 +252,8 @@ export function Composer({
   onSend,
   onStop,
   onCompact,
+  kernelCommands = null,
+  onKernelCommand,
   compactBusy = false,
   compactDisabled = false,
   externalNotice = null,
@@ -563,7 +573,8 @@ export function Composer({
               plan:
                 mode === null || mode.plan === null
                   ? undefined
-                  : { disabled: mode.plan.disabled === true }
+                  : { disabled: mode.plan.disabled === true },
+              ...(kernelCommands === null ? {} : { commands: kernelCommands })
             },
             suggest.query
           )
@@ -631,6 +642,23 @@ export function Composer({
   const pickSuggestion = (row: SuggestionRow): void => {
     if (suggest === null || row.disabled === true) return
     if (row.command !== undefined) {
+      // PB-018：内核目录来的行 —— `insert` = leadingInput（只留 `/<name> `），
+      // `execute` = 立即交给内核命令平面（不插标记、不进消息流）
+      if (row.commandRun !== undefined) {
+        if (row.commandRun === 'execute') {
+          const remaining = draft.slice(0, suggest.start) + draft.slice(suggest.end)
+          setCaretToken(suggest.start)
+          trackDraft(remaining)
+          setSuggest(null)
+          onKernelCommand?.(`/${row.command}`)
+          return
+        }
+        const inserted = `${draft.slice(0, suggest.start)}/${row.command} ${draft.slice(suggest.end)}`
+        setCaretToken(suggest.start + row.command.length + 2)
+        trackDraft(inserted)
+        setSuggest(null)
+        return
+      }
       // PB-039 `/goal` 是 leadingInput：只把 `/goal ` 留在输入框，命令在提交时解析（不立即执行）
       if (row.command === 'goal') {
         const inserted = `${draft.slice(0, suggest.start)}/goal ${draft.slice(suggest.end)}`

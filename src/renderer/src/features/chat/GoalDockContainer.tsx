@@ -1,98 +1,98 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { GoalState, GoalView } from '@shared/goal'
-import { fetchGoal, postGoalWithRetry } from './goal-api'
+import type { KernelGoalProjection, KernelPlanProjection } from '@shared/kernel-ui'
+import { fetchKernelProjection, runKernelCommand } from './kernel-command-api'
 import { GoalDock } from './GoalDock'
 
 /**
- * PB-039 goal 条容器：自己取数（`GET /api/goal`），无 goal 不渲染（返回 null，不占位）。
- * 对外只暴露两样：组件本身 + `onHasGoalChange(hasGoal)`（父级据此隐藏海獭/排 dock 顺序）。
- * 动作 → `POST`，409 重 GET 重发一次复用 `postGoalWithRetry`（与 /goal 命令同一套）。
+ * PB-018 goal 条容器：**只读内核投影**（`GET /api/kernel/projection`），无 goal 不渲染（不占位）。
+ * 动作不再 POST 旧 `/api/goal`（PB-024 起八条旧路由会 501），而是发内核命令
+ * `/goal pause|resume|clear`（走 `POST /api/kernel/command` 的 command/run→done），完成后重取投影。
+ *
+ * 对外：组件 + `onHasGoalChange(hasGoal)`（父级据此隐藏海獭/排 dock 顺序）+
+ * `onPlanChange(plan)`（plan 投影上报，`active||pending` 都算规划中，由上层用 kernelPlanActive 判）。
  */
 export interface GoalDockContainerProps {
   threadId: string
   /** 有/无 goal 变化时通知父级（dock 顺序与海獭可见性） */
   onHasGoalChange?: (hasGoal: boolean) => void
+  /** plan 投影变化时上报（内核模式的状态摘要/任务清单可见性用） */
+  onPlanChange?: (plan: KernelPlanProjection | null) => void
   /** 编辑入口交给上层（内联编辑不在本组件内实现） */
-  onEdit?: (goal: GoalView) => void
-  /**
-   * 外部要求重取的信号（值变化即重取一次）。
-   * 为什么需要：`/goal <objective>` 这类命令在别处改完 goal 后，本容器只在挂载/换会话时取数，
-   * 不刷新就看不到新条（命令建了 goal、条却不出现）。
-   */
+  onEdit?: (projection: KernelGoalProjection) => void
+  /** 外部要求重取的信号（值变化即重取一次；命令改过 goal 后 +1） */
   refreshKey?: number
 }
 
 export function GoalDockContainer({
   threadId,
   onHasGoalChange,
+  onPlanChange,
   onEdit,
   refreshKey = 0
 }: GoalDockContainerProps): React.JSX.Element | null {
-  const [state, setState] = useState<GoalState | null>(null)
+  const [projection, setProjection] = useState<KernelGoalProjection | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetchGoal(threadId)
-      setState(next)
-      onHasGoalChange?.(next.goal !== null)
+      const snapshot = await fetchKernelProjection(threadId)
+      setProjection(snapshot.goal)
+      onHasGoalChange?.(snapshot.goal?.visible === true)
+      onPlanChange?.(snapshot.plan)
     } catch {
-      setState(null)
+      setProjection(null)
       onHasGoalChange?.(false)
+      onPlanChange?.(null)
     }
-  }, [threadId, onHasGoalChange])
+  }, [threadId, onHasGoalChange, onPlanChange])
 
   useEffect(() => {
-    // 不直接调 refresh()：它是 async，但调用发生在同步阶段，`react-hooks/set-state-in-effect`
-    // 会把它当成"effect 里同步 setState"。写成 promise 回调里的 setState —— 语义不变
-    // （挂载/换会话/refreshKey 变 → 取一次），并保证卸载后不再回写。
+    // 与旧容器同一手法：effect 里不直接调 async（react-hooks/set-state-in-effect），
+    // 写成 promise 回调里的 setState，并保证卸载后不再回写。
     let cancelled = false
-    void fetchGoal(threadId).then(
-      (next) => {
+    void fetchKernelProjection(threadId).then(
+      (snapshot) => {
         if (cancelled) return
-        setState(next)
-        onHasGoalChange?.(next.goal !== null)
+        setProjection(snapshot.goal)
+        onHasGoalChange?.(snapshot.goal?.visible === true)
+        onPlanChange?.(snapshot.plan)
       },
       () => {
         if (cancelled) return
-        setState(null)
+        setProjection(null)
         onHasGoalChange?.(false)
+        onPlanChange?.(null)
       }
     )
     return () => {
       cancelled = true
     }
-  }, [threadId, onHasGoalChange, refreshKey])
+  }, [threadId, onHasGoalChange, onPlanChange, refreshKey])
 
   const act = useCallback(
-    async (action: 'pause' | 'resume' | 'clear') => {
-      const current = state?.goal
-      if (current === undefined || current === null) return
+    async (command: 'pause' | 'resume' | 'clear') => {
       try {
-        await postGoalWithRetry(
-          { threadId, action, ref: { id: current.id, revision: current.revision } },
-          threadId
-        )
+        await runKernelCommand(threadId, `/goal ${command}`, () => {
+          // 结果卡由 ChatPage 自己订阅；这里只需在 done 后重取投影
+        })
       } catch {
-        // 失败留给下一次刷新展示（卡片/条只反映服务端真值，不做乐观态）
+        // 失败留给下一次刷新投影展示（条只反映服务端真值，不做乐观态）
       } finally {
         await refresh()
       }
     },
-    [refresh, state?.goal, threadId]
+    [refresh, threadId]
   )
 
-  const goal = state?.goal ?? null
-  // complete / 无 goal 不渲染（不占位）
-  if (goal === null || goal.phase === 'complete') return null
+  if (projection === null || !projection.visible) return null
+  if (projection.phase === 'complete') return null
 
   return (
     <GoalDock
-      goal={goal}
-      activation={state?.activation ?? 'disarmed'}
+      projection={projection}
       onPause={() => void act('pause')}
       onResume={() => void act('resume')}
       onClear={() => void act('clear')}
-      onEdit={onEdit === undefined ? undefined : () => onEdit(goal)}
+      onEdit={onEdit === undefined ? undefined : () => onEdit(projection)}
     />
   )
 }

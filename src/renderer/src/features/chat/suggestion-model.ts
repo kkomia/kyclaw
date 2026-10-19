@@ -15,6 +15,7 @@
  * 已在规划里 / 实例未就绪时不传 `plan`，这条就不出现。它排在「压缩上下文」**后面**，默认高亮
  * 仍是压缩（打 `/` 回车不该被切进规划模式）。
  */
+import type { KernelCommandSummary } from '@shared/kernel-ui'
 import { PLAN_ENTER_LABEL } from './plan-ui'
 
 export type SuggestionTriggerKind = 'file' | 'slash'
@@ -39,7 +40,12 @@ export interface SuggestionRow {
   disabled?: boolean
   reference?: { kind: '文件' | '插件' | '技能'; label: string }
   /** 命令行的动作标识（round 19「压缩上下文」；round 85「进入规划模式」；PB-039 加「目标」） */
-  command?: 'compact' | 'plan' | 'goal'
+  command?: string
+  /**
+   * 选中后的动作（PB-018）：`insert` = 只把 `/<命令名> ` 留在输入框（leadingInput，如 goal），
+   * `execute` = 立即交给内核命令平面执行；缺省 = 旧路径（compact/plan 的既有回调）。
+   */
+  commandRun?: 'insert' | 'execute'
 }
 
 export interface SuggestionGroup {
@@ -123,6 +129,25 @@ export interface SlashInputs {
    * （与 ＋ 菜单那条同一档）。选中走的是 ＋ 菜单**同一个实现**，这里只决定露不露这一行。
    */
   plan?: { disabled: boolean }
+  /**
+   * PB-018：内核 `commands/list` 的目录。给了 = **命令分区只来自它**（不再拼静态三行）；
+   * 不给 = 旧路径（flag 关，保持 0.1.6 菜单）。
+   */
+  commands?: readonly KernelCommandSummary[]
+}
+
+/** 内核命令名 → 菜单展示文案（只做本地化/图标文案，不决定命令是否存在；清单永远来自 catalog） */
+const KERNEL_COMMAND_LABEL: Readonly<Record<string, string>> = {
+  compact: '压缩上下文',
+  plan: PLAN_ENTER_LABEL,
+  goal: '目标',
+  export: '导出',
+  feedback: '反馈',
+  permission: '权限'
+}
+
+function kernelCommandLabel(command: KernelCommandSummary): string {
+  return KERNEL_COMMAND_LABEL[command.name] ?? command.name
 }
 
 /** / 浮窗的分组（分区只在非空时出现；顺序 = 命令 → 插件 → 技能） */
@@ -132,37 +157,78 @@ export function slashGroups(input: SlashInputs, query: string): SuggestionGroup[
 
   const groups: SuggestionGroup[] = []
   const commands: SuggestionRow[] = []
-  // 首选顺序照旧是「压缩上下文」（默认高亮 = 平铺第一行）：习惯性打 `/` 再回车的人不该被切进规划模式。
-  // 模式入口排在它**后面** —— 它是"换一种做法"，要选得先下移一行
-  if (hit('压缩上下文')) {
-    const command = input.command
-    commands.push({
-      id: 'command:compact',
-      label: '压缩上下文',
-      ...(command === undefined
-        ? {}
-        : {
-            ...(command.busy
-              ? { hint: '压缩中…' }
-              : command.percent === null
+  if (input.commands !== undefined) {
+    // PB-018：内核模式 —— 命令分区**只来自 catalog**（顺序也照内核给的原序），不再拼静态行。
+    for (const entry of input.commands) {
+      const label = kernelCommandLabel(entry)
+      const description = entry.description?.trim() ?? ''
+      if (!hit(entry.name) && !hit(label) && !hit(description)) continue
+      const compact = entry.name === 'compact'
+      const plan = entry.name === 'plan'
+      const state = input.command
+      commands.push({
+        id: `command:${entry.name}`,
+        label,
+        ...(compact
+          ? {
+              ...(state === undefined
                 ? {}
-                : { hint: `已使用 ${command.percent}%` }),
-            disabled: command.disabled || command.busy
-          }),
-      command: 'compact'
-    })
-  }
-  if (input.plan !== undefined && hit(PLAN_ENTER_LABEL)) {
-    commands.push({
-      id: 'command:plan',
-      label: PLAN_ENTER_LABEL,
-      disabled: input.plan.disabled,
-      command: 'plan'
-    })
-  }
-  // PB-039：`/goal` 是 leadingInput（选中只把 `/goal ` 留在输入框，由提交时的解析器执行）
-  if (hit('目标')) {
-    commands.push({ id: 'command:goal', label: '目标', hint: '设置 / 查看 goal', command: 'goal' })
+                : state.busy
+                  ? { hint: '压缩中…' }
+                  : state.percent === null
+                    ? {}
+                    : { hint: `已使用 ${state.percent}%` }),
+              disabled: state?.disabled === true || state?.busy === true
+            }
+          : plan
+            ? { disabled: input.plan?.disabled === true }
+            : {
+                ...(description === '' ? {} : { hint: description }),
+                disabled: state?.disabled === true
+              }),
+        command: entry.name,
+        commandRun: entry.name === 'goal' ? 'insert' : 'execute'
+      })
+    }
+  } else {
+    // flag 关：保持 0.1.6 静态三行（内核目录此时不可用，不能假装有命令）
+    // 首选顺序照旧是「压缩上下文」（默认高亮 = 平铺第一行）：习惯性打 `/` 再回车的人不该被切进规划模式。
+    // 模式入口排在它**后面** —— 它是"换一种做法"，要选得先下移一行
+    if (hit('压缩上下文')) {
+      const command = input.command
+      commands.push({
+        id: 'command:compact',
+        label: '压缩上下文',
+        ...(command === undefined
+          ? {}
+          : {
+              ...(command.busy
+                ? { hint: '压缩中…' }
+                : command.percent === null
+                  ? {}
+                  : { hint: `已使用 ${command.percent}%` }),
+              disabled: command.disabled || command.busy
+            }),
+        command: 'compact'
+      })
+    }
+    if (input.plan !== undefined && hit(PLAN_ENTER_LABEL)) {
+      commands.push({
+        id: 'command:plan',
+        label: PLAN_ENTER_LABEL,
+        disabled: input.plan.disabled,
+        command: 'plan'
+      })
+    }
+    // PB-039：`/goal` 是 leadingInput（选中只把 `/goal ` 留在输入框，由提交时的解析器执行）
+    if (hit('目标')) {
+      commands.push({
+        id: 'command:goal',
+        label: '目标',
+        hint: '设置 / 查看 goal',
+        command: 'goal'
+      })
+    }
   }
   if (commands.length > 0) groups.push({ title: '指令', rows: commands })
   const plugins = input.plugins.filter((plugin) => hit(plugin.name))

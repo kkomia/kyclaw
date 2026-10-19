@@ -1,4 +1,5 @@
 import type { SessionPlan } from '@shared/plan'
+import type { KernelPlanProjection } from '@shared/kernel-ui'
 
 /**
  * 计划状态的展示文案（纯函数）：从 PlanModeChip.tsx 搬出来 —— 组件文件只该导出组件，
@@ -21,6 +22,18 @@ export function planModeLabel(state: SessionPlan): string {
  */
 export function planActiveOf(state: SessionPlan | null): state is SessionPlan {
   return state !== null && state.mode !== 'normal'
+}
+
+/**
+ * PB-018：内核 plan 投影的**唯一判据**（Eve verdict R1）。
+ *
+ * `/plan` 后内核可能给两种合法形态：
+ *   - `{active:true, pending:false}` —— 空闲时当场生效；
+ *   - `{active:false, pending:true}` —— 有在途 turn 时"下一步生效"。
+ * 两者都表示"在规划里"；UI 与测试只准调这一个函数，禁止各自钉一种形态（F1 就是这么 flaky 的）。
+ */
+export function kernelPlanActive(plan: KernelPlanProjection | null | undefined): boolean {
+  return plan !== null && plan !== undefined && (plan.active || plan.pending)
 }
 
 /**

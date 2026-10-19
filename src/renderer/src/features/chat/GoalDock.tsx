@@ -1,58 +1,57 @@
-import type { GoalActivation, GoalView } from '@shared/goal'
+import type { KernelGoalProjection } from '@shared/kernel-ui'
 
 /**
- * PB-039 goal 条（composer 上方，DSH `client-ui-goal:129` 数值照抄）。
+ * PB-018：goal 条（composer 上方，DSH `client-ui-goal:129` 数值照抄）。
+ *
+ * 数据**只读** main 的六行投影：phase/objective/rounds/可用命令全部来自
+ * `KernelGoalProjection`（内核权威；flag 关时由 main 的旧 store 投影出同形数据）。
+ * 组件不再自己解释 GoalView/activation —— 四动作是否出现看投影给的 `commands`。
  *
  * - 高 36px、radius 12、glass 背景；phase label 13/24/500，objective 13/20 次级省略；
- * - 右侧 28×28 圆钮（pause/resume/edit/clear）；complete / 无 goal → 不渲染（由调用方控制）；
- * - dock 顺序 审批/提问 > goal > 海獭；**goal 存在时隐藏海獭**（由父级布局决定，本组件只报存在性）。
- * - 纯展示组件：动作通过 props 交给上层（真接口在 ChatPage/上层接 `POST /api/goal`）。
+ * - 右侧 28×28 圆钮（pause/resume/edit/clear），按投影命令集合显隐；
+ * - complete / 无 goal → 不渲染（由调用方控制）。
  */
 export interface GoalDockProps {
-  goal: GoalView
-  activation: GoalActivation
+  projection: KernelGoalProjection
   onPause?: () => void
   onResume?: () => void
   onEdit?: () => void
   onClear?: () => void
 }
 
-const PHASE_LABEL: Record<GoalView['phase'], string> = {
-  active: '进行中',
-  paused: '已暂停',
-  blocked: '已阻塞',
-  complete: '已完成'
+function rowValue(projection: KernelGoalProjection, id: 'status' | 'objective'): string {
+  return projection.rows.find((row) => row.id === id)?.value ?? ''
 }
 
 export function GoalDock({
-  goal,
-  activation,
+  projection,
   onPause,
   onResume,
   onEdit,
   onClear
 }: GoalDockProps): React.JSX.Element {
-  const canPause = goal.phase === 'active' && activation === 'armed'
-  const canResume = goal.phase !== 'complete' && (goal.phase !== 'active' || activation !== 'armed')
+  const canPause = projection.commands.includes('goal pause')
+  const canResume = projection.commands.includes('goal resume')
+  const canEdit = onEdit !== undefined && projection.commands.includes('goal edit')
+  const canClear = projection.commands.includes('goal clear')
+  const rounds =
+    projection.rounds?.label ?? projection.rows.find((row) => row.id === 'rounds')?.value
   return (
     <div
       data-testid="goal-dock"
-      data-phase={goal.phase}
-      data-activation={activation}
+      data-phase={projection.phase}
       className="flex h-9 shrink-0 items-center gap-[10px] rounded-[12px] border-(length:--hairline-width) border-hairline bg-menu py-1 pr-[5px] pl-3 shadow-(--shadow-overlay) backdrop-blur-(--blur-glass)"
     >
       <span aria-hidden="true" className="size-3.5 shrink-0 text-ink-tertiary">
         ◎
       </span>
       <span className="shrink-0 text-[13px] leading-6 font-medium text-ink">
-        {PHASE_LABEL[goal.phase]}
+        {rowValue(projection, 'status')}
       </span>
       <span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-ink-tertiary">
-        {goal.objective}
+        {rowValue(projection, 'objective')}
       </span>
-      <span className="shrink-0 font-mono text-[11px] text-ink-tertiary">
-        {goal.roundsStarted}/{goal.maxGoalRounds}
-      </span>
+      <span className="shrink-0 font-mono text-[11px] text-ink-tertiary">{rounds ?? ''}</span>
       {canPause ? (
         <button
           type="button"
@@ -77,7 +76,7 @@ export function GoalDock({
           ▶
         </button>
       ) : null}
-      {onEdit === undefined ? null : (
+      {canEdit ? (
         <button
           type="button"
           data-testid="goal-dock-edit"
@@ -88,17 +87,19 @@ export function GoalDock({
         >
           ✎
         </button>
-      )}
-      <button
-        type="button"
-        data-testid="goal-dock-clear"
-        aria-label="清除 goal"
-        title="清除 goal"
-        onClick={onClear}
-        className="flex size-7 shrink-0 items-center justify-center rounded-full text-ink-tertiary hover:bg-hover hover:text-ink"
-      >
-        ×
-      </button>
+      ) : null}
+      {canClear ? (
+        <button
+          type="button"
+          data-testid="goal-dock-clear"
+          aria-label="清除 goal"
+          title="清除 goal"
+          onClick={onClear}
+          className="flex size-7 shrink-0 items-center justify-center rounded-full text-ink-tertiary hover:bg-hover hover:text-ink"
+        >
+          ×
+        </button>
+      ) : null}
     </div>
   )
 }

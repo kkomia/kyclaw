@@ -35,6 +35,7 @@ import { McpLifecycle } from '../mcp/lifecycle'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
+import { createKernelUiRouter, KERNEL_UI_ROUTE_PREFIX } from '../kernel/kernel-ui-route'
 import {
   createKernelThreadsRouter,
   createKernelThreadsUnavailableRouter
@@ -605,6 +606,12 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）
   // PB-039：goal（/api/goal）与 threads/tasks 同一条 token 闸门；路由见 mastra/routes/goal.ts
   app.route(GOAL_ROUTE_PREFIX, createGoalRouter(goals))
+  // PB-018（B3.3 renderer 半端）：renderer 的命令菜单/结果卡/六行投影统一走这层网关。
+  // flag 开 → 内核命令平面；flag 关 → 旧 goal store 降级（临时，PB-020 删）。旧 /api/goal 一行未改。
+  app.route(
+    KERNEL_UI_ROUTE_PREFIX,
+    createKernelUiRouter({ adapter: kernelAdapter, legacyGoal: goals })
+  )
   app.route(PROJECTS_ROUTE_PREFIX, createProjectsRouter({ store: sessionProjects }))
 
   // round 66：会话↔PPT 模板映射 API（对话页「PPT」胶囊的读/写；create_ppt 的缺省模板读同一份镜像）

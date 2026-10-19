@@ -42,7 +42,7 @@ import { useStore } from 'zustand'
 import { PlanModeChip } from './PlanModeChip'
 import { PlanApprovalDock } from './PlanApprovalDock'
 import { planSession } from '@renderer/lib/plans-store'
-import { planActiveOf } from './plan-ui'
+import { kernelPlanActive, planActiveOf } from './plan-ui'
 import { rendererPlansStore, settledPlan } from './plan-runtime'
 import { EMPTY_ASK_USER_THREAD, useAskUserStore } from './ask-user-store'
 import { askUserCallKey } from './ask-user-ui'
@@ -60,9 +60,12 @@ import { GoalCommandCard } from './GoalCommandCard'
 import { GoalDockContainer } from './GoalDockContainer'
 import { useUsageStream } from './useUsageStream'
 import { pushUsage } from './usage-live'
-import { parseGoalCommand, type GoalCommandAction } from './goal-command'
-import { fetchGoal, postGoalWithRetry } from './goal-api'
-import type { GoalActivation, GoalState, GoalView } from '@shared/goal'
+import { fetchKernelCatalog, kernelEnabled, runKernelCommand } from './kernel-command-api'
+import type {
+  KernelCommandSummary,
+  KernelGoalProjection,
+  KernelPlanProjection
+} from '@shared/kernel-ui'
 import { MessageList } from './MessageList'
 import { WelcomeHeatmap } from './parts/WelcomeHeatmap'
 import { ProjectChip } from './ProjectChip'
@@ -613,12 +616,25 @@ function ActiveChat({
   const [usageVersion, setUsageVersion] = useState(0)
   /** 发送预检进行中（取用量 → 也许压缩）的防抖锁：status 更新前的小窗口里防连按双发 */
   const sending = useRef(false)
-  /** PB-039：`/goal` 结果卡片（V1 不进历史；只挂在输入框上方，可关闭） */
-  const [goalCommandResult, setGoalCommandResult] = useState<{
-    goal: GoalView | null
-    activation: GoalActivation
+  /** PB-018：内核命令结果卡（`command/run` → `command/done` 驱动；不进消息流，可关闭） */
+  const [commandResult, setCommandResult] = useState<{
+    line: string
+    running: boolean
+    projection: KernelGoalProjection | null
+    plan: KernelPlanProjection | null
+    /** 命令给的可读结果（plan on/off、export 等；goal 六行已在 projection 里） */
+    resultText?: string
     error?: string
   } | null>(null)
+  /**
+   * PB-018：本会话是否走内核命令平面（flag 开）。false = 0.1.6 旧路径（菜单静态三行；
+   * `/goal` 仍交给网关，由 main 的 flag 关降级实现处理）。
+   */
+  const [kernelMode, setKernelMode] = useState(false)
+  /** 内核 `commands/list` 的目录（kernelMode 下菜单的唯一来源） */
+  const [kernelCommands, setKernelCommands] = useState<KernelCommandSummary[] | null>(null)
+  /** 内核 plan 投影（只读；两种形态都算"在规划里"，见 kernelPlanActive） */
+  const [kernelPlan, setKernelPlan] = useState<KernelPlanProjection | null>(null)
   /**
    * PB-039：本会话是否挂着 goal（`GoalDockContainer` 上报）。
    * 用途：dock 顺序「审批/提问 > goal > 海獭」+ **有 goal 时隐藏输入卡右上角的海獭**（避免两条状态抢视线）。
@@ -803,6 +819,68 @@ function ActiveChat({
     )
   }, [threadId, stop, setMessages, interactionsEnabled, realThread])
   /**
+   * PB-018：探活 + 取内核命令目录。失败/flag 关一律回旧路径（`kernelEnabled` 内部吞错），
+   * 不因为网关不可用把对话页推到错误态。
+   */
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const enabled = await kernelEnabled()
+      if (!alive) return
+      setKernelMode(enabled)
+      if (!enabled) return
+      const commands = await fetchKernelCatalog().catch(() => [] as KernelCommandSummary[])
+      if (alive) setKernelCommands(commands)
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+  /**
+   * PB-018：执行一条内核命令并驱动结果卡（`command/run` → `command/done`）。
+   * 命令**不经过 chat transport**：不发消息、不进历史；done 里带最新的 goal 六行/plan 投影。
+   */
+  const runCommandLine = useCallback(
+    async (line: string): Promise<void> => {
+      if (!ready) return
+      setCommandResult({ line, running: true, projection: null, plan: null })
+      try {
+        await runKernelCommand(threadId, line, (frame) => {
+          if (frame.type === 'command/run') {
+            setCommandResult({ line: frame.line, running: true, projection: null, plan: null })
+            return
+          }
+          const resultText =
+            frame.result.kind === 'success' &&
+            frame.result.text !== undefined &&
+            frame.result.text.trim() !== ''
+              ? frame.result.text
+              : undefined
+          setCommandResult({
+            line: frame.line,
+            running: false,
+            projection: frame.goal,
+            plan: frame.plan,
+            ...(resultText === undefined ? {} : { resultText }),
+            ...(frame.result.kind === 'error' ? { error: frame.result.text } : {})
+          })
+          if (frame.plan !== null) setKernelPlan(frame.plan)
+          // 命令可能改了 goal → 让 dock 条重取一次（与旧 `/goal` 命令同一口径）
+          setGoalRefresh((count) => count + 1)
+        })
+      } catch (cause) {
+        setCommandResult({
+          line,
+          running: false,
+          projection: null,
+          plan: null,
+          error: toError(cause).message
+        })
+      }
+    },
+    [ready, threadId]
+  )
+  /**
    * round 62：动作闸门只算一次。三档"状态忙"：流式中 / 挂起等审批 / 压缩中 —— 原来这一串在
    * 六处各写了一遍，加一条规则就得满文件找。**动作行的显隐看它**（渲染期的 state 就是它的全部）。
    */
@@ -827,6 +905,11 @@ function ActiveChat({
    */
   const enterPlan = useCallback(async (): Promise<void> => {
     if (isLocked() || enterPlanLock.current) return
+    // PB-018：内核模式 /plan 归内核命令平面（不再走旧 plans 状态机）；两种投影形态都算进入规划。
+    if (kernelMode) {
+      void runCommandLine('/plan')
+      return
+    }
     enterPlanLock.current = true
     setEnteringPlan(true)
     setPlanActionError(null)
@@ -842,7 +925,7 @@ function ActiveChat({
       enterPlanLock.current = false
       setEnteringPlan(false)
     }
-  }, [isLocked, realThread, threadId])
+  }, [isLocked, kernelMode, realThread, threadId, runCommandLine])
   /** 会话任务清单的收起状态（round 81：唯一来源是 tasks-store 的 collapsed；＋菜单那条也翻它） */
   const taskCollapsed = useStore(tasksStore, (state) => taskSession(state, threadId).collapsed)
   const toggleTasks = useCallback((): void => {
@@ -866,16 +949,27 @@ function ActiveChat({
    * 收起状态仍然只有一个来源：tasks-store 的 `collapsed`（这里只调 `setCollapsed`，
    * 不另存平行状态）。
    */
+  /**
+   * PB-018：规划中的**唯一判据**（内核模式看 kernel 投影，两种形态都算；旧路径看 plans 状态机）。
+   * `null` = 还没读到；下游只把 `true` 当"在规划里"。
+   */
+  const planIsActive: boolean | null = kernelMode
+    ? kernelPlan === null
+      ? null
+      : kernelPlanActive(kernelPlan)
+    : plan.state === null
+      ? null
+      : planActiveOf(plan.state)
   const planExpandBaseline = useRef<{ threadId: string; active: boolean | null } | null>(null)
   useEffect(() => {
-    const active = plan.state === null ? null : planActiveOf(plan.state)
+    const active = planIsActive
     const previous = planExpandBaseline.current
     planExpandBaseline.current = { threadId, active }
     if (previous === null || previous.threadId !== threadId) return
     if (active === true && previous.active === false) {
       tasksStore.getState().setCollapsed(threadId, false)
     }
-  }, [plan.state, threadId])
+  }, [planIsActive, threadId])
   /**
    * ＋ 菜单里的**模式分组**（round 81）：原先工具条上那两颗常驻按钮（「进入规划模式」「任务清单」）
    * 都收进这一个 ＋（用户口径：绝不另造第二个模式菜单）。两边都是真状态、真回调：
@@ -885,7 +979,10 @@ function ActiveChat({
    */
   const modeMenu = useMemo<ComposerModeMenu | null>(() => {
     if (!ready || !interactionsEnabled) return null
-    const canEnterPlan = !realThread || plan.state?.mode === 'normal'
+    // PB-018：内核模式按内核 plan 投影判断"是否已在规划里"；旧路径维持 plans 状态机口径。
+    const canEnterPlan = kernelMode
+      ? planIsActive !== true
+      : !realThread || plan.state?.mode === 'normal'
     return {
       plan: canEnterPlan ? { disabled: locked, onSelect: () => void enterPlan() } : null,
       tasks: { expanded: !taskCollapsed, onSelect: toggleTasks }
@@ -893,6 +990,8 @@ function ActiveChat({
   }, [
     ready,
     interactionsEnabled,
+    kernelMode,
+    planIsActive,
     realThread,
     plan.state?.mode,
     locked,
@@ -1217,80 +1316,28 @@ function ActiveChat({
    * 会话…」）。这里再守一道是为了防任何旁路 —— 未就绪时发出去只会打到占位 Chat 上当场抛。
    * 也**不排队**：排队意味着"稍后一定发"，而那时连会话是谁都还不知道（占位 id 上排队等于丢）。
    */
-  /** PB-039：`/goal` 执行（真 GET/POST；409 stale → 重 GET 再试一次由 postGoalWithRetry 负责） */
-  const runGoalCommand = useCallback(
-    async (action: GoalCommandAction, objective?: string) => {
-      try {
-        const current = await fetchGoal(threadId)
-        if (action === 'status') {
-          setGoalCommandResult({ goal: current.goal, activation: current.activation })
-          return
-        }
-        const goal = current.goal
-        const ref = goal === null ? null : { id: goal.id, revision: goal.revision }
-        if (action !== 'create' && ref === null) {
-          setGoalCommandResult({
-            goal: null,
-            activation: current.activation,
-            error: 'No goal is currently set; /goal <action> requires one.'
-          })
-          return
-        }
-        let next: GoalState
-        if (action === 'create') {
-          next = await postGoalWithRetry(
-            { threadId, action: 'create', objective: objective ?? '' },
-            threadId
-          )
-        } else if (action === 'edit') {
-          next = await postGoalWithRetry(
-            { threadId, action: 'edit', ref: ref!, objective: objective ?? '' },
-            threadId
-          )
-        } else if (action === 'pause') {
-          next = await postGoalWithRetry({ threadId, action: 'pause', ref: ref! }, threadId)
-        } else if (action === 'resume') {
-          next = await postGoalWithRetry({ threadId, action: 'resume', ref: ref! }, threadId)
-        } else {
-          next = await postGoalWithRetry({ threadId, action: 'clear', ref: ref! }, threadId)
-        }
-        setGoalCommandResult({ goal: next.goal, activation: next.activation })
-        // 命令改过 goal → 让 dock 条重取一次（否则命令建了 goal、条要等换会话才出现）
-        setGoalRefresh((count) => count + 1)
-      } catch (cause) {
-        setGoalCommandResult({
-          goal: null,
-          activation: 'disarmed',
-          error: cause instanceof Error ? cause.message : String(cause)
-        })
-      }
-    },
-    [threadId]
-  )
-
   const submit = useCallback(
     (message: OutgoingMessage) => {
       if (!ready) return
-      // PB-039：`/goal` 命令走命令通道（不进历史）；invalid → 报错不发送
-      if (message.text.trimStart().startsWith('/goal')) {
-        const parsed = parseGoalCommand(message.text)
-        if (parsed.kind === 'invalid') {
-          setGoalCommandResult({ goal: null, activation: 'disarmed', error: parsed.message })
+      const text = message.text.trimStart()
+      const goalLine = /^\/goal(?:\s|$)/u.test(text)
+      // PB-018：内核模式所有 slash 命令走命令平面（不进历史）；flag 关只拦 `/goal`
+      // （由 main 的旧 store 降级实现处理 —— renderer 已无手写解析器）。
+      if (text.startsWith('/') && (kernelMode || goalLine)) {
+        if (message.files.length > 0) {
+          setCommandResult({
+            line: text,
+            running: false,
+            projection: null,
+            plan: null,
+            error: goalLine
+              ? '/goal 附件提交（followup）尚未接入：请先移除附件再执行命令。'
+              : '命令暂不支持附件提交：请先移除附件再执行命令。'
+          })
           return
         }
-        if (parsed.kind === 'action') {
-          // 附件只随 create/edit 的 followup 提交；V1 followup 未接 → 明确报错，不许静默丢弃
-          if (message.files.length > 0) {
-            setGoalCommandResult({
-              goal: null,
-              activation: 'disarmed',
-              error: '/goal 附件提交（followup）尚未接入：请先移除附件再执行命令。'
-            })
-            return
-          }
-          void runGoalCommand(parsed.action, parsed.objective)
-          return
-        }
+        void runCommandLine(text)
+        return
       }
       if (isLocked()) {
         useSessionsStore.getState().enqueueMessage(threadId, message)
@@ -1298,7 +1345,7 @@ function ActiveChat({
       }
       dispatch(message)
     },
-    [dispatch, isLocked, ready, threadId]
+    [dispatch, isLocked, kernelMode, ready, threadId, runCommandLine]
   )
 
   /**
@@ -1598,14 +1645,17 @@ function ActiveChat({
         className={cn('relative shrink-0', hero && 'animate-message-in [animation-delay:80ms]')}
       >
         <WelcomeHero active={hero} />
-        {/* PB-039：/goal 结果卡片（V1 不进历史，只挂在输入框上方；可关闭） */}
-        {goalCommandResult === null ? null : (
+        {/* PB-018：命令结果卡（command/run → command/done；不进历史，只挂在输入框上方，可关闭） */}
+        {commandResult === null ? null : (
           <div className="pt-2">
             <GoalCommandCard
-              goal={goalCommandResult.goal}
-              activation={goalCommandResult.activation}
-              error={goalCommandResult.error}
-              onClose={() => setGoalCommandResult(null)}
+              line={commandResult.line}
+              projection={commandResult.projection}
+              plan={commandResult.plan}
+              running={commandResult.running}
+              resultText={commandResult.resultText}
+              error={commandResult.error}
+              onClose={() => setCommandResult(null)}
             />
           </div>
         )}
@@ -1667,7 +1717,7 @@ function ActiveChat({
               key={threadId}
               threadId={ready ? threadId : null}
               materialized={realThread}
-              planActive={planActiveOf(plan.state)}
+              planActive={planIsActive === true}
             />
             {/* 草稿会话进入规划失败（还没物化那一档）：原先是工具条里的一行，现在挂在清单上方同一列宽 */}
             {planActionError && !realThread ? (
@@ -1679,11 +1729,11 @@ function ActiveChat({
                 {planActionError}
               </p>
             ) : null}
-            {ready && realThread && interactionsEnabled ? (
+            {ready && (realThread || kernelMode) && interactionsEnabled ? (
               <div className="mx-auto mb-2 w-full max-w-(--chat-input-max-width)">
                 {/* 模式状态摘要（round 81）：只在真在规划里时露一行（普通模式不铺常驻件）；
                     计划内容与批准/修订动作在下面的 PlanApprovalDock 里（默认收起、点开看全文） */}
-                <PlanModeChip state={plan.state} />
+                <PlanModeChip state={plan.state} kernelPlan={kernelMode ? kernelPlan : undefined} />
                 {plan.error ? (
                   <ErrorCard error={new Error(plan.error)} onRetry={refreshPlan} />
                 ) : null}
@@ -1781,6 +1831,7 @@ function ActiveChat({
             <GoalDockContainer
               threadId={threadId}
               onHasGoalChange={setHasGoal}
+              onPlanChange={setKernelPlan}
               refreshKey={goalRefresh}
             />
           </div>
@@ -1831,6 +1882,9 @@ function ActiveChat({
             onSend={submit}
             onStop={stopInteraction}
             onCompact={compactManually}
+            // PB-018：内核模式下 `/` 菜单只列内核 catalog 的命令，选中直接交命令平面执行
+            kernelCommands={kernelMode ? (kernelCommands ?? []) : null}
+            onKernelCommand={(line) => void runCommandLine(line)}
             compactBusy={compacting}
             // round 76：没就绪时「压缩上下文」也点不得（那一条同样要真会话 id）
             compactDisabled={locked || !ready}
