@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * 技能来源清单（round 64）：插件页总览、composer 的 `+ → 引用技能`、agent 侧的技能清单，
  * 读的都是这一份。
@@ -16,7 +16,6 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SKILL_FILE } from '../../../shared/skills'
 import type { InstalledPlugin } from '../../../shared/settings'
-import { discoverSkills } from '../../../mastra/skills/loader'
 import { installedSkillViews, skillSourcesFor } from '../skills'
 
 let tmp: string
@@ -186,13 +185,12 @@ describe('installedSkillViews：总览回包里的技能行', () => {
 })
 
 describe('011：来源清单与有效技能清单的差异', () => {
-  it('有 SKILL.md 但 frontmatter 坏 → 来源清单/界面仍列出，discoverSkills（use_skill 与 read 信任根）排除', () => {
+  it('有 SKILL.md 但 frontmatter 坏 → 来源清单/界面仍列出（不再有 agent 侧 loader，Step 2）', () => {
     makeSkill(skillsDir, 'bad', '正文没有 frontmatter')
 
     const sources = skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
     // 界面仍能看到这个目录（现状），但它不是可用技能
     expect(sources.map((source) => source.dir)).toEqual(['bad'])
     expect(installedSkillViews(sources).map((view) => view.name)).toEqual(['bad'])
-    expect(discoverSkills(sources, { warn: false })).toEqual([])
   })
 })

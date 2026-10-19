@@ -25,8 +25,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { InstalledPlugin } from '../../../shared/settings'
-import { discoverSkills } from '../../../mastra/skills/loader'
-import { SKILL_TEXT_MAX_BYTES } from '../../../mastra/skills/loader'
 import {
   importSkillFromLocal,
   importSkillFromUrl,
@@ -38,6 +36,7 @@ import {
 } from '../skill-add'
 import { hostAllowed } from '../../tools/fetch-policy'
 import { installedSkillViews, skillSourcesFor } from '../skills'
+import { readSkillHeader } from '../../../shared/skills'
 import { makeZip } from './zip-fixture'
 
 const SKILL = '---\nname: demo\ndescription: 演示技能\n---\n# 做法\n'
@@ -420,20 +419,29 @@ describe('同名冲突与原子发布', () => {
     expect(readdirSync(skillsDir)).toEqual(['demo'])
   })
 
-  it('导入的技能**进 agent 侧技能清单**（同一份 skillSourcesFor → discoverSkills）', async () => {
+  it('导入的技能**进宿主技能清单**（skillSourcesFor → installedSkillViews），描述仍在 SKILL.md 头部', async () => {
     const file = join(tmp, 'demo.md')
     writeFileSync(file, SKILL, 'utf8')
     await importSkillFromLocal(deps, file)
 
-    const entries = discoverSkills(skillSourcesFor({ skillsDir, installed: [], builtinDir: null }))
-    expect(entries.map((entry) => [entry.name, entry.description, entry.dir])).toEqual([
-      ['demo', '演示技能', 'demo']
+    const sources = skillSourcesFor({ skillsDir, installed: [], builtinDir: null })
+    // view 契约（round 64 起 = `installedSkillViewSchema`，strictObject）只投影
+    // dir/name/pluginId/pluginName/source —— **不含 description**。
+    // 旧断言（旧内核 loaders 时代）是：
+    //   expect(discoverSkills(...)).toEqual([['demo', '演示技能', 'demo']])
+    // 它测的是随旧内核删除的 `mastra/skills/loader`；`discoverSkills` 宿主侧**无消费方**。
+    // "技能描述字段在宿主视图里缺失"已单独立项 **PB-036**，由 Lead 决定修还是挂账；
+    // 这里不再断言 view 没有的字段，但保留数据源覆盖（见下一条）。
+    expect(installedSkillViews(sources).map((view) => [view.name, view.dir])).toEqual([
+      ['demo', 'demo']
     ])
+    // 描述这条**数据源**必须还在（读 SKILL.md 头部）——能力没丢，只是 view 契约不投影
+    expect(readSkillHeader(sources[0]!)).toMatchObject({ name: 'demo', description: '演示技能' })
   })
 
   it('插件技能复制进来的目录不会被当成"我的技能"（认领归属仍在 installer 记录里）', async () => {
     writeSkill(skillsDir, 'market-p1-plugin-skill', '---\nname: plugin-skill\n---\n正文\n')
-    const entries = discoverSkills(
+    const entries = installedSkillViews(
       skillSourcesFor({ skillsDir, installed: [PLUGIN], builtinDir: null })
     )
     expect(entries.map((entry) => entry.name)).toEqual(['plugin-skill'])
@@ -442,8 +450,8 @@ describe('同名冲突与原子发布', () => {
     )
   })
 
-  it('SKILL.md 上限 = 读取侧那条（256KiB，与 loader 同一常量）', () => {
-    expect(SKILL_MD_MAX_BYTES).toBe(SKILL_TEXT_MAX_BYTES)
+  it('SKILL.md 上限是读取侧的 256KiB（Step 2 后只剩宿主这一处定义）', () => {
+    expect(SKILL_MD_MAX_BYTES).toBe(256 * 1024)
   })
 
   it('大于 64KiB 的中文手册（旧口径会误拒）照样导得进来', async () => {
@@ -494,13 +502,10 @@ describe('暂存根与崩溃残留', () => {
   it('崩溃残留的暂存（带 SKILL.md）不可发现、不占名字：同名导入照常成功', async () => {
     makeStagingLeftover('demo')
 
-    // 不在扫描根里：插件页清单与 agent 技能清单都看不到它
+    // 不在扫描根里：宿主技能清单看不到它（agent 侧清单随旧内核删除，Step 2）
     expect(
       installedSkillViews(skillSourcesFor({ skillsDir, installed: [], builtinDir: null }))
     ).toEqual([])
-    expect(discoverSkills(skillSourcesFor({ skillsDir, installed: [], builtinDir: null }))).toEqual(
-      []
-    )
 
     const file = join(tmp, 'demo.md')
     writeFileSync(file, SKILL, 'utf8')

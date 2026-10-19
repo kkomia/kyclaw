@@ -316,7 +316,7 @@ npm 包的完整性（`package-lock.json` 的 `integrity`，安装时强制校�
 ### 3.1 MPL-2.0 要求的几件事，我们怎么满足
 
 MPL-2.0 是**文件级** copyleft：分发可执行件时要① 给出许可文本、② 告知接收方**如何取得源码**（§3.2）。
-我们改动的只是"怎么调用它"（`src/mastra/tools/render-ppt.ts`），LibreOffice 与包装层本身一个字节没动，
+我们改动的只是"怎么调用它"（`src/main/tools/office-kit.ts`），LibreOffice 与包装层本身一个字节没动，
 所以没有 §3.1 意义上的 Modified Source Files 要公开。
 
 1. **许可文本**：随包分发，不额外张贴 ——

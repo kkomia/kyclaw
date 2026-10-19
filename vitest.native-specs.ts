@@ -8,10 +8,12 @@ import { join, relative, sep } from 'node:path'
  *
  * 宽口径 sweep 跑崩过一个 worker：`Worker exited unexpectedly with exit code 3221226505`
  * （`0xC0000409` = `STATUS_STACK_BUFFER_OVERRUN`，Windows 上原生模块崩的典型码），
- * 挂点是 `src/mastra/__tests__/ppt-template-session.spec.ts`；**同一个文件单跑全绿**。
+ * 当时的挂点是旧内核里的一个 spec（已随 Step 2 删除 `src/mastra` 移除）；**同一个文件单跑全绿**。
  *
  * 这一组 spec 的共同点是：进程里会真的装进 **libsql 原生插件**
- * （`@libsql/win32-x64-msvc/index.node`，经 `@mastra/libsql`）。默认满并发时本机是
+ * （`@libsql/win32-x64-msvc/index.node`）。Step 2 之后 `@mastra/*` 已移除，标记随之收敛，
+ * 但"同时几份原生插件 + 几份临时库"这个维度还在，限流仍然有效。
+ * 默认满并发时本机是
  * `os.availableParallelism()` = 8 个 fork 同时在跑，也就是**同时有 8 份原生插件 + 8 份
  * 临时 libsql 库**在跑；单跑时只有 1 份。把这一组收敛到更小的并发，就是冲着这个维度去的
  * （不碰任何业务代码）。
@@ -19,10 +21,7 @@ import { join, relative, sep } from 'node:path'
  * ## 成员判定（按 import/调用判，不按文件名猜）
  *
  * 扫 `src/**` 下的 spec/test，正文里出现下列任一标记即入组：
- *   - `@mastra/libsql` —— 自己 `new LibSQLStore` / `LibSQLVector`；
- *   - `startAgentServer(` —— 走 `main/agent/service.ts`，内部 `createKyclawMastra` 会
- *     `await import('@mastra/libsql')`（见 `src/mastra/index.ts`）；
- *   - `createKyclawMastra(` —— 同上，直接起真 Mastra。
+ *   - `startAgentServer(` —— 走 `main/agent/service.ts`，会起真宿主服务（存储/插件/终端）。
  *
  * 带左括号是为了只认"真的调用/导入"，不认注释里顺口提一句的（例如
  * `src/main/agent/__tests__/authoring-runtime.spec.ts` 只在头注里提了 `startAgentServer`，
@@ -42,7 +41,7 @@ import { join, relative, sep } from 'node:path'
  *     没有原生插件，不属这个维度）。
  * `node-pty` 在测试里从没被真加载过（一律注入假件），`git` 子进程是同步短命令，都留在并行池。
  */
-const MARKERS = ['@mastra/libsql', 'startAgentServer(', 'createKyclawMastra(']
+const MARKERS = ['startAgentServer(']
 
 /** 只扫测试文件；`out/`、`dist` 系产物目录不进 */
 const TEST_FILE = /\.(spec|test)\.tsx?$/

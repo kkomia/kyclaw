@@ -1,6 +1,6 @@
 # kyclaw
 
-Kimi 风格三栏桌面应用：Electron 44 + React 19 壳，主进程内嵌 Mastra agent（会话/记忆/工具）。
+Kimi 风格三栏桌面应用：Electron 44 + React 19 壳；agent 由随包的 DSH 内核子进程提供（独立进程，会话/记忆/工具都在内核侧，主进程只做适配与安全边界）。
 
 ## Recommended IDE Setup
 

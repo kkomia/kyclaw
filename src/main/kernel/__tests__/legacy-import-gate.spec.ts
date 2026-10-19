@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * PB-020 A2c：旧路径 import 闸门（可执行版，替代手工 grep 的遗忘风险）。
  *
@@ -18,12 +18,8 @@ const ROOT = process.cwd()
 const CODE_EXT = /\.(ts|tsx)$/
 const TEST_PATH = /__tests__|\.spec\./
 
-/** 附录 A allowlist：文件相对路径 + import 的模块串（都命中才算批准）。 */
-const ALLOWLIST: ReadonlyArray<{ file: string; module: string }> = [
-  { file: 'src/main/plugins/__tests__/skill-add.spec.ts', module: 'mastra/skills/loader' },
-  { file: 'src/main/plugins/__tests__/skill-add.spec.ts', module: 'mastra/skills/loader' },
-  { file: 'src/main/plugins/__tests__/skills.spec.ts', module: 'mastra/skills/loader' }
-]
+// Step 2 之后：`src/mastra` 已删除，测试侧的旧路径 import 也一并清零。
+// 这里**没有再留 allowlist**：留一个空数组 + 过滤断言会变成永不失败的假闸门（Step 2 前它确实有 3 条例外）。
 
 interface Hit {
   file: string
@@ -73,10 +69,6 @@ function isProd(hit: Hit): boolean {
   return !TEST_PATH.test(hit.file)
 }
 
-function allowed(hit: Hit): boolean {
-  return ALLOWLIST.some((item) => item.file === hit.file && hit.module.includes(item.module))
-}
-
 describe('PB-020 A2c：旧路径 import 闸门', () => {
   it('生产 src/main + src/shared：静态/动态 mastra import = 0', () => {
     const hits = scan(['src/main', 'src/shared']).filter(isProd)
@@ -94,16 +86,14 @@ describe('PB-020 A2c：旧路径 import 闸门', () => {
     ).toEqual([])
   })
 
-  it('测试：只允许附录 A 的 3 处 loader 依赖（且必须真实存在）', () => {
+  it('测试：旧路径 import = 0（Step 2 后 allowlist 已清空，没有例外）', () => {
     const hits = scan(['src/main', 'src/shared']).filter((hit) => !isProd(hit))
-    const unapproved = hits.filter((hit) => !allowed(hit))
+    // 不写成 `hits.filter(allowlist)`：allowlist 为空时那个 filter 恒空，会变成永不失败的假闸门。
     expect(
-      unapproved,
-      `不在附录 A 的测试 import：\n${unapproved.map((h) => `${h.file}:${h.line} ${h.text}`).join('\n')}`
+      hits,
+      `测试里仍有旧路径 import（src/mastra 已删除，这些 import 必然解析失败）：\n${hits
+        .map((h) => `${h.file}:${h.line} ${h.text}`)
+        .join('\n')}`
     ).toEqual([])
-    expect(hits.filter(allowed)).toHaveLength(3)
-    expect(hits.filter(allowed).every((hit) => hit.module.includes('mastra/skills/loader'))).toBe(
-      true
-    )
   })
 })
