@@ -48,12 +48,6 @@ export function PlanReviewCard({
         <p className="text-b2 font-medium text-ink">计划评审</p>
         <p className="text-c2 text-ink-tertiary">Approve / Keep planning</p>
       </div>
-      <div
-        data-testid="plan-review-markdown"
-        className="max-h-[min(30vh,18rem)] min-w-0 overflow-y-auto overscroll-contain rounded-control border-(length:--hairline-width) border-hairline bg-surface px-3 py-2 text-c1"
-      >
-        <TextPart text={review.detail} />
-      </div>
       {keepFeedback ? (
         <label className="flex flex-col gap-1 text-c1 text-ink-secondary">
           反馈（可选，告诉模型怎么改）
@@ -67,6 +61,7 @@ export function PlanReviewCard({
           />
         </label>
       ) : null}
+      {/* 动作放在正文上方：长计划也不会把 Approve / Keep planning 顶到滚动区外 */}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
@@ -98,6 +93,12 @@ export function PlanReviewCard({
           </Button>
         )}
         {submitting ? <span className="text-c2 text-ink-tertiary">提交中…</span> : null}
+      </div>
+      <div
+        data-testid="plan-review-markdown"
+        className="max-h-[min(30vh,18rem)] min-w-0 overflow-y-auto overscroll-contain rounded-control border-(length:--hairline-width) border-hairline bg-surface px-3 py-2 text-c1"
+      >
+        <TextPart text={review.detail} />
       </div>
     </section>
   )
