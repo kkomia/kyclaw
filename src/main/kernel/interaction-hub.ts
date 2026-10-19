@@ -152,8 +152,12 @@ export interface PendingQuestion {
     id: string
     question: string
     header?: string
+    /** PB-044：plan review 的完整 Markdown（`exit_plan_mode` 问题的 detail） */
+    detail?: string
     options?: ReadonlyArray<{ label: string; description?: string }>
     multiSelect?: boolean
+    /** PB-044：plan review 意图（kind/approve label/callId）；没有就不按计划审批评判 */
+    intent?: { kind?: string; approve?: string; callId?: string }
   }>
 }
 
@@ -314,7 +318,9 @@ export class InteractionHub {
    * PB-026 写面用：按 `eventId` 查这条交互是否还挂着（审批或提问），拿到它所属的 threadId。
    * 找不到返回 null——调用方据此区分「未知 eventId」与「已结算」（见 `isSettledEvent`）。
    */
-  findPendingByEventId(eventId: string): { threadId: string; kind: 'approval' | 'question' } | null {
+  findPendingByEventId(
+    eventId: string
+  ): { threadId: string; kind: 'approval' | 'question' } | null {
     for (const [threadId, byId] of this.pending) {
       if (byId.has(eventId)) return { threadId, kind: 'approval' }
     }
@@ -333,15 +339,13 @@ export class InteractionHub {
    * PB-026：409 回执用——**已结算**那条的终态信息（UI 收到 409 可直接渲结果行，不必再拉快照）。
    * `result` 只在能按 callId 关联到结果行时给（关联不到就是 `null`，UI 刷新一次快照）。
    */
-  findSettledEvent(eventId: string):
-    | {
-        threadId: string
-        kind: 'approval' | 'question'
-        at?: number
-        callId?: string
-        result: ApprovalResult | null
-      }
-    | null {
+  findSettledEvent(eventId: string): {
+    threadId: string
+    kind: 'approval' | 'question'
+    at?: number
+    callId?: string
+    result: ApprovalResult | null
+  } | null {
     const info = this.settledEvents.get(eventId)
     if (info === undefined) return null
     const result =
@@ -502,7 +506,7 @@ export class InteractionHub {
   }
 }
 
-/** 把投影里的 userQuestions view 收窄成我方形状；形状不对返回 null（不猜） */export function parseUserQuestions(
+/** 把投影里的 userQuestions view 收窄成我方形状；形状不对返回 null（不猜） */ export function parseUserQuestions(
   values: unknown
 ): { active: AskUserQuestionItem[]; settled: AskUserSettledItem[] } | null {
   if (typeof values !== 'object' || values === null) return null
@@ -569,8 +573,7 @@ export function feedKernelEvent(
 ): boolean {
   if (event.type === 'approval/asked') {
     const data = event.data as
-      | { id?: unknown; toolName?: unknown; callId?: unknown; reason?: unknown }
-      | undefined
+      { id?: unknown; toolName?: unknown; callId?: unknown; reason?: unknown } | undefined
     if (typeof data?.id !== 'string' || typeof data.toolName !== 'string') return false
     hub.applyApprovalAsked(
       threadId,
@@ -603,10 +606,7 @@ export function feedKernelEvent(
  * PB-025：`adapter.onInteractionEvent` 的直连入口——把 `$events` waterfall 事件折叠进 hub。
  * 审批 → 可应答挂起（id = eventId）；提问 → 可应答提问挂起。返回是否有状态变化。
  */
-export function applyInteractionEvent(
-  hub: InteractionHub,
-  event: KernelInteractionEvent
-): boolean {
+export function applyInteractionEvent(hub: InteractionHub, event: KernelInteractionEvent): boolean {
   if (event.kind === 'approval') {
     hub.applyApprovalRequest(event.threadId, {
       eventId: event.eventId,
@@ -650,7 +650,9 @@ export async function answerContinued(
     answerContinuedQuestion: (
       threadId: string,
       callId: string,
-      answer: { answers: ReadonlyArray<{ id: string; selected: readonly string[]; custom?: string }> }
+      answer: {
+        answers: ReadonlyArray<{ id: string; selected: readonly string[]; custom?: string }>
+      }
     ) => Promise<boolean>
   },
   threadId: string,

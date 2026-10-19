@@ -107,17 +107,23 @@ export interface ApprovalRequestEvent {
 }
 
 /** 提问 waterfall → 我方挂起项 */
+export interface QuestionRequestItem {
+  id: string
+  question: string
+  header?: string
+  /** PB-044：`exit_plan_mode` 的完整 plan Markdown（内核问题 `detail`） */
+  detail?: string
+  options?: ReadonlyArray<{ label: string; description?: string }>
+  multiSelect?: boolean
+  /** PB-044：plan review 意图（`kind:'plan-review'` + approve label + callId）；其他问题没有 */
+  intent?: { kind?: string; approve?: string; callId?: string }
+}
+
 export interface QuestionRequestEvent {
   kind: 'question'
   eventId: string
   threadId: string
-  questions: ReadonlyArray<{
-    id: string
-    question: string
-    header?: string
-    options?: ReadonlyArray<{ label: string; description?: string }>
-    multiSelect?: boolean
-  }>
+  questions: ReadonlyArray<QuestionRequestItem>
 }
 
 export type KernelInteractionEvent = ApprovalRequestEvent | QuestionRequestEvent
@@ -152,8 +158,10 @@ export function interactionFromFrame(frame: RemoteEventFrame): KernelInteraction
         id?: unknown
         question?: unknown
         header?: unknown
+        detail?: unknown
         options?: unknown
         multiSelect?: unknown
+        intent?: unknown
       }
       if (typeof question.id !== 'string' || typeof question.question !== 'string') return []
       const options = Array.isArray(question.options)
@@ -171,13 +179,26 @@ export function interactionFromFrame(frame: RemoteEventFrame): KernelInteraction
             ]
           })
         : []
+      const intentRecord =
+        typeof question.intent === 'object' && question.intent !== null
+          ? (question.intent as { kind?: unknown; approve?: unknown; callId?: unknown })
+          : null
+      const intent = {
+        ...(typeof intentRecord?.kind === 'string' ? { kind: intentRecord.kind } : {}),
+        ...(typeof intentRecord?.approve === 'string' ? { approve: intentRecord.approve } : {}),
+        ...(typeof intentRecord?.callId === 'string' ? { callId: intentRecord.callId } : {})
+      }
       return [
         {
           id: question.id,
           question: question.question,
           ...(typeof question.header === 'string' ? { header: question.header } : {}),
+          ...(typeof question.detail === 'string' && question.detail.trim() !== ''
+            ? { detail: question.detail }
+            : {}),
           ...(options.length === 0 ? {} : { options }),
-          ...(question.multiSelect === true ? { multiSelect: true } : {})
+          ...(question.multiSelect === true ? { multiSelect: true } : {}),
+          ...(Object.keys(intent).length === 0 ? {} : { intent })
         }
       ]
     })

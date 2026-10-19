@@ -131,6 +131,49 @@ describe('waterfall → 我方交互事件', () => {
     })
     expect(interactionFromFrame(empty!)).toBeNull()
   })
+
+  it('PB-044：exit_plan_mode 的 detail/intent 原样透传（plan Markdown 在 detail）', () => {
+    const plan = '# 三步验证计划\n\n1. 读配置\n2. 探针\n3. 截图'
+    const frame = parseRemoteEventFrame({
+      type: 'waterfall',
+      event: 'user-questions/request',
+      eventId: 'e-plan',
+      agentId: 'session-plan',
+      request: {
+        questions: [
+          {
+            id: 'plan-review',
+            header: 'Plan review',
+            question: 'Approve this plan and leave plan mode?',
+            detail: plan,
+            options: [
+              { label: 'Approve', description: 'Leave plan mode' },
+              { label: 'Keep planning', description: 'Stay in plan mode' }
+            ],
+            intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-plan-1' }
+          }
+        ]
+      }
+    })
+    expect(interactionFromFrame(frame!)).toEqual({
+      kind: 'question',
+      eventId: 'e-plan',
+      threadId: 'session-plan',
+      questions: [
+        {
+          id: 'plan-review',
+          header: 'Plan review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: plan,
+          options: [
+            { label: 'Approve', description: 'Leave plan mode' },
+            { label: 'Keep planning', description: 'Stay in plan mode' }
+          ],
+          intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-plan-1' }
+        }
+      ]
+    })
+  })
 })
 
 describe('$events/result 回执形状（钉死，别再套一层 args）', () => {

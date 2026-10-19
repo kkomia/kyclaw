@@ -321,6 +321,28 @@ describe('PB-025 waterfall → hub 接线', () => {
     expect(pending[0]?.eventId).toBe('q-evt-1')
     expect(Number.isFinite(Date.parse(pending[0]?.suspendedAt ?? ''))).toBe(true)
 
+    // PB-044：plan-review 的 detail/intent 必须原样穿过 hub（否则 UI 没有 plan 正文）
+    const planHub = new InteractionHub()
+    applyInteractionEvent(planHub, {
+      kind: 'question',
+      eventId: 'q-plan',
+      threadId: 'thread-A',
+      questions: [
+        {
+          id: 'plan-review',
+          question: 'Approve this plan and leave plan mode?',
+          detail: '# 三步计划',
+          options: [{ label: 'Approve' }, { label: 'Keep planning' }],
+          intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-plan-1' }
+        }
+      ]
+    })
+    expect(planHub.snapshot('thread-A').questions.pending[0]?.questions[0]).toMatchObject({
+      id: 'plan-review',
+      detail: '# 三步计划',
+      intent: { kind: 'plan-review', approve: 'Approve', callId: 'call-plan-1' }
+    })
+
     const sent: unknown[] = []
     await respondAndDismiss(
       {

@@ -67,12 +67,25 @@ export interface KernelQuestionOption {
   description?: string
 }
 
+/** PB-044：内核 plan review 的意图（`exit_plan_mode` 的 userQuestions 问题自带） */
+export interface KernelQuestionIntent {
+  /** 已知值 `plan-review`；未知值不猜 */
+  kind?: string
+  /** 批准选项的原始 label（回包必须用原始 label） */
+  approve?: string
+  /** 发起审批的 tool call id（与工具 part 对应用；没有就不关联） */
+  callId?: string
+}
+
 export interface KernelQuestionItem {
   id: string
   question: string
   header?: string
+  /** PB-044：plan review 的完整 Markdown（来自内核问题 detail）；没有就不渲染计划正文 */
+  detail?: string
   options?: readonly KernelQuestionOption[]
   multiSelect?: boolean
+  intent?: KernelQuestionIntent
 }
 
 /** 内核阻塞式提问（来自 `$events` waterfall；`eventId` 可用于 respond） */
