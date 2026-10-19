@@ -26,7 +26,24 @@ const kernel = vi.hoisted(() => {
     running: boolean
     blank: boolean
     activeAttempt?: { attemptId: string; startedAfterSeq: number; nextIndex: number }
+    /** 内核 session/projections 里的 goal / plan（每会话独立，用来验证命令面不串号） */
+    goal?: {
+      goal: {
+        id: string
+        objective: string
+        phase: 'active' | 'paused' | 'blocked' | 'complete'
+        maxGoalRounds: number
+        revision: number
+      }
+      roundsStarted: number
+      createdAt: number
+      updatedAt: number
+    }
+    plan?: { active: boolean; pending: boolean }
   }
+
+  /** 内核 rc.2 实测的命令清单（docs: 见 bao/b3-3-commands-goal.md §1） */
+  const COMMANDS = ['compact', 'export', 'feedback', 'goal', 'permission', 'plan']
 
   const state = {
     sessions: new Map<string, FakeSession>(),
@@ -35,6 +52,8 @@ const kernel = vi.hoisted(() => {
     sent: [] as Array<Record<string, unknown>>,
     prompts: [] as Array<{ sessionId: string; text: string }>,
     creates: [] as Array<{ cwd: string; sessionId?: string }>,
+    /** commands/execute 真的被调用的记录（验证未知命令没被发给内核） */
+    executes: [] as Array<{ agentId: string; line: string }>,
     /** 这些 sessionId 的 prompt 会被内核以 session/writer-held 拒绝 */
     writerHeld: new Set<string>(),
     /** 这些 sessionId 的 create 会被内核以 session/conflict 拒绝 */
@@ -43,9 +62,12 @@ const kernel = vi.hoisted(() => {
     followErrors: new Map<string, { code: string; message: string }>(),
     /** 覆盖 session/list 里回给宿主的 cwd 写法（模拟内核归一化差异） */
     listCwdOverride: new Map<string, string>(),
+    /** commands/list 是否失败（验证清单拉不到时不阻断已知命令） */
+    listCommandsFails: false,
     seq: 100,
     autoSession: 0,
-    attemptCount: 0
+    attemptCount: 0,
+    commandCount: 0
   }
 
   let onMessage: ((text: string) => void) | undefined
@@ -173,8 +195,74 @@ const kernel = vi.hoisted(() => {
         finishTurn(sessionId ?? '', '', 'cancelled')
         return {}
       }
-      case 'session/projections':
-        return { values: { goal: null, plan: { active: false, pending: false } } }
+      case 'session/projections': {
+        // 投影按 session 分开返回：命令面/投影面"传 threadId 不串号"靠这里验
+        const session = state.sessions.get(sessionId ?? '')
+        return {
+          values: {
+            goal: session?.goal ?? null,
+            plan: session?.plan ?? { active: false, pending: false }
+          }
+        }
+      }
+      case 'commands/list': {
+        if (state.listCommandsFails)
+          throw new Error('kernel rpc: commands/list failed (gateway/internal): boom')
+        return COMMANDS.map((name) => ({ name, description: `${name} command` }))
+      }
+      case 'commands/execute': {
+        // 真实内核语义：只认已知命令；未识别行**返回 undefined 且不发事件**（Eve 的 F2 实证）
+        const agentId = typeof args.agentId === 'string' ? args.agentId : ''
+        const line = typeof args.line === 'string' ? args.line : ''
+        const session = state.sessions.get(agentId)
+        if (session === undefined) return undefined
+        state.executes.push({ agentId, line })
+        const name = line.trim().replace(/^\//u, '').split(/\s+/u)[0] ?? ''
+        if (!COMMANDS.includes(name)) return undefined
+        state.commandCount += 1
+        const commandId = `cmd-${String(state.commandCount)}`
+        if (name === 'goal') {
+          const rest = line.trim().replace(/^\/goal\s*/u, '')
+          if (rest === 'pause' || rest === 'resume') {
+            if (session.goal !== undefined) {
+              session.goal.goal.phase = rest === 'pause' ? 'paused' : 'active'
+              session.goal.goal.revision += 1
+            }
+            return { commandId, result: { kind: 'success', text: `Goal ${rest}d.` } }
+          }
+          if (rest === '' || rest === 'clear') {
+            return {
+              commandId,
+              result: { kind: 'success', text: 'No goal is currently set.\nUsage: /goal <objective>' }
+            }
+          }
+          session.goal = {
+            goal: {
+              id: `goal-${agentId}`,
+              objective: rest,
+              phase: 'active',
+              maxGoalRounds: 16,
+              revision: 1
+            },
+            roundsStarted: 0,
+            createdAt: 0,
+            updatedAt: 0
+          }
+          return {
+            commandId,
+            result: { kind: 'success', text: `Goal created\nObjective: ${rest}\nRounds: 0/16` }
+          }
+        }
+        if (name === 'plan') {
+          const off = /\boff\b/u.test(line)
+          session.plan = off ? { active: false, pending: false } : { active: true, pending: false }
+          return {
+            commandId,
+            result: { kind: 'success', text: off ? 'Plan mode off.' : 'Plan mode on.' }
+          }
+        }
+        return { commandId, result: { kind: 'success', text: `${name} ok` } }
+      }
       default:
         return []
     }
@@ -238,13 +326,16 @@ const kernel = vi.hoisted(() => {
       state.sent.length = 0
       state.prompts.length = 0
       state.creates.length = 0
+      state.executes.length = 0
       state.writerHeld.clear()
       state.createConflicts.clear()
       state.followErrors.clear()
       state.listCwdOverride.clear()
+      state.listCommandsFails = false
       state.seq = 100
       state.autoSession = 0
       state.attemptCount = 0
+      state.commandCount = 0
       onMessage = undefined
       onClose = undefined
     }
@@ -494,5 +585,105 @@ describe('sameCwd（冲突预检的比较归一化）', () => {
     expect(sameCwd('/home/me/app', '/home/me/app/', false)).toBe(true)
     expect(sameCwd('/home/me/app', '/home/me/App', false)).toBe(false)
     expect(sameCwd('/home/me/app', '/home/me/app2', false)).toBe(false)
+  })
+})
+
+/**
+ * PB-004 前置：命令/投影面按 threadId 走（Cyrus 的 renderer 命令菜单要吃这个）。
+ * 多点两层：缺省 = 默认会话（旧调用零变化）；传 threadId = 该 thread 的内核 session。
+ */
+describe('PB-004 命令/投影面 threadId：不传走默认会话，传了不串号', () => {
+  it('goal/plan 投影按 threadId 隔离；缺省仍是默认会话', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+
+    // 默认会话：没建过 goal，plan 未开
+    expect(await adapter.readGoalState()).toBeNull()
+    expect(await adapter.readPlanState()).toEqual({ active: false, pending: false })
+
+    // thread-A 建 goal；thread-B 读不到
+    const created = await adapter.executeCommand('/goal 目标-A', 'thread-A')
+    expect(created).toMatchObject({ result: { kind: 'success' } })
+    const goalA = await adapter.readGoalState('thread-A')
+    expect(goalA?.goal.objective).toBe('目标-A')
+    expect(goalA?.goal.phase).toBe('active')
+    expect(await adapter.readGoalState('thread-B')).toBeNull()
+    expect(await adapter.readGoalState()).toBeNull()
+
+    // thread-B 开 plan；thread-A 的 plan 仍是关的（不是同一会话的投影）
+    await adapter.executeCommand('/plan', 'thread-B')
+    expect(await adapter.readPlanState('thread-B')).toEqual({ active: true, pending: false })
+    expect(await adapter.readPlanState('thread-A')).toEqual({ active: false, pending: false })
+    expect(await adapter.readPlanState()).toEqual({ active: false, pending: false })
+
+    // **反向**：thread-A 里的 goal 状态变化不影响 thread-B 的 goal（B 仍无 goal）
+    await adapter.executeCommand('/goal pause', 'thread-A')
+    expect((await adapter.readGoalState('thread-A'))?.goal.phase).toBe('paused')
+    expect(await adapter.readGoalState('thread-B')).toBeNull()
+
+    // 命令真的发到了各自的内核 session（agentId 就是 threadId）
+    expect(kernel.state.executes.map((item) => item.agentId)).toContain('thread-A')
+    expect(kernel.state.executes.map((item) => item.agentId)).toContain('thread-B')
+  })
+
+  it('listCommands(threadId) 与缺省都走内核清单；thread 只建会话、不额外挂 follow', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const names = (await adapter.listCommands('thread-menu')).map((command) => command.name)
+    expect(names).toContain('goal')
+    expect(names).toContain('plan')
+    // 命令面用的 thread 不需要流：只有默认会话那一条 follow
+    expect(kernel.state.streams.size).toBe(1)
+    expect(kernel.state.creates).toContainEqual({
+      cwd: expect.any(String),
+      sessionId: 'thread-menu'
+    })
+    // 缺省调用行为不变
+    expect((await adapter.listCommands()).map((command) => command.name)).toEqual(names)
+  })
+})
+
+/**
+ * PB-005-F2：未知命令**不再静默丢弃**（adapter 层；纯函数见 kernel-commands.spec.ts）。
+ */
+describe('PB-005-F2 未知命令可诊断', () => {
+  it('未知命令 → 结构化 error（与内核同形），且**没发给内核**', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const result = (await adapter.executeCommand('/eve-nope-command')) as {
+      commandId: string
+      result: { kind: string; text: string }
+    }
+    expect(result.commandId).toMatch(/^kyclaw-unknown-/u)
+    expect(result.result.kind).toBe('error')
+    expect(result.result.text).toContain('/eve-nope-command')
+    expect(result.result.text).toContain('/goal')
+    // 内核没收到这一行（否则又会是"返回 undefined 的静默丢弃"）
+    expect(kernel.state.executes.filter((item) => item.line.includes('eve-nope-command'))).toHaveLength(
+      0
+    )
+  })
+
+  it('已知命令原样透传内核结果（不缺诊断层）', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const result = (await adapter.executeCommand('/goal 目标-A')) as {
+      commandId: string
+      result: { kind: string; text: string }
+    }
+    expect(result.commandId).toMatch(/^cmd-/u)
+    expect(result.result.kind).toBe('success')
+    expect(kernel.state.executes).toContainEqual({ agentId: expect.any(String), line: '/goal 目标-A' })
+  })
+
+  it('命令清单拉不到时不阻断（内核仍是权威），只告警', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    kernel.state.listCommandsFails = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = (await adapter.executeCommand('/goal 目标-B')) as {
+        result: { kind: string }
+      }
+      expect(result.result.kind).toBe('success')
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('跳过未知命令校验'))).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

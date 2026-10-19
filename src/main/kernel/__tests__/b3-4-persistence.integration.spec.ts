@@ -107,7 +107,7 @@ function startAdapter(appDataDir: string, dshHome: string, stub: Stub): Promise<
 }
 
 describe.runIf(ENABLED)('B3.4 threadId=sessionId + 刷新重接 + 占用错误', () => {
-  it('同会话两轮带上下文；中途 reattach 有 opening；conflict / writer-held 可触发', async () => {
+  it('同会话两轮带上下文；中途 reattach 有 opening；conflict 实测；writer-held 视内核实测（当前未触发）', async () => {
     const stub = await startStub()
     const root = mkdtempSync(join(tmpdir(), 'kyclaw-b34-'))
     const home = join(root, 'home')
@@ -119,6 +119,11 @@ describe.runIf(ENABLED)('B3.4 threadId=sessionId + 刷新重接 + 占用错误',
     try {
       a1 = await startAdapter(dirA, home, stub)
       const first = await a1.startTurn('第一轮问题：记住 42', { threadId: 'thread-b34' })
+      console.log('[b34] first turn', JSON.stringify(first).slice(0, 1200))
+      console.log(
+        '[b34] stub bodies so far',
+        JSON.stringify(stub.bodies.map((body) => ({ len: body.length, hasFirst: body.includes('记住 42') })))
+      )
       expect(first.text).toMatch(/第 \d+ 次回答/)
       const listed = await a1.listKernelSessions()
       console.log('[b34] sessions', JSON.stringify(listed.filter((s) => s.sessionId === 'thread-b34')))

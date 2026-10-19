@@ -75,6 +75,29 @@ function startStub(): Promise<{ server: Server; baseUrl: string }> {
 }
 
 describe.runIf(ENABLED)('B3.3 goal 命令与投影（内核权威）', () => {
+  /**
+   * PB-005-F1：`/plan` 之后的投影有**两种合法形态**，取决于当时有没有在途 turn：
+   * - 无在途 turn → `{active:true,pending:false}`（"applies from the next step" 已生效）
+   * - 有在途 turn → `{active:false,pending:true}`（等下一步开始才生效）
+   *
+   * 本 spec 前面 `/goal resume` 之后 goal 是 armed 状态，内核会自己续跑，所以在途 turn
+   * 有无并不确定 → 只能断言"被置上了"，且**两种形态都接受**；顺带轮询等投影落地，
+   * 消掉"命令已返回但投影还没提交"的时序抖动。
+   */
+  async function waitPlanArmed(
+    adapter: KernelAdapter,
+    timeoutMs = 10_000
+  ): Promise<{ active: boolean; pending: boolean } | null> {
+    const deadline = Date.now() + timeoutMs
+    let last: { active: boolean; pending: boolean } | null = null
+    while (Date.now() < deadline) {
+      last = await adapter.readPlanState()
+      if (last !== null && (last.active || last.pending)) return last
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return last
+  }
+
   it('list 中含唯一 goal；create→query→pause→resume 四步都来自内核', async () => {
     const stub = await startStub()
     const appDataDir = mkdtempSync(join(tmpdir(), 'kyclaw-b33-goal-'))
@@ -120,10 +143,19 @@ describe.runIf(ENABLED)('B3.3 goal 命令与投影（内核权威）', () => {
       console.log('[plan before]', JSON.stringify(planBefore))
       const planResult = await adapter.executeCommand('/plan')
       console.log('[plan command]', JSON.stringify(planResult).slice(0, 600))
-      const planAfter = await adapter.readPlanState()
+      const planAfter = await waitPlanArmed(adapter)
       console.log('[plan after]', JSON.stringify(planAfter))
       expect(planBefore).toEqual({ active: false, pending: false })
-      expect(planAfter).toEqual({ active: false, pending: true })
+      // PB-005-F1：两种合法形态都算"已置上"（有/无在途 turn），只有两者皆 false 才是回归
+      expect(planAfter, `plan 投影没被置上：${JSON.stringify(planAfter)}`).not.toBeNull()
+      expect(
+        [
+          { active: true, pending: false },
+          { active: false, pending: true },
+          { active: true, pending: true }
+        ],
+        `plan 投影形态不在内核合法集合内：${JSON.stringify(planAfter)}`
+      ).toContainEqual(planAfter)
     } finally {
       await adapter?.stop()
       try {

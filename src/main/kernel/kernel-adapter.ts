@@ -19,6 +19,12 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectKernelPeer } from './kernel-auth'
+import {
+  commandNameFromLine,
+  unknownCommandResult,
+  type KernelCommandInfo,
+  type KernelCommandResult
+} from './kernel-commands'
 import { startKernelProcess } from './kernel-process'
 import { KernelRpcClient } from './kernel-rpc'
 import { KernelSseMapper, type KernelFollowValue, type RendererSseFrame } from './sse-map'
@@ -80,10 +86,15 @@ export interface KernelAdapter {
   startTurn(text: string, options?: StartTurnOptions): Promise<KernelTurnResult>
   cancelTurn(threadId?: string): Promise<void>
   stop(): Promise<void>
-  listCommands(): Promise<readonly { name: string; description?: string }[]>
-  executeCommand(line: string): Promise<unknown>
-  readGoalState(): Promise<KernelGoalState | null>
-  readPlanState(): Promise<{ active: boolean; pending: boolean } | null>
+  /**
+   * B3.3/PB-004：命令与投影面按会话走。
+   * `threadId` 缺省 = 启动时创建的默认会话（flag 关/旧调用零变化）；传了就按该 thread 的
+   * 内核 session 走（与 `body.memory.thread` 当 sessionId 的口径一致）。
+   */
+  listCommands(threadId?: string): Promise<readonly KernelCommandInfo[]>
+  executeCommand(line: string, threadId?: string): Promise<unknown>
+  readGoalState(threadId?: string): Promise<KernelGoalState | null>
+  readPlanState(threadId?: string): Promise<{ active: boolean; pending: boolean } | null>
   /** B3.4：内核可见会话列表（只读 header） */
   listKernelSessions(): Promise<KernelSessionInfo[]>
   /** B3.4：刷新重接（同一进程内重新 follow）；返回 opening 的 startedAfterSeq/nextIndex */
@@ -199,6 +210,22 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     const states = new Map<string, SessionState>()
     const byStream = new Map<string, SessionState>()
     let closed = false
+
+    /** 内核已注册的命令（诊断/校验共用一次 RPC；内核是权威，我们不缓存） */
+    const listCommandsInternal = (sessionId: string): Promise<readonly KernelCommandInfo[]> =>
+      rpc.call<readonly KernelCommandInfo[]>('commands/list', { agentId: sessionId })
+
+    /**
+     * 命令/投影面用哪个内核 session：缺省 = 默认会话；给了 threadId 就按该 thread 走。
+     * 已经 follow 过的 thread 直接复用；没见过的只 `session/create`（复用或新建），
+     * **不额外开 follow**——命令和投影不产生流，没必要给每个 thread 挂一条空订阅。
+     */
+    const sessionIdFor = async (threadId?: string): Promise<string> => {
+      if (threadId === undefined) return defaultSessionId
+      const existing = states.get(threadId)
+      if (existing !== undefined) return existing.sessionId
+      return createSession(threadId)
+    }
 
     const listKernelSessions = async (): Promise<KernelSessionInfo[]> => {
       const result = await rpc.call<{ items?: Array<Record<string, unknown>> }>('session/list', {
@@ -460,28 +487,40 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           console.warn('[kyclaw] kernel adapter: cancel failed', kernelUserError(error).message)
         }
       },
-      async listCommands() {
-        return rpc.call<Array<{ name: string; description?: string }>>('commands/list', {
-          agentId: defaultSessionId
-        })
+      async listCommands(threadId?: string) {
+        return listCommandsInternal(await sessionIdFor(threadId))
       },
-      async executeCommand(line: string) {
-        return rpc.call('commands/execute', {
-          agentId: defaultSessionId,
+      async executeCommand(line: string, threadId?: string): Promise<KernelCommandResult | unknown> {
+        // PB-005-F2：内核 `commands/execute` 对未识别行静默丢弃（返回 undefined、无 event），
+        // 这里在发 RPC 前先用内核自己的命令清单校验一次，未知命令合成**与内核同形**的 error 结果。
+        // 清单拉不到时不阻断（内核仍是权威），只告警。
+        const sessionId = await sessionIdFor(threadId)
+        const available = await listCommandsInternal(sessionId).catch((error: unknown) => {
+          console.warn(
+            '[kyclaw] kernel adapter: commands/list 不可用，跳过未知命令校验',
+            error instanceof Error ? error.message : String(error)
+          )
+          return [] as readonly KernelCommandInfo[]
+        })
+        const name = commandNameFromLine(line)
+        if (available.length > 0 && (name === null || !available.some((c) => c.name === name)))
+          return unknownCommandResult(line, available)
+        return rpc.call<KernelCommandResult>('commands/execute', {
+          agentId: sessionId,
           line,
           submittedAttachments: []
         })
       },
-      async readGoalState(): Promise<KernelGoalState | null> {
+      async readGoalState(threadId?: string): Promise<KernelGoalState | null> {
         const projections = await rpc.call<{
           values?: { goal?: KernelGoalState | null }
-        }>('session/projections', { request: { sessionId: defaultSessionId } })
+        }>('session/projections', { request: { sessionId: await sessionIdFor(threadId) } })
         return projections.values?.goal ?? null
       },
-      async readPlanState() {
+      async readPlanState(threadId?: string) {
         const projections = await rpc.call<{
           values?: { plan?: { active?: boolean; pending?: boolean } }
-        }>('session/projections', { request: { sessionId: defaultSessionId } })
+        }>('session/projections', { request: { sessionId: await sessionIdFor(threadId) } })
         const plan = projections.values?.plan
         if (plan === undefined) return null
         return { active: plan.active === true, pending: plan.pending === true }
