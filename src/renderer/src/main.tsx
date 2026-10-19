@@ -4,6 +4,8 @@
 import './styles/tokens/identity.css'
 import './styles/tokens/motion.css'
 import './styles/tailwind.css'
+// PB-026：主界面中文预设字体（@font-face + 三声部 token 覆盖；必须在 tailwind/semantic 之后）
+import './styles/ui-fonts.css'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

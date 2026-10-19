@@ -1,0 +1,56 @@
+/**
+ * PB-026 · 主界面 UI 中文预设字体（复用随包 Noto Sans SC，安装包增量 = 0）
+ *
+ * 背景（用户实测内网离线机）：
+ *   `semantic.css` 的三声部全是**系统字体栈**，干净内网机没有 Noto Sans SC / PingFang，
+ *   中文会落到雅黑或 sans-serif —— 字形不是产品预设。
+ *   但 Office 隔离面早就在用随包的 Noto Sans SC（`@betteroffice/fonts-cjk`，
+ *   NotoSansSC-Regular.otf，8,331,336 B），构建后已在 `out/renderer/assets/`（同源、CSP 允许）。
+ *   所以这里**只加 @font-face 引用同一份文件**，不新增任何字体资产。
+ *
+ * 三条硬口径：
+ *   1. 家族名 `kyclaw-ui-cjk` 排在三声部字体栈的**最前**：中文命中随包字形；
+ *   2. `unicode-range` 只覆盖 CJK / 全角区段 —— **拉丁、数字、西文标点不进这个 face**，
+ *      读数区（ComposerControls 的 13/500/20 + tabular-nums）继续走系统 sans，观感不变；
+ *   3. `font-display: swap`：首帧先用系统字体（或最后兜底）画出来，字体就绪后替换，不挡 FCP。
+ *
+ * 为什么不加 Noto Serif SC：设计语言 §2.2 / D-27 规定**中文段三声部共用同一条黑体链**
+ * （衬线声部只给拉丁），加载 11.6 MB 的宋体对 UI 没有设计依据；需要时另开条目。
+ *
+ * 为什么不改 semantic.css：该文件是字体的权威定义处，但本任务要求与新文件并行、避免与
+ * 并行改动冲突；CSS 自定义属性同特异性下**后定义者胜**，本文件在 tailwind.css（内部 import
+ * semantic.css）之后引入，因此这里覆盖 `--font-*` 等价于改 token，且可整文件回退。
+ */
+
+@font-face {
+  font-family: 'kyclaw-ui-cjk';
+  /* 与 Office 面同一份随包文件（Vite 会按内容 hash 复用已产出的 assets 条目，不重复占体积）。 */
+  src: url('../../../../node_modules/@betteroffice/fonts-cjk/assets/NotoSansSC-Regular.otf')
+    format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  /* 首帧不阻塞：先系统字体，字体就绪后 swap。 */
+  font-display: swap;
+  /* 只接管 CJK：汉字、CJK 标点、全角形式、兼容区；拉丁/数字/西文标点仍走系统字体，
+     避免把 tabular 读数的数字字形换掉。 */
+  unicode-range:
+    U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF,
+    U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+
+:root {
+  /* 中文预设优先、系统栈兜底。家族名在栈首也不影响拉丁：上面的 unicode-range 已把
+     非 CJK 码点排除，字体匹配会直接跳到下一个家族（Segoe / Sitka / Cascadia / Georgia）。 */
+  --font-ui:
+    'kyclaw-ui-cjk', 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-reading:
+    'kyclaw-ui-cjk', 'Sitka Text', 'Sitka Display', Georgia, 'Noto Sans SC', 'Source Han Sans SC',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-prose:
+    'kyclaw-serif-latin', 'kyclaw-ui-cjk', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-code:
+    'Cascadia Mono', 'Cascadia Code', Consolas, 'kyclaw-ui-cjk', 'Noto Sans SC', 'Source Han Sans SC',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
