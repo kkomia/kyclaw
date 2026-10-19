@@ -724,6 +724,22 @@ function ActiveChat({
   const [planActionError, setPlanActionError] = useState<string | null>(null)
   const [enteringPlan, setEnteringPlan] = useState(false)
   const enterPlanLock = useRef(false)
+  /**
+   * PB-027：用宿主旧线程库替换当前消息列 —— **只允许在确有数据时替换**。
+   *
+   * 为什么要有这道闸：内核路径（PB-024 之后 threads 已切内核实现）的轮次**不写宿主旧线程库**，
+   * `fetchThreadMessages` 返回空是"旧库没有这条会话的数据"，不是"会话是空的"。拿空数组
+   * `setMessages([])` 会把用户消息 + 已交付文本整列抹掉（停止后回到欢迎空态，P1 数据丢失）。
+   * 所以：① 内核模式直接不读旧库（旧库不是真源）；② flag 关读到了空快照也不覆盖。
+   * 返回值 = 是否真的替换（调用方目前不需要，但便于测试/诊断）。
+   */
+  const replaceHistoryFromServer = useCallback(async (): Promise<boolean> => {
+    if (kernelMode) return false
+    const history = mapStoredMessages(await fetchThreadMessages(threadId))
+    if (history.length === 0) return false
+    setMessages(history)
+    return true
+  }, [kernelMode, threadId, setMessages])
   const cancelPlan = useCallback(async (): Promise<void> => {
     await stop()
     await settledPlan(threadId)
@@ -732,9 +748,8 @@ function ActiveChat({
     if (current && current.mode !== 'normal' && current.mode !== 'cancelled') {
       await rendererPlansStore.getState().cancel(threadId, current.version)
     }
-    const history = mapStoredMessages(await fetchThreadMessages(threadId))
-    setMessages(history)
-  }, [stop, threadId, setMessages])
+    await replaceHistoryFromServer()
+  }, [replaceHistoryFromServer, stop, threadId])
   const decidePlan = useCallback(
     async (decision: 'approve' | 'revise'): Promise<void> => {
       const current = planSession(rendererPlansStore.getState(), threadId)
@@ -758,9 +773,8 @@ function ActiveChat({
         if (useAskUserStore.getState().threads.get(threadId)?.pending.length) return
         if (!hasPendingAskUser(chat.messages[chat.messages.length - 1])) return
         try {
-          const history = mapStoredMessages(await fetchThreadMessages(threadId))
-          if (chatStreamActive(chat)) return
-          setMessages(history)
+          const replaced = await replaceHistoryFromServer()
+          if (!replaced || chatStreamActive(chat)) return
         } catch {
           useAskUserStore.setState((state) => ({
             threads: new Map(state.threads).set(threadId, {
@@ -770,7 +784,7 @@ function ActiveChat({
           }))
         }
       })
-  }, [threadId, chat, setMessages])
+  }, [threadId, chat, replaceHistoryFromServer])
   useEffect(() => {
     if (!ready || !interactionsEnabled) return
     refreshQuestions()
@@ -796,6 +810,14 @@ function ActiveChat({
       void stop()
       return
     }
+    // PB-027：内核路径停止 = 只 abort 本轮。消息列由 useChat 自己保留（abort 不丢已交付文本）；
+    // **绝不**走旧 ask-user cancel → 旧线程库 history 覆盖（内核轮次不写旧库 → 空数组清列）。
+    // 内核侧挂起的 ask_user/审批由内核 session/cancel 结算（PB-025 接 UI 应答后在此补取消语义）。
+    if (kernelMode) {
+      setPlanActionError(null)
+      void stop()
+      return
+    }
     setPlanActionError(null)
     void useAskUserStore.getState().cancel(
       threadId,
@@ -810,14 +832,13 @@ function ActiveChat({
       },
       async () => {
         try {
-          const history = mapStoredMessages(await fetchThreadMessages(threadId))
-          setMessages(history)
+          await replaceHistoryFromServer()
         } catch {
           throw new Error('停止已确认，但历史刷新失败，请刷新待答问题')
         }
       }
     )
-  }, [threadId, stop, setMessages, interactionsEnabled, realThread])
+  }, [threadId, stop, replaceHistoryFromServer, interactionsEnabled, kernelMode, realThread])
   /**
    * PB-018：探活 + 取内核命令目录。失败/flag 关一律回旧路径（`kernelEnabled` 内部吞错），
    * 不因为网关不可用把对话页推到错误态。
