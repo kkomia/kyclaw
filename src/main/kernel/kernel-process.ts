@@ -28,6 +28,23 @@ export interface KernelProcessHandle {
 
 const READY_PATTERN = /dsh web: (http:\/\/127\.0\.0\.1:(\d+)\/\?token=(\S+))/
 
+/**
+ * 诊断脱敏（H1/Eve 验收）：stderr 进 Error.message / 日志前必须过这一层。
+ *
+ * 防线：即使当前内核 stderr 恰好不打印 token，未来任何一行带上 URL/token/cookie，
+ * 也不能原样进入错误卡（B3.1b 接通后错误文本会到用户眼前）。
+ * - `token=…`（query 参数）→ `token=<redacted>`
+ * - `dsh-auth-…=…`（API cookie）→ `<redacted>`
+ * - `Authorization: Bearer …` / `Cookie: …`  整段值 → `<redacted>`
+ */
+export function redactKernelDiagnostics(text: string): string {
+  return text
+    .replace(/([?&]token=)[^\s"'&]+/giu, '$1<redacted>')
+    .replace(/(dsh-auth-[A-Za-z0-9_-]+=)[^\s;"']+/gu, '$1<redacted>')
+    .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/giu, '$1<redacted>')
+    .replace(/(Cookie:\s*)[^\r\n"']+/giu, '$1<redacted>')
+}
+
 /** 起内核并等到它打印带 token 的回环 URL；超时/提前退出都会 reject 并已清理子进程 */
 export async function startKernelProcess(
   options: StartKernelProcessOptions
@@ -54,7 +71,7 @@ export async function startKernelProcess(
   stderr.on('data', (chunk: Buffer) => {
     const text = String(chunk)
     stderrTail = `${stderrTail}${text}`.slice(-4000)
-    options.onStderr?.(text.replace(READY_PATTERN, 'dsh web: <redacted>'))
+    options.onStderr?.(redactKernelDiagnostics(text))
   })
 
   const ready = await new Promise<{ baseUrl: string; token: string }>((resolve, reject) => {
@@ -64,7 +81,7 @@ export async function startKernelProcess(
       cleanup()
       reject(
         new Error(
-          `kernel process: not ready after ${String(timeoutMs)}ms${stderrTail === '' ? '' : `; stderr: ${stderrTail.slice(-1200)}`}`
+          `kernel process: not ready after ${String(timeoutMs)}ms${stderrTail === '' ? '' : `; stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`
         )
       )
     }, timeoutMs)
@@ -81,7 +98,7 @@ export async function startKernelProcess(
       cleanup()
       reject(
         new Error(
-          `kernel process: exited before ready (code=${String(code)}, signal=${String(signal)})${stderrTail === '' ? '' : `; stderr: ${stderrTail.slice(-1200)}`}`
+          `kernel process: exited before ready (code=${String(code)}, signal=${String(signal)})${stderrTail === '' ? '' : `; stderr: ${redactKernelDiagnostics(stderrTail.slice(-1200))}`}`
         )
       )
     }
