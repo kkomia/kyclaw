@@ -892,7 +892,7 @@ export function buildTrajectory(input: BuildTrajectoryInput): TrajectoryDoc {
       turn: null,
       step: null,
       // 按档说人话：精简 / 去重 / 折叠 / 摘要（老记录没有 level = 摘要档）
-      text: `${COMPACT_VERB[level]} ${compaction.summarized} 条 · 保留 ${compaction.kept} 条`,
+      text: `${COMPACT_VERB[level]} ${compaction.summarized} 条 · 保留 ${compaction.kept ?? '—'} 条`,
       body: compaction.summary,
       thinking: null,
       toolName: null,

@@ -18,7 +18,6 @@ import { createMcpRouter } from '../../mastra/routes/mcp'
 import { createMemoryRouter } from '../../mastra/routes/memory'
 import { createProjectsRouter } from '../../mastra/routes/projects'
 import { createSessionPptTemplatesRouter } from '../../mastra/routes/session-ppt-templates'
-import { createThreadsRouter } from '../../mastra/routes/threads'
 import { createTasksRouter } from '../../mastra/routes/tasks'
 import { createTrajectoryRouter } from '../../mastra/routes/trajectory'
 import { createUsageRouter } from '../../mastra/routes/usage'
@@ -35,9 +34,13 @@ import type { RulesProcessorDependencies } from '../../mastra/rules'
 import { McpLifecycle } from '../mcp/lifecycle'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
+import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
+import {
+  createKernelThreadsRouter,
+  createKernelThreadsUnavailableRouter
+} from '../threads/kernel-threads'
 import { pluginsDirs } from '../plugins/store'
 import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
-import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
 import type { Project } from '../../shared/projects'
 import type { SkillSource } from '../../shared/skills'
 import type { AuthoringRuntime } from '../../shared/authoring'
@@ -477,14 +480,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     requestSnapshots,
     sessionProjects,
     sessionPptTemplates,
-    sessionPptSources,
-    sessionDocxSources,
-    compaction,
     telemetry,
     recall,
     rules,
     tasks,
-    plans,
     goals
   } = await createKyclawMastra({
     dataDir: options.dataDir,
@@ -586,49 +585,21 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   app.route('/api/tasks', createTasksRouter({ memory, store: tasks }))
 
-  // 线程 API 挂同一份服务、走同一道 token 闸门（在闸门之后注册，所以它同样被挡在里面）
+  // 线程 API：0.2.0 例外项，直接走 DSH kernel session；不再注册旧 Mastra createThreadsRouter。
+  // flag 关时也不回退旧实现：没有 kernel adapter 就返回 503 feature-disabled。
+  const threadsDefaultCwd = defaultWorkspaceFor() ?? options.dataDir
+  const kernelThreadsOps =
+    kernelAdapter === null ? null : createKernelSessionOpsForAdapter(kernelAdapter)
   app.route(
     THREADS_ROUTE_PREFIX,
-    createThreadsRouter({
-      memory,
-      tasks,
-      plans,
-      resolveModel: resolveModelFor,
-      // 删线程前先掐掉在跑的那一轮（agent 的线程级取消），否则"取消 → 半截回复落库"
-      // 会把刚删掉的线程写回来（T9 实测到的复活）
-      abortThreadRun: (threadId) => {
-        const agent = mastra.getAgentById(KYCLAW_AGENT_ID)
-        agent?.abortThreadStream({ threadId, resourceId: LOCAL_USER_RESOURCE_ID })
-      },
-      // T18：会话没了，它的项目映射也一起摘掉（别在映射表里留一条指向不存在会话的行）。
-      // 尽力而为：清理失败只记日志，不影响删除本身。
-      onThreadDeleted: (threadId) => {
-        void sessionProjects.clear(threadId).catch((error: unknown) => {
-          console.warn('[kyclaw] 删除会话后清理项目映射失败（不影响删除本身）', error)
+    kernelThreadsOps === null
+      ? createKernelThreadsUnavailableRouter('kernel-not-running')
+      : createKernelThreadsRouter({
+          ops: kernelThreadsOps,
+          defaultCwd: threadsDefaultCwd,
+          // 待接工作区：当前只知道默认工作区；project/thread 归属由后续 PB 接。
+          cwdOf: () => threadsDefaultCwd
         })
-        // round 66：模板映射同理（会话级的选择跟着会话一起消失）
-        void sessionPptTemplates.clear(threadId).catch((error: unknown) => {
-          console.warn('[kyclaw] 删除会话后清理 PPT 模板映射失败（不影响删除本身）', error)
-        })
-        // round 76：PPT 源结构同理（create_ppt 记的那些行跟会话一起走）
-        void sessionPptSources.clear(threadId).catch((error: unknown) => {
-          console.warn('[kyclaw] 删除会话后清理 PPT 源结构失败（不影响删除本身）', error)
-        })
-        // Word 源结构同理（create_docx 记的那些行跟会话一起走）
-        void sessionDocxSources.clear(threadId).catch((error: unknown) => {
-          console.warn('[kyclaw] 删除会话后清理 Word 源结构失败（不影响删除本身）', error)
-        })
-        // round 19：压缩记录同理（它的 thread_id 指向已不存在的会话）
-        void compaction.clear(threadId).catch((error: unknown) => {
-          console.warn('[kyclaw] 删除会话后清理压缩记录失败（不影响删除本身）', error)
-        })
-      },
-      // round 19：上下文压缩（记录读 + 摘要服务）；POST 失败在路由层转人话
-      compaction: {
-        compact: (threadId, keep) => compaction.compact(threadId, keep),
-        of: (threadId) => compaction.current(threadId)
-      }
-    })
   )
 
   // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）

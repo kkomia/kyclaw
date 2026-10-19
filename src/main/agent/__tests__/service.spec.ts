@@ -143,23 +143,15 @@ describe('startAgentServer', () => {
     expect((await fetch(url, { headers: { authorization: 'Bearer wrong-token' } })).status).toBe(
       401
     )
-    expect((await fetch(url, { headers })).status).toBe(404)
+
+    // 0.2.0 threads 是内核例外项：flag 关（本 spec 的 start() 没起内核）时明确 503，
+    // 不再注册旧 Mastra createThreadsRouter；任务面的宿主线程直接写旧 store 造。
     const created = await fetch(`${server.baseUrl}/api/threads`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ threadId })
     })
-    expect(created.status).toBe(200)
-    const initial = await fetch(url, { headers })
-    expect(initial.status).toBe(200)
-    expect(await initial.json()).toMatchObject({ revision: 0, items: [] })
-    const saved = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(write) })
-    expect(saved.status).toBe(200)
-    expect(await saved.json()).toMatchObject({
-      revision: 1,
-      items: [{ title: '服务任务', status: 'pending' }]
-    })
-    expect(await (await fetch(url, { headers })).json()).toMatchObject({ revision: 1 })
+    expect(created.status).toBe(503)
 
     const { LibSQLStore } = await import('@mastra/libsql')
     const storage = new LibSQLStore({
@@ -170,6 +162,27 @@ describe('startAgentServer', () => {
       const memory = await storage.getStore('memory')
       if (memory === undefined) throw new Error('memory store unavailable')
       const now = new Date()
+      await memory.saveThread({
+        thread: {
+          id: threadId,
+          resourceId: 'local-user',
+          title: '',
+          createdAt: now,
+          updatedAt: now
+        }
+      })
+
+      const initial = await fetch(url, { headers })
+      expect(initial.status).toBe(200)
+      expect(await initial.json()).toMatchObject({ revision: 0, items: [] })
+      const saved = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(write) })
+      expect(saved.status).toBe(200)
+      expect(await saved.json()).toMatchObject({
+        revision: 1,
+        items: [{ title: '服务任务', status: 'pending' }]
+      })
+      expect(await (await fetch(url, { headers })).json()).toMatchObject({ revision: 1 })
+
       await memory.saveThread({
         thread: {
           id: 'service-tasks-foreign',

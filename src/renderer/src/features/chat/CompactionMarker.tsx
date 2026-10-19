@@ -106,8 +106,8 @@ export function CompactionMarker({
           >
             <p className="text-b2 whitespace-pre-wrap text-ink-secondary">{compaction.summary}</p>
             <p className="pt-2 text-c1 text-ink-tertiary">
-              {LEVEL_DONE[level]} {compaction.summarized} 条消息 · 保留最近 {compaction.kept} 条 ·{' '}
-              {localTime(compaction.createdAt)}
+              {LEVEL_DONE[level]} {compaction.summarized} 条消息 · 保留最近 {compaction.kept ?? '—'}{' '}
+              条 · {localTime(compaction.createdAt)}
             </p>
           </div>
         </TraceFold>

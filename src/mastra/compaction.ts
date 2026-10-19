@@ -927,7 +927,7 @@ export function createCompactionProcessor(store: Pick<CompactionStore, 'get'>): 
       }
       args.messageList.addSystem(mechanicalPrefix(level))
       // 裁剪窗口 = 这条记录当时认定的保留窗口（服务端算省量的口径），两边同一个窗口
-      trimLoadedHistory(args.messageList, level, record.kept)
+      trimLoadedHistory(args.messageList, level, record.kept ?? 0)
       return args.messageList
     }
   }

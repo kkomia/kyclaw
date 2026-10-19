@@ -136,8 +136,12 @@ export const threadCompactionSchema = z.strictObject({
    * （助手正文换成折叠说明，消息本身没删）。
    */
   summarized: z.number().int().min(1),
-  /** 保留的最近消息条数（压缩时刻） */
-  kept: z.number().int().min(0),
+  /**
+   * 保留的最近消息条数（压缩时刻）。
+   * PB-024：内核没有 kept 字段；DSH 路径无法给出这个数字时必须是 null（UI 显示 —），
+   * 不允许用派生值冒充精确值。
+   */
+  kept: z.number().int().min(0).nullable(),
   /**
    * round 75：本次走的档位（见 compactionLevels）。
    *
