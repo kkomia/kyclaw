@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sameCwd, startKernelAdapter, type KernelAdapter } from '../kernel-adapter'
 import { InteractionHub, feedKernelEvent } from '../interaction-hub'
+import { approvalOutcomeCopy } from '../interaction-hub'
 
 const kernel = vi.hoisted(() => {
   interface FakeSession {
@@ -65,6 +66,15 @@ const kernel = vi.hoisted(() => {
     listCwdOverride: new Map<string, string>(),
     /** commands/list 是否失败（验证清单拉不到时不阻断已知命令） */
     listCommandsFails: false,
+    /** PB-025：`$events` 流（交互 waterfall） */
+    eventsStreams: [] as string[],
+    eventsOpens: [] as Array<Record<string, unknown>>,
+    remoteResults: [] as Array<Record<string, unknown>>,
+    continuedAnswers: [] as Array<{ agentId: string; callId: string; answer: unknown }>,
+    /** 是否在 $events open 时立刻发 ready 帧（测"没就绪就应答"时关掉） */
+    autoReady: true,
+    /** 模拟内核 fail-closed：非法审批值归一成 unavailable，记生效值 */
+    effectiveApprovals: [] as string[],
     seq: 100,
     autoSession: 0,
     attemptCount: 0,
@@ -211,6 +221,28 @@ const kernel = vi.hoisted(() => {
         return { received: args }
       case 'test/boom':
         throw new Error('kernel rpc: test/boom failed (gateway/internal): boom')
+      case '$events/result': {
+        // PB-025：模拟网关校验 + 内核 fail-closed（非法审批值 → unavailable）
+        state.remoteResults.push(args)
+        const outcome = args.outcome as { kind?: unknown; value?: unknown } | undefined
+        if (outcome?.kind === 'result') {
+          const value = outcome.value
+          const raw = typeof value === 'string' ? value : undefined
+          const effective = ['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(
+            raw ?? ''
+          )
+            ? (raw as string)
+            : 'unavailable'
+          state.effectiveApprovals.push(effective)
+        }
+        return {}
+      }
+      case 'userQuestions/answer': {
+        const agentId = typeof args.agentId === 'string' ? args.agentId : ''
+        const callId = typeof args.callId === 'string' ? args.callId : ''
+        state.continuedAnswers.push({ agentId, callId, answer: args.answer })
+        return false
+      }
       case 'commands/list': {
         if (state.listCommandsFails)
           throw new Error('kernel rpc: commands/list failed (gateway/internal): boom')
@@ -289,6 +321,13 @@ const kernel = vi.hoisted(() => {
         return
       }
       if (parsed.type !== 'open' || parsed.streamId === undefined) return
+      // PB-025：$events（交互 waterfall）流
+      if (parsed.endpoint === '$events') {
+        state.eventsOpens.push(parsed as unknown as Record<string, unknown>)
+        state.eventsStreams.push(parsed.streamId)
+        if (state.autoReady) item(parsed.streamId, { type: 'ready', clientId: 'evt-client-1', host: {} })
+        return
+      }
       const sessionId = parsed.payload?.args?.request?.address?.sessionId ?? ''
       const error = state.followErrors.get(sessionId)
       if (error !== undefined) {
@@ -333,6 +372,10 @@ const kernel = vi.hoisted(() => {
     ): void {
       for (const streamId of openStreams(sessionId)) item(streamId, { type: 'event', event })
     },
+    /** PB-025：往 `$events` 流推一帧（ready 之外的 waterfall/emit） */
+    emitRemoteFrame(value: Record<string, unknown>): void {
+      for (const streamId of state.eventsStreams) item(streamId, value)
+    },
     reset(): void {
       state.sessions.clear()
       state.streams.clear()
@@ -345,6 +388,12 @@ const kernel = vi.hoisted(() => {
       state.followErrors.clear()
       state.listCwdOverride.clear()
       state.listCommandsFails = false
+      state.eventsStreams.length = 0
+      state.eventsOpens.length = 0
+      state.remoteResults.length = 0
+      state.continuedAnswers.length = 0
+      state.autoReady = true
+      state.effectiveApprovals.length = 0
       state.seq = 100
       state.autoSession = 0
       state.attemptCount = 0
@@ -389,7 +438,10 @@ function tempDir(label: string): string {
 
 async function startAdapter(
   appDataDir: string,
-  extras: { onSessionEvent?: (threadId: string, event: { type: string }) => void } = {}
+  extras: {
+    onSessionEvent?: (threadId: string, event: { type: string }) => void
+    onInteractionEvent?: (event: import('../kernel-interactions').KernelInteractionEvent) => void
+  } = {}
 ): Promise<KernelAdapter> {
   const adapter = await startKernelAdapter({
     electronExecutable: 'fake-electron',
@@ -648,6 +700,99 @@ describe('PB-024 rpcCall 透传', () => {
   it('内核错误原样抛出（不吞成 undefined）', async () => {
     const adapter = await startAdapter(tempDir('a'))
     await expect(adapter.rpcCall('test/boom')).rejects.toThrow(/test\/boom failed/u)
+  })
+})
+
+describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手取证）', () => {
+  it('给 onInteractionEvent 才开 $events；payload 恰好 {args:{}}；waterfall → 结构化事件', async () => {
+    const received: Array<{ kind: string; eventId: string; threadId: string; toolName?: string }> = []
+    const adapter = await startAdapter(tempDir('a'), {
+      onInteractionEvent: (event) => received.push(event)
+    })
+    // payload 必须恰好 {args:{}}（多一个键内核会回 gateway/arguments-invalid）
+    const open = kernel.state.eventsOpens[0]
+    expect(open?.['endpoint']).toBe('$events')
+    expect(open?.['payload']).toEqual({ args: {} })
+
+    kernel.emitRemoteFrame({
+      type: 'waterfall',
+      event: 'approval/request',
+      eventId: 'e-1',
+      agentId: 'session-x',
+      request: { toolName: 'bash', callId: 'call-1', reason: '要写权限' }
+    })
+    expect(received).toEqual([
+      { kind: 'approval', eventId: 'e-1', threadId: 'session-x', toolName: 'bash', callId: 'call-1', reason: '要写权限' }
+    ])
+    expect(adapter.sessionId).not.toBe('')
+  })
+
+  it('没给 onInteractionEvent 就不开 $events（不多开常驻流）', async () => {
+    await startAdapter(tempDir('a'))
+    expect(kernel.state.eventsOpens).toHaveLength(0)
+  })
+
+  it('审批应答：args 恰好 {clientId,eventId,outcome}，value = 裸四态字符串（不套 args）', async () => {
+    const adapter = await startAdapter(tempDir('a'), { onInteractionEvent: () => undefined })
+    await adapter.respondInteraction({ eventId: 'e-1', kind: 'approval', outcome: 'allowed-once' })
+    await adapter.respondInteraction({ eventId: 'e-2', kind: 'approval', outcome: 'rejected' })
+    expect(kernel.state.remoteResults).toEqual([
+      { clientId: 'evt-client-1', eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } },
+      { clientId: 'evt-client-1', eventId: 'e-2', outcome: { kind: 'result', value: 'rejected' } }
+    ])
+    // 红线：绝不能出现 args.args（那是踩过的坑）
+    expect(kernel.state.remoteResults.some((args) => 'args' in args)).toBe(false)
+  })
+
+  it('提问应答：value = {answers:[{id,selected,custom?}]}', async () => {
+    const adapter = await startAdapter(tempDir('a'), { onInteractionEvent: () => undefined })
+    await adapter.respondInteraction({
+      eventId: 'e-3',
+      kind: 'question',
+      answer: { answers: [{ id: 'q1', selected: ['A'] }] }
+    })
+    expect(kernel.state.remoteResults[0]).toEqual({
+      clientId: 'evt-client-1',
+      eventId: 'e-3',
+      outcome: { kind: 'result', value: { answers: [{ id: 'q1', selected: ['A'] }] } }
+    })
+  })
+
+  it('还没收到 ready 帧就应答 → 可诊断错误（不静默丢）', async () => {
+    kernel.state.autoReady = false
+    const adapter = await startAdapter(tempDir('a'), { onInteractionEvent: () => undefined })
+    await expect(
+      adapter.respondInteraction({ eventId: 'e-1', kind: 'approval', outcome: 'rejected' })
+    ).rejects.toThrow(/events 流尚未就绪/u)
+    expect(kernel.state.remoteResults).toHaveLength(0)
+  })
+
+  it('continued 补答：userQuestions/answer 带 agentId/callId/answer，返回内核 boolean', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const stillContinued = await adapter.answerContinuedQuestion('thread-A', 'call-1', {
+      answers: [{ id: 'q1', selected: ['A'], custom: '其它' }]
+    })
+    expect(stillContinued).toBe(false)
+    expect(kernel.state.continuedAnswers[0]).toEqual({
+      agentId: expect.any(String),
+      callId: 'call-1',
+      answer: { answers: [{ id: 'q1', selected: ['A'], custom: '其它' }] }
+    })
+  })
+
+  it('内核 fail-closed：非法审批值 → unavailable，文案不含「你拒绝」（负向）', async () => {
+    const adapter = await startAdapter(tempDir('a'), { onInteractionEvent: () => undefined })
+    // 绕过类型（模拟未来某个调用点写错形状）：内核按 OUTCOMES.includes 归一成 unavailable
+    await adapter.rpcCall('$events/result', {
+      clientId: 'evt-client-1',
+      eventId: 'e-9',
+      outcome: { kind: 'result', value: 'definitely-not-an-outcome' }
+    })
+    expect(kernel.state.effectiveApprovals).toEqual(['unavailable'])
+    const copy = approvalOutcomeCopy('unavailable')
+    expect(`${copy.title}${copy.detail}`).not.toContain('你拒绝')
+    expect(copy.attribution).toBe('system')
+    expect(copy.canRetry).toBe(true)
   })
 })
 

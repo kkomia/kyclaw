@@ -60,6 +60,12 @@ function fakeAdapter(
     async rpcCall<T = unknown>(): Promise<T> {
       return {} as T
     },
+    async respondInteraction() {
+      await Promise.resolve()
+    },
+    async answerContinuedQuestion() {
+      return false
+    },
     async cancelTurn(threadId) {
       cancels.push(threadId)
       await Promise.resolve()

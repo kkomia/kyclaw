@@ -20,6 +20,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectKernelPeer } from './kernel-auth'
 import {
+  approvalResultArgs,
+  interactionFromFrame,
+  parseRemoteEventFrame,
+  questionResultArgs,
+  REMOTE_EVENTS_ENDPOINT,
+  REMOTE_EVENTS_RESULT_ENDPOINT,
+  type InteractionResponse,
+  type KernelInteractionEvent
+} from './kernel-interactions'
+import {
   commandNameFromLine,
   isCommandLine,
   unknownCommandResult,
@@ -52,6 +62,13 @@ export interface KernelAdapterOptions {
     threadId: string,
     event: { type: string; seq?: number; data?: Record<string, unknown> }
   ) => void
+  /**
+   * PB-025：内核 **Remote 事件流（`$events`）** 里的交互请求（审批 / 阻塞式提问）。
+   *
+   * 给了这个回调才会开 `$events` 流（不给就不多开一条流）。回调收到的是**已收窄**的
+   * `KernelInteractionEvent`（带回执用的 `eventId`）；应答走 `adapter.respondInteraction()`。
+   */
+  onInteractionEvent?: (event: KernelInteractionEvent) => void
   /** B3.3b：goal 轮次安全阀（写进隔离 profile 的 cordis.patch.yml；默认 16） */
   goalMaxRounds?: number
 }
@@ -116,6 +133,24 @@ export interface KernelAdapter {
    * 错误原样抛出（不吞成 undefined）。
    */
   rpcCall<T = unknown>(method: string, payload?: unknown): Promise<T>
+  /**
+   * PB-025：应答一条交互请求（审批 allow/deny、阻塞式提问的回答）。
+   *
+   * 内部走 `$events/result`：args **就是** `{clientId, eventId, outcome}`，不再包 `{args:…}`
+   * （见 `kernel-interactions.ts` 文件头的踩坑说明）。没收到 `$events` 就绪帧时抛可诊断错误，
+   * 不静默丢应答。
+   */
+  respondInteraction(response: InteractionResponse): Promise<void>
+  /**
+   * PB-025：给 **continued**（timed 到期后仍可答）的提问补答。
+   * 走 `userQuestions/answer`（活内核实测：args `{agentId, callId, answer:{answers:[…]}}`，
+   * 结果 boolean = 问题是否仍 continued）。
+   */
+  answerContinuedQuestion(
+    threadId: string,
+    callId: string,
+    answer: { answers: ReadonlyArray<{ id: string; selected: readonly string[]; custom?: string }> }
+  ): Promise<boolean>
 }
 
 export function framesToSse(frames: readonly RendererSseFrame[]): string {
@@ -227,6 +262,9 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     const states = new Map<string, SessionState>()
     const byStream = new Map<string, SessionState>()
     let closed = false
+    /** PB-025：`$events` 流的身份（ready 帧给的 clientId；回执要带） */
+    let interactionsStreamId: string | undefined
+    let interactionsClientId: string | undefined
 
     /** 内核已注册的命令（诊断/校验共用一次 RPC；内核是权威，我们不缓存） */
     const listCommandsInternal = (sessionId: string): Promise<readonly KernelCommandInfo[]> =>
@@ -390,6 +428,23 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         return
       }
       if (parsed.type !== 'item' || parsed.streamId === undefined || parsed.value === undefined) return
+      // PB-025：`$events` 流（交互 waterfall）与 session/follow 分开处理
+      if (interactionsStreamId !== undefined && parsed.streamId === interactionsStreamId) {
+        const frame = parseRemoteEventFrame(parsed.value)
+        if (frame === null) return
+        if (frame.type === 'ready') {
+          interactionsClientId = frame.clientId
+          return
+        }
+        const interaction = interactionFromFrame(frame)
+        if (interaction === null) return
+        try {
+          options.onInteractionEvent?.(interaction)
+        } catch {
+          // 订阅方异常不能打断内核流（应答还得能发出去）
+        }
+        return
+      }
       const state = byStream.get(parsed.streamId)
       if (state === undefined) return
       const value = parsed.value
@@ -459,6 +514,20 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     const defaultSessionId = await createSession()
     let defaultState = await openFollow(defaultSessionId)
     states.set(defaultSessionId, defaultState)
+
+    // PB-025：只有需要交互回调时才开 `$events` 流（不多开一条常驻流）。
+    // payload 必须**恰好** `{args:{}}`（多一个键内核回 gateway/arguments-invalid）。
+    if (options.onInteractionEvent !== undefined) {
+      interactionsStreamId = `kyclaw-events-${randomUUID()}`
+      ws?.send(
+        JSON.stringify({
+          type: 'open',
+          streamId: interactionsStreamId,
+          endpoint: REMOTE_EVENTS_ENDPOINT,
+          payload: { args: {} }
+        })
+      )
+    }
 
     let stopped = false
     return {
@@ -564,6 +633,30 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
        */
       rpcCall<T = unknown>(method: string, payload?: unknown): Promise<T> {
         return rpc.call<T>(method, (payload ?? {}) as Record<string, unknown>)
+      },
+      /**
+       * PB-025：应答交互请求。args **就是** `{clientId, eventId, outcome}`（不再包 `{args:…}`，
+       * 见 `kernel-interactions.ts` 文件头）；没收到就绪帧时抛可诊断错误，不静默丢应答。
+       */
+      async respondInteraction(response: InteractionResponse): Promise<void> {
+        if (interactionsClientId === undefined)
+          throw new Error(
+            'kernel adapter: $events 流尚未就绪（没收到 ready 帧），无法应答交互请求；请稍后重试'
+          )
+        const args =
+          response.kind === 'approval'
+            ? approvalResultArgs(interactionsClientId, response.eventId, response.outcome)
+            : questionResultArgs(interactionsClientId, response.eventId, response.answer)
+        await rpc.call(REMOTE_EVENTS_RESULT_ENDPOINT, args as unknown as Record<string, unknown>)
+      },
+      /** PB-025：continued（timed 到期仍可答）的提问补答 → `userQuestions/answer` */
+      async answerContinuedQuestion(threadId, callId, answer): Promise<boolean> {
+        const result = await rpc.call<boolean>('userQuestions/answer', {
+          agentId: await sessionIdFor(threadId),
+          callId,
+          answer
+        })
+        return result === true
       },
       async reattach(threadId: string): Promise<KernelSessionOpening> {
         const current = states.get(threadId)
