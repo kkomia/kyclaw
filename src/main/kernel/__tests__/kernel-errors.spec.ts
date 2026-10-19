@@ -9,7 +9,9 @@ import { kernelUserError } from '../kernel-adapter'
 
 describe('kernel session 错误文案', () => {
   it('writer-held → 明确提示“另一个窗口/进程占用”', () => {
-    const mapped = kernelUserError(new Error('kernel rpc: session/prompt failed (session/writer-held)'))
+    const mapped = kernelUserError(
+      new Error('kernel rpc: session/prompt failed (session/writer-held)')
+    )
     expect(mapped.message).toContain('另一个窗口/进程占用')
     expect(mapped.message).toContain('session/writer-held')
   })

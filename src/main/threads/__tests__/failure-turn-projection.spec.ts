@@ -61,7 +61,10 @@ describe('PB-034 失败轮投影', () => {
     const events: Event[] = [
       turnStart(1, 1),
       inboxSplice(2, [userText('帮我写个报告', 'u-failed-1')]),
-      turnEnd(1, 3, { kind: 'error', error: { code: 'provider/unauthorized', message: '401 未授权' } })
+      turnEnd(1, 3, {
+        kind: 'error',
+        error: { code: 'provider/unauthorized', message: '401 未授权' }
+      })
     ]
 
     const messages = projectThreadMessages(events)
@@ -124,8 +127,9 @@ describe('PB-034 失败轮投影', () => {
      * 若只在"没有 user/message"时才挂元数据，`TurnFailureCard` 在真机上永远不会出现。
      * 成功轮的 user 消息不带这个键（见下一条用例）。
      */
-    expect((messages[0]?.content as { metadata?: { turnFailure?: unknown } }).metadata?.turnFailure)
-      .toEqual({ turn: 1, kind: 'error', code: 'x', message: 'y' })
+    expect(
+      (messages[0]?.content as { metadata?: { turnFailure?: unknown } }).metadata?.turnFailure
+    ).toEqual({ turn: 1, kind: 'error', code: 'x', message: 'y' })
   })
 
   it('已有可见 user/message 的成功轮：不挂 turnFailure（completed 不算失败）', () => {

@@ -99,7 +99,10 @@ describe('AI 轮过程展示（task-77）', () => {
     expect(screen.getByTestId('turn-answer')).not.toHaveTextContent('正文内容')
 
     rerender(
-      <Message message={assistant([TOOL_PART, { type: 'text', text: '正文内容' }])} streaming={false} />
+      <Message
+        message={assistant([TOOL_PART, { type: 'text', text: '正文内容' }])}
+        streaming={false}
+      />
     )
     expect(screen.getByTestId('turn-answer')).toHaveTextContent('正文内容')
   })
@@ -107,7 +110,9 @@ describe('AI 轮过程展示（task-77）', () => {
   it('PB-032 reduced：chase-loader 的动画/轮换有两层静态兜底', () => {
     expect(CHASE_CSS).toContain('@media (prefers-reduced-motion: reduce)')
     expect(CHASE_CSS).toContain("[data-motion='reduced'] .chase-dot")
-    expect(CHASE_CSS).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.chase-dot[^{]*\{[^}]*animation:\s*none/)
+    expect(CHASE_CSS).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.chase-dot[^{]*\{[^}]*animation:\s*none/
+    )
     // 轮换定时器在 reduced 下不排（组件源码契约）
     expect(CHASE_TSX).toContain('ROTATE_MS = 10_000')
     expect(CHASE_TSX).toMatch(/if \(reduced\) return undefined/)
@@ -129,7 +134,11 @@ describe('中文计时 / 最新步骤纯函数', () => {
       [{ type: 'tool-read', state: 'input-streaming' }, 'tool-preparing', '正在准备工具调用'],
       [{ type: 'tool-read', state: 'input-available' }, 'tool-running', '正在调用工具'],
       [{ type: 'tool-bash', state: 'approval-requested' }, 'tool-approval', '等待审批'],
-      [{ type: 'tool-bash', state: 'approval-responded' }, 'tool-approval-done', '审批已回应，继续处理'],
+      [
+        { type: 'tool-bash', state: 'approval-responded' },
+        'tool-approval-done',
+        '审批已回应，继续处理'
+      ],
       [{ type: 'tool-read', state: 'output-available' }, 'tool-result', '正在处理工具结果'],
       [{ type: 'tool-bash', state: 'output-error' }, 'tool-error', '工具出错，正在继续'],
       [{ type: 'tool-bash', state: 'output-denied' }, 'tool-denied', '工具被拒绝，正在继续']
@@ -201,8 +210,7 @@ describe('PB-032 · 装载指示器与轮换', () => {
 })
 
 describe('PB-032 · ChaseLoader 轮换节奏（假时钟）', () => {
-  const mode = (): string | null =>
-    screen.getByTestId('chase-loader').getAttribute('data-mode')
+  const mode = (): string | null => screen.getByTestId('chase-loader').getAttribute('data-mode')
 
   it('每 10s 换一个不同于当前的 motion（连续两次都换）', () => {
     vi.useFakeTimers()

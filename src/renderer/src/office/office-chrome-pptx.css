@@ -54,16 +54,24 @@
   color: var(--text-secondary) !important;
   font: 500 12px var(--font-ui) !important;
   line-height: 1 !important;
-  transition: background-color 120ms ease-main, color 120ms ease-main !important;
+  transition:
+    background-color 120ms ease-main,
+    color 120ms ease-main !important;
 }
 
-[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button:not(:disabled):hover {
+[data-testid='surface-pptx-editor']
+  [data-testid='pptx-formatting-toolbar']
+  button:not(:disabled):hover {
   background: var(--fill-hover) !important;
   color: var(--text-primary) !important;
 }
 
-[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button:not(:disabled):active,
-[data-testid='surface-pptx-editor'] [data-testid='pptx-formatting-toolbar'] button[aria-pressed='true'] {
+[data-testid='surface-pptx-editor']
+  [data-testid='pptx-formatting-toolbar']
+  button:not(:disabled):active,
+[data-testid='surface-pptx-editor']
+  [data-testid='pptx-formatting-toolbar']
+  button[aria-pressed='true'] {
   background: var(--fill-selected) !important;
   color: var(--text-primary) !important;
 }

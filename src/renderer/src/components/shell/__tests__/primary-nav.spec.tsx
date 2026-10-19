@@ -47,14 +47,16 @@ describe('PrimaryNav 一级导航', () => {
       expect(button).toHaveAttribute('data-hidden-entry', 'true')
       expect(button).toHaveAttribute('tabindex', '-1')
       expect(button).toHaveAttribute('aria-hidden', 'true')
-      expect(within(nav).queryByRole('button', { name: button.getAttribute('aria-label')! })).toBeNull()
+      expect(
+        within(nav).queryByRole('button', { name: button.getAttribute('aria-label')! })
+      ).toBeNull()
     }
     // 可见入口顺序不变：主对话 → Office（隐藏项不插入、不改顺序）
-    expect(within(nav).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
-      '主对话',
-      'Office',
-      '设置'
-    ])
+    expect(
+      within(nav)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['主对话', 'Office', '设置'])
 
     expect(screen.getByTestId('primary-nav-chat')).toHaveAttribute('aria-current', 'page')
     // 设置是最后一个动作（底部入口），不与模块项混排

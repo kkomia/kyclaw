@@ -29,7 +29,9 @@ interface ScriptResponse {
 }
 
 /** 极简 Anthropic Messages SSE provider：按脚本逐片吐；无 tools 的请求（标题生成）直接短文本。 */
-function startScriptedProvider(script: ScriptResponse[]): Promise<{ server: Server; baseUrl: string }> {
+function startScriptedProvider(
+  script: ScriptResponse[]
+): Promise<{ server: Server; baseUrl: string }> {
   let pointer = 0
   const server = createServer((request, response) => {
     const chunks: Buffer[] = []
@@ -57,18 +59,40 @@ function startScriptedProvider(script: ScriptResponse[]): Promise<{ server: Serv
         // ignore
       }
       if (isTitle) {
-        response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-store'
+        })
         const sendTitle = (event: string, data: unknown): void => {
           response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         }
         sendTitle('message_start', {
           type: 'message_start',
-          message: { id: 'msg_title', type: 'message', role: 'assistant', model: 'deepseek-flash', content: [], usage: { input_tokens: 1, output_tokens: 1 } }
+          message: {
+            id: 'msg_title',
+            type: 'message',
+            role: 'assistant',
+            model: 'deepseek-flash',
+            content: [],
+            usage: { input_tokens: 1, output_tokens: 1 }
+          }
         })
-        sendTitle('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
-        sendTitle('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '标题' } })
+        sendTitle('content_block_start', {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' }
+        })
+        sendTitle('content_block_delta', {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: '标题' }
+        })
         sendTitle('content_block_stop', { type: 'content_block_stop', index: 0 })
-        sendTitle('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } })
+        sendTitle('message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 1 }
+        })
         sendTitle('message_stop', { type: 'message_stop' })
         response.end()
         return
@@ -86,14 +110,25 @@ function startScriptedProvider(script: ScriptResponse[]): Promise<{ server: Serv
       const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
       send('message_start', {
         type: 'message_start',
-        message: { id: `msg_${String(pointer)}`, type: 'message', role: 'assistant', model: 'deepseek-flash', content: [], usage: { input_tokens: 12, output_tokens: 1 } }
+        message: {
+          id: `msg_${String(pointer)}`,
+          type: 'message',
+          role: 'assistant',
+          model: 'deepseek-flash',
+          content: [],
+          usage: { input_tokens: 12, output_tokens: 1 }
+        }
       })
       if (scripted.preDelayMs !== undefined) await sleep(scripted.preDelayMs)
       let blockIndex = 0
       let blockOpen = false
       const openText = (): void => {
         if (blockOpen) return
-        send('content_block_start', { type: 'content_block_start', index: blockIndex, content_block: { type: 'text', text: '' } })
+        send('content_block_start', {
+          type: 'content_block_start',
+          index: blockIndex,
+          content_block: { type: 'text', text: '' }
+        })
         blockOpen = true
       }
       const closeText = (): void => {
@@ -106,7 +141,11 @@ function startScriptedProvider(script: ScriptResponse[]): Promise<{ server: Serv
         if (delta.delayMs !== undefined) await sleep(delta.delayMs)
         if (delta.text !== undefined) {
           openText()
-          send('content_block_delta', { type: 'content_block_delta', index: blockIndex, delta: { type: 'text_delta', text: delta.text } })
+          send('content_block_delta', {
+            type: 'content_block_delta',
+            index: blockIndex,
+            delta: { type: 'text_delta', text: delta.text }
+          })
         }
         if (delta.tool !== undefined) {
           closeText()
@@ -129,7 +168,11 @@ function startScriptedProvider(script: ScriptResponse[]): Promise<{ server: Serv
         }
       }
       closeText()
-      send('message_delta', { type: 'message_delta', delta: { stop_reason: scripted.stop, stop_sequence: null }, usage: { output_tokens: 8 } })
+      send('message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: scripted.stop, stop_sequence: null },
+        usage: { output_tokens: 8 }
+      })
       send('message_stop', { type: 'message_stop' })
       response.end()
     })
@@ -148,7 +191,10 @@ function closeServer(server: Server): Promise<void> {
 }
 
 async function turning(page: Page): Promise<boolean> {
-  return page.getByTestId('composer-stop').isVisible().catch(() => false)
+  return page
+    .getByTestId('composer-stop')
+    .isVisible()
+    .catch(() => false)
 }
 
 async function sample(page: Page): Promise<Record<string, unknown>> {
@@ -160,8 +206,10 @@ async function sample(page: Page): Promise<Record<string, unknown>> {
     const label = document.querySelector('[data-testid="turn-latest-label"]')
     const chase = document.querySelector('[data-mode]')
     const text = last?.innerText ?? ''
-    const lineHeight = last === undefined ? 0 : Number.parseFloat(getComputedStyle(last).lineHeight || '0') || 0
-    const rows = last === undefined || lineHeight === 0 ? 0 : Math.round(last.scrollHeight / lineHeight)
+    const lineHeight =
+      last === undefined ? 0 : Number.parseFloat(getComputedStyle(last).lineHeight || '0') || 0
+    const rows =
+      last === undefined || lineHeight === 0 ? 0 : Math.round(last.scrollHeight / lineHeight)
     return {
       t: Date.now(),
       answerRows: text.trim() === '' ? 0 : rows,
@@ -171,9 +219,15 @@ async function sample(page: Page): Promise<Record<string, unknown>> {
       motion: status?.getAttribute('data-motion') ?? null,
       label: label?.textContent ?? null,
       mode: chase?.getAttribute('data-mode') ?? null,
-      errorText: (document.querySelector('[data-testid="error-card"]') as HTMLElement | null)?.innerText.slice(0, 400) ?? null,
+      errorText:
+        (
+          document.querySelector('[data-testid="error-card"]') as HTMLElement | null
+        )?.innerText.slice(0, 400) ?? null,
       // 工具级错误文案在工具卡里（`tool-output`）；轮级 `error-card` 只在整轮失败时才有（PB-045 踩坑）
-      toolOutput: (document.querySelector('[data-testid="tool-output"]') as HTMLElement | null)?.innerText.slice(0, 400) ?? null
+      toolOutput:
+        (
+          document.querySelector('[data-testid="tool-output"]') as HTMLElement | null
+        )?.innerText.slice(0, 400) ?? null
     }
   })
 }
@@ -195,7 +249,10 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         deltas: [
           { text: '中间正文：' },
           { text: '我先检查一下。', delayMs: 400 },
-          { tool: { id: 'toolu_r07_read', name: 'read', input: { file_path: 'settings.json' } }, delayMs: 600 }
+          {
+            tool: { id: 'toolu_r07_read', name: 'read', input: { file_path: 'settings.json' } },
+            delayMs: 600
+          }
         ],
         stop: 'tool_use'
       },
@@ -205,7 +262,11 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         stop: 'end_turn'
       }
     ])
-    const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
+    const launched = await launchApp({
+      kernel: 'real',
+      env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl },
+      keepUserData: true
+    })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
@@ -228,13 +289,18 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       writeEvidence('r07a-raw-error', rawError)
       const running = samples.filter((item) => item.stage !== null)
       expect(running.length, `R07a 没采到轮内状态行样本（${file}）`).toBeGreaterThan(3)
-      const dirty = running.filter((item) => item.answerRows !== 0 || String(item.answerText ?? '') !== '')
+      const dirty = running.filter(
+        (item) => item.answerRows !== 0 || String(item.answerText ?? '') !== ''
+      )
       expect(dirty, `R07a 轮内正文区应为空（PB-031），越界样本见 ${file}`).toHaveLength(0)
       const finalText = String(samples[samples.length - 1]?.answerText ?? '')
       expect(finalText, `R07a 轮末应含两段（${file}）`).toContain('中间正文')
       expect(finalText).toContain('最终回答')
       expect(finalText.indexOf('中间正文')).toBeLessThan(finalText.indexOf('最终回答'))
-      expect(samples.some((item) => item.hasDivider === 'true'), `R07a 未见 data-has-divider=true（${file}）`).toBe(true)
+      expect(
+        samples.some((item) => item.hasDivider === 'true'),
+        `R07a 未见 data-has-divider=true（${file}）`
+      ).toBe(true)
     } finally {
       await closeApp(launched)
       await closeServer(stub.server)
@@ -244,9 +310,19 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
   test('R07b 纯文本：10 采样长度单调不减且出现 3 段递增', async () => {
     test.setTimeout(120_000)
     const stub = await startScriptedProvider([
-      { deltas: [{ text: '第一段。' }, { text: '第二段。', delayMs: 500 }, { text: '第三段。', delayMs: 500 }], stop: 'end_turn' }
+      {
+        deltas: [
+          { text: '第一段。' },
+          { text: '第二段。', delayMs: 500 },
+          { text: '第三段。', delayMs: 500 }
+        ],
+        stop: 'end_turn'
+      }
     ])
-    const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl } })
+    const launched = await launchApp({
+      kernel: 'real',
+      env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }
+    })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
@@ -258,7 +334,9 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       const file = writeEvidence('r07b', samples)
       const lengths = samples.map((item) => String(item.answerText ?? '').length)
       for (let i = 1; i < lengths.length; i += 1) {
-        expect(lengths[i], `R07b 文本长度回落（${file}）`).toBeGreaterThanOrEqual(lengths[i - 1] as number)
+        expect(lengths[i], `R07b 文本长度回落（${file}）`).toBeGreaterThanOrEqual(
+          lengths[i - 1] as number
+        )
       }
       expect(new Set(lengths).size, `R07b 应出现 3 段递增（${file}）`).toBeGreaterThanOrEqual(3)
     } finally {
@@ -289,7 +367,11 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       },
       { preDelayMs: 2_500, deltas: [{ text: '完成。' }], stop: 'end_turn' }
     ])
-    const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
+    const launched = await launchApp({
+      kernel: 'real',
+      env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl },
+      keepUserData: true
+    })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
@@ -316,9 +398,14 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         if (key === 'idle' && item.label === '暂未响应') continue
         expect(LABELS[key], `R08-a 出现不可达/未知 stage=${key}（${file}）`).toBeDefined()
       }
-      const motions = samples.map((item) => item.motion).filter((motion) => typeof motion === 'string')
+      const motions = samples
+        .map((item) => item.motion)
+        .filter((motion) => typeof motion === 'string')
       expect(motions.length, `R08-a 没采到 data-motion（${file}）`).toBeGreaterThan(0)
-      expect(motions.every((motion) => motion === 'full'), `R08-a 默认 data-motion 应为 full（${file}）`).toBe(true)
+      expect(
+        motions.every((motion) => motion === 'full'),
+        `R08-a 默认 data-motion 应为 full（${file}）`
+      ).toBe(true)
       // 同一 stage 稳定 ≥1.6s（8×200ms）才断言文案；且要跳过前 1.2s（1s 说法锁 + 换词动画的过渡帧）
       let stableRuns = 0
       let toolResultRuns = 0
@@ -331,7 +418,9 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         if (runLength >= 8 && start !== '' && LABELS[start] !== undefined) {
           stableRuns += 1
           const settled = samples[runStart + 7]
-          expect(settled?.label, `R08-a stage=${start} 稳定 1.6s 后文案不符（${file}）`).toBe(LABELS[start])
+          expect(settled?.label, `R08-a stage=${start} 稳定 1.6s 后文案不符（${file}）`).toBe(
+            LABELS[start]
+          )
           if (start === 'tool-result') toolResultRuns += 1
         }
         runStart = i
@@ -349,13 +438,20 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
     const script: ScriptResponse[] = Array.from({ length: 8 }, (_, index) => ({
       deltas: [
         { text: `第 ${String(index + 1)} 步。` },
-        { tool: { id: `toolu_r06_${String(index + 1)}`, name: 'get_goal', input: {} }, delayMs: 200 }
+        {
+          tool: { id: `toolu_r06_${String(index + 1)}`, name: 'get_goal', input: {} },
+          delayMs: 200
+        }
       ],
       stop: 'tool_use' as const
     }))
     script.push({ deltas: [{ text: '全部查完。' }], stop: 'end_turn' })
     const stub = await startScriptedProvider(script)
-    const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
+    const launched = await launchApp({
+      kernel: 'real',
+      env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl },
+      keepUserData: true
+    })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
@@ -366,11 +462,13 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
           await launched.page.evaluate(() => {
             const summary = document.querySelector('[data-testid="turn-process-summary"]')
             const rows = [...document.querySelectorAll('[data-testid="tool-row"]')]
-            const rectOf = (element: Element | null): DOMRect | null => (element === null ? null : element.getBoundingClientRect())
+            const rectOf = (element: Element | null): DOMRect | null =>
+              element === null ? null : element.getBoundingClientRect()
             const summaryRect = rectOf(summary)
             const intersections: Array<{ summary: string; row: string }> = []
             if (summaryRect !== null) {
-              const summarize = (rect: DOMRect): string => `${String(Math.round(rect.top))}-${String(Math.round(rect.bottom))}`
+              const summarize = (rect: DOMRect): string =>
+                `${String(Math.round(rect.top))}-${String(Math.round(rect.bottom))}`
               for (const row of rows) {
                 const rect = rectOf(row)
                 if (rect === null) continue
@@ -380,7 +478,8 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
                   summaryRect.bottom <= rect.top ||
                   summaryRect.top >= rect.bottom
                 )
-                if (overlap) intersections.push({ summary: summarize(summaryRect), row: summarize(rect) })
+                if (overlap)
+                  intersections.push({ summary: summarize(summaryRect), row: summarize(rect) })
               }
             }
             return { t: Date.now(), toolRows: rows.length, intersections }
@@ -391,8 +490,14 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         await launched.page.waitForTimeout(50)
       }
       const file = writeEvidence('r06', samples)
-      expect(samples.some((item) => Number(item.toolRows) > 0), `R06 没有工具行，采样无意义（${file}）`).toBe(true)
-      const total = samples.reduce((sum, item) => sum + (Array.isArray(item.intersections) ? item.intersections.length : 0), 0)
+      expect(
+        samples.some((item) => Number(item.toolRows) > 0),
+        `R06 没有工具行，采样无意义（${file}）`
+      ).toBe(true)
+      const total = samples.reduce(
+        (sum, item) => sum + (Array.isArray(item.intersections) ? item.intersections.length : 0),
+        0
+      )
       expect(total, `R06 汇总行与工具命令行发生重叠（${file}）`).toBe(0)
     } finally {
       await closeApp(launched)
@@ -412,11 +517,17 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         stop: 'end_turn'
       }
     ])
-    const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
+    const launched = await launchApp({
+      kernel: 'real',
+      env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl },
+      keepUserData: true
+    })
     try {
       await waitForChat(launched.page)
       await launched.page.evaluate(() => {
-        const w = window as unknown as { __r16: { added: number; removed: number; firstHtml: string | null; shikiAtFirst: boolean } }
+        const w = window as unknown as {
+          __r16: { added: number; removed: number; firstHtml: string | null; shikiAtFirst: boolean }
+        }
         w.__r16 = { added: 0, removed: 0, firstHtml: null, shikiAtFirst: false }
         const observer = new MutationObserver((mutations) => {
           for (const mutation of mutations) {
@@ -448,7 +559,16 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       }
       await launched.page.waitForTimeout(900)
       const result = await launched.page.evaluate(() => {
-        const probe = (window as unknown as { __r16: { added: number; removed: number; firstHtml: string | null; shikiAtFirst: boolean } }).__r16
+        const probe = (
+          window as unknown as {
+            __r16: {
+              added: number
+              removed: number
+              firstHtml: string | null
+              shikiAtFirst: boolean
+            }
+          }
+        ).__r16
         const code = document.querySelector('[data-testid="code-block"] pre code')
         const codeHtml = code?.innerHTML ?? ''
         return {
@@ -457,16 +577,26 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
           finalCodeHighlighted: /shiki|data-shiki|class="[^"]*shiki/u.test(codeHtml),
           dom: {
             messageText:
-              (document.querySelector('[data-testid="message-text"]') as HTMLElement | null)?.innerText ?? '',
+              (document.querySelector('[data-testid="message-text"]') as HTMLElement | null)
+                ?.innerText ?? '',
             errorCards: document.querySelectorAll('[data-testid="error-card"]').length,
             codeBlocks: document.querySelectorAll('[data-testid="code-block"]').length
           }
         }
       })
       const file = writeEvidence('r16', result)
-      expect(result.removed, `R16 code-block 被重挂（removed=${String(result.removed)}，${file}）`).toBe(0)
-      expect(result.added, `R16 code-block 重复挂载（added=${String(result.added)}，dom=${JSON.stringify((result as { dom?: unknown }).dom)}，${file}）`).toBe(1)
-      expect(result.shikiAtFirst, `R16 首帧未高亮（firstHtml=${String(result.firstHtml).slice(0, 120)}，${file}）`).toBe(true)
+      expect(
+        result.removed,
+        `R16 code-block 被重挂（removed=${String(result.removed)}，${file}）`
+      ).toBe(0)
+      expect(
+        result.added,
+        `R16 code-block 重复挂载（added=${String(result.added)}，dom=${JSON.stringify((result as { dom?: unknown }).dom)}，${file}）`
+      ).toBe(1)
+      expect(
+        result.shikiAtFirst,
+        `R16 首帧未高亮（firstHtml=${String(result.firstHtml).slice(0, 120)}，${file}）`
+      ).toBe(true)
     } finally {
       await closeApp(launched)
       await closeServer(stub.server)

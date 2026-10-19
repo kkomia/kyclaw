@@ -49,4 +49,3 @@ describe('resolveUsageReadout', () => {
     expect(result).toEqual({ contextInput: 100, reported: true, source: 'stored' })
   })
 })
-

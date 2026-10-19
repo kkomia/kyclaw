@@ -271,7 +271,10 @@ const kernel = vi.hoisted(() => {
           if (rest === '' || rest === 'clear') {
             return {
               commandId,
-              result: { kind: 'success', text: 'No goal is currently set.\nUsage: /goal <objective>' }
+              result: {
+                kind: 'success',
+                text: 'No goal is currently set.\nUsage: /goal <objective>'
+              }
             }
           }
           session.goal = {
@@ -325,7 +328,8 @@ const kernel = vi.hoisted(() => {
       if (parsed.endpoint === '$events') {
         state.eventsOpens.push(parsed as unknown as Record<string, unknown>)
         state.eventsStreams.push(parsed.streamId)
-        if (state.autoReady) item(parsed.streamId, { type: 'ready', clientId: 'evt-client-1', host: {} })
+        if (state.autoReady)
+          item(parsed.streamId, { type: 'ready', clientId: 'evt-client-1', host: {} })
         return
       }
       const sessionId = parsed.payload?.args?.request?.address?.sessionId ?? ''
@@ -523,7 +527,8 @@ describe('B3.4 threadId = 内核 sessionId', () => {
     expect(kernel.state.prompts.filter((prompt) => prompt.sessionId === 'thread-B')).toHaveLength(1)
   })
 
-  it('同一 thread 上一轮还在跑时再发一轮 → agent-busy 文案（不并发写同一会话）', async () => {    const adapter = await startAdapter(tempDir('a'))
+  it('同一 thread 上一轮还在跑时再发一轮 → agent-busy 文案（不并发写同一会话）', async () => {
+    const adapter = await startAdapter(tempDir('a'))
     const running = adapter.startTurn('第一问', { threadId: 'thread-A' })
     await waitReady('thread-A')
     await expect(adapter.startTurn('第二问', { threadId: 'thread-A' })).rejects.toThrow(
@@ -569,7 +574,8 @@ describe('PB-004 交互事件生产（adapter → InteractionHub）', () => {
   })
 })
 
-describe('B3.4 刷新重接（reattach）', () => {  it('opening 带内核自带的 startedAfterSeq/nextIndex；在跑的一轮挂到新流上且不重复', async () => {
+describe('B3.4 刷新重接（reattach）', () => {
+  it('opening 带内核自带的 startedAfterSeq/nextIndex；在跑的一轮挂到新流上且不重复', async () => {
     const adapter = await startAdapter(tempDir('a'))
     const running = adapter.startTurn('慢轮问题', { threadId: 'thread-A' })
     await waitReady('thread-A')
@@ -737,7 +743,8 @@ describe('PB-024 rpcCall 透传', () => {
 
 describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手取证）', () => {
   it('给 onInteractionEvent 才开 $events；payload 恰好 {args:{}}；waterfall → 结构化事件', async () => {
-    const received: Array<{ kind: string; eventId: string; threadId: string; toolName?: string }> = []
+    const received: Array<{ kind: string; eventId: string; threadId: string; toolName?: string }> =
+      []
     const adapter = await startAdapter(tempDir('a'), {
       onInteractionEvent: (event) => received.push(event)
     })
@@ -754,7 +761,14 @@ describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手�
       request: { toolName: 'bash', callId: 'call-1', reason: '要写权限' }
     })
     expect(received).toEqual([
-      { kind: 'approval', eventId: 'e-1', threadId: 'session-x', toolName: 'bash', callId: 'call-1', reason: '要写权限' }
+      {
+        kind: 'approval',
+        eventId: 'e-1',
+        threadId: 'session-x',
+        toolName: 'bash',
+        callId: 'call-1',
+        reason: '要写权限'
+      }
     ])
     expect(adapter.sessionId).not.toBe('')
   })
@@ -769,7 +783,11 @@ describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手�
     await adapter.respondInteraction({ eventId: 'e-1', kind: 'approval', outcome: 'allowed-once' })
     await adapter.respondInteraction({ eventId: 'e-2', kind: 'approval', outcome: 'rejected' })
     expect(kernel.state.remoteResults).toEqual([
-      { clientId: 'evt-client-1', eventId: 'e-1', outcome: { kind: 'result', value: 'allowed-once' } },
+      {
+        clientId: 'evt-client-1',
+        eventId: 'e-1',
+        outcome: { kind: 'result', value: 'allowed-once' }
+      },
       { clientId: 'evt-client-1', eventId: 'e-2', outcome: { kind: 'result', value: 'rejected' } }
     ])
     // 红线：绝不能出现 args.args（那是踩过的坑）
@@ -914,9 +932,9 @@ describe('PB-030 读路径不建会话', () => {
     expect(await adapter.readGoalState('kyclaw-pending')).toBeNull()
     expect(await adapter.readPlanState('kyclaw-pending')).toBeNull()
     expect(await adapter.listCommands('kyclaw-pending')).toEqual([])
-    expect(
-      await adapter.answerContinuedQuestion('kyclaw-pending', 'call-1', { answers: [] })
-    ).toBe(false)
+    expect(await adapter.answerContinuedQuestion('kyclaw-pending', 'call-1', { answers: [] })).toBe(
+      false
+    )
     // 内核侧零新增：既没有 session/create，也没有这个 id 的会话
     expect(kernel.state.creates.length).toBe(before)
     expect(kernel.state.creates.some((item) => item.sessionId === 'kyclaw-pending')).toBe(false)
@@ -1016,9 +1034,9 @@ describe('PB-005-F2 未知命令可诊断', () => {
     expect(result.result.text).toContain('/eve-nope-command')
     expect(result.result.text).toContain('/goal')
     // 内核没收到这一行（否则又会是"返回 undefined 的静默丢弃"）
-    expect(kernel.state.executes.filter((item) => item.line.includes('eve-nope-command'))).toHaveLength(
-      0
-    )
+    expect(
+      kernel.state.executes.filter((item) => item.line.includes('eve-nope-command'))
+    ).toHaveLength(0)
   })
 
   it('已知命令原样透传内核结果（不缺诊断层）', async () => {
@@ -1029,7 +1047,10 @@ describe('PB-005-F2 未知命令可诊断', () => {
     }
     expect(result.commandId).toMatch(/^cmd-/u)
     expect(result.result.kind).toBe('success')
-    expect(kernel.state.executes).toContainEqual({ agentId: expect.any(String), line: '/goal 目标-A' })
+    expect(kernel.state.executes).toContainEqual({
+      agentId: expect.any(String),
+      line: '/goal 目标-A'
+    })
   })
 
   it('不带 / 的行（Eve P3）：即使命令名已注册也判未知，不发给内核', async () => {
@@ -1051,7 +1072,9 @@ describe('PB-005-F2 未知命令可诊断', () => {
         result: { kind: string }
       }
       expect(result.result.kind).toBe('success')
-      expect(warn.mock.calls.some((call) => String(call[0]).includes('跳过未知命令校验'))).toBe(true)
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('跳过未知命令校验'))).toBe(
+        true
+      )
     } finally {
       warn.mockRestore()
     }

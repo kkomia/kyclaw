@@ -77,7 +77,14 @@ export const TEXT_EXTENSIONS: readonly string[] = [
 ]
 
 /** 无扩展名但公认是文本的文件名（大小写不敏感；`Dockerfile.dev` 这类前缀也认） */
-const TEXT_BARE_NAMES: readonly string[] = ['Makefile', 'Dockerfile', 'LICENSE', 'NOTICE', 'README', 'CHANGELOG']
+const TEXT_BARE_NAMES: readonly string[] = [
+  'Makefile',
+  'Dockerfile',
+  'LICENSE',
+  'NOTICE',
+  'README',
+  'CHANGELOG'
+]
 
 /** 这份文件名是不是"已知文本"（按扩展名/常见无扩展名规则；不读内容） */
 export function isKnownTextPath(pathOrName: string): boolean {
@@ -272,4 +279,3 @@ export function decodeTextFileBytes(
 ): TextDecodeResult {
   return decodeTextWith(bytes, unsupportedMessageFile, options)
 }
-

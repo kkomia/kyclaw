@@ -8,7 +8,11 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
-import { primaryModuleOf, isPrimaryModuleVisible, type PrimaryModuleId } from '@renderer/lib/primary-modules'
+import {
+  primaryModuleOf,
+  isPrimaryModuleVisible,
+  type PrimaryModuleId
+} from '@renderer/lib/primary-modules'
 import { cn } from '../ui/cn'
 import { navItemClass } from './nav-item'
 

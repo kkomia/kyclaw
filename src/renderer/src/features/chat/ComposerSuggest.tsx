@@ -140,7 +140,9 @@ export function ComposerSuggest({
                     >
                       {iconOfGroup(group.title)}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{row.label}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
+                      {row.label}
+                    </span>
                     {secondary === null ? null : (
                       <span className="max-w-[40%] shrink-0 truncate font-mono text-[11px] text-ink-tertiary">
                         {secondary}

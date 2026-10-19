@@ -373,7 +373,9 @@ describe('PB-001 · 多消息轮：正文落在下一条 assistant 消息时，�
             'a1'
           )}
         />
-        <Message message={assistantMessage([{ type: 'text', text: '正文在下一轮消息里。' }], 'a2')} />
+        <Message
+          message={assistantMessage([{ type: 'text', text: '正文在下一轮消息里。' }], 'a2')}
+        />
       </>
     )
 

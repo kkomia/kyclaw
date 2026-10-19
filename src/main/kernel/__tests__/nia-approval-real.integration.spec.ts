@@ -30,7 +30,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { startAgentServer } from '../../agent/service'
 import { KYCLAW_AGENT_ID } from '../../../shared/agent-id'
-import { InteractionHub, applyInteractionEvent, feedKernelEvent, respondAndDismiss } from '../interaction-hub'
+import {
+  InteractionHub,
+  applyInteractionEvent,
+  feedKernelEvent,
+  respondAndDismiss
+} from '../interaction-hub'
 import { startKernelAdapter, type KernelAdapter } from '../kernel-adapter'
 import type { KernelInteractionEvent } from '../kernel-interactions'
 import { resolveKernelLayout } from '../kernel-layout'
@@ -40,7 +45,8 @@ const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const ENABLED = process.env.KYCLAW_KERNEL_E2E === '1'
 const PROBE = process.env.KYCLAW_APPROVAL_PROBE === '1'
 const ELECTRON =
-  process.env.KYCLAW_KERNEL_ELECTRON ?? join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+  process.env.KYCLAW_KERNEL_ELECTRON ??
+  join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
 const KERNEL_ROOT = process.env.KYCLAW_KERNEL_ROOT ?? join(repoRoot, 'resources', 'kernel')
 
 function kernelVersionDir(): string | null {
@@ -201,7 +207,10 @@ async function startRealAdapter(extraEnv: Record<string, string> = {}): Promise<
 }
 
 /** 等审批请求（E1：超时抛可诊断错误，附 follow 事件序列） */
-async function waitForApproval(handle: AdapterHandle, timeoutMs = 25_000): Promise<KernelInteractionEvent> {
+async function waitForApproval(
+  handle: AdapterHandle,
+  timeoutMs = 25_000
+): Promise<KernelInteractionEvent> {
   const deadline = Date.now() + timeoutMs
   while (handle.interactions.length === 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -249,9 +258,14 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
   it('allowed-once：审批请求字段对、文件真落盘、tool-output-available、hub 结果行 allowed-once', async () => {
     const target = join(tmpdir(), `kyclaw-approval-allowed-${String(Date.now())}.txt`)
     const stub = await startToolStub(approvalTool(target))
-    const handle = await startRealAdapter({ DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl })
+    const handle = await startRealAdapter({
+      DEEPSEEK_API_KEY: 'test',
+      DEEPSEEK_BASE_URL: stub.baseUrl
+    })
     try {
-      const turnPromise = handle.adapter.startTurn('写一个文件到工作区外', { threadId: 'thread-approval-allow' })
+      const turnPromise = handle.adapter.startTurn('写一个文件到工作区外', {
+        threadId: 'thread-approval-allow'
+      })
       // 立即挂错误处理：断言失败时 turn 仍在等审批，stop() 会让它 reject（不能变 unhandled rejection）
       const settled = turnPromise.then(
         (result) => ({ ok: true as const, result }),
@@ -308,15 +322,21 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
   it('rejected：文件不落盘、tool-output-error 出现、正文不被替换、hub 结果行 rejected', async () => {
     const target = join(tmpdir(), `kyclaw-approval-rejected-${String(Date.now())}.txt`)
     const stub = await startToolStub(approvalTool(target))
-    const handle = await startRealAdapter({ DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl })
+    const handle = await startRealAdapter({
+      DEEPSEEK_API_KEY: 'test',
+      DEEPSEEK_BASE_URL: stub.baseUrl
+    })
     try {
-      const turnPromise = handle.adapter.startTurn('写一个文件到工作区外', { threadId: 'thread-approval-reject' })
+      const turnPromise = handle.adapter.startTurn('写一个文件到工作区外', {
+        threadId: 'thread-approval-reject'
+      })
       const settled = turnPromise.then(
         (result) => ({ ok: true as const, result }),
         (error: unknown) => ({ ok: false as const, error })
       )
       const interaction = await waitForApproval(handle)
-      if (interaction.kind !== 'approval') throw new Error(`E3 期望 approval，实际 ${interaction.kind}`)
+      if (interaction.kind !== 'approval')
+        throw new Error(`E3 期望 approval，实际 ${interaction.kind}`)
       const pendingBefore = handle.hub.snapshot('thread-approval-reject').approvals.pending
       expect(pendingBefore.some((item) => item.id === interaction.eventId)).toBe(true)
       await respondAndDismiss(handle.adapter, handle.hub, 'thread-approval-reject', {
@@ -362,13 +382,18 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
           extraEnv: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }
         }
       })
-      const headers = { 'content-type': 'application/json', authorization: `Bearer ${server.token}` }
+      const headers = {
+        'content-type': 'application/json',
+        authorization: `Bearer ${server.token}`
+      }
       const threadId = 'thread-http-approval'
       const response = await fetch(`${server.baseUrl}/chat/${KYCLAW_AGENT_ID}`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '写一个文件到工作区外' }] }],
+          messages: [
+            { id: 'u1', role: 'user', parts: [{ type: 'text', text: '写一个文件到工作区外' }] }
+          ],
           memory: { thread: threadId }
         })
       })
@@ -379,9 +404,12 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
       let pending: Array<Record<string, unknown>> = []
       while (Date.now() < deadline) {
         const snapshot = (await (
-          await fetch(`${server.baseUrl}/kernel/interactions?threadId=${encodeURIComponent(threadId)}`, {
-            headers
-          })
+          await fetch(
+            `${server.baseUrl}/kernel/interactions?threadId=${encodeURIComponent(threadId)}`,
+            {
+              headers
+            }
+          )
         ).json()) as { approvals?: { pending?: Array<Record<string, unknown>> } }
         pending = snapshot.approvals?.pending ?? []
         if (pending.length > 0) break
@@ -393,13 +421,20 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
       }
       expect(pending.some((item) => item.toolName === 'write')).toBe(true)
       const waterfall = pending.find((item) => item.source === 'waterfall')
-      expect(waterfall, `HTTP 挂起里应有可应答 waterfall 项：${JSON.stringify(pending)}`).toBeTruthy()
+      expect(
+        waterfall,
+        `HTTP 挂起里应有可应答 waterfall 项：${JSON.stringify(pending)}`
+      ).toBeTruthy()
       const eventId = String(waterfall?.id ?? '')
 
       // E2：应答通道
       const respond = await fetch(
         `${server.baseUrl}/api/kernel/interactions/${encodeURIComponent(eventId)}/respond`,
-        { method: 'POST', headers, body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' }) }
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' })
+        }
       )
       const respondBody = (await respond.json()) as Record<string, unknown>
       expect(respond.status, JSON.stringify(respondBody)).toBe(200)
@@ -408,7 +443,11 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
       // 同一 eventId 重复提交 → 409（语义：已结算）
       const again = await fetch(
         `${server.baseUrl}/api/kernel/interactions/${encodeURIComponent(eventId)}/respond`,
-        { method: 'POST', headers, body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' }) }
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' })
+        }
       )
       expect(again.status).toBe(409)
 
@@ -417,15 +456,20 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
       const types = frames.map((frame) => String(frame.type))
       expect(types).toContain('tool-output-available')
       const text = frames
-        .flatMap((frame) => (frame.type === 'text-delta' && typeof frame.delta === 'string' ? [frame.delta] : []))
+        .flatMap((frame) =>
+          frame.type === 'text-delta' && typeof frame.delta === 'string' ? [frame.delta] : []
+        )
         .join('')
       expect(text).toBe('工具已完成。')
       expect(existsSync(target), 'HTTP 链路允许后文件应真实存在').toBe(true)
 
       const final = (await (
-        await fetch(`${server.baseUrl}/kernel/interactions?threadId=${encodeURIComponent(threadId)}`, {
-          headers
-        })
+        await fetch(
+          `${server.baseUrl}/kernel/interactions?threadId=${encodeURIComponent(threadId)}`,
+          {
+            headers
+          }
+        )
       ).json()) as { approvals?: { pending?: unknown[]; results?: Array<{ outcome?: string }> } }
       expect(final.approvals?.pending ?? []).toHaveLength(0)
       expect(final.approvals?.results?.[0]?.outcome).toBe('allowed-once')
@@ -444,23 +488,31 @@ describe.runIf(READY_TO_RUN)('PB-021/WaveB · 审批真实链路（真内核 + �
   }, 240_000)
 })
 
-describe.runIf(ENABLED && VERSION_DIR !== null && PROBE)('PB-021/WaveB · Step 0 触发探针（诊断用）', () => {
-  it('探 commands/list 与 /permission（找确定性审批入口）', async () => {
-    const handle = await startRealAdapter()
-    try {
-      const commands = await handle.adapter.listCommands()
-      console.log('[approval-probe] commands', JSON.stringify(commands))
-      for (const line of ['/permission', '/permission read-only', '/permission', '/permission workspace-write']) {
-        try {
-          const result = await handle.adapter.executeCommand(line)
-          console.log(`[approval-probe] ${line} ->`, JSON.stringify(result))
-        } catch (error) {
-          console.log(`[approval-probe] ${line} ERR`, String(error))
+describe.runIf(ENABLED && VERSION_DIR !== null && PROBE)(
+  'PB-021/WaveB · Step 0 触发探针（诊断用）',
+  () => {
+    it('探 commands/list 与 /permission（找确定性审批入口）', async () => {
+      const handle = await startRealAdapter()
+      try {
+        const commands = await handle.adapter.listCommands()
+        console.log('[approval-probe] commands', JSON.stringify(commands))
+        for (const line of [
+          '/permission',
+          '/permission read-only',
+          '/permission',
+          '/permission workspace-write'
+        ]) {
+          try {
+            const result = await handle.adapter.executeCommand(line)
+            console.log(`[approval-probe] ${line} ->`, JSON.stringify(result))
+          } catch (error) {
+            console.log(`[approval-probe] ${line} ERR`, String(error))
+          }
         }
+        expect(commands.some((command) => command.name === 'permission')).toBe(true)
+      } finally {
+        await handle.stop()
       }
-      expect(commands.some((command) => command.name === 'permission')).toBe(true)
-    } finally {
-      await handle.stop()
-    }
-  }, 180_000)
-})
+    }, 180_000)
+  }
+)

@@ -8,7 +8,7 @@
 | 项                        | 值                                                                                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 内核版本                  | `@deepseek-ai/*` **v0.2.1-rc.2**（DSH 桌面安装版内嵌内核快照）                                                                                   |
-| 取证件                    | `kernel-snapshot-rc2-complete-sharp.tar.gz`（35.3 MiB，`bytes=36994698`）                                                                       |
+| 取证件                    | `kernel-snapshot-rc2-complete-sharp.tar.gz`（35.3 MiB，`bytes=36994698`）                                                                        |
 | **SHA256（验收⑤取证值）** | `16EEF01776F022A078326972D80FF35E9AE83FBA47A27CAE7613125107C2F47B`                                                                               |
 | 包数                      | **524**（`SNAPSHOT.json.packagesKept`）                                                                                                          |
 | 文件数                    | **12,249** 总文件 = node_modules **12,244** + 根 5（SNAPSHOT.json / SHA256SUMS.txt / package.json / packages.tsv / packages-by-capability.json） |
@@ -40,7 +40,7 @@
   `require('@img/sharp-win32-x64/sharp.node')`。宿主 exe 的 node_modules 不参与内核加载，
   `app.asar` 里的 sharp 主包也不会去 `app.asar.unpacked` 找缺失的平台包——所以平台包必须完整
   落在 `resources/kernel/rc.2/node_modules/@img/sharp-win32-x64/`（package.json/index.cjs/versions.json
-  + `lib/{libvips-42.dll,libvips-cpp-8.18.7.dll,sharp-win32-x64-0.35.5.node}`，共 8 文件）。
+  - `lib/{libvips-42.dll,libvips-cpp-8.18.7.dll,sharp-win32-x64-0.35.5.node}`，共 8 文件）。
 - 本版冻结为 `kernel-snapshot-rc2-complete-sharp.tar.gz`：**12,249 文件 / 36,994,698 B /
   SHA256 16EEF017…C2F47B**；overlay 变 **314 文件 / 21,143,074 B**。验证：
   `node -e "require('sharp')"`（cwd=`resources/kernel/rc.2`）应打印 `sharp 0.35.5 / vips 8.18.7`。

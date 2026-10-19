@@ -97,8 +97,13 @@ function failureOf(
   if (!FAILURE_TURN_KINDS.has(kind)) return null
   const error = recordOf(reason?.error)
   const code = typeof error?.code === 'string' && error.code !== '' ? error.code : undefined
-  const message = typeof error?.message === 'string' && error.message !== '' ? error.message : undefined
-  return { kind, ...(code === undefined ? {} : { code }), ...(message === undefined ? {} : { message }) }
+  const message =
+    typeof error?.message === 'string' && error.message !== '' ? error.message : undefined
+  return {
+    kind,
+    ...(code === undefined ? {} : { code }),
+    ...(message === undefined ? {} : { message })
+  }
 }
 
 interface FailureTurn {

@@ -124,7 +124,10 @@ test.describe('内嵌浏览器 · 客人 viewport 跟住 webview 盒', () => {
   test('导航 / 收窄铺满 / 面板隐藏再开：客人 viewport == 盒尺寸，且窄盒里正文换行', async () => {
     // 内嵌浏览器 guest viewport 依赖 webviewTag/打包预览环境（本机 dev 跑不出 browser-title）。
     // 归 b 组 env-gate；开关在 chat 视图下已修（AppShell.tsx:278），环境具备时再开。
-    test.skip(process.env.KYCLAW_WEBVIEW_E2E !== '1', '内嵌 webview/guest 需要打包预览环境：KYCLAW_WEBVIEW_E2E=1')
+    test.skip(
+      process.env.KYCLAW_WEBVIEW_E2E !== '1',
+      '内嵌 webview/guest 需要打包预览环境：KYCLAW_WEBVIEW_E2E=1'
+    )
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(FIXTURE_HTML)

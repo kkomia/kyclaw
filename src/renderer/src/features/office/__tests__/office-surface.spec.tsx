@@ -79,7 +79,14 @@ describe('OfficeSurface：handshake 状态机', () => {
     dispatchFromSurface({ type: 'surface:hello', nonce: 'nonce-1', version: 1 })
     expect(postMessage).toHaveBeenCalledTimes(1)
     expect(postMessage).toHaveBeenCalledWith(
-      { type: 'surface:init', nonce: 'nonce-1', locale: 'zh-CN', theme: 'light', probe: false, motion: 'full' },
+      {
+        type: 'surface:init',
+        nonce: 'nonce-1',
+        locale: 'zh-CN',
+        theme: 'light',
+        probe: false,
+        motion: 'full'
+      },
       '*'
     )
     expect(screen.getByTestId('office-surface')).toHaveAttribute('data-state', 'loading')
@@ -205,7 +212,14 @@ describe('OfficeSurface：M3-S2 文档投递与主题热切换', () => {
 
     dispatchFromSurface({ type: 'surface:hello', nonce: 'nonce-doc', version: 1 })
     expect(postMessage).toHaveBeenCalledWith(
-      { type: 'surface:init', nonce: 'nonce-doc', locale: 'zh-CN', theme: 'dark', probe: false, motion: 'full' },
+      {
+        type: 'surface:init',
+        nonce: 'nonce-doc',
+        locale: 'zh-CN',
+        theme: 'dark',
+        probe: false,
+        motion: 'full'
+      },
       '*'
     )
     // ready 之前不能发文档（面还没应用 init）
@@ -293,7 +307,14 @@ describe('OfficeSurface：M3-S2 文档投递与主题热切换', () => {
 
     await waitFor(() =>
       expect(postMessage).toHaveBeenCalledWith(
-        { type: 'surface:init', nonce: 'theme-nonce', locale: 'zh-CN', theme: 'dark', probe: false, motion: 'full' },
+        {
+          type: 'surface:init',
+          nonce: 'theme-nonce',
+          locale: 'zh-CN',
+          theme: 'dark',
+          probe: false,
+          motion: 'full'
+        },
         '*'
       )
     )

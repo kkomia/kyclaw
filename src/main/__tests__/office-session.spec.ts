@@ -21,7 +21,10 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-function tab(id: string, overrides: Partial<OfficeSession['tabs'][number]> = {}): OfficeSession['tabs'][number] {
+function tab(
+  id: string,
+  overrides: Partial<OfficeSession['tabs'][number]> = {}
+): OfficeSession['tabs'][number] {
   return {
     documentId: id,
     realPath: `C:\\docs\\${id}.docx`,

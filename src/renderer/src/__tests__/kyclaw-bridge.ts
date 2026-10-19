@@ -682,8 +682,20 @@ export interface OfficeApiStub {
   reportDirtyState: Mock<(count: number) => Promise<void>>
   onQuitRequest: Mock<(listener: (payload: OfficeQuitRequestPayload) => void) => () => void>
   respondQuitRequest: Mock<(result: OfficeQuitResult) => Promise<void>>
-  sessionSync: Mock<(documentIds: string[], activeDocumentId?: string | null) => Promise<{ ok: boolean; message?: string }>>
-  sessionRestore: Mock<() => Promise<{ restored: OfficeDocumentInfo[]; activeDocumentId: string | null; modifiedOnDisk: number; skipped: number }>>
+  sessionSync: Mock<
+    (
+      documentIds: string[],
+      activeDocumentId?: string | null
+    ) => Promise<{ ok: boolean; message?: string }>
+  >
+  sessionRestore: Mock<
+    () => Promise<{
+      restored: OfficeDocumentInfo[]
+      activeDocumentId: string | null
+      modifiedOnDisk: number
+      skipped: number
+    }>
+  >
 }
 
 /** 造一份 `OfficeDocumentInfo`（用例只改关心的字段） */
@@ -746,7 +758,12 @@ export function officeApiStub(): OfficeApiStub {
     onQuitRequest: vi.fn(() => () => undefined),
     respondQuitRequest: vi.fn(async () => undefined),
     sessionSync: vi.fn(async () => ({ ok: true })),
-    sessionRestore: vi.fn(async () => ({ restored: [], activeDocumentId: null, modifiedOnDisk: 0, skipped: 0 }))
+    sessionRestore: vi.fn(async () => ({
+      restored: [],
+      activeDocumentId: null,
+      modifiedOnDisk: 0,
+      skipped: 0
+    }))
   }
 }
 

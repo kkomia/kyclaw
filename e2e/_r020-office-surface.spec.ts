@@ -86,7 +86,10 @@ test.describe('M3-S1 · kyclaw-office:// 隔离面（真机 preview）', () => {
   // eslint-disable-next-line no-empty-pattern -- Playwright 要求首参是对象解构；本用例不用 fixtures
   test('origin / 两侧 CSP / wasm / 无 window.kyclaw / Range / 0 外请', async ({}, testInfo) => {
     // 需要 LibreOffice/低负载 preview 环境；本机不作为发版门禁（PB-048 b 组）
-    test.skip(process.env.KYCLAW_OFFICE_E2E !== '1', '需要 LibreOffice/低负载 preview 环境：KYCLAW_OFFICE_E2E=1')
+    test.skip(
+      process.env.KYCLAW_OFFICE_E2E !== '1',
+      '需要 LibreOffice/低负载 preview 环境：KYCLAW_OFFICE_E2E=1'
+    )
     test.setTimeout(180_000)
     mkdirSync(EVIDENCE_DIR, { recursive: true })
 

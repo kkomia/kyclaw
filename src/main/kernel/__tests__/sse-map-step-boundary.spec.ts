@@ -21,7 +21,9 @@ import {
 
 /** 与 PB-013 spec 同形的 AI SDK 最小消费端（reset-step 只丢当前步骤） */
 class UiModel {
-  private readonly parts: Array<{ kind: 'step-start' } | { kind: 'text'; id: string; text: string }> = []
+  private readonly parts: Array<
+    { kind: 'step-start' } | { kind: 'text'; id: string; text: string }
+  > = []
   private activeText = new Map<string, { kind: 'text'; id: string; text: string }>()
 
   apply(frame: RendererSseFrame): void {

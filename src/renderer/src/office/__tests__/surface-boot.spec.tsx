@@ -845,10 +845,9 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
       // <150ms：还没到显示阈值（瞬时路径不闪）
       expect(screen.queryByTestId('surface-fonts-loading')).not.toBeInTheDocument()
       // ≥150ms：骨架出现（预热/升格面也一样，pptx 在升格面里等 6 面时必须有加载态）
-      await waitFor(
-        () => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(),
-        { timeout: 2000 }
-      )
+      await waitFor(() => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(), {
+        timeout: 2000
+      })
       expect(screen.getByTestId('surface-fonts-loading')).toHaveAttribute(
         'data-surface-loading-stage',
         '3'
@@ -913,10 +912,9 @@ describe('SurfaceBoot：M3-S4 面内快捷键转发', () => {
     })
     await waitFor(() => expect(screen.getByTestId('surface-xlsx-editor')).toBeInTheDocument())
     // 一直不 onLoaded → 等过 150ms 阈值，骨架出现
-    await waitFor(
-      () => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(),
-      { timeout: 2000 }
-    )
+    await waitFor(() => expect(screen.getByTestId('surface-fonts-loading')).toBeInTheDocument(), {
+      timeout: 2000
+    })
     // 解析失败：编辑器报错 → 骨架必须立刻消失（不等最短展示），错误态与重试可见
     act(() => xlsxMock.lastProps?.onError?.('open', 'bad zip: invalid Zip archive'))
     await waitFor(() =>

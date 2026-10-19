@@ -248,9 +248,7 @@ function basenameOf(path: string): string {
  */
 function insidePackageDir(path: string, packageName: string): boolean {
   if (path.startsWith(`node_modules/${packageName}/`)) return true
-  return (
-    path.startsWith('node_modules/.pnpm/') && path.includes(`/node_modules/${packageName}/`)
-  )
+  return path.startsWith('node_modules/.pnpm/') && path.includes(`/node_modules/${packageName}/`)
 }
 
 /**

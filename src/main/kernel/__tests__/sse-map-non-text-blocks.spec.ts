@@ -16,7 +16,12 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { KernelSseMapper, type KernelAssistantChunk, type KernelFollowValue, type RendererSseFrame } from '../sse-map'
+import {
+  KernelSseMapper,
+  type KernelAssistantChunk,
+  type KernelFollowValue,
+  type RendererSseFrame
+} from '../sse-map'
 
 const KERNEL_TOOL = fileURLToPath(
   new URL('./fixtures/kernel-tool-follow-values.json', import.meta.url)
@@ -71,8 +76,12 @@ describe('PB-039：非文本 block 不得产生 text 帧', () => {
   it('非文本块（tool-call）的 block-end → 不发 text-end（也不发 text-start）', () => {
     const mapper = new KernelSseMapper()
     const frames: RendererSseFrame[] = []
-    frames.push(...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } }))
-    frames.push(...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'tool-call' })))
+    frames.push(
+      ...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } })
+    )
+    frames.push(
+      ...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'tool-call' }))
+    )
     frames.push(
       ...mapper.push(
         chunk('a:1', 0, {
@@ -88,8 +97,12 @@ describe('PB-039：非文本 block 不得产生 text 帧', () => {
   it('文本块照常配对：start → delta → end 同 id，且只发一次 end', () => {
     const mapper = new KernelSseMapper()
     const frames: RendererSseFrame[] = []
-    frames.push(...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } }))
-    frames.push(...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'text' })))
+    frames.push(
+      ...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } })
+    )
+    frames.push(
+      ...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'text' }))
+    )
     frames.push(...mapper.push(chunk('a:1', 0, { type: 'text-delta', index: 0, text: '先说一句' })))
     frames.push(
       ...mapper.push(
@@ -106,15 +119,21 @@ describe('PB-039：非文本 block 不得产生 text 帧', () => {
   it('文本块结束后再来一个工具块：工具块不产生 text 帧，文本块不受影响', () => {
     const mapper = new KernelSseMapper()
     const frames: RendererSseFrame[] = []
-    frames.push(...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } }))
-    frames.push(...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'text' })))
+    frames.push(
+      ...mapper.push({ type: 'assistant-stream', frame: { type: 'start', attemptId: 'a:1' } })
+    )
+    frames.push(
+      ...mapper.push(chunk('a:1', 0, { type: 'block-start', index: 0, blockType: 'text' }))
+    )
     frames.push(...mapper.push(chunk('a:1', 0, { type: 'text-delta', index: 0, text: '先读目标' })))
     frames.push(
       ...mapper.push(
         chunk('a:1', 0, { type: 'block-end', index: 0, block: { type: 'text', text: '先读目标' } })
       )
     )
-    frames.push(...mapper.push(chunk('a:1', 1, { type: 'block-start', index: 1, blockType: 'tool-call' })))
+    frames.push(
+      ...mapper.push(chunk('a:1', 1, { type: 'block-start', index: 1, blockType: 'tool-call' }))
+    )
     frames.push(
       ...mapper.push(
         chunk('a:1', 1, {

@@ -980,10 +980,7 @@ describe('PB-023：打开错误与保存错误分开（错误横幅 + 重试/关
     expect(screen.getByTestId('office-doc-error-retry')).toBeInTheDocument()
     expect(screen.getByTestId('office-doc-error-close')).toBeInTheDocument()
     // 文档没有进入「已加载」态（错误来自读盘前的 ZIP 校验，不等引擎）
-    expect(screen.getByTestId('office-workspace')).toHaveAttribute(
-      'data-document-state',
-      'error'
-    )
+    expect(screen.getByTestId('office-workspace')).toHaveAttribute('data-document-state', 'error')
   })
 
   it('PB-023 返工：进入文档后 10s 未 doc:loaded → 打开超时错误（三格式兜底）', async () => {

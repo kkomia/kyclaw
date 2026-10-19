@@ -24,9 +24,9 @@ describe('isRetryKeepMessage', () => {
     expect(isRetryKeepMessage({ role: 'user', metadata: {} })).toBe(false)
     expect(isRetryKeepMessage({ role: 'user' })).toBe(false)
     expect(isRetryKeepMessage({ role: 'user', metadata: null })).toBe(false)
-    expect(isRetryKeepMessage({ role: 'user', metadata: { [RETRY_KEEP_METADATA_KEY]: 'yes' } })).toBe(
-      false
-    )
+    expect(
+      isRetryKeepMessage({ role: 'user', metadata: { [RETRY_KEEP_METADATA_KEY]: 'yes' } })
+    ).toBe(false)
     // 就算是 assistant 带了同名 metadata，也不算（标记只对 user 消息生效）
     expect(
       isRetryKeepMessage({ role: 'assistant', metadata: { [RETRY_KEEP_METADATA_KEY]: true } })

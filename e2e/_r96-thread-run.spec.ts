@@ -181,7 +181,10 @@ function runSpinner(page: Page): Locator {
 
 test('010：真 SSE——运行（含切走）画灰色圆环；收尾转成完成点', async () => {
   // 旧 provider 测具（OpenAI /v1/chat/completions + settings.providers）待迁移到 kernel provider（PB-047/026）
-  test.skip(process.env.KYCLAW_INTERACTIVE_E2E !== '1', '旧 provider 测具待迁移（PB-047/026）：KYCLAW_INTERACTIVE_E2E=1')
+  test.skip(
+    process.env.KYCLAW_INTERACTIVE_E2E !== '1',
+    '旧 provider 测具待迁移（PB-047/026）：KYCLAW_INTERACTIVE_E2E=1'
+  )
   test.setTimeout(300_000)
   const provider = await startControllableProvider()
   const launched = await createInteractiveApp(provider.url)
@@ -233,7 +236,10 @@ test('010：真 SSE——运行（含切走）画灰色圆环；收尾转成完�
 
 test('010：真 SSE——停止 / 失败指示消失；项目分组同样画灰圈（附 009 弹窗实测）', async () => {
   // 旧 provider 测具待迁移 + 项目分组依赖已下架 projects（PB-047/026 + PB-041）
-  test.skip(process.env.KYCLAW_INTERACTIVE_E2E !== '1', '旧 provider 测具待迁移（PB-047/026）：KYCLAW_INTERACTIVE_E2E=1')
+  test.skip(
+    process.env.KYCLAW_INTERACTIVE_E2E !== '1',
+    '旧 provider 测具待迁移（PB-047/026）：KYCLAW_INTERACTIVE_E2E=1'
+  )
   test.setTimeout(360_000)
   const provider = await startControllableProvider()
   const launched = await createInteractiveApp(provider.url)

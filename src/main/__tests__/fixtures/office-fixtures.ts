@@ -42,7 +42,9 @@ export async function fixtureDocx(input: FixtureDocxInput): Promise<Buffer> {
     if (block.type === 'heading') {
       const text = block.text.trim()
       if (text === '') continue
-      children.push(new Paragraph({ text, heading: headings[block.level ?? 1] ?? HeadingLevel.HEADING_1 }))
+      children.push(
+        new Paragraph({ text, heading: headings[block.level ?? 1] ?? HeadingLevel.HEADING_1 })
+      )
       continue
     }
     if (block.type === 'paragraph') {
@@ -174,7 +176,10 @@ export async function fixturePptx(input: FixturePptxInput): Promise<FixturePptxR
     const stats = slideInput.stats ?? []
     if (stats.length > 0) {
       slide.addText(
-        stats.map((stat) => ({ text: `${stat.value} ${stat.label}`, options: { breakLine: true } })),
+        stats.map((stat) => ({
+          text: `${stat.value} ${stat.label}`,
+          options: { breakLine: true }
+        })),
         { x: 0.6, y: 1.6, w: 8, h: 2 }
       )
     }

@@ -57,7 +57,7 @@ export default defineConfig({
         '@betteroffice/xlsx-i18n',
         '@betteroffice/pptx',
         '@betteroffice/pptx-react',
-        '@betteroffice/pptx-i18n',
+        '@betteroffice/pptx-i18n'
         // 注意（2026-10-18 最终 build 回归结论）：新增/升级 @betteroffice 包后必须重启 dev，
         // 或删除 node_modules/.vite（旧 dev server 的预打包模块图会让 pptx/xlsx wasm 的
         // new URL(...) 落到 Vite SPA 兜底 HTML，出现 expected magic word 00 61 73 6d）。

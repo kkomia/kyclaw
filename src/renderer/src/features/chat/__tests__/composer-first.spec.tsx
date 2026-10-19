@@ -225,8 +225,8 @@ describe('历史回灌之前：输入卡就在，发送挡着', () => {
     // 落位：标题进场、占位撑开、选择项目行展开（2026-10-18 A · 信笺重定基线，
     // 卡片中心下移到 mock 的 ≈478 ⇒ mt-28/112 收到 mt-12/48；推导见 ChatPage 注释）
     // task-118：hero 输入区沉底，预留热力图占位
-  expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow-0')
-  expect(screen.getByTestId('welcome-heatmap-placeholder')).toHaveClass('flex-1')
+    expect(screen.getByTestId('welcome-spacer')).toHaveClass('grow-0')
+    expect(screen.getByTestId('welcome-heatmap-placeholder')).toHaveClass('flex-1')
     expect(screen.getByTestId('composer-project-row-collapse')).toHaveAttribute(
       'data-active',
       'true'

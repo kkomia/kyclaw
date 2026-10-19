@@ -622,9 +622,7 @@ test.describe('interactive features — production UI functional evidence', () =
       expect(narrow.mainDisplay).toBe('none')
       // 铺满宽 = innerWidth − primary-nav-rail(56) − sidebar(240) − edge-gap(6)（含左侧 rail）
       expect(
-        Math.abs(
-          narrow.panelWidth - (narrow.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
-        )
+        Math.abs(narrow.panelWidth - (narrow.innerWidth - primaryNavRail - sidebarWidth - edgeGap))
       ).toBeLessThanOrEqual(8)
       // 铺满是算出来的布局结果，不是偏好：store 里的宽度没被动过
       expect(narrow.panelPreference).toBe('400px')
@@ -747,8 +745,7 @@ test.describe('interactive features — production UI functional evidence', () =
       expect(crossing!.mainDisplay).toBe('none')
       expect(
         Math.abs(
-          crossing!.panelWidth -
-            (crossing!.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
+          crossing!.panelWidth - (crossing!.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
         )
       ).toBeLessThanOrEqual(8)
       expect(crossing!.panelSource).toBe(expectedSource(crossing!))

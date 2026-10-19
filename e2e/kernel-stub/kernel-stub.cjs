@@ -90,16 +90,22 @@ let turnCounter = 0
  * 落盘：真内核把会话 log 持久化在 `DSH_HOME`；stub 也照做，否则「关应用再开」的 e2e（R11 reopen）
  * 会看到空 session/page —— 那是替身缺陷，不是产品行为。文件只在 DSH_HOME 下，随 userData 清理。
  */
-const SESSION_STORE = process.env.DSH_HOME === undefined || process.env.DSH_HOME === ''
-  ? ''
-  : path.join(process.env.DSH_HOME, 'e2e-stub-sessions.json')
+const SESSION_STORE =
+  process.env.DSH_HOME === undefined || process.env.DSH_HOME === ''
+    ? ''
+    : path.join(process.env.DSH_HOME, 'e2e-stub-sessions.json')
 
 function saveSessionStore() {
   if (SESSION_STORE === '') return
   try {
     const out = {}
     for (const [sessionId, session] of sessions) {
-      out[sessionId] = { cwd: session.cwd, seq: session.seq, used: session.used === true, records: session.records }
+      out[sessionId] = {
+        cwd: session.cwd,
+        seq: session.seq,
+        used: session.used === true,
+        records: session.records
+      }
     }
     fs.mkdirSync(path.dirname(SESSION_STORE), { recursive: true })
     fs.writeFileSync(SESSION_STORE, JSON.stringify({ sessions: out }), 'utf8')
@@ -238,7 +244,12 @@ async function runTurn(session, text) {
 
   broadcast(session, {
     type: 'event',
-    event: { type: 'turn/start', seq: nextSeq(session), time: Date.now(), data: { turn: turnNumber } }
+    event: {
+      type: 'turn/start',
+      seq: nextSeq(session),
+      time: Date.now(),
+      data: { turn: turnNumber }
+    }
   })
   // 内核持久化 log 替身：turn/start + inbox spliced（失败轮投影依赖 inserted；见 thread-projection）
   recordEvent(session, 'turn/start', { turn: turnNumber })
@@ -369,9 +380,7 @@ async function runTurn(session, text) {
           message: {
             toolCallId: callId,
             isError: TOOL.isError === true,
-            content: [
-              { type: 'text', text: JSON.stringify(TOOL.result ?? { ok: true }) }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(TOOL.result ?? { ok: true }) }]
           }
         }
       }
@@ -544,7 +553,8 @@ function handleRpc(endpoint, args) {
       const throughSeq =
         typeof request.throughSeq === 'number' ? request.throughSeq : Number.MAX_SAFE_INTEGER
       const beforeSeq = typeof request.beforeSeq === 'number' ? request.beforeSeq : undefined
-      const maxMessages = typeof request.maxMessages === 'number' ? Math.max(1, request.maxMessages) : 200
+      const maxMessages =
+        typeof request.maxMessages === 'number' ? Math.max(1, request.maxMessages) : 200
       const events = session.records
         .map((record) => record.event)
         .filter(
@@ -569,7 +579,10 @@ function handleRpc(endpoint, args) {
       const text = Array.isArray(request.content)
         ? request.content
             .flatMap((part) =>
-              typeof part === 'object' && part !== null && part.type === 'text' && typeof part.text === 'string'
+              typeof part === 'object' &&
+              part !== null &&
+              part.type === 'text' &&
+              typeof part.text === 'string'
                 ? [part.text]
                 : []
             )
@@ -608,7 +621,10 @@ function handleRpc(endpoint, args) {
     default:
       return {
         ok: false,
-        error: { code: 'unknown-endpoint', message: `kernel stub: unknown RPC endpoint ${endpoint}` }
+        error: {
+          code: 'unknown-endpoint',
+          message: `kernel stub: unknown RPC endpoint ${endpoint}`
+        }
       }
   }
 }
@@ -904,7 +920,9 @@ server.listen(0, '127.0.0.1', () => {
   }
   logStub('ready', { port: address.port })
   // 这一行是 kernel-process.ts READY_PATTERN 的唯一输入，格式不要改
-  process.stdout.write(`${DSH_WEB_READY_PREFIX}http://127.0.0.1:${String(address.port)}/?token=${token}\n`)
+  process.stdout.write(
+    `${DSH_WEB_READY_PREFIX}http://127.0.0.1:${String(address.port)}/?token=${token}\n`
+  )
 })
 
 function shutdown() {

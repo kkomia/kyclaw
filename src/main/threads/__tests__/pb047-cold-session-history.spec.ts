@@ -45,7 +45,10 @@ function item(
   }
 }
 
-function record(seq: number, type = 'user/message'): { type: string; event: KernelSessionEventLike } {
+function record(
+  seq: number,
+  type = 'user/message'
+): { type: string; event: KernelSessionEventLike } {
   return { type: 'item', event: { type, seq, data: {} } }
 }
 
@@ -69,7 +72,11 @@ describe('PB-047：冷会话（重启后）读历史', () => {
         if (method === 'session/list') return { items: [item('cold-1', { asOfSeq: 21 })] }
         if (method === 'session/page') {
           return {
-            records: [record(2, 'agent/inbox/spliced'), record(20, 'turn/start'), record(21, 'user/message')],
+            records: [
+              record(2, 'agent/inbox/spliced'),
+              record(20, 'turn/start'),
+              record(21, 'user/message')
+            ],
             hasMore: false
           }
         }

@@ -95,9 +95,7 @@ const USER_APPROVAL_DECISIONS = ['allowed-once', 'rejected'] as const
 
 function parseRespondBody(
   body: unknown
-):
-  | { ok: true; response: InteractionResponse }
-  | { ok: false; error: string } {
+): { ok: true; response: InteractionResponse } | { ok: false; error: string } {
   if (typeof body !== 'object' || body === null) return { ok: false, error: 'body-not-object' }
   const record = body as { kind?: unknown; outcome?: unknown; answers?: unknown }
   if (record.kind === 'approval') {
@@ -144,12 +142,10 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
   app.get('/ask-user/pending', (context) => {
     const threadId = readThreadId(context.req.query('threadId'))
     if (threadId === '') return context.json({ pending: [] })
-    const pending = hub
-      .snapshot(threadId)
-      .questions.pending.flatMap((question) => {
-        const mapped = toLegacyPendingQuestion(question)
-        return mapped === null ? [] : [mapped]
-      })
+    const pending = hub.snapshot(threadId).questions.pending.flatMap((question) => {
+      const mapped = toLegacyPendingQuestion(question)
+      return mapped === null ? [] : [mapped]
+    })
     return context.json({ pending })
   })
 
@@ -160,7 +156,8 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
     } catch {
       return context.json({ error: 'invalid-json' }, 400)
     }
-    const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
+    const record =
+      typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
     const threadId = readThreadId(record.threadId)
     const runId = typeof record.runId === 'string' ? record.runId : undefined
     if (threadId === '') return context.json({ status: 'cancelled', runIds: [] })
@@ -168,7 +165,9 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
     const targets =
       runId === undefined
         ? pending
-        : pending.filter((question) => `kernel-${question.eventId}` === runId || question.eventId === runId)
+        : pending.filter(
+            (question) => `kernel-${question.eventId}` === runId || question.eventId === runId
+          )
     for (const question of targets) hub.dismissQuestion(threadId, question.eventId)
     return context.json({ status: 'cancelled', runIds: targets.map((q) => `kernel-${q.eventId}`) })
   })
@@ -199,8 +198,7 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
     }
     const parsed = parseRespondBody(body)
     if (!parsed.ok) return context.json({ error: parsed.error }, 400)
-    if (responder === undefined)
-      return context.json({ error: 'interactions-unavailable' }, 503)
+    if (responder === undefined) return context.json({ error: 'interactions-unavailable' }, 503)
     const pending = hub.findPendingByEventId(eventId)
     if (pending === null) {
       const settled = hub.findSettledEvent(eventId)
@@ -223,9 +221,7 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
                   settledBy: settled.result.settledBy,
                   matchedBy: settled.result.matchedBy,
                   ...(settled.result.at === undefined ? {} : { at: settled.result.at }),
-                  ...(settled.result.reason === undefined
-                    ? {}
-                    : { reason: settled.result.reason })
+                  ...(settled.result.reason === undefined ? {} : { reason: settled.result.reason })
                 }
         },
         409

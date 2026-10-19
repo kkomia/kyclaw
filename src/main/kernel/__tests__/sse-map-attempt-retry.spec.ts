@@ -28,7 +28,9 @@ const MARK = 'DUPBODY'
 
 /** AI SDK v7 消费端语义的最小复刻（只保留与判定相关的分支） */
 class UiModel {
-  private readonly parts: Array<{ kind: 'step-start' } | { kind: 'text'; id: string; text: string }> = []
+  private readonly parts: Array<
+    { kind: 'step-start' } | { kind: 'text'; id: string; text: string }
+  > = []
   private activeText = new Map<string, { kind: 'text'; id: string; text: string }>()
 
   apply(frame: RendererSseFrame): void {
@@ -134,7 +136,9 @@ describe('PB-013 重试正文替换（attempt 边界）', () => {
     expect(ui.text()).toBe(`${MARK}｜`)
     expect(frames.filter((frame) => frame.type === 'reset-step')).toHaveLength(3)
     // 每次重试的 start 帧都换了 messageId（attempt 边界可辨认）
-    expect(new Set(frames.flatMap((frame) => (frame.type === 'start' ? [frame.messageId] : []))).size).toBe(4)
+    expect(
+      new Set(frames.flatMap((frame) => (frame.type === 'start' ? [frame.messageId] : []))).size
+    ).toBe(4)
   })
 
   it('2 次断流后成功（K2 剧本）：UI 正文只 1 份', () => {
@@ -156,7 +160,10 @@ describe('PB-013 重试正文替换（attempt 边界）', () => {
     const values: KernelFollowValue[] = [
       attemptStart('c1'),
       ...attemptBody('c1', MARK),
-      { type: 'assistant-stream', frame: { type: 'end', attemptId: 'c1', outcome: { kind: 'failed' } } },
+      {
+        type: 'assistant-stream',
+        frame: { type: 'end', attemptId: 'c1', outcome: { kind: 'failed' } }
+      },
       attemptStart('c2'),
       ...attemptBody('c2', MARK),
       ...attemptFinish('c2')

@@ -80,4 +80,3 @@ KYCLAW_UPDATE_URL=http://127.0.0.1:8555/ pnpm dev
 
 第三方依赖与随包资源的许可见 `resources/skills/THIRD_PARTY_NOTICES.md`；随包的
 LibreOffice Kit 遵守 MPL-2.0（licenses/ 与 sources/ 必须随分发保留）。
-

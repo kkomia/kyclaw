@@ -30,9 +30,12 @@ async function currentThreadId(page: Page): Promise<string | null> {
 async function fetchMessages(page: Page, threadId: string): Promise<Record<string, unknown>[]> {
   return page.evaluate(async (id) => {
     const endpoint = await window.kyclaw.agent.endpoint()
-    const response = await fetch(`${endpoint.baseUrl}/api/threads/${encodeURIComponent(id)}/messages`, {
-      headers: { Authorization: `Bearer ${endpoint.token}` }
-    })
+    const response = await fetch(
+      `${endpoint.baseUrl}/api/threads/${encodeURIComponent(id)}/messages`,
+      {
+        headers: { Authorization: `Bearer ${endpoint.token}` }
+      }
+    )
     if (!response.ok) throw new Error(`messages HTTP ${String(response.status)}`)
     const body = (await response.json()) as { messages?: unknown }
     return Array.isArray(body.messages) ? (body.messages as Record<string, unknown>[]) : []
@@ -41,7 +44,7 @@ async function fetchMessages(page: Page, threadId: string): Promise<Record<strin
 
 function userTextOf(message: Record<string, unknown>): string {
   const content = message.content as { parts?: unknown } | unknown[] | undefined
-  const parts = Array.isArray(content) ? content : (content as { parts?: unknown[] })?.parts ?? []
+  const parts = Array.isArray(content) ? content : ((content as { parts?: unknown[] })?.parts ?? [])
   return (parts as Array<{ type?: string; text?: string }>)
     .filter((part) => part?.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text)
@@ -77,7 +80,9 @@ test.describe('R11 · 失败轮数据保留（kernel stub error 场景）', () =
         messageCount: await first.page.getByTestId('message-text').count(),
         errorCards: await first.page.getByTestId('error-card').count()
       }
-      await first.page.screenshot({ path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-turn.png') })
+      await first.page.screenshot({
+        path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-turn.png')
+      })
       threadId = await currentThreadId(first.page)
       expect(threadId, 'R11 前置：找不到 materialize 后的会话行').not.toBeNull()
       const before = await fetchMessages(first.page, threadId as string)
@@ -93,7 +98,9 @@ test.describe('R11 · 失败轮数据保留（kernel stub error 场景）', () =
         messageCount: await first.page.getByTestId('message-text').count(),
         errorCards: await first.page.getByTestId('error-card').count()
       }
-      await first.page.screenshot({ path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-after-reload.png') })
+      await first.page.screenshot({
+        path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-after-reload.png')
+      })
 
       // 数据侧断言（reload 后）
       assertFailureTurn(afterReload, 'reload')
@@ -102,7 +109,9 @@ test.describe('R11 · 失败轮数据保留（kernel stub error 场景）', () =
       await expect(first.page.getByTestId('turn-failure-card')).toHaveCount(1, { timeout: 30_000 })
       await expect(first.page.getByTestId('message-bubble').first()).toContainText('先别急着答')
       await expect(first.page.getByTestId('error-card')).toHaveCount(0, { timeout: 10_000 })
-      await first.page.screenshot({ path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-stub-ui-after-reload.png') })
+      await first.page.screenshot({
+        path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-stub-ui-after-reload.png')
+      })
     } finally {
       await closeApp(first)
     }
@@ -118,7 +127,9 @@ test.describe('R11 · 失败轮数据保留（kernel stub error 场景）', () =
         messageCount: await second.page.getByTestId('message-text').count(),
         errorCards: await second.page.getByTestId('error-card').count()
       }
-      await second.page.screenshot({ path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-after-reopen.png') })
+      await second.page.screenshot({
+        path: resolve('.superpowers/dev-verify/20261019-0.2.0/nia/r11-after-reopen.png')
+      })
       assertFailureTurn(afterReopen, 'reopen')
     } finally {
       await closeApp(second)
@@ -135,5 +146,8 @@ function assertFailureTurn(messages: readonly Record<string, unknown>[], stage: 
   expect(userTextOf(firstUser as Record<string, unknown>)).toContain('先别急着答')
   const failure = messages.find((message) => failureKindOf(message) !== null)
   expect(failure, `R11 ${stage}：没有 content.metadata.turnFailure 的失败轮`).toBeDefined()
-  expect(failureKindOf(failure as Record<string, unknown>), `R11 ${stage}：turnFailure.kind 不是 error`).toBe('error')
+  expect(
+    failureKindOf(failure as Record<string, unknown>),
+    `R11 ${stage}：turnFailure.kind 不是 error`
+  ).toBe('error')
 }

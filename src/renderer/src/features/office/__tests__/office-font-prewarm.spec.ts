@@ -198,9 +198,7 @@ describe('P0-2 / P0-5：升格面定位不再 rAF 空转 + 字体预热门控', 
       // CR-10：500ms 定时器兜底（不依赖 rAF/paint）
       await vi.waitFor(
         () => {
-          expect(
-            document.querySelector('[data-testid="office-font-prewarm-host"]')
-          ).not.toBeNull()
+          expect(document.querySelector('[data-testid="office-font-prewarm-host"]')).not.toBeNull()
         },
         { timeout: 2_000 }
       )

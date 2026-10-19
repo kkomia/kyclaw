@@ -148,9 +148,7 @@ describe('kernel-chat：B3.4 threadId 透传（body.memory.thread = 内核 sessi
   })
 
   it('startTurn 带上 body.memory.thread 的 threadId', async () => {
-    const { adapter, threadIds } = fakeAdapter([
-      { type: 'text-delta', id: 'text-0', delta: '好' }
-    ])
+    const { adapter, threadIds } = fakeAdapter([{ type: 'text-delta', id: 'text-0', delta: '好' }])
     const app = new Hono()
     app.post('/chat/kyclaw', createKernelChatHandler(adapter))
     const response = await app.request('/chat/kyclaw', {

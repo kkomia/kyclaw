@@ -64,7 +64,9 @@ describe('wasmGateProblems（PB-016 / CR-24 打包 wasm 闸门）', () => {
   })
 
   it('缺 1 个依赖 wasm（openjpeg）→ 只报一条，点名期望路径模式', () => {
-    const problems = wasmGateProblems(REAL_BASELINE.filter((path) => !path.endsWith('/openjpeg.wasm')))
+    const problems = wasmGateProblems(
+      REAL_BASELINE.filter((path) => !path.endsWith('/openjpeg.wasm'))
+    )
     expect(problems).toHaveLength(1)
     expect(joined(problems)).toContain('openjpeg.wasm')
     expect(joined(problems)).toContain('node_modules/pdfjs-dist/**/openjpeg.wasm')
@@ -76,7 +78,13 @@ describe('wasmGateProblems（PB-016 / CR-24 打包 wasm 闸门）', () => {
   it('5 个依赖全缺 → 一条问题里点名 5 个（含期望路径）', () => {
     const problems = wasmGateProblems(OFFICE_WASM)
     expect(problems).toHaveLength(1)
-    for (const name of ['quickjs-eval.wasm', 'openjpeg.wasm', 'jbig2.wasm', 'qcms_bg.wasm', 'xxhash.wasm']) {
+    for (const name of [
+      'quickjs-eval.wasm',
+      'openjpeg.wasm',
+      'jbig2.wasm',
+      'qcms_bg.wasm',
+      'xxhash.wasm'
+    ]) {
       expect(joined(problems)).toContain(name)
     }
     expect(joined(problems)).toContain('node_modules/pdfjs-dist/**/quickjs-eval.wasm')
@@ -129,7 +137,9 @@ describe('wasmGateProblems（PB-016 / CR-24 打包 wasm 闸门）', () => {
     expect(problems).toHaveLength(1)
     expect(joined(problems)).toContain('node_modules/pdfjs-dist/**/openjpeg.wasm')
     // 失败信息要给出"实际找到的同名文件在哪"
-    expect(joined(problems)).toContain('实际找到同名文件：node_modules/some-other-dep/wasm/openjpeg.wasm')
+    expect(joined(problems)).toContain(
+      '实际找到同名文件：node_modules/some-other-dep/wasm/openjpeg.wasm'
+    )
   })
 
   it('依赖 wasm 被收进 out/renderer（node_modules 里仍在）→ 不把 Office 计数顶成 7（R2-06②）', () => {

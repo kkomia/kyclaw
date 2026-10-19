@@ -235,7 +235,9 @@ describe('PB-026 写面：POST /api/kernel/interactions/:eventId/respond', () =>
 
 describe('P0：/ask-user/pending 不再是 404', () => {
   it('空态 → 200 + {pending: []}（composer 得以解锁）', async () => {
-    const response = await appWith(new InteractionHub()).request('/ask-user/pending?threadId=thread-A')
+    const response = await appWith(new InteractionHub()).request(
+      '/ask-user/pending?threadId=thread-A'
+    )
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ pending: [] })
   })
@@ -327,7 +329,9 @@ describe('P0：/ask-user/pending 不再是 404', () => {
       approvals: { pending: Array<{ id: string; source: string }> }
       questions: { pending: unknown[] }
     }
-    expect(body.approvals.pending).toEqual([expect.objectContaining({ id: 'evt-a', source: 'waterfall' })])
+    expect(body.approvals.pending).toEqual([
+      expect.objectContaining({ id: 'evt-a', source: 'waterfall' })
+    ])
     expect(body.questions.pending).toEqual([])
     // 缺 threadId → 400（不是静默空快照，避免调用方以为"没有交互"）
     expect((await appWith(hub).request('/kernel/interactions')).status).toBe(400)

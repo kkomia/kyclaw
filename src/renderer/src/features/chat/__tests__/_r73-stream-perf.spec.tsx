@@ -308,7 +308,9 @@ describe('探针：流式正文渲染成本（round 73）', () => {
     const started = performance.now()
     const view = render(<TextPart text={reply} streaming={false} />)
     const elapsed = performance.now() - started // 首屏 FCP 类：渲染在 WebKit/DOM 里同步发生
-    console.log(`[r73] 结束态一次性渲染：${lines} 行 / ${reply.length} 字符 → ${elapsed.toFixed(1)}ms`)
+    console.log(
+      `[r73] 结束态一次性渲染：${lines} 行 / ${reply.length} 字符 → ${elapsed.toFixed(1)}ms`
+    )
 
     // 内容完整性：整篇都渲染出来了（标题 / 表格 / 代码块一个不少）
     expect(view.getByTestId('message-text')).toBeInTheDocument()

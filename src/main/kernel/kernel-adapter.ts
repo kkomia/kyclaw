@@ -39,7 +39,12 @@ import {
 import { startKernelProcess } from './kernel-process'
 import { kernelExitMessage } from './kernel-startup'
 import { KernelRpcClient } from './kernel-rpc'
-import { KernelSseMapper, appendEffectiveFrames, type KernelFollowValue, type RendererSseFrame } from './sse-map'
+import {
+  KernelSseMapper,
+  appendEffectiveFrames,
+  type KernelFollowValue,
+  type RendererSseFrame
+} from './sse-map'
 import type { KernelGoalState } from './goal-projection'
 import { connectWebSocket, type WebSocketClient } from './ws-mux'
 
@@ -261,7 +266,9 @@ export function sameCwd(
 export function kernelUserError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error)
   if (raw.includes('session/writer-held'))
-    return new Error('会话正被另一个窗口/进程占用（session/writer-held）；请关闭占用它的窗口后重试。')
+    return new Error(
+      '会话正被另一个窗口/进程占用（session/writer-held）；请关闭占用它的窗口后重试。'
+    )
   if (raw.includes('session/conflict'))
     return new Error('会话 id 已属于另一个目录（session/conflict）；不能在这里续接，请新建会话。')
   if (raw.includes('session/agent-busy'))
@@ -334,7 +341,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         ...(typeof item.blank === 'boolean' ? { blank: item.blank } : {})
       }))
       // PB-024：list 是 cwd 的另一个来源（thread 可能由别的路径物化），顺手记进内存映射
-      for (const item of items) if (item.cwd !== undefined) cwdBySession.set(item.sessionId, item.cwd)
+      for (const item of items)
+        if (item.cwd !== undefined) cwdBySession.set(item.sessionId, item.cwd)
       return items
     }
 
@@ -511,7 +519,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         }
         return
       }
-      if (parsed.type !== 'item' || parsed.streamId === undefined || parsed.value === undefined) return
+      if (parsed.type !== 'item' || parsed.streamId === undefined || parsed.value === undefined)
+        return
       // PB-025：`$events` 流（交互 waterfall）与 session/follow 分开处理
       if (interactionsStreamId !== undefined && parsed.streamId === interactionsStreamId) {
         const frame = parseRemoteEventFrame(parsed.value)
@@ -536,7 +545,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       // PB-004：内核 session 事件原样喂给 main 侧（InteractionHub 的审批四态/提问状态都来自这里）
       if (value.type === 'event' && options.onSessionEvent !== undefined) {
         try {
-          options.onSessionEvent(state.sessionId, value.event)        } catch {
+          options.onSessionEvent(state.sessionId, value.event)
+        } catch {
           // 订阅方异常不能打断内核流
         }
       }
@@ -588,7 +598,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           settleTurn(state, undefined, {
             error: {
               ...(reason?.error?.code === undefined ? {} : { code: reason.error.code }),
-              message: reason?.error?.message ?? `kernel turn ended with ${reason?.kind ?? 'unknown'}`
+              message:
+                reason?.error?.message ?? `kernel turn ended with ${reason?.kind ?? 'unknown'}`
             }
           })
       }
@@ -622,11 +633,15 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       },
       pid: kernel.pid,
       port: Number(new URL(kernel.baseUrl).port),
-      async startTurn(text: string, startOptions: StartTurnOptions = {}): Promise<KernelTurnResult> {
+      async startTurn(
+        text: string,
+        startOptions: StartTurnOptions = {}
+      ): Promise<KernelTurnResult> {
         if (stopped) throw new Error('kernel adapter: adapter is stopped')
         // PB-043：内核进程已退出（运行期崩溃）→ 立刻给可诊断错误（退出码/signal + 日志绝对路径），
         // 不让用户看到"连接中断"那种把内核崩溃误报成网络问题的文案。
-        if (kernelExit !== undefined) throw new Error(kernelExitMessage(kernelExit, options.logFile))
+        if (kernelExit !== undefined)
+          throw new Error(kernelExitMessage(kernelExit, options.logFile))
         if (startOptions.threadId === undefined && defaultState.dead === true) {
           defaultState = await openFollow(defaultSessionId)
           states.set(defaultSessionId, defaultState)
@@ -641,7 +656,10 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         const timeoutMs = options.turnTimeoutMs ?? 120_000
         const promise = new Promise<KernelTurnResult>((resolve, reject) => {
           const timer = setTimeout(() => {
-            settleTurn(state, new Error(`kernel adapter: turn timed out after ${String(timeoutMs)}ms`))
+            settleTurn(
+              state,
+              new Error(`kernel adapter: turn timed out after ${String(timeoutMs)}ms`)
+            )
           }, timeoutMs)
           state.turn = {
             frames: [],
@@ -664,7 +682,9 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           // PB-043：如果这期间内核进程已经退出，用崩溃文案而不是原生的 fetch 错误
           settleTurn(
             state,
-            kernelExit === undefined ? kernelUserError(error) : new Error(kernelExitMessage(kernelExit, options.logFile))
+            kernelExit === undefined
+              ? kernelUserError(error)
+              : new Error(kernelExitMessage(kernelExit, options.logFile))
           )
         }
         return promise
@@ -684,7 +704,10 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
         if (sessionId === undefined) return []
         return listCommandsInternal(sessionId)
       },
-      async executeCommand(line: string, threadId?: string): Promise<KernelCommandResult | unknown> {
+      async executeCommand(
+        line: string,
+        threadId?: string
+      ): Promise<KernelCommandResult | unknown> {
         // PB-005-F2：内核 `commands/execute` 对未识别行静默丢弃（返回 undefined、无 event），
         // 这里在发 RPC 前先用内核自己的命令清单校验一次，未知命令合成**与内核同形**的 error 结果。
         // 清单拉不到时不阻断（内核仍是权威），只告警。

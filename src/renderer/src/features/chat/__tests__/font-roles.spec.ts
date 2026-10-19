@@ -101,9 +101,7 @@ describe('Composer = UI 声部 + 规章 §9.2#6', () => {
     const effort = read('../ThinkingEffort.tsx')
     // 三处吃同一个常量（数值只许有一份），源文件里不再各写各的类
     expect(controls).toMatch(/data-testid="composer-model"[\s\S]{0,400}COMPOSER_READOUT_CLASS/)
-    expect(controls).toMatch(
-      /data-testid="context-percent"[\s\S]{0,200}COMPOSER_READOUT_CLASS/
-    )
+    expect(controls).toMatch(/data-testid="context-percent"[\s\S]{0,200}COMPOSER_READOUT_CLASS/)
     expect(effort).toMatch(/data-testid="composer-effort"[\s\S]{0,400}COMPOSER_READOUT_CLASS/)
     expect(effort).toMatch(
       /COMPOSER_READOUT_CLASS\s*=\s*'font-sans text-\[13px\] font-medium leading-\[20px\] text-ink-secondary tabular-nums'/

@@ -8,10 +8,7 @@
  * exceljs 直接写 / `zip-fixture.ts` 手写真 zip。全程只碰内存与临时目录。
  */
 import { describe, expect, it } from 'vitest'
-import {
-  fixturePptx as renderPptx,
-  fixtureXlsx as renderXlsx
-} from './fixtures/office-fixtures'
+import { fixturePptx as renderPptx, fixtureXlsx as renderXlsx } from './fixtures/office-fixtures'
 import {
   SHEET_COLUMN_LIMIT,
   SHEET_LIMIT,

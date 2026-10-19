@@ -122,11 +122,16 @@ describe.runIf(ENABLED)('B3.4 threadId=sessionId + 刷新重接 + 占用错误',
       console.log('[b34] first turn', JSON.stringify(first).slice(0, 1200))
       console.log(
         '[b34] stub bodies so far',
-        JSON.stringify(stub.bodies.map((body) => ({ len: body.length, hasFirst: body.includes('记住 42') })))
+        JSON.stringify(
+          stub.bodies.map((body) => ({ len: body.length, hasFirst: body.includes('记住 42') }))
+        )
       )
       expect(first.text).toMatch(/第 \d+ 次回答/)
       const listed = await a1.listKernelSessions()
-      console.log('[b34] sessions', JSON.stringify(listed.filter((s) => s.sessionId === 'thread-b34')))
+      console.log(
+        '[b34] sessions',
+        JSON.stringify(listed.filter((s) => s.sessionId === 'thread-b34'))
+      )
       expect(listed.some((session) => session.sessionId === 'thread-b34')).toBe(true)
 
       // “刷新页面”：同一 adapter（main/内核不重启）再发一轮
@@ -166,7 +171,8 @@ describe.runIf(ENABLED)('B3.4 threadId=sessionId + 刷新重接 + 占用错误',
       const heldText =
         heldResult instanceof Error
           ? heldResult.message
-          : (heldResult as { error?: { message?: string }; frames?: unknown[] }).error?.message ?? ''
+          : ((heldResult as { error?: { message?: string }; frames?: unknown[] }).error?.message ??
+            '')
       if (heldResult instanceof Error || heldText !== '') {
         expect(`${heldResult instanceof Error ? heldResult.message : ''} ${heldText}`).toMatch(
           /writer-held|占用/
@@ -186,7 +192,10 @@ describe.runIf(ENABLED)('B3.4 threadId=sessionId + 刷新重接 + 占用错误',
         () => null,
         (error: unknown) => error
       )
-      console.log('[b34] conflict error =', conflict instanceof Error ? conflict.message : String(conflict))
+      console.log(
+        '[b34] conflict error =',
+        conflict instanceof Error ? conflict.message : String(conflict)
+      )
       expect(conflict).toBeInstanceOf(Error)
       expect((conflict as Error).message).toContain('session/conflict')
     } finally {

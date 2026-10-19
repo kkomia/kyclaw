@@ -95,9 +95,7 @@ describe('OfficeStatusBar：字段与壳真值', () => {
   })
 
   it('PB-020 E1：无页数时显示 detail（xlsx 文件大小）而不是「—」', () => {
-    render(
-      <OfficeStatusBar {...props({ kind: 'xlsx', pageCount: 0, detail: '12 KB · 本地' })} />
-    )
+    render(<OfficeStatusBar {...props({ kind: 'xlsx', pageCount: 0, detail: '12 KB · 本地' })} />)
     const pages = screen.getByTestId('office-status-pages')
     expect(pages).toHaveTextContent('12 KB · 本地')
     expect(pages).toHaveAttribute('data-pages', '0')

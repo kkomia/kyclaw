@@ -174,152 +174,157 @@ export const PptxEditorPane = forwardRef<PptxEditorPaneHandle, PptxEditorPanePro
       propsRef.current.onSaveRequest()
     }, [])
 
-    const handleReady = useCallback((api: PptxEditorApi) => {
-      apiRef.current = api
-      if (propsRef.current.probe === true && import.meta.env.DEV) {
-        // D17：仅未打包 dev 构建 + ?officeProbe=1；生产构建里这段不执行
-        window.__KYCLAW_OFFICE_PPTX_PROBE__ = {
-          version: () => api.version(),
-          readContent: () => api.readContent(),
-          readTexts: async () => {
-            const result = (await api.readContent()) as {
-              ok?: boolean
-              stories?: Array<{ text?: string }>
-            }
-            if (result.ok !== true) return []
-            return (result.stories ?? []).map((story) => story.text ?? '')
-          },
-          replaceFirstText: async (search, replacement) => {
-            try {
-              const found = (await api.findText({ text: search })) as {
+    const handleReady = useCallback(
+      (api: PptxEditorApi) => {
+        apiRef.current = api
+        if (propsRef.current.probe === true && import.meta.env.DEV) {
+          // D17：仅未打包 dev 构建 + ?officeProbe=1；生产构建里这段不执行
+          window.__KYCLAW_OFFICE_PPTX_PROBE__ = {
+            version: () => api.version(),
+            readContent: () => api.readContent(),
+            readTexts: async () => {
+              const result = (await api.readContent()) as {
                 ok?: boolean
-                failure?: { code?: string }
-                matches?: Array<{
-                  range?: { slideId: string; shapeId: string; storyId: string }
-                }>
+                stories?: Array<{ text?: string }>
               }
-              if (found.ok !== true)
-                return { ok: false, code: found.failure?.code ?? 'find-failed' }
-              const range = found.matches?.[0]?.range
-              if (range === undefined) return { ok: false, code: 'not-found' }
-              const expectVersion = await api.version()
-              const result = (await api.applyEdits({
-                expectVersion,
-                steps: [
-                  {
-                    op: 'replaceText',
-                    target: {
-                      kind: 'search',
-                      within: {
-                        slideId: range.slideId,
-                        shapeId: range.shapeId,
-                        storyId: range.storyId
-                      },
-                      text: search
-                    },
-                    text: replacement
-                  }
-                ]
-              } as never)) as { ok?: boolean; failure?: { code?: string } }
-              return result.ok === true
-                ? { ok: true }
-                : { ok: false, code: result.failure?.code ?? 'apply-failed' }
-            } catch (error) {
-              return { ok: false, code: messageOf(error) }
-            }
-          },
-          setFirstShapeX: async (xEmu) => {
-            try {
-              const read = (await api.readContent()) as {
-                ok?: boolean
-                failure?: { code?: string }
-                slides?: Array<{
-                  id?: string
-                  shapes?: Array<{
-                    id?: string
-                    x?: number
-                    y?: number
-                    width?: number
-                    height?: number
+              if (result.ok !== true) return []
+              return (result.stories ?? []).map((story) => story.text ?? '')
+            },
+            replaceFirstText: async (search, replacement) => {
+              try {
+                const found = (await api.findText({ text: search })) as {
+                  ok?: boolean
+                  failure?: { code?: string }
+                  matches?: Array<{
+                    range?: { slideId: string; shapeId: string; storyId: string }
                   }>
-                }>
-              }
-              if (read.ok !== true) return { ok: false, code: read.failure?.code ?? 'read-failed' }
-              const slide = read.slides?.[0]
-              const shape = slide?.shapes?.[0]
-              if (slide?.id === undefined || shape?.id === undefined) {
-                return { ok: false, code: 'no-shape' }
-              }
-              const expectVersion = await api.version()
-              const result = (await api.applyEdits({
-                expectVersion,
-                steps: [
-                  {
-                    op: 'setShapeRect',
-                    target: { slideId: slide.id, shapeId: shape.id },
-                    rect: {
-                      x: xEmu,
-                      y: shape.y ?? 0,
-                      width: shape.width ?? 1,
-                      height: shape.height ?? 1
+                }
+                if (found.ok !== true)
+                  return { ok: false, code: found.failure?.code ?? 'find-failed' }
+                const range = found.matches?.[0]?.range
+                if (range === undefined) return { ok: false, code: 'not-found' }
+                const expectVersion = await api.version()
+                const result = (await api.applyEdits({
+                  expectVersion,
+                  steps: [
+                    {
+                      op: 'replaceText',
+                      target: {
+                        kind: 'search',
+                        within: {
+                          slideId: range.slideId,
+                          shapeId: range.shapeId,
+                          storyId: range.storyId
+                        },
+                        text: search
+                      },
+                      text: replacement
                     }
-                  }
-                ]
-              } as never)) as { ok?: boolean; failure?: { code?: string } }
-              return result.ok === true
-                ? { ok: true }
-                : { ok: false, code: result.failure?.code ?? 'apply-failed' }
-            } catch (error) {
-              return { ok: false, code: messageOf(error) }
-            }
-          },
-          setSlideNotes: async (slideIndex, text) => {
-            try {
-              const read = (await api.readContent()) as {
-                ok?: boolean
-                failure?: { code?: string }
-                slides?: Array<{ id?: string }>
+                  ]
+                } as never)) as { ok?: boolean; failure?: { code?: string } }
+                return result.ok === true
+                  ? { ok: true }
+                  : { ok: false, code: result.failure?.code ?? 'apply-failed' }
+              } catch (error) {
+                return { ok: false, code: messageOf(error) }
               }
-              if (read.ok !== true) return { ok: false, code: read.failure?.code ?? 'read-failed' }
-              const slideId = read.slides?.[slideIndex]?.id
-              if (slideId === undefined) return { ok: false, code: 'no-slide' }
-              const expectVersion = await api.version()
-              const result = (await api.applyEdits({
-                expectVersion,
-                steps: [{ op: 'setSlideNotes', target: { slideId }, text }]
-              } as never)) as { ok?: boolean; failure?: { code?: string } }
-              return result.ok === true
-                ? { ok: true }
-                : { ok: false, code: result.failure?.code ?? 'apply-failed' }
-            } catch (error) {
-              return { ok: false, code: messageOf(error) }
-            }
-          },
-          save: async () => {
-            try {
-              await api.flushPendingInput()
-              const bytes = api.save()
-              return { ok: true, byteLength: bytes.byteLength }
-            } catch (error) {
-              return { ok: false, code: messageOf(error) }
+            },
+            setFirstShapeX: async (xEmu) => {
+              try {
+                const read = (await api.readContent()) as {
+                  ok?: boolean
+                  failure?: { code?: string }
+                  slides?: Array<{
+                    id?: string
+                    shapes?: Array<{
+                      id?: string
+                      x?: number
+                      y?: number
+                      width?: number
+                      height?: number
+                    }>
+                  }>
+                }
+                if (read.ok !== true)
+                  return { ok: false, code: read.failure?.code ?? 'read-failed' }
+                const slide = read.slides?.[0]
+                const shape = slide?.shapes?.[0]
+                if (slide?.id === undefined || shape?.id === undefined) {
+                  return { ok: false, code: 'no-shape' }
+                }
+                const expectVersion = await api.version()
+                const result = (await api.applyEdits({
+                  expectVersion,
+                  steps: [
+                    {
+                      op: 'setShapeRect',
+                      target: { slideId: slide.id, shapeId: shape.id },
+                      rect: {
+                        x: xEmu,
+                        y: shape.y ?? 0,
+                        width: shape.width ?? 1,
+                        height: shape.height ?? 1
+                      }
+                    }
+                  ]
+                } as never)) as { ok?: boolean; failure?: { code?: string } }
+                return result.ok === true
+                  ? { ok: true }
+                  : { ok: false, code: result.failure?.code ?? 'apply-failed' }
+              } catch (error) {
+                return { ok: false, code: messageOf(error) }
+              }
+            },
+            setSlideNotes: async (slideIndex, text) => {
+              try {
+                const read = (await api.readContent()) as {
+                  ok?: boolean
+                  failure?: { code?: string }
+                  slides?: Array<{ id?: string }>
+                }
+                if (read.ok !== true)
+                  return { ok: false, code: read.failure?.code ?? 'read-failed' }
+                const slideId = read.slides?.[slideIndex]?.id
+                if (slideId === undefined) return { ok: false, code: 'no-slide' }
+                const expectVersion = await api.version()
+                const result = (await api.applyEdits({
+                  expectVersion,
+                  steps: [{ op: 'setSlideNotes', target: { slideId }, text }]
+                } as never)) as { ok?: boolean; failure?: { code?: string } }
+                return result.ok === true
+                  ? { ok: true }
+                  : { ok: false, code: result.failure?.code ?? 'apply-failed' }
+              } catch (error) {
+                return { ok: false, code: messageOf(error) }
+              }
+            },
+            save: async () => {
+              try {
+                await api.flushPendingInput()
+                const bytes = api.save()
+                return { ok: true, byteLength: bytes.byteLength }
+              } catch (error) {
+                return { ok: false, code: messageOf(error) }
+              }
             }
           }
         }
-      }
-      // PB-020 E1：打开即上报总页数（snapshot 是同步 API）；拿不到就回落到 onLoaded()
-      let reported = false
-      try {
-        const snapshot = api.handle.snapshot() as { slides?: readonly unknown[] }
-        const count = snapshot.slides?.length ?? 0
-        if (count > 0) {
-          reportPageCount(count)
-          reported = true
+        // PB-020 E1：打开即上报总页数（snapshot 是同步 API）；拿不到就回落到 onLoaded()
+        let reported = false
+        try {
+          const snapshot = api.handle.snapshot() as { slides?: readonly unknown[] }
+          const count = snapshot.slides?.length ?? 0
+          if (count > 0) {
+            reportPageCount(count)
+            reported = true
+          }
+        } catch {
+          // 拿不到就保持「—」，不影响编辑
         }
-      } catch {
-        // 拿不到就保持「—」，不影响编辑
-      }
-      if (!reported) propsRef.current.onLoaded()
-    }, [reportPageCount])
+        if (!reported) propsRef.current.onLoaded()
+      },
+      [reportPageCount]
+    )
 
     // 探针面随 pane 卸载消失（生产不设即不存在）
     useEffect(

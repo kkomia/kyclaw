@@ -34,8 +34,8 @@
   /* 只接管 CJK：汉字、CJK 标点、全角形式、兼容区；拉丁/数字/西文标点仍走系统字体，
      避免把 tabular 读数的数字字形换掉。 */
   unicode-range:
-    U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF,
-    U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+    U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF,
+    U+FE30-FE4F, U+FF00-FFEF;
 }
 
 :root {
@@ -51,6 +51,6 @@
     'kyclaw-serif-latin', 'kyclaw-ui-cjk', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --font-code:
-    'Cascadia Mono', 'Cascadia Code', Consolas, 'kyclaw-ui-cjk', 'Noto Sans SC', 'Source Han Sans SC',
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    'Cascadia Mono', 'Cascadia Code', Consolas, 'kyclaw-ui-cjk', 'Noto Sans SC',
+    'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }

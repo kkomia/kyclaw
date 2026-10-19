@@ -60,7 +60,8 @@ export function resolveUsageReadout(input: {
 }): UsageReadout {
   const stored = input.stored
   if (input.settled) {
-    if (stored === null || !stored.reported) return { contextInput: null, reported: false, source: 'stored' }
+    if (stored === null || !stored.reported)
+      return { contextInput: null, reported: false, source: 'stored' }
     return { contextInput: stored.contextInput, reported: true, source: 'stored' }
   }
   if (input.live.reported) {

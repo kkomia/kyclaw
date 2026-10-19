@@ -93,7 +93,14 @@ describe('PB-033 · ContextChip 读数', () => {
   it('resetLiveUsage + 库值 reported=false → 回到「—」', async () => {
     const { rerender } = render(<ContextChip threadId="t1" />)
     await waitFor(() => expect(fetchThreadContext).toHaveBeenCalled())
-    pushUsage({ input: null, output: null, total: null, cached: null, contextInput: 1234, reported: true })
+    pushUsage({
+      input: null,
+      output: null,
+      total: null,
+      cached: null,
+      contextInput: 1234,
+      reported: true
+    })
     await waitFor(() => expect(screen.getByTestId('context-percent')).toHaveTextContent(/\d+%/))
 
     // 库值没有 usage（reported=false）：回落也不显示 0
@@ -108,7 +115,14 @@ describe('PB-033 · ContextChip 读数', () => {
     fetchThreadContext.mockResolvedValue(contextOf({ lastInput: 999_999 }))
     const { rerender } = render(<ContextChip threadId="t1" settled={false} />)
     await waitFor(() => expect(fetchThreadContext).toHaveBeenCalled())
-    pushUsage({ input: null, output: null, total: null, cached: null, contextInput: 1234, reported: true })
+    pushUsage({
+      input: null,
+      output: null,
+      total: null,
+      cached: null,
+      contextInput: 1234,
+      reported: true
+    })
     await waitFor(() => expect(screen.getByTestId('context-percent')).toHaveTextContent(/\d+%/))
     const livePct = Number(screen.getByTestId('context-percent').textContent?.replace('%', ''))
 

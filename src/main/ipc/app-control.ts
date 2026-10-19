@@ -12,12 +12,7 @@
  * 2. **有回包**：失败必须让 UI 知道"没有重启"，不能 fire-and-forget 制造假承诺。
  */
 import { app, ipcMain } from 'electron'
-import {
-  IPC_CHANNELS,
-  noArgsSchema,
-  parseIpcArgs,
-  type AppRelaunchResult
-} from '../../shared/ipc'
+import { IPC_CHANNELS, noArgsSchema, parseIpcArgs, type AppRelaunchResult } from '../../shared/ipc'
 
 export interface AppControlDeps {
   /** 当前未保存的 Office 文档数（来自 quitGuard；> 0 时拒绝重启） */
@@ -31,19 +26,16 @@ export interface AppControlDeps {
 export function registerAppControlIpc(deps: AppControlDeps): void {
   const relaunch = deps.relaunch ?? (() => app.relaunch())
   const quit = deps.quit ?? (() => app.quit())
-  ipcMain.handle(
-    IPC_CHANNELS.app.relaunch,
-    (_event, ...args): AppRelaunchResult => {
-      parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.app.relaunch)
-      if (deps.dirtyCount() > 0) return { ok: false, reason: 'unsaved-documents' }
-      try {
-        relaunch()
-        quit()
-        return { ok: true }
-      } catch (error) {
-        console.warn('[kyclaw] 重启应用失败', error)
-        return { ok: false, reason: 'relaunch-failed' }
-      }
+  ipcMain.handle(IPC_CHANNELS.app.relaunch, (_event, ...args): AppRelaunchResult => {
+    parseIpcArgs(noArgsSchema, args, IPC_CHANNELS.app.relaunch)
+    if (deps.dirtyCount() > 0) return { ok: false, reason: 'unsaved-documents' }
+    try {
+      relaunch()
+      quit()
+      return { ok: true }
+    } catch (error) {
+      console.warn('[kyclaw] 重启应用失败', error)
+      return { ok: false, reason: 'relaunch-failed' }
     }
-  )
+  })
 }

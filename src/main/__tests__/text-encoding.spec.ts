@@ -7,7 +7,12 @@
  * （生产代码只走 `globalThis.TextDecoder`，所以替得掉）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { decodeTextBytes, decodeTextFileBytes, describeEncoding, isKnownTextPath } from '../text-encoding'
+import {
+  decodeTextBytes,
+  decodeTextFileBytes,
+  describeEncoding,
+  isKnownTextPath
+} from '../text-encoding'
 
 /** UTF-16LE 字节（可选 BOM）：`Buffer.from(text, 'utf16le')` 就是不带 BOM 的 LE */
 function utf16le(text: string, bom = false): Buffer {

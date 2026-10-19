@@ -38,13 +38,17 @@ function startFailingProvider(): Promise<{ server: Server; baseUrl: string }> {
       }
       let tools: unknown[] = []
       try {
-        tools = (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { tools?: unknown[] }).tools ?? []
+        tools =
+          (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { tools?: unknown[] }).tools ?? []
       } catch {
         // ignore
       }
       const isTitle = !Array.isArray(tools) || tools.length === 0
       if (isTitle) {
-        response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-store'
+        })
         const send = (event: string, data: unknown): void => {
           response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         }
@@ -59,17 +63,33 @@ function startFailingProvider(): Promise<{ server: Server; baseUrl: string }> {
             usage: { input_tokens: 1, output_tokens: 1 }
           }
         })
-        send('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
-        send('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '标题' } })
+        send('content_block_start', {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' }
+        })
+        send('content_block_delta', {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: '标题' }
+        })
         send('content_block_stop', { type: 'content_block_stop', index: 0 })
-        send('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } })
+        send('message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 1 }
+        })
         send('message_stop', { type: 'message_stop' })
         response.end()
         return
       }
       // 聊天请求：直接失败（内核会走 turn/end reason=error；PB-034 从 inbox 投影用户正文）
       response.writeHead(500, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ error: { type: 'server_error', message: 'R11 UI probe: 模拟 provider 500' } }))
+      response.end(
+        JSON.stringify({
+          error: { type: 'server_error', message: 'R11 UI probe: 模拟 provider 500' }
+        })
+      )
     })
   })
   return new Promise((resolveListen) => {
@@ -96,9 +116,12 @@ async function threadIdOf(page: Page): Promise<string> {
 async function fetchMessages(page: Page, threadId: string): Promise<Record<string, unknown>[]> {
   return page.evaluate(async (id) => {
     const endpoint = await window.kyclaw.agent.endpoint()
-    const response = await fetch(`${endpoint.baseUrl}/api/threads/${encodeURIComponent(id)}/messages`, {
-      headers: { Authorization: `Bearer ${endpoint.token}` }
-    })
+    const response = await fetch(
+      `${endpoint.baseUrl}/api/threads/${encodeURIComponent(id)}/messages`,
+      {
+        headers: { Authorization: `Bearer ${endpoint.token}` }
+      }
+    )
     if (!response.ok) throw new Error(`messages HTTP ${String(response.status)}`)
     const body = (await response.json()) as { messages?: unknown }
     return Array.isArray(body.messages) ? (body.messages as Record<string, unknown>[]) : []
@@ -110,11 +133,16 @@ function assertData(messages: readonly Record<string, unknown>[], stage: string)
   const first = messages[0] as Record<string, unknown>
   expect(first.role, `R11 UI ${stage}：首条应为 user`).toBe('user')
   const content = first.content as { metadata?: { turnFailure?: { kind?: unknown } } } | undefined
-  expect(content?.metadata?.turnFailure?.kind, `R11 UI ${stage}：turnFailure.kind 应为 error`).toBe('error')
+  expect(content?.metadata?.turnFailure?.kind, `R11 UI ${stage}：turnFailure.kind 应为 error`).toBe(
+    'error'
+  )
 }
 
 test.describe('R11 · 真内核 UI：失败轮 → reload', () => {
-  test.skip(!ENABLED, 'KYCLAW_R11_UI_E2E=1 时才跑（真内核 + 本地 provider；需 build 与 resources/kernel）')
+  test.skip(
+    !ENABLED,
+    'KYCLAW_R11_UI_E2E=1 时才跑（真内核 + 本地 provider；需 build 与 resources/kernel）'
+  )
 
   test('画面同时有正文 + turn-failure-card，dock 不重复；数据侧同断言', async () => {
     test.setTimeout(240_000)
@@ -143,7 +171,9 @@ test.describe('R11 · 真内核 UI：失败轮 → reload', () => {
       await expect(launched.page.getByTestId('message-text').first()).toContainText('先别急着答', {
         timeout: 30_000
       })
-      await expect(launched.page.getByTestId('turn-failure-card')).toHaveCount(1, { timeout: 60_000 })
+      await expect(launched.page.getByTestId('turn-failure-card')).toHaveCount(1, {
+        timeout: 60_000
+      })
       await expect(launched.page.getByTestId('error-card')).toHaveCount(0, { timeout: 15_000 })
       const bodyText = await launched.page.getByTestId('message-text').first().innerText()
       const dockErrorCards = await launched.page.getByTestId('error-card').count()
@@ -160,7 +190,11 @@ test.describe('R11 · 真内核 UI：失败轮 → reload', () => {
         turnFailureCards: await launched.page.getByTestId('turn-failure-card').count(),
         dockErrorCards
       }
-      writeFileSync(resolve(OUT, 'r11-real-ui-messages.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8')
+      writeFileSync(
+        resolve(OUT, 'r11-real-ui-messages.json'),
+        `${JSON.stringify(evidence, null, 2)}\n`,
+        'utf8'
+      )
     } finally {
       await closeApp(launched)
       await closeServer(provider.server)

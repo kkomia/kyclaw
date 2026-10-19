@@ -55,7 +55,11 @@ function tempDir(prefix: string): string {
 }
 
 /** 与 `e2e/kernel-stub/launcher.ts` 同构的最小内核树（布局：current.json + <version>/node_modules/...） */
-function materializeStub(rootDir: string): { kernelRoot: string; versionDir: string; entry: string } {
+function materializeStub(rootDir: string): {
+  kernelRoot: string
+  versionDir: string
+  entry: string
+} {
   const versionDir = join(rootDir, STUB_VERSION)
   const entryDir = join(versionDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib')
   mkdirSync(entryDir, { recursive: true })
@@ -80,7 +84,10 @@ interface StubAdapterHandle {
 }
 
 interface StubAdapterHooks {
-  onSessionEvent?: (threadId: string, event: { type?: string; seq?: number; data?: Record<string, unknown> }) => void
+  onSessionEvent?: (
+    threadId: string,
+    event: { type?: string; seq?: number; data?: Record<string, unknown> }
+  ) => void
 }
 
 async function startStubAdapter(
@@ -151,10 +158,20 @@ describe('PB-021 · kernel stub 布局/注入 seam（defaultKernelRoot + resolve
       })
     ).toBe(override)
     expect(
-      defaultKernelRoot({ isPackaged: true, resourcesPath: join('C:', 'res'), appPath: '', env: {} })
+      defaultKernelRoot({
+        isPackaged: true,
+        resourcesPath: join('C:', 'res'),
+        appPath: '',
+        env: {}
+      })
     ).toBe(join('C:', 'res', 'kernel'))
     expect(
-      defaultKernelRoot({ isPackaged: false, resourcesPath: '', appPath: join('C:', 'app'), env: {} })
+      defaultKernelRoot({
+        isPackaged: false,
+        resourcesPath: '',
+        appPath: join('C:', 'app'),
+        env: {}
+      })
     ).toBe(join('C:', 'app', 'resources', 'kernel'))
   })
 
@@ -409,18 +426,20 @@ describe('PB-021 · Electron-as-node 真启动路径（app 里就是这么 spawn
   it.skipIf(!ELECTRON_AVAILABLE)(
     '用 electron.exe + ELECTRON_RUN_AS_NODE 跑一轮（不需要真内核快照）',
     async () => {
-    const handle = await startStubAdapter(
-      {
-        KYCLAW_STUB_CHUNKS: JSON.stringify([REF_TEXT]),
-        KYCLAW_STUB_CHUNK_DELAY_MS: '0'
-      },
-      ELECTRON
-    )
-    try {
-      const result = await handle.adapter.startTurn('say hi')
-      expect(result.text).toBe(REF_TEXT)
-    } finally {
-      await handle.stop()
-    }
-  }, 60_000)
+      const handle = await startStubAdapter(
+        {
+          KYCLAW_STUB_CHUNKS: JSON.stringify([REF_TEXT]),
+          KYCLAW_STUB_CHUNK_DELAY_MS: '0'
+        },
+        ELECTRON
+      )
+      try {
+        const result = await handle.adapter.startTurn('say hi')
+        expect(result.text).toBe(REF_TEXT)
+      } finally {
+        await handle.stop()
+      }
+    },
+    60_000
+  )
 })

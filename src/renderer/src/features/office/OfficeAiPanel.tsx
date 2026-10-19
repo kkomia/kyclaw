@@ -72,10 +72,7 @@ export function OfficeAiPanel({
 
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 overflow-y-auto px-6 py-4 text-center">
           {/* PB-020 E4：诚实空态——能力未接入就不给假按钮（不给 disabled chip / 输入框） */}
-          <div
-            data-testid="office-ai-placeholder"
-            className="flex flex-col items-center gap-2"
-          >
+          <div data-testid="office-ai-placeholder" className="flex flex-col items-center gap-2">
             <Sparkles aria-hidden="true" className="size-5 text-ink-tertiary" />
             <p className="text-b2 text-ink-secondary">AI 编辑能力尚未接入</p>
             <p className="max-w-56 text-c1 leading-relaxed text-ink-tertiary">

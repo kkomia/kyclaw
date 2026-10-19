@@ -1200,4 +1200,3 @@ export function PendingChips({
     </div>
   )
 }
-
