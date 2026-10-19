@@ -36,7 +36,7 @@ import {
   SkillEgressBlockedError,
   type SkillImportDeps
 } from '../skill-add'
-import { hostAllowed } from '../../../mastra/tools/fetch'
+import { hostAllowed } from '../../tools/fetch-policy'
 import { installedSkillViews, skillSourcesFor } from '../skills'
 import { makeZip } from './zip-fixture'
 

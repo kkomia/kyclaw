@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startAgentServer, type AgentServerHandle } from '../../agent/service'
 import { threadMemoryBody } from '../../../shared/threads'
 import { KYCLAW_AGENT_ID } from '../../../mastra/agents/kyclaw'
-import type { KyclawModel } from '../../../mastra/model'
+import type { KyclawModel } from '../../model'
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/renderer-sse-kyclaw-0.1.6.json', import.meta.url))
 

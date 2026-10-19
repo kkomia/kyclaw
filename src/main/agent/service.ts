@@ -22,22 +22,18 @@ import { createTasksRouter } from '../../mastra/routes/tasks'
 import { createTrajectoryRouter } from '../../mastra/routes/trajectory'
 import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
-import { resolveModel, selectProviderConfig, type KyclawModel } from '../../mastra/model'
+import { resolveModel, selectProviderConfig, type KyclawModel } from '../model'
 import { detectRenderer, type PptRenderer } from '../../mastra/tools/render-ppt'
 import type { SkillRuntimeFacts } from '../../mastra/skills/runtime'
 import { probedKeyOf, visionOf } from '../../shared/models'
 import type { ModelResolver } from '../../mastra/agents/kyclaw'
-import type { LangfuseExportConfig } from '../../mastra/telemetry'
+import type { LangfuseExportConfig } from '../telemetry-config'
 import { readSettings, settingsPath, updateSettings } from '../settings'
 import { readProjectRules } from '../project-rules'
 import type { RulesProcessorDependencies } from '../../mastra/rules'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
-import {
-  InteractionHub,
-  applyInteractionEvent,
-  feedKernelEvent
-} from '../kernel/interaction-hub'
+import { InteractionHub, applyInteractionEvent, feedKernelEvent } from '../kernel/interaction-hub'
 import { createKernelInteractionRouter } from '../kernel/kernel-interaction-route'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
 import { createKernelUiRouter, KERNEL_UI_ROUTE_PREFIX } from '../kernel/kernel-ui-route'
@@ -45,6 +41,7 @@ import {
   createKernelThreadsRouter,
   createKernelThreadsUnavailableRouter
 } from '../threads/kernel-threads'
+import { createThreadCwdResolver } from '../threads/thread-cwd'
 import { pluginsDirs } from '../plugins/store'
 import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
 import type { Project } from '../../shared/projects'
@@ -64,7 +61,7 @@ import type { Mastra } from '@mastra/core/mastra'
 import type { MastraMemory } from '@mastra/core/memory'
 import type { MastraEmbeddingModel } from '@mastra/core/vector'
 import type { LocalEmbeddingEndpoint, RecallRuntime } from '../../mastra/embedding'
-import type { PdfPrinter } from '../../mastra/tools/artifacts'
+import type { PdfPrinter } from '../print-pdf'
 import type { WebSearchRuntime } from '../../shared/search'
 
 const HOST = '127.0.0.1'
@@ -534,19 +531,15 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   /**
    * PB-024 R3：cwd 的唯一权威是 thread/workspace，不是 adapter.appDataDir。
-   * 同一个 resolver 同时喂给 adapter（create/reattach/startTurn）和 threads router（create），
-   * 避免“threads 用 workspace、chat 用 appDataDir”各写一份 cwd → session/conflict。
+   * PB-019：解析器抽成 `threads/thread-cwd.ts`（不依赖旧 Mastra store），Kai 在 PB-020
+   * 只要换 `projectIdOf` 的数据源即可；同一个闭包同时喂 adapter 与 threads router。
    */
-  const resolveThreadCwd = (threadId?: string): string => {
-    if (threadId !== undefined) {
-      const projectId = sessionProjects.get(threadId)
-      if (projectId !== null) {
-        const project = projectsFor().find((item) => item.id === projectId)
-        if (project !== undefined) return project.path
-      }
-    }
-    return defaultWorkspaceFor() ?? options.dataDir
-  }
+  const resolveThreadCwd = createThreadCwdResolver({
+    projectIdOf: (threadId) => sessionProjects.get(threadId),
+    projects: projectsFor,
+    defaultWorkspace: defaultWorkspaceFor,
+    fallback: options.dataDir
+  })
 
   /**
    * B3.1b：**flag 判定的唯一入口**（回退只需关 `KYCLAW_KERNEL_PORT`）。

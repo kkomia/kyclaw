@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 模型解析（R3 离线优先 + T8 provider 定稿）：把 settings.providers + 密钥翻译成 AI SDK 模型。
  *
  * 四种口径：
@@ -127,16 +127,8 @@ export interface ResolvedModel {
  */
 export type ProviderKeyReader = (id: string) => string | null
 
-/** 半截配置：解析处抛它；设置页行内提示用的是同一句文案（providerConfigProblems） */
-export class ProviderConfigError extends Error {
-  readonly problems: readonly string[]
-
-  constructor(id: string, problems: readonly string[]) {
-    super(`provider「${id}」${problems.join('；')}`)
-    this.name = 'ProviderConfigError'
-    this.problems = problems
-  }
-}
+import { ProviderConfigError } from '../main/model'
+export { ProviderConfigError }
 
 /** 选哪条配置：默认标记优先，没有默认就是第一条（顺序 = 用户在设置页看到的顺序） */
 export function selectProviderConfig(

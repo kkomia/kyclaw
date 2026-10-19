@@ -16,7 +16,7 @@
  * 超时有界：每步一个步超时，整趟一个总超时兜底（后面几步只拿剩余预算）。
  */
 import type { ToolSet } from 'ai'
-import { buildLanguageModel, type KyclawModel } from '../mastra/model'
+import { buildLanguageModel, type KyclawModel } from './model'
 import {
   CONNECTION_TEST_SCOPE_NOTE,
   type ConnectionTestResult,

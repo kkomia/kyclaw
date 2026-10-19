@@ -36,7 +36,7 @@ import type { OfficePreviewPriority } from '../../shared/office-preview'
 
 /** kit 的解析被整份 mock 掉：单测的结论不许跟着开发机装没装随包引擎变 */
 const kit = vi.hoisted(() => ({ resolve: vi.fn<() => string | null>(() => null) }))
-vi.mock('../../mastra/tools/render-ppt', () => ({ resolveKitCli: kit.resolve }))
+vi.mock('../tools/office-kit', () => ({ resolveKitCli: kit.resolve }))
 
 const CLI = 'C:/fake/libreoffice-kit/cli.js'
 /** 源字节：内容是什么不重要（后端不解析它），重要的是**同一个二进制不会被改** */

@@ -13,7 +13,7 @@
  *   - 单条命令 60s 超时、超时杀进程树（交给 exec 的 runProcess）；
  *   - `-c core.quotepath=false`：中文文件名不转义成 \344\270\255。
  */
-import { runProcess } from '../mastra/tools/exec'
+import { runProcess } from './tools/exec'
 import { gitExecutable, GIT_MISSING } from './git-bash'
 import type {
   GitChange,

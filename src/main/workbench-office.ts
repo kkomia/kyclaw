@@ -20,7 +20,7 @@
  * 扩展名 + 文件头两道闸，再读不通就是文件本身坏了，不该含糊成"二进制文件"。
  */
 import { posix } from 'node:path'
-import { readZipEntries } from '../mastra/tools/artifact-check'
+import { readZipEntries } from './tools/artifact-check'
 import type { PreviewSheet, PreviewSlide } from '../shared/workbench'
 
 /** Excel 最多抽多少张工作表（多出来的不抽，由 `truncated` 如实标注） */

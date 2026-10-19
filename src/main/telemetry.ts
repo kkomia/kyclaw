@@ -12,7 +12,7 @@
  * 代理的兜底口径（round 67）：设置项非空就用它；空则看 `LANGFUSE_PROXY_URL` /
  * `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 环境变量（归一逻辑在 mastra/telemetry.ts）。
  */
-import { langfuseConfigOf, resolveProxyUrl, type LangfuseExportConfig } from '../mastra/telemetry'
+import { langfuseConfigOf, resolveProxyUrl, type LangfuseExportConfig } from './telemetry-config'
 import type { LangfuseState } from '../shared/ipc'
 import {
   clearProviderKey,

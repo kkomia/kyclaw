@@ -36,8 +36,8 @@ import { constants as fsConstants, type Stats } from 'node:fs'
 import { lstat, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { formatSeconds, runProcess } from '../mastra/tools/exec'
-import { resolveKitCli } from '../mastra/tools/render-ppt'
+import { formatSeconds, runProcess } from './tools/exec'
+import { resolveKitCli } from './tools/office-kit'
 import {
   OFFICE_PREVIEW_FAILURE_MESSAGES,
   OFFICE_PREVIEW_INPUT_MAX_BYTES,

@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { MOCK_REPLY_CHUNKS } from '../../../mastra/model'
+import { MOCK_REPLY_CHUNKS } from '../../model'
 import { DEFAULT_SETTINGS } from '../../../shared/settings'
 import { settingsPath, writeSettings } from '../../settings'
 import {

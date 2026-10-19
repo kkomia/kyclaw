@@ -21,7 +21,7 @@ import {
   FETCH_MAX_REDIRECTS,
   isLocalHostName,
   normalizeHost
-} from '../../mastra/tools/fetch'
+} from '../tools/fetch-policy'
 import { slugify } from '../../shared/plugins'
 import type { InstalledPlugin } from '../../shared/settings'
 import {

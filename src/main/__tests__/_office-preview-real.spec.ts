@@ -40,7 +40,7 @@ import {
   type OfficePreviewRequest
 } from '../office-preview'
 import type { OfficePreviewFormat } from '../../shared/office-preview'
-import { resolveKitCli } from '../../mastra/tools/render-ppt'
+import { resolveKitCli } from '../tools/office-kit'
 import { renderDocx } from '../../mastra/tools/docx'
 import { renderPptx } from '../../mastra/tools/ppt'
 import { extractPdfText } from '../pdf'
@@ -223,7 +223,7 @@ describe.skipIf(!canRun)('办公档页式预览（真链路探针）', () => {
     expect(existsSync(path)).toBe(true)
 
     // 用**真** runProcess，但外面包一层：只为拿到"引擎已经跑起来"这个时刻，再动手取消
-    const { runProcess } = await import('../../mastra/tools/exec')
+    const { runProcess } = await import('../tools/exec')
     let scratch = ''
     let started: () => void = () => undefined
     const running = new Promise<void>((settle) => {

@@ -4,7 +4,7 @@
  * 为什么落在主进程这一侧：`printToPDF` 是 Electron 的窗口能力，而工具层（src/mastra/**）刻意
  * **不 import electron**（否则整条 agent 链路在 vitest/node 里跑不起来）。装配口径与 llama 二进制
  * 路径同路数：main 算好一个函数，经 createKyclawAgent 的 toolOptions 注进工具，
- * 工具只吃 `PdfPrinter` 这个形状（见 src/mastra/tools/artifacts.ts）。
+ * 工具只吃 `PdfPrinter` 这个形状（PB-019 起类型定义就在本文件，不再 import `src/mastra`）。
  *
  * 实现要点：
  *   - **隐藏窗口**（show: false）：不打扰用户；宽度 794px ≈ A4@96dpi，高度给一屏（打印时按页重排）。
@@ -21,7 +21,9 @@
 import { app, BrowserWindow } from 'electron'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { PdfPrinter } from '../mastra/tools/artifacts'
+
+/** 产物 PDF 打印钩子的形状（宿主/旧工具共用；PB-019 从 tools/artifacts.ts 搬出）。 */
+export type PdfPrinter = (html: string) => Promise<Buffer | Uint8Array>
 
 /** A4 @96dpi 的像素宽（窗口按纸张宽度排版，打印时按页高重排） */
 const PAGE_WIDTH_PX = 794
