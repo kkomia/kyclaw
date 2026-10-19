@@ -1,4 +1,4 @@
-﻿import { readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Ref } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
@@ -18,7 +18,8 @@ const kernel = vi.hoisted(() => ({
   versionCalls: 0,
   saveCalls: 0,
   saveBytes: new Uint8Array([4, 5, 6]),
-  saveError: null as Error | null
+  saveError: null as Error | null,
+  toolbarProps: null as Record<string, unknown> | null
 }))
 
 vi.mock('@betteroffice/xlsx-react', async () => {
@@ -41,10 +42,14 @@ vi.mock('@betteroffice/xlsx-react', async () => {
     React.useImperativeHandle(ref, () => ({}))
     return React.createElement('div', { 'data-testid': 'xlsx-editor-stub' }, props.toolbar as never)
   })
+  const EditorToolbar = (props: Record<string, unknown>): unknown => {
+    kernel.toolbarProps = props
+    return React.createElement('div', null, props.children as never)
+  }
   return {
     XlsxEditor,
     XlsxSaveRefusedError: MockXlsxSaveRefusedError,
-    EditorToolbar: Object.assign(passthrough, {
+    EditorToolbar: Object.assign(EditorToolbar, {
       Toolbar: passthrough,
       FormulaBar: () => null
     }),
@@ -128,6 +133,7 @@ afterEach(() => {
   kernel.versionCalls = 0
   kernel.saveCalls = 0
   kernel.saveError = null
+  kernel.toolbarProps = null
 })
 
 describe('XlsxEditorPane：M4-X 接线', () => {
@@ -277,5 +283,39 @@ describe('XlsxEditorPane：M4-X 接线', () => {
     })
     expect(screen.getByTestId('xlsx-find-count')).toHaveTextContent('1/2')
   })
+
+  it('commands 模式工具栏不接收 legacy 专属 props（上游会 throw）+ 自查按钮能开查找条', async () => {
+    const pane = renderPane()
+    await pane.waitReady()
+
+    // 上游 `fs` 名单（@betteroffice/xlsx-react 0.3.0）：commands 模式下传任一即
+    // `A commands-mode EditorToolbar reads state and actions from the editor's commands; remove …`
+    const legacyOnly = [
+      'currentFormatting',
+      'selectionShape',
+      'onFormat',
+      'onMerge',
+      'onSearchMenus',
+      'onUndo',
+      'onRedo',
+      'canUndo',
+      'canRedo',
+      'onPrint',
+      'zoom',
+      'onZoomChange',
+      'fontFamilies',
+      'fontSizes',
+      'disabled'
+    ]
+    const passed = Object.keys(kernel.toolbarProps ?? {})
+    expect(passed.filter((key) => legacyOnly.includes(key))).toEqual([])
+    expect(kernel.toolbarProps?.mode).toBe('commands')
+
+    // 查找入口是我们自己的按钮（上游 searchMenus 命令在 commands 模式无法回调宿主）
+    fireEvent.click(screen.getByTestId('xlsx-find-button'))
+    expect(await screen.findByTestId('xlsx-find-bar')).toBeInTheDocument()
+  })
 })
+
+
 

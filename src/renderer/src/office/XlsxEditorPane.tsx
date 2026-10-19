@@ -87,10 +87,19 @@ declare global {
   }
 }
 
-/** 明确不出现保存/导出/打印/演示的工具栏（D16：sandbox 不放宽，能力收口） */
-function xlsxToolbar(onSearchMenus: () => void): ReactNode {
+/**
+ * 明确不出现保存/导出/打印/演示的工具栏（D16：sandbox 不放宽，能力收口）。
+ *
+ * ⚠️ `mode="commands"` 下**绝对不能给 EditorToolbar 传任何 legacy 专属 props**
+ * （`onSearchMenus` / `onFormat` / `onMerge` / `onUndo` / `zoom`…，上游 `fs` 名单）；
+ * 上游会在渲染时直接 throw：
+ * `A commands-mode EditorToolbar reads state and actions from the editor's commands; remove onSearchMenus or use mode="legacy".`
+ * 所以查找入口改成**我们自己的按钮**（上游 `searchMenus` 命令在 commands 模式下无法回调宿主），
+ * 查找能力本身仍走上游真 API（`api.findText` / `api.selectCells`）。
+ */
+function xlsxToolbar(openFind: () => void): ReactNode {
   return (
-    <EditorToolbar mode="commands" onSearchMenus={onSearchMenus}>
+    <EditorToolbar mode="commands">
       <EditorToolbar.Toolbar>
         <ToolbarGroup label="撤销">
           <ToolbarCommandButton id="undo" />
@@ -124,7 +133,16 @@ function xlsxToolbar(onSearchMenus: () => void): ReactNode {
           <ToolbarCommandSelect id="merge" />
         </ToolbarGroup>
         <ToolbarGroup label="查找">
-          <ToolbarCommandButton id="searchMenus" />
+          <button
+            type="button"
+            data-testid="xlsx-find-button"
+            aria-label="查找"
+            title="查找（Ctrl/Cmd+F）"
+            onClick={openFind}
+            style={{ padding: '0 8px' }}
+          >
+            查找
+          </button>
         </ToolbarGroup>
         <ToolbarGroup label="视图">
           <ToolbarCommandSelect id="zoom" />
