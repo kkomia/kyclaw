@@ -14,10 +14,13 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   APPROVAL_OUTCOMES,
   InteractionHub,
+  answerContinued,
+  applyInteractionEvent,
   approvalOutcomeCopy,
   feedKernelEvent,
   isApprovalOutcome,
-  parseUserQuestions
+  parseUserQuestions,
+  respondAndDismiss
 } from '../interaction-hub'
 
 const FORBIDDEN_FOR_NON_REJECTED = ['你拒绝', '你拒绝了', '用户拒绝']
@@ -79,6 +82,7 @@ describe('审批生命周期（asked → decided，一次结算）', () => {
       {
         threadId: 'thread-A',
         id: 'ap-1',
+        source: 'asked',
         toolName: 'bash',
         callId: 'call-1',
         askedAtSeq: 10
@@ -195,5 +199,195 @@ describe('提问状态（投影 userQuestions；超时/continued 不是拒绝）
     const hub = new InteractionHub()
     hub.applyUserQuestionsProjection('thread-A', { nonsense: true })
     expect(hub.snapshot('thread-A').askUser).toEqual({ active: [], settled: [], timed: false })
+  })
+})
+
+/**
+ * PB-025 批次 2：`$events` waterfall → hub 接线，以及三种状态语义。
+ *
+ * 语义来源（一手，见 `bao/pb025-wire-forensics.md` §7.3）：关闭 `$events` 只是摘投递，
+ * pending 会随新客户端重连**重新投递**；只有请求 signal 中止（应用退出/会话中止）才走 `cancelled`；
+ * `unavailable` 是"没人答"的 fail-closed。→ 切会话/读快照/重连**都不得**改状态。
+ */
+describe('PB-025 waterfall → hub 接线', () => {
+  const approvalFrame = {
+    kind: 'approval' as const,
+    eventId: 'evt-1',
+    threadId: 'thread-A',
+    toolName: 'pwsh',
+    callId: 'call-1',
+    reason: '要写 workspace 之外'
+  }
+
+  it('approval waterfall → 可应答挂起（source=waterfall，id=eventId）', () => {
+    const hub = new InteractionHub()
+    expect(applyInteractionEvent(hub, approvalFrame)).toBe(true)
+    expect(hub.snapshot('thread-A').approvals.pending).toEqual([
+      {
+        threadId: 'thread-A',
+        id: 'evt-1',
+        source: 'waterfall',
+        toolName: 'pwsh',
+        callId: 'call-1',
+        reason: '要写 workspace 之外'
+      }
+    ])
+  })
+
+  it('应答成功才摘挂起；应答失败挂起必须留着（可重试）', async () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, approvalFrame)
+    const failing = { respondInteraction: () => Promise.reject(new Error('$events 流尚未就绪')) }
+    await expect(
+      respondAndDismiss(failing, hub, 'thread-A', {
+        eventId: 'evt-1',
+        kind: 'approval',
+        outcome: 'rejected'
+      })
+    ).rejects.toThrow(/尚未就绪/u)
+    expect(hub.hasPending('thread-A')).toBe(true)
+
+    const sent: unknown[] = []
+    const ok = {
+      respondInteraction: (response: unknown) => {
+        sent.push(response)
+        return Promise.resolve()
+      }
+    }
+    await respondAndDismiss(ok, hub, 'thread-A', {
+      eventId: 'evt-1',
+      kind: 'approval',
+      outcome: 'allowed-once'
+    })
+    expect(sent).toEqual([{ eventId: 'evt-1', kind: 'approval', outcome: 'allowed-once' }])
+    expect(hub.hasPending('thread-A')).toBe(false)
+  })
+
+  it('decided 关联：唯一挂起按 sole 关联；无挂起只出结果行（matchedBy none，不硬配工具名）', () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, approvalFrame)
+    const matched = hub.applyApprovalDecided('thread-A', { id: 'ap-x', outcome: 'rejected' }, 9)
+    expect(matched?.matchedBy).toBe('sole')
+    expect(matched?.toolName).toBe('pwsh')
+    expect(matched?.callId).toBe('call-1')
+    expect(hub.hasPending('thread-A')).toBe(false)
+
+    const orphan = hub.applyApprovalDecided('thread-A', { id: 'ap-y', outcome: 'cancelled' }, 10)
+    expect(orphan?.matchedBy).toBe('none')
+    expect(orphan?.toolName).toBeUndefined()
+    expect(orphan?.systemInitiated).toBe(true)
+  })
+
+  it('两个挂起项 + 无关 decided → 不猜（matchedBy none，两个挂起都留着）', () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, { ...approvalFrame, eventId: 'evt-1' })
+    applyInteractionEvent(hub, { ...approvalFrame, eventId: 'evt-2', callId: 'call-2' })
+    const result = hub.applyApprovalDecided('thread-A', { id: 'ap-z', outcome: 'unavailable' }, 11)
+    expect(result?.matchedBy).toBe('none')
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(2)
+  })
+
+  it('提问 waterfall → 可应答提问挂起；作答后摘除', async () => {
+    const hub = new InteractionHub()
+    expect(
+      applyInteractionEvent(hub, {
+        kind: 'question',
+        eventId: 'q-evt-1',
+        threadId: 'thread-A',
+        questions: [{ id: 'q1', question: '选 A 还是 B？', header: '选择' }]
+      })
+    ).toBe(true)
+    const pending = hub.snapshot('thread-A').questions.pending
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.eventId).toBe('q-evt-1')
+    expect(Number.isFinite(Date.parse(pending[0]?.suspendedAt ?? ''))).toBe(true)
+
+    const sent: unknown[] = []
+    await respondAndDismiss(
+      {
+        respondInteraction: (response: unknown) => {
+          sent.push(response)
+          return Promise.resolve()
+        }
+      },
+      hub,
+      'thread-A',
+      { eventId: 'q-evt-1', kind: 'question', answer: { answers: [{ id: 'q1', selected: ['A'] }] } }
+    )
+    expect(sent).toHaveLength(1)
+    expect(hub.snapshot('thread-A').questions.pending).toHaveLength(0)
+  })
+
+  it('continued 补答原样转给 adapter（返回内核 boolean，不摘投影状态）', async () => {
+    const calls: Array<{ threadId: string; callId: string; answer: unknown }> = []
+    const stillContinued = await answerContinued(
+      {
+        answerContinuedQuestion: (threadId, callId, answer) => {
+          calls.push({ threadId, callId, answer })
+          return Promise.resolve(true)
+        }
+      },
+      'thread-A',
+      'call-1',
+      { answers: [{ id: 'q1', selected: ['A'], custom: '其它' }] }
+    )
+    expect(stillContinued).toBe(true)
+    expect(calls).toEqual([
+      {
+        threadId: 'thread-A',
+        callId: 'call-1',
+        answer: { answers: [{ id: 'q1', selected: ['A'], custom: '其它' }] }
+      }
+    ])
+  })
+})
+
+describe('PB-025 三种状态语义（切会话 ≠ 拒绝；应用退出 = cancelled）', () => {
+  it('读快照/切会话/重连重投递：挂起项保持原样（不自动 deny）', () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, {
+      kind: 'approval',
+      eventId: 'evt-1',
+      threadId: 'thread-A',
+      toolName: 'pwsh'
+    })
+    for (let index = 0; index < 3; index += 1) {
+      hub.snapshot('thread-A')
+      hub.snapshot('thread-B')
+    }
+    const pending = hub.snapshot('thread-A').approvals.pending
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.source).toBe('waterfall')
+    expect(hub.snapshot('thread-A').approvals.results).toHaveLength(0)
+
+    // 重连重投递：同一个 waterfall 事件再喂一次（新事件流），挂起项仍是一条（按 eventId 去重）
+    applyInteractionEvent(hub, {
+      kind: 'approval',
+      eventId: 'evt-1',
+      threadId: 'thread-A',
+      toolName: 'pwsh'
+    })
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(1)
+  })
+
+  it('应用退出/会话中止 → cancelled：文案说"取消/可能因应用关闭"，不说「你拒绝」', () => {
+    const copy = approvalOutcomeCopy('cancelled')
+    expect(copy.title).toBe('这次审批已取消')
+    expect(copy.detail).toContain('应用被关闭')
+    expect(copy.attribution).toBe('system')
+    expect(copy.canRetry).toBe(true)
+    for (const forbidden of ['你拒绝', '你拒绝了'])
+      expect(`${copy.title}${copy.detail}`).not.toContain(forbidden)
+  })
+
+  it('无应答者 fail-closed → unavailable：说"不是你点的"；三态标题互不相同', () => {
+    const rejected = approvalOutcomeCopy('rejected')
+    const cancelled = approvalOutcomeCopy('cancelled')
+    const unavailable = approvalOutcomeCopy('unavailable')
+    expect(rejected.title).toContain('你拒绝')
+    expect(unavailable.detail).toContain('这不是你点的')
+    expect(new Set([rejected.title, cancelled.title, unavailable.title]).size).toBe(3)
+    expect(cancelled.title).not.toContain('你拒绝')
+    expect(unavailable.title).not.toContain('你拒绝')
   })
 })

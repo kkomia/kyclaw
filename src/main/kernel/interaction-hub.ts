@@ -13,15 +13,17 @@
  *    「系统/应用取消」或「系统按安全策略自动拒绝，不是你点的」。见 `approvalOutcomeCopy`。
  *
  * 边界（本模块不做的）：
- * - 不碰 RPC/网络：内核事件由 `kernel-adapter` 的 `onSessionEvent` 喂进来（见其 options）；
- * - 不回答审批/提问：**应答通道**（内核 `approval/request` waterfall、`userQuestions.answer`）
- *   目前只在 kernel 进程内的插件侧可用，我们还没有 main → 内核的应答端点，见报告「已知缺口」；
+ * - 不碰 RPC/网络：内核事件由 `kernel-adapter` 的 `onSessionEvent` / `onInteractionEvent` 喂进来；
+ * - 不直接发应答：应答走 adapter 的 `respondInteraction`（`$events/result`）与
+ *   `answerContinuedQuestion`（`userQuestions/answer`），本模块只提供 `respondAndDismiss` /
+ *   `answerContinued` 两个**纯编排** helper（PB-025 起应答通道已可用）；
  * - 不写 renderer 代码：只提供 `subscribe()` / `snapshot()` 供后续 route/IPC 接线。
  */
 
+import type { InteractionResponse, KernelInteractionEvent } from './kernel-interactions'
+
 /** 内核审批四态词汇（`dsh-user-approval/lib/types/index.js`，只有这四个） */
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
-
 export const APPROVAL_OUTCOMES: readonly ApprovalOutcome[] = [
   'allowed-once',
   'rejected',
@@ -99,7 +101,10 @@ export interface ApprovalDecidedEvent {
 /** 挂起中的审批（renderer 只读） */
 export interface PendingApproval {
   threadId: string
+  /** waterfall 请求用 `eventId`（可应答）；只有审计事件时用 `approval/asked` 的 id（只观察） */
   id: string
+  /** `waterfall` = 我们收得到也能答（PB-025）；`asked` = 只从 session 事件看到（无应答通道时） */
+  source: 'waterfall' | 'asked'
   toolName: string
   callId?: string
   reason?: string
@@ -111,7 +116,9 @@ export interface PendingApproval {
 export interface ApprovalResult {
   threadId: string
   id: string
-  toolName: string
+  /** 与挂起项的关联方式：`id` 最准，`sole` = 该 thread 当时只有一个挂起项，`none` = 只能出结果行 */
+  matchedBy: 'id' | 'sole' | 'none'
+  toolName?: string
   callId?: string
   outcome: ApprovalOutcome
   copy: ApprovalCopy
@@ -119,6 +126,21 @@ export interface ApprovalResult {
   systemInitiated: boolean
   askedAtSeq?: number
   decidedAtSeq?: number
+}
+
+/** 真机（阻塞式）提问的挂起项：来自 `$events` waterfall，带可应答的 `eventId` */
+export interface PendingQuestion {
+  threadId: string
+  eventId: string
+  /** 请求到达时间（ISO；旧 `/ask-user/pending` 回包要这个字段） */
+  suspendedAt: string
+  questions: ReadonlyArray<{
+    id: string
+    question: string
+    header?: string
+    options?: ReadonlyArray<{ label: string; description?: string }>
+    multiSelect?: boolean
+  }>
 }
 
 /** 提问活动项（内核投影 `userQuestions.questions.active`，字段照 rc.2） */
@@ -147,6 +169,8 @@ export interface InteractionSnapshot {
   threadId: string
   approvals: { pending: readonly PendingApproval[]; results: readonly ApprovalResult[] }
   askUser: AskUserState
+  /** PB-025：来自 `$events` waterfall 的**可应答**提问（与投影里的 active 是两回事） */
+  questions: { pending: readonly PendingQuestion[] }
 }
 
 export interface InteractionHubOptions {
@@ -168,6 +192,8 @@ export class InteractionHub {
   private readonly pending = new Map<string, Map<string, PendingApproval>>()
   private readonly results = new Map<string, ApprovalResult[]>()
   private readonly askUser = new Map<string, AskUserState>()
+  private readonly pendingQuestions = new Map<string, Map<string, PendingQuestion>>()
+  private readonly settledIds = new Map<string, Set<string>>()
   private readonly listeners = new Set<Listener>()
   private readonly maxResults: number
 
@@ -191,8 +217,31 @@ export class InteractionHub {
         pending: [...(this.pending.get(threadId)?.values() ?? [])],
         results: [...(this.results.get(threadId) ?? [])]
       },
-      askUser: this.askUser.get(threadId) ?? EMPTY_ASK_USER
+      askUser: this.askUser.get(threadId) ?? EMPTY_ASK_USER,
+      questions: { pending: [...(this.pendingQuestions.get(threadId)?.values() ?? [])] }
     }
+  }
+
+  /**
+   * PB-025：`$events` 的 `approval/request` waterfall → **可应答**挂起（id = eventId）。
+   * 这是 renderer dock 真正要显示、用户能点的那一条。
+   */
+  applyApprovalRequest(
+    threadId: string,
+    request: { eventId: string; toolName: string; callId?: string; reason?: string }
+  ): void {
+    const byId = this.pending.get(threadId) ?? new Map<string, PendingApproval>()
+    this.pending.set(threadId, byId)
+    if (byId.has(request.eventId)) return
+    byId.set(request.eventId, {
+      threadId,
+      id: request.eventId,
+      source: 'waterfall',
+      toolName: request.toolName,
+      ...(request.callId === undefined ? {} : { callId: request.callId }),
+      ...(request.reason === undefined ? {} : { reason: request.reason })
+    })
+    this.notify(threadId)
   }
 
   /** 内核 `approval/asked`：建挂起（同 id 重复到达按第一次为准） */
@@ -203,6 +252,7 @@ export class InteractionHub {
     byId.set(event.id, {
       threadId,
       id: event.id,
+      source: 'asked',
       toolName: event.toolName,
       ...(event.callId === undefined ? {} : { callId: event.callId }),
       ...(event.reason === undefined ? {} : { reason: event.reason }),
@@ -211,29 +261,77 @@ export class InteractionHub {
     this.notify(threadId)
   }
 
+  /** 应答成功后摘掉挂起项（只摘本地状态；内核侧由 `$events/result` 结算） */
+  dismissPending(threadId: string, id: string): boolean {
+    const byId = this.pending.get(threadId)
+    if (byId === undefined || !byId.delete(id)) return false
+    this.notify(threadId)
+    return true
+  }
+
+  /** PB-025：`user-questions/request` waterfall → 可应答的提问挂起（id = eventId） */
+  applyQuestionRequest(threadId: string, request: PendingQuestion): void {
+    const byId = this.pendingQuestions.get(threadId) ?? new Map<string, PendingQuestion>()
+    this.pendingQuestions.set(threadId, byId)
+    if (byId.has(request.eventId)) return
+    byId.set(request.eventId, { ...request, threadId })
+    this.notify(threadId)
+  }
+
+  /** 回答提交成功后摘掉提问挂起 */
+  dismissQuestion(threadId: string, eventId: string): boolean {
+    const byId = this.pendingQuestions.get(threadId)
+    if (byId === undefined || !byId.delete(eventId)) return false
+    this.notify(threadId)
+    return true
+  }
+
   /**
-   * 内核 `approval/decided`：按 outcome 结算（四态）。
-   * 找不到对应 asked 时不伪造结果——内核 invariant 不允许，出现说明事件缺口，返回 null 让上层记日志。
+   * 内核 `approval/decided`：按 outcome 结算（四态），并尝试与挂起项关联。
+   *
+   * 关联顺序（**不硬配**）：`id` 直接命中（asked 路径最准）→ 该 thread 内**恰好一个**挂起项时
+   * 认它（`matchedBy:'sole'`）→ 否则只出结果行（`matchedBy:'none'`、toolName 留空）。
+   * 为什么这样：waterfall 的 `eventId` 与审计事件的 `id` 不同源，而 `approval/decided`
+   * 只带 `{id, outcome}`（Ada 取证），没有 callId/toolName 可对；多个挂起项时**不猜**。
+   * 同一 id 重复 decided 视为重放，忽略（不重复出结果行）。
    */
   applyApprovalDecided(
     threadId: string,
     event: ApprovalDecidedEvent,
     seq?: number
   ): ApprovalResult | null {
+    const settled = this.settledIds.get(threadId) ?? new Set<string>()
+    this.settledIds.set(threadId, settled)
+    if (settled.has(event.id)) return null
+    settled.add(event.id)
+
     const byId = this.pending.get(threadId)
-    const asked = byId?.get(event.id)
-    if (asked === undefined) return null
-    byId?.delete(event.id)
     const copy = approvalOutcomeCopy(event.outcome)
+    let matched: PendingApproval | undefined
+    let matchedBy: ApprovalResult['matchedBy'] = 'none'
+    const direct = byId?.get(event.id)
+    if (direct !== undefined) {
+      matched = direct
+      matchedBy = 'id'
+      byId?.delete(event.id)
+    } else if (byId !== undefined && byId.size === 1) {
+      const [sole] = [...byId.values()]
+      if (sole !== undefined) {
+        matched = sole
+        matchedBy = 'sole'
+        byId.delete(sole.id)
+      }
+    }
     const result: ApprovalResult = {
       threadId,
       id: event.id,
-      toolName: asked.toolName,
-      ...(asked.callId === undefined ? {} : { callId: asked.callId }),
+      matchedBy,
       outcome: event.outcome,
       copy,
       systemInitiated: copy.attribution !== 'user',
-      ...(asked.askedAtSeq === undefined ? {} : { askedAtSeq: asked.askedAtSeq }),
+      ...(matched?.toolName === undefined ? {} : { toolName: matched.toolName }),
+      ...(matched?.callId === undefined ? {} : { callId: matched.callId }),
+      ...(matched?.askedAtSeq === undefined ? {} : { askedAtSeq: matched.askedAtSeq }),
       ...(seq === undefined ? {} : { decidedAtSeq: seq })
     }
     const list = this.results.get(threadId) ?? []
@@ -327,8 +425,7 @@ export class InteractionHub {
  * 返回是否有状态变化（便于上层决定要不要推给 renderer）。
  *
  * 注意：`threadId` 就是内核 `sessionId`（B3.4 的映射口径）。
- */
-export function feedKernelEvent(
+ */export function feedKernelEvent(
   hub: InteractionHub,
   threadId: string,
   event: { type?: string; seq?: number; data?: Record<string, unknown> }
@@ -358,4 +455,65 @@ export function feedKernelEvent(
     )
   }
   return false
+}
+
+/**
+ * PB-025：`adapter.onInteractionEvent` 的直连入口——把 `$events` waterfall 事件折叠进 hub。
+ * 审批 → 可应答挂起（id = eventId）；提问 → 可应答提问挂起。返回是否有状态变化。
+ */
+export function applyInteractionEvent(
+  hub: InteractionHub,
+  event: KernelInteractionEvent
+): boolean {
+  if (event.kind === 'approval') {
+    hub.applyApprovalRequest(event.threadId, {
+      eventId: event.eventId,
+      toolName: event.toolName,
+      ...(event.callId === undefined ? {} : { callId: event.callId }),
+      ...(event.reason === undefined ? {} : { reason: event.reason })
+    })
+    return true
+  }
+  hub.applyQuestionRequest(event.threadId, {
+    threadId: event.threadId,
+    eventId: event.eventId,
+    suspendedAt: new Date().toISOString(),
+    questions: event.questions
+  })
+  return true
+}
+
+/**
+ * PB-025：应答 + 本地摘挂起。**先应答内核、成功后再摘本地状态**：
+ * 应答失败时挂起项必须留着（用户还能重试），不能造成"UI 已经当它处理完了"。
+ */
+export async function respondAndDismiss(
+  adapter: { respondInteraction: (response: InteractionResponse) => Promise<void> },
+  hub: InteractionHub,
+  threadId: string,
+  response: InteractionResponse
+): Promise<void> {
+  await adapter.respondInteraction(response)
+  if (response.kind === 'approval') hub.dismissPending(threadId, response.eventId)
+  else hub.dismissQuestion(threadId, response.eventId)
+}
+
+/**
+ * PB-025：`continued`（timed 到期后仍可答）的提问补答——走适配层 `answerContinuedQuestion`
+ * （内核 `userQuestions/answer`）。返回值 = 问题是否**仍** continued（`false` = 已在别处结算）。
+ * 这里不摘任何本地状态：那条问题的生命周期归内核投影（`userQuestions.active/settled`）。
+ */
+export async function answerContinued(
+  adapter: {
+    answerContinuedQuestion: (
+      threadId: string,
+      callId: string,
+      answer: { answers: ReadonlyArray<{ id: string; selected: readonly string[]; custom?: string }> }
+    ) => Promise<boolean>
+  },
+  threadId: string,
+  callId: string,
+  answer: { answers: ReadonlyArray<{ id: string; selected: readonly string[]; custom?: string }> }
+): Promise<boolean> {
+  return adapter.answerContinuedQuestion(threadId, callId, answer)
 }

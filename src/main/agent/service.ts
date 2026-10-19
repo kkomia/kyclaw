@@ -33,6 +33,12 @@ import { readProjectRules } from '../project-rules'
 import type { RulesProcessorDependencies } from '../../mastra/rules'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
+import {
+  InteractionHub,
+  applyInteractionEvent,
+  feedKernelEvent
+} from '../kernel/interaction-hub'
+import { createKernelInteractionRouter } from '../kernel/kernel-interaction-route'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
 import { createKernelUiRouter, KERNEL_UI_ROUTE_PREFIX } from '../kernel/kernel-ui-route'
 import {
@@ -549,11 +555,22 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
    * - flag 开 → 起真内核（token/cookie 只在 main），chat 帧由 adapter 出。
    * 两条路并存、不删旧 loop。
    */
+  // PB-004/PB-025：交互中枢（审批/提问状态源）。flag 关也建（只是永远没有内核事件进来），
+  // 这样 /ask-user/pending 在两种 flag 下都返回 200 —— 404 会让 renderer composer 永久 disabled。
+  const interactionHub = new InteractionHub()
+
   const kernelAdapter = await maybeStartKernelAdapter({
     electronExecutable: options.kernel?.electronExecutable ?? '',
     asarPath: options.kernel?.asarPath ?? '',
     appDataDir: options.dataDir,
     resolveCwd: resolveThreadCwd,
+    // PB-004/PB-025：交互中枢——内核 session 事件与 `$events` waterfall 都喂给同一个 hub
+    onSessionEvent: (threadId, event) => {
+      feedKernelEvent(interactionHub, threadId, event)
+    },
+    onInteractionEvent: (event) => {
+      applyInteractionEvent(interactionHub, event)
+    },
     ...(options.kernel?.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
     ...(options.kernel?.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
     ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
@@ -581,6 +598,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     }
     return next()
   })
+
+  // PB-004/PB-025：交互路由（ask-user pending/cancel + hub 快照）。
+  // **两种 flag 都挂**：renderer 挂载即请求 /ask-user/pending，404 会让 composer 永久 disabled。
+  app.route('/', createKernelInteractionRouter({ hub: interactionHub }))
 
   // B3.1b：flag 开才注册内核 chat 分支（同一路径、同一 token 闸门；先注册者优先于 Mastra 的 /chat）
   if (kernelAdapter !== null) {
