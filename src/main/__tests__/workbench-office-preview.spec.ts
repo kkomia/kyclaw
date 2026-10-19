@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * 办公档预览的**接线层**（`main/workbench-files.ts` 的 `convertOfficeToPdf` / `readFileBounded`）：
  * 授权闸门、有界读、读取前后的真实路径与身份复验、取消。
@@ -27,7 +27,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { renderDocx } from '../../mastra/tools/docx'
+import { fixtureDocx as renderDocx } from './fixtures/office-fixtures'
 import { PREVIEW_OFFICE_MAX_BYTES } from '../../shared/workbench'
 import { OfficePreviewError } from '../../shared/office-preview'
 import { convertOfficeToPdf, readFileBounded, type BoundedFileRead } from '../workbench-files'

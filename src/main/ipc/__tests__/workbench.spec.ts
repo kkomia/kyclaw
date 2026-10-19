@@ -1,4 +1,4 @@
-import {
+﻿import {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -132,7 +132,7 @@ async function writeDocxFixture(
   text = '正文一段',
   directory = project
 ): Promise<void> {
-  const { renderDocx } = await import('../../../mastra/tools/docx')
+  const { fixtureDocx: renderDocx } = await import('../../__tests__/fixtures/office-fixtures')
   writeFileSync(
     join(directory, name),
     await renderDocx({ title: '方案', blocks: [{ type: 'paragraph', text }] })
@@ -508,8 +508,8 @@ describe('文件族', () => {
   })
 
   it('read-bytes：办公档（docx/xlsx）真过桥回抽好的结构，不是原始字节', async () => {
-    const { renderDocx } = await import('../../../mastra/tools/docx')
-    const { renderXlsx } = await import('../../../mastra/tools/excel')
+    const { fixtureDocx: renderDocx } = await import('../../__tests__/fixtures/office-fixtures')
+    const { fixtureXlsx: renderXlsx } = await import('../../__tests__/fixtures/office-fixtures')
     writeFileSync(
       join(project, '方案.docx'),
       await renderDocx({ blocks: [{ type: 'paragraph', text: '正文一段' }] })
@@ -1122,7 +1122,7 @@ describe('办公档预览的请求账（createOfficePreviewRequests）', () => {
 
 describe('表格原始字节通道（table-bytes）', () => {
   it('xls / xlsx / csv 各回原始字节（与 read-bytes 那条抽结构的路互不影响）', async () => {
-    const { renderXlsx } = await import('../../../mastra/tools/excel')
+    const { fixtureXlsx: renderXlsx } = await import('../../__tests__/fixtures/office-fixtures')
     const ole = Buffer.concat([
       Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
       Buffer.alloc(32, 7)

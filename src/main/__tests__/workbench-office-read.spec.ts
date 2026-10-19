@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * read 专用的办公档抽取（`src/main/workbench-office.ts` 的 0.1.2 新增面）：xlsx 的单元格定位 /
  * 公式缓存 / 日期稳定 / 空格；pptx 的真实页序与"图片没读"；csv 的行列与准确截断。
@@ -8,8 +8,10 @@
  * exceljs 直接写 / `zip-fixture.ts` 手写真 zip。全程只碰内存与临时目录。
  */
 import { describe, expect, it } from 'vitest'
-import { renderXlsx } from '../../mastra/tools/excel'
-import { renderPptx } from '../../mastra/tools/ppt'
+import {
+  fixturePptx as renderPptx,
+  fixtureXlsx as renderXlsx
+} from './fixtures/office-fixtures'
 import {
   SHEET_COLUMN_LIMIT,
   SHEET_LIMIT,

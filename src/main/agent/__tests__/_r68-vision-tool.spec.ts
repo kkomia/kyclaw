@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * R68 探针 C：render_ppt 的页图**真的进到 provider 请求体**吗（真 agent 装配 + 真渲染 + 假端点）。
  *
@@ -24,7 +24,7 @@ import { DefaultChatTransport } from 'ai'
 import { startAgentServer, type AgentServerHandle } from '../../agent/service'
 import { KYCLAW_AGENT_ID } from '../../../mastra/agents/kyclaw'
 import { detectRenderer } from '../../../mastra/tools/render-ppt'
-import { renderPptx } from '../../../mastra/tools/ppt'
+import { fixturePptx as renderPptx } from '../../__tests__/fixtures/office-fixtures'
 import { threadMemoryBody } from '../../../shared/threads'
 
 /** 假端点收下的请求体 */

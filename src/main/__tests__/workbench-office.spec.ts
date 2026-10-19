@@ -2,15 +2,18 @@
 /**
  * 办公档读取器（`src/main/workbench-office.ts`）：Word / Excel / PPT 抽结构 + csv/tsv 解析。
  *
- * fixture 是**真件**：docx/xlsx/pptx 用仓库自己的产出器（`src/mastra/tools` 的
- * `renderDocx` / `renderXlsx` / `renderPptx`，它们就是真文件）；pptx 里那些产出器造不出的形状
+ * fixture 是**真件**：docx/xlsx/pptx 由 `__tests__/fixtures/office-fixtures.ts` 用仓库现有生产依赖
+ * （`docx` / `exceljs` / `pptxgenjs`）直接产出（Step 2 前从 `src/mastra/tools` 的产出器迁来，
+ * 避免删旧内核时把 main 侧测试一起带崩）；pptx 里那些夹具造不出的形状
  * （标题占位符 / 页码乱序 / 超页数上限）用 `zip-fixture.ts` 手写的真 zip 造。
  * 全程只碰内存与临时目录，不写用户目录。
  */
 import { describe, expect, it } from 'vitest'
-import { renderDocx } from '../../mastra/tools/docx'
-import { renderXlsx } from '../../mastra/tools/excel'
-import { renderPptx } from '../../mastra/tools/ppt'
+import {
+  fixtureDocx as renderDocx,
+  fixturePptx as renderPptx,
+  fixtureXlsx as renderXlsx
+} from './fixtures/office-fixtures'
 import {
   CSV_TEXT_MAX_BYTES,
   DOCX_MARKDOWN_MAX_CHARS,

@@ -1,11 +1,13 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { renderDocx } from '../../mastra/tools/docx'
-import { renderXlsx } from '../../mastra/tools/excel'
-import { renderPptx } from '../../mastra/tools/ppt'
+import {
+  fixtureDocx as renderDocx,
+  fixturePptx as renderPptx,
+  fixtureXlsx as renderXlsx
+} from './fixtures/office-fixtures'
 import {
   PREVIEW_HTML_MAX_BYTES,
   PREVIEW_IMAGE_MAX_BYTES,

@@ -1,4 +1,4 @@
-// @vitest-environment node
+﻿// @vitest-environment node
 /**
  * 办公档页式预览**真链路探针**：真起 kit 子进程、真转 PDF、真落盘一份 PDF 供人打开看。
  *
@@ -41,8 +41,10 @@ import {
 } from '../office-preview'
 import type { OfficePreviewFormat } from '../../shared/office-preview'
 import { resolveKitCli } from '../tools/office-kit'
-import { renderDocx } from '../../mastra/tools/docx'
-import { renderPptx } from '../../mastra/tools/ppt'
+import {
+  fixtureDocx as renderDocx,
+  fixturePptx as renderPptx
+} from './fixtures/office-fixtures'
 import { extractPdfText } from '../pdf'
 
 const enabled = process.env.KYCLAW_OFFICE_PREVIEW_REAL === '1'
