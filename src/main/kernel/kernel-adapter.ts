@@ -1,4 +1,4 @@
-﻿/**
+/**
  * B3.1a：真内核适配层（**只在 feature flag 开启时才会被实例化**）。
  *
  * 一次流程：
@@ -13,6 +13,7 @@
  * 安全（D1）：内核 token/cookie 只在本模块内部；`KernelAdapter` 不暴露它们。
  */
 import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { connectKernelPeer } from './kernel-auth'
 import { startKernelProcess } from './kernel-process'
@@ -31,6 +32,8 @@ export interface KernelAdapterOptions {
   turnTimeoutMs?: number
   /** 诊断/测试：每条 follow value 原样回调（不含 token/cookie） */
   onFollowValue?: (value: KernelFollowValue) => void
+  /** B3.3b：goal 轮次安全阀（写进隔离 profile 的 cordis.patch.yml；默认 16） */
+  goalMaxRounds?: number
 }
 
 export interface KernelTurnResult {
@@ -81,8 +84,36 @@ interface TurnState {
   onFrame?: (frame: RendererSseFrame) => void
 }
 
+/**
+ * B3.3b：把 maxGoalRounds 钉进**我们生成的 profile patch**（不改内核包）。
+ * 内核 profile 首次启动会自动初始化；预先写好的 patch 会被保留。
+ */
+export function ensureGoalRoundCap(dshHome: string, maxGoalRounds: number): string {
+  const profileDir = join(dshHome, 'profiles', 'web')
+  mkdirSync(profileDir, { recursive: true })
+  const patchPath = join(profileDir, 'cordis.patch.yml')
+  const entry = `- id: goal\n  config:\n    defaultMaxGoalRounds: ${String(maxGoalRounds)}\n`
+  if (!existsSync(patchPath)) {
+    writeFileSync(patchPath, `# kyclaw B3.3b：goal 轮次安全阀（内核权威执行）\n${entry}`, 'utf8')
+    return patchPath
+  }
+  const current = readFileSync(patchPath, 'utf8')
+  if (/defaultMaxGoalRounds\s*:/u.test(current)) return patchPath
+  if (/^-\s*id:\s*goal\s*$/mu.test(current)) {
+    const injected = current.replace(
+      /^-\s*id:\s*goal\s*$/mu,
+      `- id: goal\n  config:\n    defaultMaxGoalRounds: ${String(maxGoalRounds)}`
+    )
+    writeFileSync(patchPath, injected, 'utf8')
+    return patchPath
+  }
+  writeFileSync(patchPath, `${current}${current.endsWith('\n') ? '' : '\n'}${entry}`, 'utf8')
+  return patchPath
+}
+
 export async function startKernelAdapter(options: KernelAdapterOptions): Promise<KernelAdapter> {
   const dshHome = join(options.appDataDir, 'dsh-kernel-home')
+  ensureGoalRoundCap(dshHome, options.goalMaxRounds ?? 16)
   const kernel = await startKernelProcess({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,

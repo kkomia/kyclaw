@@ -1,4 +1,4 @@
-﻿// @vitest-environment node
+// @vitest-environment node
 /**
  * B3.3 真机：goal 命令走内核命令平面（`commands/list` + `commands/execute`），
  * goal 数据来自内核 `session/page`，六行投影只读。
@@ -100,9 +100,9 @@ describe.runIf(ENABLED)('B3.3 goal 命令与投影（内核权威）', () => {
       expect(createdState?.goal.phase).toBe('active')
       const dock = projectGoalDock(createdState)
       console.log('[goal dock rounds]', dock.rounds?.label)
-      expect(dock.rounds?.label).toContain(
-        `/16（内核上限 ${String(createdState?.goal.maxGoalRounds ?? 0)}）`
-      )
+      // B3.3b：adapter 默认把内核 defaultMaxGoalRounds 钉成 16
+      expect(createdState?.goal.maxGoalRounds).toBe(16)
+      expect(dock.rounds?.label).toBe('0/16')
 
       // 2) query（裸 /goal）
       const queried = await adapter.executeCommand('/goal')

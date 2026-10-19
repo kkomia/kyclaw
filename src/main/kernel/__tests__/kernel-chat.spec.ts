@@ -104,4 +104,3 @@ describe('kernel-chat：真实 HTTP 形状', () => {
     expect(await response.text()).toContain('"type":"error"')
   })
 })
-
