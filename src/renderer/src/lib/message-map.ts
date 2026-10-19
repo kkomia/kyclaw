@@ -45,6 +45,7 @@
 import type { UIMessage } from 'ai'
 import type { StoredMessage } from '@shared/threads'
 import { MESSAGE_CONTEXT_KEY, readMessageContext, SENT_AT_KEY } from '@shared/message-context'
+import { turnFailureFromMetadata } from '@shared/turn-failure'
 
 type Part = UIMessage['parts'][number]
 
@@ -322,18 +323,21 @@ export function mapStoredMessages(stored: readonly StoredMessage[]): UIMessage[]
     const createdAt = messageTime(message, content)
     const context = readMessageContext(storedMetadata(content))
     const sentAt = storedSentAt(content)
+    /** PB-037：PB-034 的失败轮 metadata 原样透传（严格校验；缺失/坏形状不挂） */
+    const turnFailure = turnFailureFromMetadata(storedMetadata(content))
 
     messages.push({
       id: message.id,
       role: message.role,
       parts,
-      ...(createdAt === null && context === null && sentAt === null
+      ...(createdAt === null && context === null && sentAt === null && turnFailure === null
         ? {}
         : {
             metadata: {
               ...(createdAt === null ? {} : { createdAt }),
               ...(sentAt === null ? {} : { [SENT_AT_KEY]: sentAt }),
-              ...(context === null ? {} : { [MESSAGE_CONTEXT_KEY]: context })
+              ...(context === null ? {} : { [MESSAGE_CONTEXT_KEY]: context }),
+              ...(turnFailure === null ? {} : { turnFailure })
             }
           })
     })

@@ -557,4 +557,19 @@ describe('0.1.3 / 006 + 008：展示上下文与发送时刻的回读', () => {
     expect(metadata[MESSAGE_CONTEXT_KEY]).toBeUndefined()
     expect(metadata.createdAt).toBe(Date.parse('2026-10-16T06:05:30.000Z'))
   })
+
+  it('PB-037：content.metadata.turnFailure 原样透传到 UIMessage.metadata（坏形状丢弃）', () => {
+    const [good] = mapStoredMessages([
+      storedUser({ turnFailure: { turn: 4, kind: 'error', code: 'E1', message: '失败了' } })
+    ])
+    expect((good.metadata as Record<string, unknown>).turnFailure).toEqual({
+      turn: 4,
+      kind: 'error',
+      code: 'E1',
+      message: '失败了'
+    })
+
+    const [bad] = mapStoredMessages([storedUser({ turnFailure: { kind: 'completed', turn: 4 } })])
+    expect((bad.metadata as Record<string, unknown> | undefined)?.turnFailure).toBeUndefined()
+  })
 })
