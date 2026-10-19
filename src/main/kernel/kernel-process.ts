@@ -153,6 +153,13 @@ export async function startKernelProcess(
     throw error
   })
 
+  // P3（Eve 验收建议）：ready 之后原先的 spawn 'error' 监听会随 cleanup 摘掉；运行期再来的
+  // EPERM/EACCES（杀进程失败、句柄异常等）不该变成未捕获事件把主进程带崩 —— 留一个永久 log-only。
+  // 它不改变任何状态：服务已建立，错误只记录，由上层重试/重启应用兜底。
+  child.on('error', (error: Error) => {
+    console.warn('[kyclaw] 内核进程运行期错误（已建立的服务不受影响；持续出现请重启应用）', error)
+  })
+
   let stopped = false
   const stop = async (): Promise<void> => {
     if (stopped) return
