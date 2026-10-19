@@ -1,0 +1,40 @@
+[
+  {
+    "type": "start",
+    "messageId": "<message-id>"
+  },
+  {
+    "type": "start-step"
+  },
+  {
+    "type": "text-start",
+    "id": "<id>"
+  },
+  {
+    "type": "text-delta",
+    "id": "<id>",
+    "delta": "字段级等价参考文本。"
+  },
+  {
+    "type": "text-end",
+    "id": "<id>"
+  },
+  {
+    "type": "finish-step"
+  },
+  {
+    "type": "data-usage",
+    "data": {
+      "stepIndex": 0,
+      "inputTokens": 12,
+      "outputTokens": 8,
+      "totalTokens": 20,
+      "cachedInputTokens": 0,
+      "contextInput": 12
+    }
+  },
+  {
+    "type": "finish",
+    "finishReason": "stop"
+  }
+]

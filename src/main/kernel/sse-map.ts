@@ -1,0 +1,168 @@
+/**
+ * B3.1a：内核 assistant-stream / 会话事件 → **现有 renderer 吃的 SSE 帧**。
+ *
+ * 目标：字段级等价，不是"看着差不多"。基准来自
+ * `__tests__/fixtures/renderer-sse-kyclaw-0.1.6.json`（现有 kyclaw chat 路径实测帧），
+ * 内核侧输入来自 `__tests__/fixtures/kernel-follow-frames.json`（B3.1a 真机探测的原样帧）。
+ *
+ * 内核 `session/follow`（assistantStream: true）给的是：
+ *   - `assistant-stream` 帧：`start` / `chunk{block-start|text-delta|block-end|usage|finish}` / `end`；
+ *   - `event` 帧：`turn/start`、`user/message`、`assistant/message`、`step/end`、`turn/end` 等。
+ * 这里只把"对 renderer 有意义"的 assistant-stream 子集映射成现有 8 帧形状：
+ *   start → start-step → text-start → text-delta → text-end → finish-step → data-usage → finish
+ * （其中 data-usage 在 finish 处补发：内核先 usage 后 finish，而现有帧顺序是 finish-step → data-usage → finish）
+ */
+
+export type RendererSseFrame =
+  | { type: 'start'; messageId: string }
+  | { type: 'start-step' }
+  | { type: 'text-start'; id: string }
+  | { type: 'text-delta'; id: string; delta: string }
+  | { type: 'text-end'; id: string }
+  | { type: 'finish-step' }
+  | {
+      type: 'data-usage'
+      data: {
+        stepIndex: number
+        inputTokens: number
+        outputTokens: number
+        totalTokens: number
+        cachedInputTokens: number
+        contextInput: number
+      }
+    }
+  | { type: 'finish'; finishReason: string }
+  | { type: 'error'; errorText: string }
+
+/** `session/follow` 的 item.value 里我们用到的子集（字段照 rc.2 原样） */
+export interface KernelAssistantChunk {
+  type: 'block-start' | 'text-delta' | 'block-end' | 'usage' | 'finish'
+  index?: number
+  blockType?: string
+  text?: string
+  block?: { type: string; text?: string }
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number }
+  reason?: { kind: string }
+}
+
+export type KernelFollowValue =
+  | { type: 'snapshot'; cursor?: number; records?: unknown[] }
+  | {
+      type: 'assistant-stream'
+      frame:
+        | { type: 'start'; attemptId: string; revision?: number; turn?: number; step?: number }
+        | {
+            type: 'chunk'
+            attemptId: string
+            revision?: number
+            index?: number
+            chunk: KernelAssistantChunk
+          }
+        | { type: 'end'; attemptId: string; outcome?: { kind?: string; seq?: number } }
+    }
+  | { type: 'event'; event: { type: string; seq?: number; data?: Record<string, unknown> } }
+
+const FINISH_REASONS: Readonly<Record<string, string>> = {
+  stop: 'stop',
+  length: 'length',
+  'tool-calls': 'tool-calls',
+  'content-filter': 'content-filter',
+  error: 'error',
+  other: 'other'
+}
+
+/** 一条 follow 流 → SSE 帧的增量映射器（每个 follow stream 一个实例） */
+export class KernelSseMapper {
+  private messageId: string | undefined
+  private stepStarted = false
+  private readonly textIds = new Map<number, string>()
+  private pendingUsage: KernelAssistantChunk['usage'] | undefined
+  private finished = false
+
+  /** 喂一条 item.value；返回本次应发出的 SSE 帧（按现有顺序） */
+  push(value: KernelFollowValue): RendererSseFrame[] {
+    if (value.type === 'assistant-stream') return this.onAssistantStream(value.frame)
+    if (value.type === 'event') return this.onEvent(value.event)
+    return []
+  }
+
+  private onAssistantStream(
+    frame: Extract<KernelFollowValue, { type: 'assistant-stream' }>['frame']
+  ): RendererSseFrame[] {
+    if (frame.type === 'start') {
+      this.messageId = `kernel-${frame.attemptId}`
+      return [{ type: 'start', messageId: this.messageId }]
+    }
+    if (frame.type === 'end') return []
+    return this.onChunk(frame.chunk)
+  }
+
+  private onEvent(event: { type: string; data?: Record<string, unknown> }): RendererSseFrame[] {
+    if (event.type !== 'turn/end') return []
+    const reason = event.data?.reason as { kind?: string } | undefined
+    if (reason?.kind === 'completed' || reason?.kind === 'cancelled') return []
+    // 错误轮：现有 renderer 的 error 帧（字段名沿用我们 chat 路由的 `errorText`）
+    const error = reason as { error?: { message?: string } } | undefined
+    return [{ type: 'error', errorText: error?.error?.message ?? 'kernel turn failed' }]
+  }
+
+  private onChunk(chunk: KernelAssistantChunk): RendererSseFrame[] {
+    switch (chunk.type) {
+      case 'block-start': {
+        if (chunk.blockType !== 'text') return []
+        const index = chunk.index ?? 0
+        const id = `text-${String(index)}`
+        this.textIds.set(index, id)
+        const frames: RendererSseFrame[] = []
+        if (!this.stepStarted) {
+          frames.push({ type: 'start-step' })
+          this.stepStarted = true
+        }
+        frames.push({ type: 'text-start', id })
+        return frames
+      }
+      case 'text-delta': {
+        const index = chunk.index ?? 0
+        const id = this.textIds.get(index) ?? `text-${String(index)}`
+        return [{ type: 'text-delta', id, delta: chunk.text ?? '' }]
+      }
+      case 'block-end': {
+        const index = chunk.index ?? 0
+        const id = this.textIds.get(index) ?? `text-${String(index)}`
+        return [{ type: 'text-end', id }]
+      }
+      case 'usage': {
+        // 先缓存：现有帧顺序要求 finish-step 在 data-usage 之前
+        this.pendingUsage = chunk.usage
+        return []
+      }
+      case 'finish': {
+        const frames: RendererSseFrame[] = []
+        if (!this.finished) {
+          frames.push({ type: 'finish-step' })
+          if (this.pendingUsage !== undefined) {
+            frames.push({
+              type: 'data-usage',
+              data: {
+                stepIndex: 0,
+                inputTokens: this.pendingUsage.inputTokens,
+                outputTokens: this.pendingUsage.outputTokens,
+                totalTokens: this.pendingUsage.totalTokens,
+                cachedInputTokens: 0,
+                contextInput: this.pendingUsage.inputTokens
+              }
+            })
+          }
+          frames.push({
+            type: 'finish',
+            finishReason: FINISH_REASONS[chunk.reason?.kind ?? 'stop'] ?? 'other'
+          })
+          this.finished = true
+        }
+        return frames
+      }
+      default:
+        return []
+    }
+  }
+}
