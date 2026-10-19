@@ -1,8 +1,9 @@
 /**
  * Git Bash / git 可执行文件的探测链（**共享件**：bash 工具、git 工具、工作台终端三处用同一套口径）。
  *
- * 本模块是从 `mastra/tools/bash.ts` 提取出来的（工作台的「终端」工具要起真 PTY，不能 import
- * 一个挂着 @mastra/core 的工具模块）——口径与行为一字未改，bash.ts 继续 re-export 这些名字。
+ * 本模块是从旧内核的 bash 工具里提取出来的（工作台的「终端」工具要起真 PTY，不能 import
+ * 一个挂着 @mastra/core 的工具模块）——口径与行为一字未改。Step 2 之后 `src/mastra` 已整片删除，
+ * 当年那份 bash.ts 不再存在，这里就是唯一实现。
  *
  * 探测顺序（成功结果缓存）：
  *   1. 环境变量 `KYCLAW_GIT_BASH`（显式指定，给自定义安装位留的口子）；
