@@ -30,7 +30,8 @@ describe('PB-031 中间轮次正文延迟到轮末显示', () => {
     const { rerender } = render(<Message message={withFinal} streaming />)
 
     const answer = screen.getByTestId('turn-answer')
-    expect(answer).toHaveTextContent('最终回答：仓库是干净的。')
+    // B-精简版：工具轮里流式中正文区为空（连最终回答也不抢先显示，避免闪现）
+    expect(answer).toHaveTextContent('')
     expect(answer).not.toHaveTextContent('中间正文')
 
     // 轮末：中间正文补进来（内容不丢、顺序保持：中间在前、最终在后）

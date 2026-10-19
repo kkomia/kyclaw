@@ -882,7 +882,9 @@ export function Message({
           <div data-testid="turn-answer" className="flex flex-col gap-2">
             {/* PB-031：流式中只实时显示"最后一次过程之后"的最终回答；中间轮次正文等轮末按原顺序一次全出 */}
             {textChunks
-              .filter((chunk) => !streaming || chunk.index > lastProcessIndex)
+              // PB-031（B-精简版）：有过程内容时流式中不渲染任何正文（避免中间正文闪现），
+              // 轮末一次全出；纯文本回复（无过程，lastProcessIndex<0）照常流式
+              .filter(() => !streaming || lastProcessIndex < 0)
               .map((chunk) => (
                 <TextPart
                   key={`text-${chunk.index}`}
