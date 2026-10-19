@@ -441,6 +441,7 @@ async function startAdapter(
   extras: {
     onSessionEvent?: (threadId: string, event: { type: string }) => void
     onInteractionEvent?: (event: import('../kernel-interactions').KernelInteractionEvent) => void
+    resolveCwd?: (threadId?: string) => string
   } = {}
 ): Promise<KernelAdapter> {
   const adapter = await startKernelAdapter({
@@ -793,6 +794,57 @@ describe('PB-025 $events 交互 waterfall（mock 传输层；形状取自一手�
     expect(`${copy.title}${copy.detail}`).not.toContain('你拒绝')
     expect(copy.attribution).toBe('system')
     expect(copy.canRetry).toBe(true)
+  })
+})
+
+/** PB-024（Eve P0）：cwd 唯一来源 + 默认会话 id 只读暴露 */
+describe('PB-024 cwd 钩子与 defaultSessionId', () => {
+  it('resolveCwd 给 workspace cwd：create/startTurn 都走它，不再 conflict', async () => {
+    const appDir = tempDir('a')
+    const workspace = tempDir('ws')
+    const adapter = await startAdapter(appDir, { resolveCwd: () => workspace })
+
+    const turn = adapter.startTurn('用 workspace 物化', { threadId: 'thread-W' })
+    await waitReady('thread-W')
+    kernel.finishTurn('thread-W', '答', 'completed')
+    expect((await turn).text).toBe('答')
+
+    // 内核收到的是 workspace cwd（不是 appDataDir）
+    expect(kernel.state.creates).toContainEqual({ cwd: workspace, sessionId: 'thread-W' })
+    expect(kernel.state.creates.some((item) => item.cwd === appDir)).toBe(false)
+    // 同一 thread 第二轮复用同一会话（没有第二次 create、不 conflict）
+    const again = adapter.startTurn('第二轮', { threadId: 'thread-W' })
+    await waitReady('thread-W', 2)
+    kernel.finishTurn('thread-W', '答2', 'completed')
+    expect((await again).text).toBe('答2')
+    expect(kernel.state.creates.filter((item) => item.sessionId === 'thread-W')).toHaveLength(1)
+  })
+
+  it('钩子的 cwd 就是内核里那份：同 id 换回 appDataDir 会被内核判 conflict（反证）', async () => {
+    const dirA = tempDir('a')
+    const workspace = tempDir('ws')
+    const hooked = await startAdapter(dirA, { resolveCwd: () => workspace })
+
+    const turn = hooked.startTurn('钩子侧', { threadId: 'thread-shared' })
+    await waitReady('thread-shared')
+    kernel.finishTurn('thread-shared', '答', 'completed')
+    await turn
+
+    const listed = await hooked.listKernelSessions()
+    expect(listed.find((item) => item.sessionId === 'thread-shared')?.cwd).toBe(workspace)
+    // 直接拿 appDataDir 去建同一个 id → 内核拒绝（说明"各写一份 cwd"正是 conflict 的来源）
+    await expect(
+      hooked.rpcCall('session/create', { request: { cwd: dirA, sessionId: 'thread-shared' } })
+    ).rejects.toThrow(/session\/conflict/u)
+  })
+
+  it('defaultSessionId 只读暴露（threads 列表过滤幽灵会话用），默认行为不变', async () => {
+    const dirA = tempDir('a')
+    const adapter = await startAdapter(dirA)
+    expect(adapter.defaultSessionId).toBe(adapter.sessionId)
+    expect(adapter.defaultSessionId).toMatch(/^auto-session-/u)
+    const listed = await adapter.listKernelSessions()
+    expect(listed.some((item) => item.sessionId === adapter.defaultSessionId)).toBe(true)
   })
 })
 

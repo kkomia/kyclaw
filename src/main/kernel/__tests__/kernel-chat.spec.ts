@@ -22,6 +22,7 @@ function fakeAdapter(
   const cancels: Array<string | undefined> = []
   const adapter: KernelAdapter = {
     sessionId: 'session-test',
+    defaultSessionId: 'session-test',
     pid: 1,
     port: 1,
     async startTurn(text, startOptions = {}) {

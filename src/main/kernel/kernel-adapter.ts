@@ -71,6 +71,15 @@ export interface KernelAdapterOptions {
   onInteractionEvent?: (event: KernelInteractionEvent) => void
   /** B3.3b：goal 轮次安全阀（写进隔离 profile 的 cordis.patch.yml；默认 16） */
   goalMaxRounds?: number
+  /**
+   * PB-024（Eve P0）：**每个 thread 用哪个工作目录物化内核会话**。
+   *
+   * 不传 = 现有行为（固定 `appDataDir`，flag 关/旧测试零变化）。threads 侧传 workspace cwd：
+   * 内核的 `session/create` 复用规则要求「同 id 属于同一 cwd」，两边各写一份 cwd 就会
+   * `session/conflict`（表现为侧栏新建会话第一条消息必失败）。
+   * adapter 内部所有拿 cwd 的地方（create/冲突预检）**统一走这个钩子**。
+   */
+  resolveCwd?: (threadId?: string) => string
 }
 
 export interface KernelTurnResult {
@@ -123,6 +132,12 @@ export interface KernelAdapter {
   readPlanState(threadId?: string): Promise<{ active: boolean; pending: boolean } | null>
   /** B3.4：内核可见会话列表（只读 header） */
   listKernelSessions(): Promise<KernelSessionInfo[]>
+  /**
+   * PB-024（Eve P0）：启动时创建的**默认会话** id（只读）。
+   * threads 列表要把它过滤掉（它是 adapter 的 `openFollow` 产物，不是用户会话）。
+   * 默认会话的创建时机不变（B3.4 行为）。
+   */
+  readonly defaultSessionId: string
   /** B3.4：刷新重接（同一进程内重新 follow）；返回 opening 的 startedAfterSeq/nextIndex */
   reattach(threadId: string): Promise<KernelSessionOpening>
   /**
@@ -244,7 +259,12 @@ export function kernelUserError(error: unknown): Error {
 export async function startKernelAdapter(options: KernelAdapterOptions): Promise<KernelAdapter> {
   const dshHome = options.dshHome ?? join(options.appDataDir, 'dsh-kernel-home')
   ensureGoalRoundCap(dshHome, options.goalMaxRounds ?? 16)
-  const cwd = options.appDataDir
+  /**
+   * 内核会话用哪个 cwd 物化：**唯一来源**（create / 冲突预检 / reattach / startTurn 都走它）。
+   * 缺省 = 固定 appDataDir（flag 关与旧测试零变化）；threads 侧传 workspace cwd。
+   */
+  const resolveCwd = (threadId?: string): string =>
+    options.resolveCwd?.(threadId) ?? options.appDataDir
   const kernel = await startKernelProcess({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,
@@ -338,6 +358,8 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     }
 
     const createSession = async (sessionId?: string): Promise<string> => {
+      // cwd 的唯一来源（PB-024：threads 的 workspace cwd 也走这里，避免各写一份 → session/conflict）
+      const cwd = resolveCwd(sessionId)
       // B3.4：建会话前先 list 校验归属（同 id 跨目录 → session/conflict）
       if (sessionId !== undefined) {
         const listed = await listKernelSessions().catch(() => [] as KernelSessionInfo[])
@@ -532,6 +554,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     let stopped = false
     return {
       sessionId: defaultSessionId,
+      defaultSessionId,
       pid: kernel.pid,
       port: Number(new URL(kernel.baseUrl).port),
       async startTurn(text: string, startOptions: StartTurnOptions = {}): Promise<KernelTurnResult> {
