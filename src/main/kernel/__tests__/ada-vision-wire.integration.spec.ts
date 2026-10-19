@@ -87,6 +87,18 @@ function findToolResultBody(bodies: unknown[]): unknown {
   return bodies.slice(1).find((body) => JSON.stringify(body).includes('"tool_result"'))
 }
 
+/** 会话标题请求与 agent 轮次共用一个 stub：标题请求不计入工具调用次数（否则首次调用会被标题抢走）。 */
+function isTitleRequest(raw: string): boolean {
+  try {
+    const body = JSON.parse(raw) as { tools?: unknown; system?: unknown }
+    const hasTools = Array.isArray(body.tools) && body.tools.length > 0
+    const system = typeof body.system === 'string' ? body.system : ''
+    return !hasTools && system.includes('concise title')
+  } catch {
+    return false
+  }
+}
+
 /** 一次 read 工具调用 + 捕获第二轮请求体。 */
 function startWireStub(filePath: string): Promise<{
   server: Server
@@ -105,7 +117,8 @@ function startWireStub(filePath: string): Promise<{
         res.writeHead(404).end('not found')
         return
       }
-      calls += 1
+      const isTitle = isTitleRequest(raw)
+      if (!isTitle) calls += 1
       try {
         bodies.push(JSON.parse(raw) as unknown)
       } catch {
