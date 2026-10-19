@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+﻿import { describe, expect, it } from 'vitest'
 import { resolveUsageReadout } from '../usage-live'
 import type { UsageLatest } from '../useUsageStream'
 
 /** PB-033 读数优先级：live 覆盖库值 / live 缺失回落 / reported=false 显示「—」/ 轮末以库为准。 */
-const live = (contextInput: number, reported = true): UsageLatest => ({
+const live = (contextInput: number | null, reported = true): UsageLatest => ({
   input: 1,
   output: 2,
   total: 3,
@@ -49,3 +49,4 @@ describe('resolveUsageReadout', () => {
     expect(result).toEqual({ contextInput: 100, reported: true, source: 'stored' })
   })
 })
+
