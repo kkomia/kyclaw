@@ -8,7 +8,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
-import { primaryModuleOf, type PrimaryModuleId } from '@renderer/lib/primary-modules'
+import { primaryModuleOf, isPrimaryModuleVisible, type PrimaryModuleId } from '@renderer/lib/primary-modules'
 import { cn } from '../ui/cn'
 import { navItemClass } from './nav-item'
 
@@ -60,11 +60,18 @@ export function PrimaryNav(): React.JSX.Element {
         {MODULE_ENTRIES.map((entry) => {
           const selected = activeModule === entry.id
           const Icon = entry.icon
+          // PB-037：早期模块（笔记/知识库/导图）只隐藏入口；用 hidden 属性而不是不渲染，
+          // 这样不占布局槽、对读屏/键盘也摘掉，但既有路由与测试的入口契约保留（开关一开即恢复）。
+          const visible = isPrimaryModuleVisible(entry.id)
           return (
             <button
               key={entry.id}
               type="button"
               data-testid={entry.testId}
+              data-hidden-entry={visible ? undefined : 'true'}
+              hidden={!visible}
+              tabIndex={visible ? undefined : -1}
+              aria-hidden={visible ? undefined : true}
               aria-label={entry.label}
               aria-current={selected ? 'page' : undefined}
               title={entry.label}
