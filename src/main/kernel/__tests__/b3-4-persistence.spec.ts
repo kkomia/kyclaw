@@ -672,6 +672,16 @@ describe('PB-005-F2 未知命令可诊断', () => {
     expect(kernel.state.executes).toContainEqual({ agentId: expect.any(String), line: '/goal 目标-A' })
   })
 
+  it('不带 / 的行（Eve P3）：即使命令名已注册也判未知，不发给内核', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const result = (await adapter.executeCommand('goal')) as {
+      result: { kind: string; text: string }
+    }
+    expect(result.result.kind).toBe('error')
+    expect(result.result.text).toContain('命令要以 / 开头')
+    expect(kernel.state.executes.filter((item) => item.line === 'goal')).toHaveLength(0)
+  })
+
   it('命令清单拉不到时不阻断（内核仍是权威），只告警', async () => {
     const adapter = await startAdapter(tempDir('a'))
     kernel.state.listCommandsFails = true

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * B3.1a：内核 assistant-stream / 会话事件 → **现有 renderer 吃的 SSE 帧**。
  *
  * 目标：字段级等价，不是"看着差不多"。基准来自
@@ -37,6 +37,17 @@ export type RendererSseFrame =
   | { type: 'tool-input-available'; toolCallId: string; toolName: string; input: unknown }
   | { type: 'tool-output-available'; toolCallId: string; output: unknown }
   | { type: 'tool-output-error'; toolCallId: string; errorText: string }
+  /**
+   * PB-013：内核 attempt 级重试的**正文替换**信号。
+   *
+   * 内核在「正文已经交付之后」断流时会自己重试（新的 `assistant-stream start` + 新 attemptId），
+   * 而落库只保留最终 attempt。若交付侧继续把重试正文追加到同一个 `text-*` 部件，UI 会出现
+   * N 份正文而库里 1 份（PB-013 实测：UI 3 份 / 落库 1 份）。
+   * `reset-step` 是 AI SDK v7 的既有 UI chunk（schema + 消费端都支持）：丢弃**当前步骤**已渲染的
+   * 部件（正文/reasoning/工具），随后重发的 `start-step`/`text-start` 从零开始。
+   * 这样重试正文是**替换**而不是追加，同时又保留正常路径的边收边发。
+   */
+  | { type: 'reset-step' }
 
 /** `session/follow` 的 item.value 里我们用到的子集（字段照 rc.2 原样） */
 export interface KernelAssistantChunk {
@@ -75,9 +86,37 @@ const FINISH_REASONS: Readonly<Record<string, string>> = {
   other: 'other'
 }
 
+/**
+ * 把一轮的新帧并入**有效帧流**（`result.frames` / `result.sse` 用的那一条）。
+ *
+ * 为什么需要：实时 `onFrame` 已经把每个 attempt 的正文发出去了，renderer 靠 `reset-step` 把它们
+ * 丢掉；但"整轮结果"（非流式调用方、日志、探针）拿的是累积帧数组，如果保留被作废的 attempt，
+ * 同一个正文就会在那个数组里出现 N 份（PB-013 的 uiCopies 就是这么数的）。
+ * 这里在遇到 `reset-step` 时**剔掉上一个步骤的帧**（保留更早的 start/步骤，以及 reset-step 本身），
+ * 于是有效帧流与"用户最终看到的"一致：正文只有最终 attempt 一份。
+ */
+export function appendEffectiveFrames(
+  target: RendererSseFrame[],
+  incoming: readonly RendererSseFrame[]
+): void {
+  if (incoming.some((frame) => frame.type === 'reset-step')) {
+    let lastStepStart = -1
+    for (let index = target.length - 1; index >= 0; index -= 1) {
+      if (target[index]?.type === 'start-step') {
+        lastStepStart = index
+        break
+      }
+    }
+    if (lastStepStart >= 0) target.splice(lastStepStart, target.length - lastStepStart)
+  }
+  target.push(...incoming)
+}
+
 /** 一条 follow 流 → SSE 帧的增量映射器（每个 follow stream 一个实例） */
 export class KernelSseMapper {
   private messageId: string | undefined
+  /** 当前 attempt（内核一次 model 请求）。变化 = 重试边界（PB-013） */
+  private attemptId: string | undefined
   private stepStarted = false
   private readonly textIds = new Map<number, string>()
   private pendingUsage: KernelAssistantChunk['usage'] | undefined
@@ -95,8 +134,21 @@ export class KernelSseMapper {
     frame: Extract<KernelFollowValue, { type: 'assistant-stream' }>['frame']
   ): RendererSseFrame[] {
     if (frame.type === 'start') {
+      const frames: RendererSseFrame[] = []
+      // PB-013：新 attemptId = 内核重试。上一尝试已交付的正文作废（内核只保留最终 attempt），
+      // 先发 reset-step 让 renderer 丢掉当前步骤的部件，再让重试正文从新的 step 重新开始。
+      const retried = this.attemptId !== undefined && this.attemptId !== frame.attemptId
+      if (retried && this.stepStarted) frames.push({ type: 'reset-step' })
+      this.attemptId = frame.attemptId
       this.messageId = `kernel-${frame.attemptId}`
-      return [{ type: 'start', messageId: this.messageId }]
+      // 每个 attempt 都是独立的正文边界：text id 从 0 重来，finish/usage/error 归属本次 attempt
+      this.textIds.clear()
+      this.stepStarted = false
+      this.pendingUsage = undefined
+      this.finished = false
+      this.errored = false
+      frames.push({ type: 'start', messageId: this.messageId })
+      return frames
     }
     if (frame.type === 'end') {
       // 失败/取消的 assistant 流：帧里带 outcome。已交付的文本帧必须先于 error（R11 基线）。

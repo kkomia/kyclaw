@@ -8,7 +8,7 @@
  * 在 `b3-4-persistence.spec.ts` 的命令平面用例里（同一套 fake 传输层）。
  */
 import { describe, expect, it } from 'vitest'
-import { commandNameFromLine, unknownCommandResult } from '../kernel-commands'
+import { commandNameFromLine, isCommandLine, unknownCommandResult } from '../kernel-commands'
 
 const AVAILABLE = [
   { name: 'compact' },
@@ -56,5 +56,20 @@ describe('unknownCommandResult', () => {
     expect(result.commandId).toBe('kyclaw-unknown-empty')
     expect(result.result.text).toContain('命令行是空的')
     expect(result.result.text).not.toContain('未识别的命令：')
+  })
+
+  it('不带 / 的行（Eve P3 残留）：判未知并说清"要以 / 开头"，不交给内核', () => {
+    expect(isCommandLine('goal')).toBe(false)
+    expect(isCommandLine(' /goal ')).toBe(true)
+    const result = unknownCommandResult('goal', AVAILABLE)
+    expect(result.result.text).toContain('未识别的命令：goal')
+    expect(result.result.text).toContain('命令要以 / 开头')
+    expect(result.result.text).toContain('/goal')
+  })
+
+  it('清单拉不到时文案仍可读（不出现"可用命令："后空一截）', () => {
+    const result = unknownCommandResult('/x', [])
+    expect(result.result.text).toContain('命令清单')
+    expect(result.result.text).not.toContain('可用命令：。')
   })
 })

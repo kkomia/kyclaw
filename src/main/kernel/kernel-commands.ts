@@ -33,22 +33,34 @@ export function commandNameFromLine(line: string): string | null {
   return name === '' ? null : name
 }
 
+/** 命令行的**语法**是否合法：内核命令平面只认 `/` 开头的整行（不带 `/` 的 `goal` 不是命令） */
+export function isCommandLine(line: string): boolean {
+  return line.trim().startsWith('/')
+}
+
 /**
  * 未知命令的失败结果（与内核同形，上层按 `result.kind === 'error'` 就能渲染）。
- * `text` 里同时给：原样命令 + 当次可用命令清单。
+ * `text` 里同时给：原样命令 + 当次可用命令清单（不含 `/` 开头的行单独说清语法）。
  */
 export function unknownCommandResult(
   line: string,
   available: readonly KernelCommandInfo[]
 ): KernelCommandResult {
   const name = commandNameFromLine(line)
-  const head = name === null ? '未识别的命令（命令行是空的）' : `未识别的命令：${line.trim()}`
+  const slashless = !isCommandLine(line) && name !== null
+  const head =
+    name === null
+      ? '未识别的命令（命令行是空的）'
+      : slashless
+        ? `未识别的命令：${line.trim()}（命令要以 / 开头，例如 /${name}）`
+        : `未识别的命令：${line.trim()}`
   const listed = available.map((command) => `/${command.name}`).join('、')
+  const tail = listed === '' ? '（当前拿不到命令清单）' : `可用命令：${listed}`
   return {
     commandId: `kyclaw-unknown-${name ?? 'empty'}`,
     result: {
       kind: 'error',
-      text: `${head}；可用命令：${listed}。这一行不会发送到内核，也不会产生模型消息。`
+      text: `${head}；${tail}。这一行不会发送到内核，也不会产生模型消息。`
     }
   }
 }

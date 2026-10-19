@@ -21,13 +21,14 @@ import { join } from 'node:path'
 import { connectKernelPeer } from './kernel-auth'
 import {
   commandNameFromLine,
+  isCommandLine,
   unknownCommandResult,
   type KernelCommandInfo,
   type KernelCommandResult
 } from './kernel-commands'
 import { startKernelProcess } from './kernel-process'
 import { KernelRpcClient } from './kernel-rpc'
-import { KernelSseMapper, type KernelFollowValue, type RendererSseFrame } from './sse-map'
+import { KernelSseMapper, appendEffectiveFrames, type KernelFollowValue, type RendererSseFrame } from './sse-map'
 import type { KernelGoalState } from './goal-projection'
 import { connectWebSocket, type WebSocketClient } from './ws-mux'
 
@@ -402,7 +403,9 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       const turn = state.turn
       if (turn === undefined) return
       const frames = state.mapper.push(value)
-      turn.frames.push(...frames)
+      // PB-013：重试（reset-step）时把被作废步骤的帧从"整轮有效帧"里剔掉，
+      // 实时流的 reset-step 照旧发给 renderer（UI 会丢掉那段正文）。
+      appendEffectiveFrames(turn.frames, frames)
       if (turn.onFrame !== undefined) {
         for (const frame of frames) {
           try {
@@ -503,6 +506,9 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           return [] as readonly KernelCommandInfo[]
         })
         const name = commandNameFromLine(line)
+        // 语法层：内核命令平面只认 `/` 开头的行（不带 `/` 的 `goal` 会被内核静默丢弃 → 这里先判未知，
+        // 不依赖命令清单是否拉得到）。清单层：拿到了就校验命令名是否已注册。
+        if (!isCommandLine(line)) return unknownCommandResult(line, available)
         if (available.length > 0 && (name === null || !available.some((c) => c.name === name)))
           return unknownCommandResult(line, available)
         return rpc.call<KernelCommandResult>('commands/execute', {
