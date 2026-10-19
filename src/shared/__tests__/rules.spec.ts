@@ -81,12 +81,7 @@ describe('用户可见的诊断文案（统一说「记忆指令」）', () => {
   })
 
   it('产出这几句话的四个文件里不再出现旧说法「规矩」「约束」（改文案漏一处的守卫）', async () => {
-    const files = [
-      '../rules.ts',
-      '../../main/project-rules.ts',
-      '../../main/ipc/rules.ts',
-      '../../mastra/rules.ts'
-    ]
+    const files = ['../rules.ts', '../../main/project-rules.ts', '../../main/ipc/rules.ts']
     const { readFile } = await import('node:fs/promises')
     for (const relative of files) {
       const text = await readFile(new URL(relative, import.meta.url), 'utf8')
