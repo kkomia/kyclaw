@@ -334,6 +334,19 @@ const kernel = vi.hoisted(() => {
         emit({ type: 'error', streamId: parsed.streamId, error })
         return
       }
+      /**
+       * 真内核语义（PB-047 探针实测）：对**不存在的 session** 调 `session/follow` 回
+       * `session/not-found` 错误帧（不会替你建会话）。fake 必须同样严谨，否则
+       * `ensureSession` 的"先 follow 再 create"顺序在测试里会被误判成不需要 create。
+       */
+      if (!state.sessions.has(sessionId)) {
+        emit({
+          type: 'error',
+          streamId: parsed.streamId,
+          error: { code: 'session/not-found', message: `unknown session ${sessionId}` }
+        })
+        return
+      }
       state.streams.set(parsed.streamId, sessionId)
       item(parsed.streamId, snapshotValue(sessionId))
     },
@@ -601,12 +614,30 @@ describe('B3.4 刷新重接（reattach）', () => {  it('opening 带内核自带
     expect(kernel.state.creates.filter((item) => item.sessionId === 'thread-A')).toHaveLength(1)
   })
 
-  it('reattach 一个还没见过的 thread → 用该 id 建会话并返回 opening', async () => {
-    const adapter = await startAdapter(tempDir('a'))
-    const opening = await adapter.reattach('thread-new')
+  it('reattach 冷会话（重启后、内存没见过）→ 按 id 直接 follow，不 create', async () => {
+    const first = await startAdapter(tempDir('a'))
+    const turn = first.startTurn('建会话', { threadId: 'thread-cold' })
+    await waitReady('thread-cold')
+    kernel.finishTurn('thread-cold', '答', 'completed')
+    await turn
+
+    // 新 adapter = 进程重启后的状态（内存 states 空，但内核会话还在）
+    const second = await startAdapter(tempDir('a'))
+    const before = kernel.state.creates.length
+    const opening = await second.reattach('thread-cold')
     expect(opening.cursor).toBeTypeOf('number')
-    expect(kernel.state.creates).toContainEqual({ cwd: expect.any(String), sessionId: 'thread-new' })
-    expect(kernel.openStreams('thread-new')).toHaveLength(1)
+    // 关键：读路径不许为"重启后没见过的会话"建新会话（旧实现会给非空会话 mint 新 id）
+    expect(kernel.state.creates.length).toBe(before)
+    // 两个 adapter 各一条 follow（fake 内核里同时存在），至少新 adapter 接上了这条会话
+    expect(kernel.openStreams('thread-cold').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('reattach 一个内核里不存在的 thread → not-found 原样抛，不 create', async () => {
+    const adapter = await startAdapter(tempDir('a'))
+    const before = kernel.state.creates.length
+    await expect(adapter.reattach('thread-never')).rejects.toThrow(/not-found/)
+    expect(kernel.state.creates.length).toBe(before)
+    expect(kernel.state.creates.some((item) => item.sessionId === 'thread-never')).toBe(false)
   })
 })
 
