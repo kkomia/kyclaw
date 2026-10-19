@@ -119,8 +119,13 @@ export function appendEffectiveFrames(
 /** 一条 follow 流 → SSE 帧的增量映射器（每个 follow stream 一个实例） */
 export class KernelSseMapper {
   private messageId: string | undefined
-  /** 当前 attempt（内核一次 model 请求）。变化 = 重试边界（PB-013） */
+  /** 当前 attempt（内核一次 model 请求）。**注意**：每个 step 都会换，不能单独当重试判据（PB-013 返工） */
   private attemptId: string | undefined
+  /** start 帧带的持久 turn/step：判「步骤边界 vs 真重试」的唯一判据 */
+  private turn: number | undefined
+  private step: number | undefined
+  /** 正文部件序号：步骤之间必须唯一（同一 step 内也不重复） */
+  private partSeq = 0
   private stepStarted = false
   private readonly textIds = new Map<number, string>()
   private pendingUsage: KernelAssistantChunk['usage'] | undefined
@@ -139,14 +144,45 @@ export class KernelSseMapper {
   ): RendererSseFrame[] {
     if (frame.type === 'start') {
       const frames: RendererSseFrame[] = []
-      // PB-013：新 attemptId = 内核重试。上一尝试已交付的正文作废（内核只保留最终 attempt），
-      // 先发 reset-step 让 renderer 丢掉当前步骤的部件，再让重试正文从新的 step 重新开始。
-      const retried = this.attemptId !== undefined && this.attemptId !== frame.attemptId
+      /**
+       * PB-013 返工（Nia R07/R08/R06）：**attemptId 每个 step 都会变**（内核 `sessionId:attempt`，
+       * 见 dsh-agent-loop 的 LlmAttempt 构造），所以它不能单独当重试判据。start 帧还带持久的
+       * `turn`/`step`：
+       *   - 同一 (turn, step) + 新 attemptId = **真重试** → 发 reset-step（PB-013 原修法，正文只留最终份）；
+       *   - (turn, step) 变了 = **工具步骤边界** → 绝不能 reset-step（否则上一步正文/工具卡/过程块被清空，
+       *     真机表现：中间正文先可见随后变空、8 步只见 1 个 tool-row）。
+       * 旧夹具/旧内核没带 turn/step 时保持原行为（attemptId 变 = 重试），不为猜测改语义。
+       */
+      const changed = this.attemptId !== undefined && this.attemptId !== frame.attemptId
+      const slotKnown =
+        frame.turn !== undefined &&
+        frame.step !== undefined &&
+        this.turn !== undefined &&
+        this.step !== undefined
+      const sameSlot = slotKnown && frame.turn === this.turn && frame.step === this.step
+      const stepBoundary = changed && slotKnown && !sameSlot
+      if (stepBoundary) {
+        // 步骤边界：不 reset-step、不发新 start（同一条 assistant 消息继续），只切本步解析状态。
+        this.attemptId = frame.attemptId
+        this.turn = frame.turn
+        this.step = frame.step
+        this.textIds.clear()
+        this.pendingUsage = undefined
+        this.finished = false
+        // 新步骤显式开 step（tool-only 步骤也必须有自己的 step 边界，R08 的 per-step 采样靠它）
+        frames.push({ type: 'start-step' })
+        this.stepStarted = true
+        return frames
+      }
+      const retried = changed
       if (retried && this.stepStarted) frames.push({ type: 'reset-step' })
       this.attemptId = frame.attemptId
+      this.turn = frame.turn
+      this.step = frame.step
       this.messageId = `kernel-${frame.attemptId}`
       // 每个 attempt 都是独立的正文边界：text id 从 0 重来，finish/usage/error 归属本次 attempt
       this.textIds.clear()
+      this.partSeq = 0
       this.stepStarted = false
       this.pendingUsage = undefined
       this.finished = false
@@ -247,7 +283,10 @@ export class KernelSseMapper {
       case 'block-start': {
         if (chunk.blockType !== 'text') return []
         const index = chunk.index ?? 0
-        const id = `text-${String(index)}`
+        // PB-013 返工：正文部件 id 用全局序号（步骤之间必须唯一；同一步内按块序递增，
+        // 单步场景与旧 `text-<index>` 同名，兼容既有断言/夹具）。
+        const id = `text-${String(this.partSeq)}`
+        this.partSeq += 1
         this.textIds.set(index, id)
         const frames: RendererSseFrame[] = []
         if (!this.stepStarted) {
