@@ -77,16 +77,18 @@ export function GoalDock({
           ▶
         </button>
       ) : null}
-      <button
-        type="button"
-        data-testid="goal-dock-edit"
-        aria-label="编辑 goal"
-        title="编辑 goal"
-        onClick={onEdit}
-        className="flex size-7 shrink-0 items-center justify-center rounded-full text-ink-tertiary hover:bg-hover hover:text-ink"
-      >
-        ✎
-      </button>
+      {onEdit === undefined ? null : (
+        <button
+          type="button"
+          data-testid="goal-dock-edit"
+          aria-label="编辑 goal"
+          title="编辑 goal"
+          onClick={onEdit}
+          className="flex size-7 shrink-0 items-center justify-center rounded-full text-ink-tertiary hover:bg-hover hover:text-ink"
+        >
+          ✎
+        </button>
+      )}
       <button
         type="button"
         data-testid="goal-dock-clear"
