@@ -21,3 +21,6 @@ resources/libreoffice-kit/
 # 构建产物与临时目录（不入库）
 *.tsbuildinfo
 .tmp-native-sweep/
+
+# website/ 是本地构建/宣传站产物，不是产品资产（0.1.5 起未跟踪；asar 已由 electron-builder.yml 排除）
+website/
