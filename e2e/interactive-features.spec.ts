@@ -833,7 +833,8 @@ test.describe('interactive features — production UI functional evidence', () =
         probe.remove()
         return measured
       })
-      expect(c2.token).toBe('14px')
+      // 0.2.0 组件库把该 token 写成 calc(14px * 1.000)（等比缩放变量），字面量不再固定 '14px'
+      expect(c2.token).toMatch(/^(14px|calc\(14px \* 1(?:\.0+)?\))$/)
       expect(c2.height).toBe('14px')
       expect(c2.rect).toBe(14)
       record('c2LineHeight', c2)
