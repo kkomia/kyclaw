@@ -208,9 +208,9 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
     expect(screen.getByTestId('error-card').parentElement?.className).toContain(
       'pl-[var(--chat-reading-indent)]'
     )
-    expect(
-      screen.getByTestId('error-card').parentElement?.parentElement?.className
-    ).toContain('max-w-[calc(var(--chat-content-width)+32px)]')
+    expect(screen.getByTestId('error-card').parentElement?.parentElement?.className).toContain(
+      'max-w-[calc(var(--chat-content-width)+32px)]'
+    )
     expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
 
     await act(async () => {
@@ -234,31 +234,17 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
 })
 
 describe('端点取不到（服务没起来）', () => {
-  it('对话页给错误卡；重试重新取端点，拿到后进会话界面', async () => {
+  it('PB-038：启动失败给「重启应用」，点击走 app.relaunch，不再「再跑一次」', async () => {
     installKyclawBridge()
-    /**
-     * 端点这一档**一直失败**，不是"只失败一次"：页面进不进错误态只取决于"端点取不到"这一个事实。
-     * 同一时刻还有别的人在问同一个端点（项目映射、待答问题……），"第一次调用归谁"是谁先调度的事 ——
-     * 拿 `mockRejectedValueOnce` 写这条用例，判据就挂在跨功能调用次序上了（改一处预取顺序就红）。
-     * 重试前把这一档整体翻成"通"（不是"下一次通"），两段都不依赖调用次序。
-     */
-    let endpointDown = true
     const endpoint = vi.fn(async (): Promise<{ baseUrl: string; token: string }> => {
-      if (endpointDown) throw new Error('agent 服务未启动')
-      return { baseUrl: 'http://127.0.0.1:9', token: 'tok' }
+      throw new Error('agent 服务未启动')
     })
     window.kyclaw.agent.endpoint = endpoint
-    // 端点背后的"服务"：列表与历史都给空（这个用例只验证端点重试这条路）
+    const relaunch = vi.fn(async () => ({ ok: true as const }))
+    window.kyclaw.app.relaunch = relaunch
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => {
-        const path = new URL(url).pathname
-        const payload = path.endsWith('/messages') ? { messages: [] } : { threads: [] }
-        return new Response(JSON.stringify(payload), {
-          status: 200,
-          headers: { 'content-type': 'application/json' }
-        })
-      })
+      vi.fn(async () => new Response(JSON.stringify({ threads: [] }), { status: 200 }))
     )
 
     render(
@@ -268,23 +254,16 @@ describe('端点取不到（服务没起来）', () => {
     )
 
     expect(await screen.findByTestId('error-card')).toHaveTextContent('agent 服务未启动')
+    expect(screen.getByTestId('error-retry')).toHaveTextContent('重启应用')
+    expect(screen.getByTestId('error-retry-hint')).toHaveTextContent('重启后会重新加载内核')
+    expect(screen.queryByText('再跑一次')).not.toBeInTheDocument()
 
-    // 重试：这一档整体翻成"通"
     const before = endpoint.mock.calls.length
-    endpointDown = false
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('error-retry'))
-    })
-
-    // 重试 = 重新取了一次端点（只看"有没有再取"，不把次数钉成某个绝对数：
-    // 还有别的功能也在问这个端点，绝对数同样是跨功能次序的断言）
-    await waitFor(() => {
-      expect(endpoint.mock.calls.length).toBeGreaterThan(before)
-    })
-    await waitFor(() => {
-      expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
-    })
-    expect(screen.getByTestId('composer-input')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('error-retry'))
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1))
+    expect(endpoint.mock.calls.length).toBe(before)
+    await waitFor(() => expect(screen.getByTestId('error-retry')).toHaveTextContent('正在重启…'))
+    expect(screen.getByTestId('error-retry')).toBeDisabled()
     vi.unstubAllGlobals()
   })
 })
@@ -299,7 +278,12 @@ describe('PB-035 B′：保留内容再试', () => {
     const onRetry = vi.fn()
     const onRetryKeep = vi.fn()
     const { rerender } = render(
-      <ErrorCard error={new Error('断了')} onRetry={onRetry} onRetryKeep={onRetryKeep} preservedRecords={3} />
+      <ErrorCard
+        error={new Error('断了')}
+        onRetry={onRetry}
+        onRetryKeep={onRetryKeep}
+        preservedRecords={3}
+      />
     )
     expect(screen.getByTestId('error-retry-keep')).toHaveTextContent('保留内容再试')
     expect(screen.getByTestId('error-retry')).toHaveTextContent('清空重来')
@@ -309,7 +293,12 @@ describe('PB-035 B′：保留内容再试', () => {
     expect(screen.getByTestId('error-retry')).not.toHaveTextContent('重试')
 
     rerender(
-      <ErrorCard error={new Error('断了')} onRetry={onRetry} onRetryKeep={onRetryKeep} preservedRecords={0} />
+      <ErrorCard
+        error={new Error('断了')}
+        onRetry={onRetry}
+        onRetryKeep={onRetryKeep}
+        preservedRecords={0}
+      />
     )
     expect(screen.queryByTestId('error-retry-keep')).not.toBeInTheDocument()
     expect(screen.queryByTestId('error-preserve-note')).not.toBeInTheDocument()

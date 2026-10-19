@@ -26,6 +26,13 @@ export interface ErrorCardProps {
   onRetryKeep?: () => void
   /** 失败轮里用户看得见的记录条数（非空正文 + 工具调用）；0 = 什么都没产出来 */
   preservedRecords?: number
+  /** PB-038：启动失败态把主按钮文案换成「重启应用」（默认仍是「再跑一次」） */
+  retryLabel?: string
+  retryDisabled?: boolean
+  /** PB-038：主按钮上方的一句口径（如「重启后会重新加载内核」） */
+  retryHint?: string
+  /** PB-038：重启被退出守卫拒绝/失败时的可读提示（role=alert） */
+  retryNote?: string | null
 }
 
 /** 认证类错误：HTTP 401（APICallError.statusCode）或文案里带 key/unauthorized/authentication */
@@ -64,7 +71,11 @@ export function ErrorCard({
   error,
   onRetry,
   onRetryKeep,
-  preservedRecords = 0
+  preservedRecords = 0,
+  retryLabel,
+  retryDisabled = false,
+  retryHint,
+  retryNote = null
 }: ErrorCardProps): React.JSX.Element {
   // PB-035 B′：失败轮已经有产出 → 给"保留/清空"两条路；什么都没产出 → 只留一个按钮（没有分叉的必要）
   const keepAvailable = onRetryKeep !== undefined && preservedRecords > 0
@@ -113,11 +124,31 @@ export function ErrorCard({
             保留内容再试
           </Button>
         ) : (
-          <Button size="sm" variant="ghost" data-testid="error-retry" onClick={onRetry}>
-            再跑一次
+          <Button
+            size="sm"
+            variant="ghost"
+            data-testid="error-retry"
+            onClick={onRetry}
+            disabled={retryDisabled}
+          >
+            {retryLabel ?? '再跑一次'}
           </Button>
         )}
       </div>
+      {retryHint === undefined ? null : (
+        <p data-testid="error-retry-hint" className="min-w-0 break-words text-c1 text-ink-tertiary">
+          {retryHint}
+        </p>
+      )}
+      {retryNote === null ? null : (
+        <p
+          data-testid="error-retry-note"
+          role="alert"
+          className="min-w-0 break-words text-c1 text-warning"
+        >
+          {retryNote}
+        </p>
+      )}
       <details data-testid="error-details" className="min-w-0 text-c1 text-ink-tertiary">
         <summary className="inline-flex min-h-6 cursor-pointer items-center select-none">
           详情

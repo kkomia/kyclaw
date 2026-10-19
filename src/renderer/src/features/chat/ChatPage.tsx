@@ -51,6 +51,7 @@ import type { ChatView } from './ChatHeader'
 import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
+import { StartupFailureCard } from './StartupFailureCard'
 import { RETRY_KEEP_METADATA_KEY, RETRY_KEEP_PROMPT, preservedRecordsOf } from './retry-keep'
 import { GoalCommandCard } from './GoalCommandCard'
 import { GoalDockContainer } from './GoalDockContainer'
@@ -431,7 +432,7 @@ export function ChatSession({
   const pending: ActiveChatPending | null = ready
     ? null
     : endpointError !== null
-      ? { kind: 'error', error: endpointError, retry: onRetryEndpoint ?? retry }
+      ? { kind: 'error', error: endpointError, retry: onRetryEndpoint ?? retry, startup: true }
       : resolveError !== null
         ? { kind: 'error', error: resolveError, retry }
         : transport === null
@@ -509,7 +510,9 @@ export function ChatSession({
  *   - `error`：端点和历史任一环失败（消息区错误卡 + 重试；输入卡只挡发送、不重复解释）
  */
 export type ActiveChatPending =
-  { kind: 'connecting' } | { kind: 'loading' } | { kind: 'error'; error: Error; retry: () => void }
+  | { kind: 'connecting' }
+  | { kind: 'loading' }
+  | { kind: 'error'; error: Error; retry: () => void; startup?: boolean }
 
 interface ActiveChatProps {
   chat: Chat<UIMessage>
@@ -540,7 +543,11 @@ function PendingNotice({
   if (pending.kind === 'error') {
     return (
       <div className="px-4 pt-6">
-        <ErrorCard error={pending.error} onRetry={pending.retry} />
+        {pending.startup === true ? (
+          <StartupFailureCard error={pending.error} />
+        ) : (
+          <ErrorCard error={pending.error} onRetry={pending.retry} />
+        )}
       </div>
     )
   }
