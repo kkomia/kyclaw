@@ -15,6 +15,7 @@
  * （用户反馈 017 点的就是"轨迹被用量带走"这件事）。
  */
 import type { z } from 'zod'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import {
   trajectoryRequestDetailResponseSchema,
   trajectoryThreadRequestsResponseSchema,
@@ -37,6 +38,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>, label: string): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) {
     // 失败时把服务端那句人话带出来（400 的 invalid-input 详情、500 的"读取失败：…"都在 body 里）
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null

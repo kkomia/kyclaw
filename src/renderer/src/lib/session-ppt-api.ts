@@ -17,6 +17,7 @@
  */
 import type { z } from 'zod'
 import type { AgentEndpoint } from '@shared/ipc'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import {
   sessionPptTemplateListSchema,
   sessionPptTemplateRequestSchema,
@@ -41,6 +42,7 @@ async function authorized(
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>, what: string): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) throw new Error(`${what}服务返回 ${response.status}`)
   const parsed = schema.safeParse(await response.json())
   if (!parsed.success) {
@@ -68,5 +70,6 @@ export async function putSessionPptTemplate(threadId: string, template: string):
     method: 'PUT',
     body: JSON.stringify(body)
   })
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) throw new Error(`PPT 模板映射服务返回 ${response.status}`)
 }

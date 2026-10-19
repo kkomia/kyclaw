@@ -9,6 +9,7 @@
  * 回包过 shared/projects 的 schema（边界纪律同线程 API）：格式不对就抛，由 store 落到错误态。
  */
 import type { z } from 'zod'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import {
   sessionProjectListSchema,
   sessionProjectRequestSchema,
@@ -28,6 +29,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>, what: string): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) throw new Error(`${what}服务返回 ${response.status}`)
   const parsed = schema.safeParse(await response.json())
   if (!parsed.success) {
@@ -50,5 +52,6 @@ export async function putSessionProject(threadId: string, projectId: string | nu
     method: 'PUT',
     body: JSON.stringify(body)
   })
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) throw new Error(`项目映射服务返回 ${response.status}`)
 }

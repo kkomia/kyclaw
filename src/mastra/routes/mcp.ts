@@ -44,12 +44,7 @@ function badRequest(detail: string): { error: string } {
 export function createMcpRouter(options: McpRouterOptions): Hono {
   const router = new Hono()
 
-  const testServer =
-    options.testServer ??
-    (async (config: McpServerConfig) => {
-      const { testMcpServer } = await import('../mcp')
-      return testMcpServer(config)
-    })
+  const testServer = options.testServer
 
   router.get('/servers', (context) => {
     return context.json(mcpServersResponseSchema.parse({ servers: options.readServers() }))
@@ -78,6 +73,11 @@ export function createMcpRouter(options: McpRouterOptions): Hono {
     const id = context.req.param('id')
     const config = options.readServers().find((server) => server.id === id)
     if (config === undefined) return context.json({ error: 'not-found' }, 404)
+    // PB-022：生产 mount 已整体 501；这里不再临时 import ../mcp（旧路径 import=0）。
+    // 旧测试若注入 testServer 仍可覆盖 handler；未注入时明确 disabled，不落回旧实现。
+    if (testServer === undefined) {
+      return context.json({ error: 'feature-disabled', feature: 'mcp', availableIn: '0.2.x' }, 501)
+    }
 
     const result = await testServer(config)
     return context.json(mcpTestResultSchema.parse(result))

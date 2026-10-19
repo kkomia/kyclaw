@@ -120,93 +120,39 @@ describe('startAgentServer', () => {
     expect(body).toContain('data: [DONE]')
   }, 60_000)
 
-  it('tasks 经过 Bearer 闸门；本机线程 GET/PUT 可用，外部资源与不存在线程拒绝', async () => {
+  it('tasks 已下架：Bearer 闸门仍在，带对 token 回 501 feature-disabled', async () => {
     const server = await start()
     const threadId = 'service-tasks-owned'
     const url = `${server.baseUrl}/api/tasks/${threadId}`
     const headers = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }
-    const write = {
-      action: 'replace',
-      expectedRevision: 0,
-      items: [{ title: '服务任务', status: 'pending' }]
-    }
+
     expect((await fetch(url)).status).toBe(401)
-    expect(
-      (
-        await fetch(url, {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(write)
-        })
-      ).status
-    ).toBe(401)
     expect((await fetch(url, { headers: { authorization: 'Bearer wrong-token' } })).status).toBe(
       401
     )
 
-    // 0.2.0 threads 是内核例外项：flag 关（本 spec 的 start() 没起内核）时明确 503，
-    // 不再注册旧 Mastra createThreadsRouter；任务面的宿主线程直接写旧 store 造。
+    const get = await fetch(url, { headers })
+    expect(get.status).toBe(501)
+    await expect(get.json()).resolves.toMatchObject({
+      error: 'feature-disabled',
+      feature: 'tasks',
+      availableIn: '0.2.x'
+    })
+    const put = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ action: 'replace', expectedRevision: 0, items: [] })
+    })
+    expect(put.status).toBe(501)
+    await expect(put.json()).resolves.toMatchObject({ error: 'feature-disabled', feature: 'tasks' })
+
+    // threads 仍是例外项：flag 关且没有内核 adapter → 503（不落回旧线程实现）
     const created = await fetch(`${server.baseUrl}/api/threads`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ threadId })
     })
     expect(created.status).toBe(503)
-
-    const { LibSQLStore } = await import('@mastra/libsql')
-    const storage = new LibSQLStore({
-      id: 'tasks-ownership-probe',
-      url: `file:${join(dir, 'kyclaw.db').replace(/\\/g, '/')}`
-    })
-    try {
-      const memory = await storage.getStore('memory')
-      if (memory === undefined) throw new Error('memory store unavailable')
-      const now = new Date()
-      await memory.saveThread({
-        thread: {
-          id: threadId,
-          resourceId: 'local-user',
-          title: '',
-          createdAt: now,
-          updatedAt: now
-        }
-      })
-
-      const initial = await fetch(url, { headers })
-      expect(initial.status).toBe(200)
-      expect(await initial.json()).toMatchObject({ revision: 0, items: [] })
-      const saved = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(write) })
-      expect(saved.status).toBe(200)
-      expect(await saved.json()).toMatchObject({
-        revision: 1,
-        items: [{ title: '服务任务', status: 'pending' }]
-      })
-      expect(await (await fetch(url, { headers })).json()).toMatchObject({ revision: 1 })
-
-      await memory.saveThread({
-        thread: {
-          id: 'service-tasks-foreign',
-          resourceId: 'other-user',
-          title: '外部资源',
-          createdAt: now,
-          updatedAt: now
-        }
-      })
-      for (const id of ['service-tasks-foreign', 'service-tasks-missing']) {
-        expect((await fetch(`${server.baseUrl}/api/tasks/${id}`, { headers })).status).toBe(404)
-        expect(
-          (
-            await fetch(`${server.baseUrl}/api/tasks/${id}`, {
-              method: 'PUT',
-              headers,
-              body: JSON.stringify(write)
-            })
-          ).status
-        ).toBe(404)
-      }
-    } finally {
-      await storage.close()
-    }
   }, 60_000)
 
   it('端口被占用 → 自动换端口（≤5 次尝试），占用者不受影响', async () => {

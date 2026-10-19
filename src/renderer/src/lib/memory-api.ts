@@ -8,6 +8,7 @@
  *   那一个会话那一份（工作记忆 thread 作用域，见 mastra/index.ts 的装配）。
  */
 import type { z } from 'zod'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import {
   clearMemoryResponseSchema,
   recallStatusResponseSchema,
@@ -28,6 +29,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) {
     // 失败时尽量把服务端那句人话带出来（400 的 invalid-input 详情就在 body 里）
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null

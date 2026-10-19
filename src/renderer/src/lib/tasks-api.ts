@@ -10,6 +10,7 @@ import {
   type TodoOutput
 } from '@shared/tasks'
 import { resolveAgentEndpoint } from './agent'
+import { featureDisabledError } from './feature-disabled'
 
 export interface TasksApi {
   get(threadId: string): Promise<TaskSnapshot>
@@ -38,6 +39,7 @@ function snapshot(value: unknown): TaskSnapshot {
 }
 
 function serviceError(status: number): Error {
+  if (status === 501) return featureDisabledError()
   return new Error(
     status === 404 ? '当前会话不存在或不可访问' : `任务服务返回 ${status}，请稍后重试`
   )

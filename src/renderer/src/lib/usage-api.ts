@@ -5,6 +5,7 @@
  * 渲染端与服务端不会因为时区/时钟不同步而各算各的。
  */
 import type { z } from 'zod'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import {
   usageCalendarSchema,
   usageResponseSchema,
@@ -28,6 +29,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) {
     // 失败时尽量把服务端那句人话带出来（400 的 invalid-input 详情就在 body 里）
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null

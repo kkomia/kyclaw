@@ -6,6 +6,7 @@
  * 没有 mcpServers 这个字段，所以这里不是"另一条路"，是唯一那条。
  */
 import type { z } from 'zod'
+import { isFeatureDisabled, featureDisabledError } from './feature-disabled'
 import { mcpServersResponseSchema, mcpTestResultSchema, type McpTestResult } from '@shared/mcp'
 import type { McpServerConfig } from '@shared/settings'
 
@@ -23,6 +24,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 
 /** 失败时尽量把服务端那句人话带出来（400 的 invalid-input 详情就在 body 里） */
 async function json<T>(response: Response, schema: z.ZodType<T>): Promise<T> {
+  if (isFeatureDisabled(response)) throw featureDisabledError()
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null
     const detail = typeof body?.error === 'string' ? body.error : `MCP 服务返回 ${response.status}`

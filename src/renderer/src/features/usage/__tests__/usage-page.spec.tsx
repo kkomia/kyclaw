@@ -191,6 +191,23 @@ describe('用量页：今日', () => {
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('1,500')
   })
 
+  it('PB-022：/api/usage 501 → 页面显示 0.2.0 暂不可用（不是内部 code）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: 'feature-disabled', feature: 'usage', availableIn: '0.2.x' }),
+            { status: 501, headers: { 'content-type': 'application/json' } }
+          )
+      )
+    )
+    render(<UsagePage />)
+    expect(await screen.findByTestId('usage-error')).toHaveTextContent(
+      '0.2.0 暂不可用（0.2.x 恢复）'
+    )
+  })
+
   it('数字排版（P2 字体统一）：用量/次数是 mono + tabular-nums，「Token/次」标签保持 sans', async () => {
     installFakeUsage({ today: TODAY, month: MONTH })
     render(<UsagePage />)

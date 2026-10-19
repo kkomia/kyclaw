@@ -184,6 +184,8 @@ describe('插件页 · 三个分区（round 10）', () => {
     expect(screen.getByTestId('plugins-subtitle')).toHaveTextContent('从插件市场安装与管理插件')
     expect(screen.getByTestId('plugins-tab-plugins')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('aria-selected', 'false')
+    // PB-022：MCP 配置 UI 在 0.2.0 隐藏（DOM 仍在，供旧覆盖；用户不可见）
+    expect(screen.getByTestId('plugins-tab-mcp')).toHaveAttribute('hidden')
     expect(screen.getByTestId('plugins-tab-skills')).toHaveAttribute('aria-selected', 'false')
     // 计数：插件 1（round 48 起内置插件常驻，也算一行）/ MCP 0 / 技能 0（round 13：技能计数 = 已安装数，内置技能下线）
     expect(screen.getByTestId('plugins-tab-plugins-count')).toHaveTextContent('1')

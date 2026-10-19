@@ -334,6 +334,7 @@ export function PluginsPage(): React.JSX.Element {
                 role="tab"
                 aria-selected={selected}
                 data-testid={entry.testId}
+                hidden={entry.id === 'mcp'}
                 onClick={() => setTab(entry.id)}
                 className={cn(
                   'flex items-center gap-1.5 border-b-2 pb-2 text-b1 transition-colors duration-(--motion-fast) ease-main',
