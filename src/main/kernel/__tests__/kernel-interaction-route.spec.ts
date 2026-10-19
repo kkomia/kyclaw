@@ -20,6 +20,169 @@ function appWith(hub: InteractionHub): Hono {
   return app
 }
 
+/** 带应答器的写面 app（fake responder 记录调用） */
+function appWithResponder(
+  hub: InteractionHub,
+  respond: (response: unknown) => Promise<void>
+): { app: Hono; calls: unknown[] } {
+  const calls: unknown[] = []
+  const app = new Hono()
+  app.route(
+    '/',
+    createKernelInteractionRouter({
+      hub,
+      responder: {
+        respondInteraction: (response) => {
+          calls.push(response)
+          return respond(response)
+        }
+      }
+    })
+  )
+  return { app, calls }
+}
+
+function seededApproval(hub: InteractionHub): void {
+  applyInteractionEvent(hub, {
+    kind: 'approval',
+    eventId: 'evt-a',
+    threadId: 'thread-A',
+    toolName: 'pwsh',
+    callId: 'call-1'
+  })
+}
+
+describe('PB-026 写面：POST /api/kernel/interactions/:eventId/respond', () => {
+  it('审批允许 → 200 responded；应答 args 正确；挂起被摘、再提交是 409', async () => {
+    const hub = new InteractionHub()
+    seededApproval(hub)
+    const { app, calls } = appWithResponder(hub, () => Promise.resolve())
+    const response = await app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' })
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      status: 'responded',
+      eventId: 'evt-a',
+      kind: 'approval',
+      threadId: 'thread-A'
+    })
+    expect(calls).toEqual([{ eventId: 'evt-a', kind: 'approval', outcome: 'allowed-once' }])
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(0)
+
+    // 重复提交：409（不是静默 200，也不是 404）
+    const again = await app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
+    })
+    expect(again.status).toBe(409)
+    expect(await again.json()).toEqual({ error: 'already-settled', eventId: 'evt-a' })
+  })
+
+  it('未知 eventId → 404 unknown-event（与 409 区分开）', async () => {
+    const hub = new InteractionHub()
+    const { app, calls } = appWithResponder(hub, () => Promise.resolve())
+    const response = await app.request('/api/kernel/interactions/evt-nope/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
+    })
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'unknown-event', eventId: 'evt-nope' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('提问回答 → 200 responded；answers 原样转给应答器；挂起摘除', async () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, {
+      kind: 'question',
+      eventId: 'evt-q',
+      threadId: 'thread-A',
+      questions: [
+        { id: 'q1', header: '选择', question: '选？', options: [{ label: 'A' }, { label: 'B' }] }
+      ]
+    })
+    const { app, calls } = appWithResponder(hub, () => Promise.resolve())
+    const response = await app.request('/kernel/interactions/evt-q/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'question',
+        answers: [{ id: 'q1', selected: ['A'], custom: '其它' }]
+      })
+    })
+    expect(response.status).toBe(200)
+    expect(calls).toEqual([
+      {
+        eventId: 'evt-q',
+        kind: 'question',
+        answer: { answers: [{ id: 'q1', selected: ['A'], custom: '其它' }] }
+      }
+    ])
+    expect(hub.snapshot('thread-A').questions.pending).toHaveLength(0)
+  })
+
+  it('body 不合法 → 400；审批只接受用户能做的两个决定', async () => {
+    const hub = new InteractionHub()
+    seededApproval(hub)
+    const { app } = appWithResponder(hub, () => Promise.resolve())
+    const badOutcome = await app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'unavailable' })
+    })
+    expect(badOutcome.status).toBe(400)
+    expect(await badOutcome.json()).toEqual({ error: 'outcome-not-a-user-decision' })
+
+    const badKind = await app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'nope' })
+    })
+    expect(badKind.status).toBe(400)
+  })
+
+  it('应答失败：$events 未就绪 → 503；其它 → 502；挂起必须留着可重试', async () => {
+    const hub = new InteractionHub()
+    seededApproval(hub)
+    const notReady = appWithResponder(hub, () =>
+      Promise.reject(new Error('kernel adapter: $events 流尚未就绪'))
+    )
+    const first = await notReady.app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
+    })
+    expect(first.status).toBe(503)
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(1)
+
+    const boom = appWithResponder(hub, () => Promise.reject(new Error('gateway/internal: boom')))
+    const second = await boom.app.request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
+    })
+    expect(second.status).toBe(502)
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(1)
+  })
+
+  it('没有应答器（flag 关/内核未起）→ 503，不静默成功', async () => {
+    const hub = new InteractionHub()
+    seededApproval(hub)
+    const response = await appWith(hub).request('/api/kernel/interactions/evt-a/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' })
+    })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'interactions-unavailable' })
+    expect(hub.snapshot('thread-A').approvals.pending).toHaveLength(1)
+  })
+})
+
 describe('P0：/ask-user/pending 不再是 404', () => {
   it('空态 → 200 + {pending: []}（composer 得以解锁）', async () => {
     const response = await appWith(new InteractionHub()).request('/ask-user/pending?threadId=thread-A')

@@ -13,14 +13,6 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createKyclawMastra } from '../../mastra/index'
-import { createGoalRouter, GOAL_ROUTE_PREFIX } from '../../mastra/routes/goal'
-import { createMcpRouter } from '../../mastra/routes/mcp'
-import { createMemoryRouter } from '../../mastra/routes/memory'
-import { createProjectsRouter } from '../../mastra/routes/projects'
-import { createSessionPptTemplatesRouter } from '../../mastra/routes/session-ppt-templates'
-import { createTasksRouter } from '../../mastra/routes/tasks'
-import { createTrajectoryRouter } from '../../mastra/routes/trajectory'
-import { createUsageRouter } from '../../mastra/routes/usage'
 import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
 import { resolveModel, selectProviderConfig, type KyclawModel } from '../model'
 import { detectRenderer, type PptRenderer } from '../../mastra/tools/render-ppt'
@@ -37,6 +29,7 @@ import { InteractionHub, applyInteractionEvent, feedKernelEvent } from '../kerne
 import { createKernelInteractionRouter } from '../kernel/kernel-interaction-route'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
 import { createKernelUiRouter, KERNEL_UI_ROUTE_PREFIX } from '../kernel/kernel-ui-route'
+import { createFeatureDisabledRouter } from '../features/feature-disabled'
 import {
   createKernelThreadsRouter,
   createKernelThreadsUnavailableRouter
@@ -68,6 +61,9 @@ const HOST = '127.0.0.1'
 
 /** 线程 API 的挂载前缀（路由本体在 src/mastra/routes/threads.ts） */
 export const THREADS_ROUTE_PREFIX = '/api/threads'
+
+/** goal 命令面 API 的挂载前缀（PB-022 下架后仅保留 501 mount） */
+export const GOAL_ROUTE_PREFIX = '/api/goal'
 
 /** MCP 管理 API 的挂载前缀（路由本体在 src/mastra/routes/mcp.ts） */
 export const MCP_ROUTE_PREFIX = '/api/mcp'
@@ -473,14 +469,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     mastra,
     storage,
     memory,
-    usage,
-    requestSnapshots,
     sessionProjects,
     sessionPptTemplates,
     telemetry,
     recall,
     rules,
-    tasks,
     goals
   } = await createKyclawMastra({
     dataDir: options.dataDir,
@@ -592,9 +585,16 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     return next()
   })
 
-  // PB-004/PB-025：交互路由（ask-user pending/cancel + hub 快照）。
+  // PB-004/PB-025/PB-026：交互路由（ask-user pending/cancel + hub 快照 + 写面）。
   // **两种 flag 都挂**：renderer 挂载即请求 /ask-user/pending，404 会让 composer 永久 disabled。
-  app.route('/', createKernelInteractionRouter({ hub: interactionHub }))
+  // 写面只在 flag 开（有 adapter）时可用；否则回 503，不静默成功。
+  app.route(
+    '/',
+    createKernelInteractionRouter({
+      hub: interactionHub,
+      ...(kernelAdapter === null ? {} : { responder: kernelAdapter })
+    })
+  )
 
   // B3.1b：flag 开才注册内核 chat 分支（同一路径、同一 token 闸门；先注册者优先于 Mastra 的 /chat）
   if (kernelAdapter !== null) {
@@ -607,7 +607,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const mastraServer = new MastraServer({ app, mastra })
   await mastraServer.init()
 
-  app.route('/api/tasks', createTasksRouter({ memory, store: tasks }))
+  app.route('/api/tasks', createFeatureDisabledRouter('tasks'))
 
   // 线程 API：0.2.0 例外项，直接走 DSH kernel session；不再注册旧 Mastra createThreadsRouter。
   // flag 关时也不回退旧实现：没有 kernel adapter 就返回 503 feature-disabled。
@@ -629,44 +629,35 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
         })
   )
 
-  // 项目映射 API（T18）：会话↔项目映射的读（侧栏按项目分组）/ 写（新建会话归属项目）
-  // PB-039：goal（/api/goal）与 threads/tasks 同一条 token 闸门；路由见 mastra/routes/goal.ts
-  app.route(GOAL_ROUTE_PREFIX, createGoalRouter(goals))
+  // PB-022：八条宿主 API 0.2.0 下架；mount 保留，旧实现文件保留到 PB-020 再删。
+  // 线程 API 是例外（走内核），见上；/api/kernel 是 PB-018 的命令面，不在下架清单。
+  app.route(GOAL_ROUTE_PREFIX, createFeatureDisabledRouter('goal'))
   // PB-018（B3.3 renderer 半端）：renderer 的命令菜单/结果卡/六行投影统一走这层网关。
   // flag 开 → 内核命令平面；flag 关 → 旧 goal store 降级（临时，PB-020 删）。旧 /api/goal 一行未改。
   app.route(
     KERNEL_UI_ROUTE_PREFIX,
     createKernelUiRouter({ adapter: kernelAdapter, legacyGoal: goals })
   )
-  app.route(PROJECTS_ROUTE_PREFIX, createProjectsRouter({ store: sessionProjects }))
+  app.route(PROJECTS_ROUTE_PREFIX, createFeatureDisabledRouter('projects'))
 
   // round 66：会话↔PPT 模板映射 API（对话页「PPT」胶囊的读/写；create_ppt 的缺省模板读同一份镜像）
-  app.route(
-    SESSION_PPT_TEMPLATES_ROUTE_PREFIX,
-    createSessionPptTemplatesRouter({ store: sessionPptTemplates })
-  )
+  app.route(SESSION_PPT_TEMPLATES_ROUTE_PREFIX, createFeatureDisabledRouter('ppt'))
 
   // MCP 管理 API（T12）：服务端是配置的权威，写盘走 updateSettings（同一条校验路）。
   // PB-023：MCP 连接已迁到 DSH 内核插件（下次启动读 home patch 生效），这里不再有 lifecycle 对齐；
   // 路由本身在 PB-022 下架前保留（界面/模型的写盘入口不变，只是不再"写完即连"）。
   // round 65：这里的 saveServers 与 agent 侧 add_mcp_server / remove_mcp_server **是同一个函数**
-  app.route(
-    MCP_ROUTE_PREFIX,
-    createMcpRouter({
-      readServers: mcpServersFor,
-      saveServers: saveMcpServers
-    })
-  )
+  app.route(MCP_ROUTE_PREFIX, createFeatureDisabledRouter('mcp'))
 
   // 记忆 API（T14）：working memory 的查看/编辑/清空 + 语义召回的运行状态（round 28）
-  app.route(MEMORY_ROUTE_PREFIX, createMemoryRouter({ memory, recall }))
+  app.route(MEMORY_ROUTE_PREFIX, createFeatureDisabledRouter('memory'))
 
   // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
-  app.route(USAGE_ROUTE_PREFIX, createUsageRouter({ store: usage, snapshots: requestSnapshots }))
+  app.route(USAGE_ROUTE_PREFIX, createFeatureDisabledRouter('usage'))
 
   // 轨迹数据面（用户反馈 015 / 017）：逐次模型请求的摘要 + 按 id 取正文。
   // 独立路由、独立表（request_snapshots / request_blobs）：用量那条腿坏掉不牵连轨迹。
-  app.route(TRAJECTORY_ROUTE_PREFIX, createTrajectoryRouter({ snapshots: requestSnapshots }))
+  app.route(TRAJECTORY_ROUTE_PREFIX, createFeatureDisabledRouter('trajectory'))
 
   const attempts = Math.max(1, options.attempts ?? DEFAULT_PORT_ATTEMPTS)
   let server: NodeServer | undefined

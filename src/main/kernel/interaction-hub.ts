@@ -194,6 +194,8 @@ export class InteractionHub {
   private readonly askUser = new Map<string, AskUserState>()
   private readonly pendingQuestions = new Map<string, Map<string, PendingQuestion>>()
   private readonly settledIds = new Map<string, Set<string>>()
+  /** 已结算/已应答的交互 eventId（写面用来区分 409 与 404；跨 thread 统一存） */
+  private readonly settledEventIds = new Set<string>()
   private readonly listeners = new Set<Listener>()
   private readonly maxResults: number
 
@@ -265,8 +267,28 @@ export class InteractionHub {
   dismissPending(threadId: string, id: string): boolean {
     const byId = this.pending.get(threadId)
     if (byId === undefined || !byId.delete(id)) return false
+    this.settledEventIds.add(id)
     this.notify(threadId)
     return true
+  }
+
+  /**
+   * PB-026 写面用：按 `eventId` 查这条交互是否还挂着（审批或提问），拿到它所属的 threadId。
+   * 找不到返回 null——调用方据此区分「未知 eventId」与「已结算」（见 `isSettledEvent`）。
+   */
+  findPendingByEventId(eventId: string): { threadId: string; kind: 'approval' | 'question' } | null {
+    for (const [threadId, byId] of this.pending) {
+      if (byId.has(eventId)) return { threadId, kind: 'approval' }
+    }
+    for (const [threadId, byId] of this.pendingQuestions) {
+      if (byId.has(eventId)) return { threadId, kind: 'question' }
+    }
+    return null
+  }
+
+  /** 这个 eventId 是否**曾经**挂着、现在已结算（用于 409 而不是 404，避免把重复提交说成"不存在"） */
+  isSettledEvent(eventId: string): boolean {
+    return this.settledEventIds.has(eventId)
   }
 
   /** PB-025：`user-questions/request` waterfall → 可应答的提问挂起（id = eventId） */
@@ -282,6 +304,7 @@ export class InteractionHub {
   dismissQuestion(threadId: string, eventId: string): boolean {
     const byId = this.pendingQuestions.get(threadId)
     if (byId === undefined || !byId.delete(eventId)) return false
+    this.settledEventIds.add(eventId)
     this.notify(threadId)
     return true
   }
