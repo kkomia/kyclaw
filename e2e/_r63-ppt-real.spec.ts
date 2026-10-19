@@ -2,12 +2,17 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, statS
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
-import { readZipEntries } from '../src/mastra/tools/artifact-check'
+import { unzipSync } from 'fflate'
 import { closeApp, launchApp, sendMessage, waitForChat } from './harness'
 
 /**
  * R63 真实场景探针（不进常规 e2e 闸门；只在 KYCLAW_R63_REAL=1 时运行）：
  * 真模型 + 真产出物，验证「用户在画廊固定模板 → create_ppt 真用上它」这条产品链路 ——
+ *
+ * ⚠️ 0.2.0 / PB-021 处置（待 Lead 登记 = obsolete/重定）：本探针依赖旧宿主工具 `create_ppt`
+ * 与真模型密钥；0.2.0 已把产出物能力迁到内核侧。此文件只做「去掉旧内置 mock 依赖」的机械迁移
+ * （zip 读取改用 devDependency `fflate`），**不再承诺在 0.2.0 跑绿**；
+ * 真产出物验收应在真内核插件路径另立手工探针（见 nia/kernel-stub-contract.md §7）。
  *
  *   1. 在对话页「PPT」胶囊里选「学术紫」（走 UI，与真实用户一致）；
  *   2. 发一条**不指定模板**的 PPT 需求，等回合跑完；
@@ -22,6 +27,11 @@ import { closeApp, launchApp, sendMessage, waitForChat } from './harness'
 const repoRoot = resolve(__dirname, '..')
 const evidenceDir = join(repoRoot, '.superpowers', 'sdd', '2026-10-10-kyclaw-mvp')
 const realUserData = join(process.env.APPDATA ?? '', 'kyclaw')
+
+/** zip 读取（旧宿主 readZipEntries 的同义实现；fflate 是仓库 devDependency） */
+function readZipEntries(bytes: Uint8Array): Map<string, Uint8Array> {
+  return new Map(Object.entries(unzipSync(bytes)))
+}
 
 function listFiles(dir: string): string[] {
   if (!existsSync(dir)) return []
@@ -118,7 +128,8 @@ test.describe('R63 真实场景（选模板 → 真模型出 PPT）', () => {
       ).toBeTruthy()
       const bytes = readFileSync(pptx as string)
       const entries = readZipEntries(new Uint8Array(bytes))
-      const slide1 = entries.get('ppt/slides/slide1.xml')?.toString('utf8') ?? ''
+      const slide1Bytes = entries.get('ppt/slides/slide1.xml')
+      const slide1 = slide1Bytes === undefined ? '' : new TextDecoder().decode(slide1Bytes)
       expect(slide1, '封面应是「学术紫」的 band 构图（左侧通栏色带 5B3FA8）').toContain('5B3FA8')
       copyFileSync(pptx as string, join(evidenceDir, '_r63-ppt-real-output.pptx'))
       console.log(

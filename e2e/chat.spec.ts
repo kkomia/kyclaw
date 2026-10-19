@@ -1,15 +1,17 @@
 import { expect, test } from '@playwright/test'
-import { MOCK_REPLY_CHUNKS, MOCK_WRITE_MARKER } from '../src/mastra/model'
 import { closeApp, launchApp, sendMessage, waitForChat } from './harness'
+import { STUB_REPLY_CHUNKS } from './kernel-stub/mock-reply'
 
 /**
- * 对话冒烟（plan T16 Step 2）：`KYCLAW_FORCE_MOCK=1`（R3）下走真链路——
- * 渲染端 → 内嵌 agent 服务（随机端口 + token）→ mock provider 的逐段流。
- * 断言用的是 mock 那份真身（`MOCK_REPLY_CHUNKS`，服务侧单测同一份），不是另抄的字符串。
+ * 对话冒烟（plan T16 Step 2；0.2.0 / PB-021 迁移到 kernel stub）：
+ * 渲染端 → 内嵌 agent 服务（随机端口 + token）→ **stub 内核进程**按协议回放逐段流。
+ *
+ * 断言用的分片来自 `e2e/kernel-stub/mock-reply.ts`（与 stub 默认分片同一份），
+ * 不再是旧内置 mock（0.2.0 随旧内核删除）。
  */
-const REPLY_FULL = MOCK_REPLY_CHUNKS.join('')
+const REPLY_FULL = STUB_REPLY_CHUNKS.join('')
 
-test('对话：mock 流式回复逐段到达（先首段、后全文）', async () => {
+test('对话：内核 stub 流式回复逐段到达（先首段、后全文）', async () => {
   const launched = await launchApp()
   const { page } = launched
 
@@ -22,8 +24,8 @@ test('对话：mock 流式回复逐段到达（先首段、后全文）', async 
 
     // 流式：首段先到，此刻还不是全文（后两段各隔 250ms，够看）
     const reply = page.getByTestId('message-text')
-    await expect(reply).toContainText(MOCK_REPLY_CHUNKS[0], { timeout: 20_000 })
-    expect(await reply.innerText()).not.toContain(MOCK_REPLY_CHUNKS[MOCK_REPLY_CHUNKS.length - 1])
+    await expect(reply).toContainText(STUB_REPLY_CHUNKS[0], { timeout: 20_000 })
+    expect(await reply.innerText()).not.toContain(STUB_REPLY_CHUNKS[STUB_REPLY_CHUNKS.length - 1])
 
     // 收尾：全文落地
     await expect(reply).toHaveText(REPLY_FULL, { timeout: 20_000 })
@@ -47,7 +49,7 @@ test('停止：流式中给的是停止钮；点停 → 回到发送钮，文本
 
     // 先等首段真的上屏再停：首段到之前点停等于什么都没验证（旧版断言会在这里空转）
     const reply = page.getByTestId('message-text')
-    await expect(reply).toContainText(MOCK_REPLY_CHUNKS[0], { timeout: 20_000 })
+    await expect(reply).toContainText(STUB_REPLY_CHUNKS[0], { timeout: 20_000 })
     await stop.click()
 
     // 停止后立刻回到"发送"态
@@ -68,7 +70,6 @@ test('停止：流式中给的是停止钮；点停 → 回到发送钮，文本
   }
 })
 
-/** 冒烟自带一次自检：E2E 认的口令与 mock 真身必须是同一个（否则审批冒烟会静默失联） */
-test('自检：mock 的写文件口令能被识别（E2E 与 src 共用一份）', () => {
-  expect(MOCK_WRITE_MARKER.test('创建 [[write:demo.txt]]')).toBe(true)
-})
+// 旧第三例「自检：mock 的写文件口令能被识别」随旧 mock 删除：
+// 0.2.0 的 write 工具在内核进程里执行，stub 只回放协议帧、不执行产品工具（不假装工具产出）。
+// 审批/写文件链路的 e2e 口径改为真内核集成探针（见 nia/kernel-stub-contract.md §5）。

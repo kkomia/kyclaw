@@ -8,7 +8,7 @@ import { closeApp, launchApp, sendMessage, waitForChat } from './harness'
  * 机制：侧栏的草稿行只在 activeId 还停在草稿上时渲染，而服务端镜像要等轮末才刷新 ——
  * 发送后、回复前切走，两边都不在，那一行就没了。修复 = 发送那一刻先物化成真线程。
  *
- * 这里跑真链路（KYCLAW_FORCE_MOCK=1，mock 逐段流 ≈750ms）：发送后立刻切走，那一行必须还在。
+ * 这里跑真链路（0.2.0：kernel stub 逐段流 ≈750ms，三段文本与旧 mock 逐字一致）：发送后立刻切走，那一行必须还在。
  * 断言给的窗口刻意短（500ms）：修复前它要等这一轮收尾（≈750ms 后）才回来，会落在这个窗口外。
  */
 test('发送后 AI 还没回就切走会话：侧栏那一行还在', async () => {

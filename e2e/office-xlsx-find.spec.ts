@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron, expect, test, type Frame } from '@playwright/test'
 import { strToU8, zipSync } from 'fflate'
+import { materializeStubKernel } from './kernel-stub/launcher'
 
 delete process.env.ELECTRON_RUN_AS_NODE
 const repoRoot = resolve(__dirname, '..')
@@ -69,12 +70,17 @@ test('P0：xlsx 打开不再崩（commands 模式断言消失）+ 查找两条�
     `${JSON.stringify({ theme: 'system' })}\n`,
     'utf8'
   )
+  // 0.2.0 / PB-021：内核替身（离线）。本 spec 不发消息，只要求应用能带内核起来。
+  const stub = materializeStubKernel({
+    rootDir: join(userDataDir, 'kernel-stub'),
+    logFile: join(userDataDir, 'kernel-stub.log')
+  })
   const app = await electron.launch({
     args: [repoRoot, `--user-data-dir=${userDataDir}`],
     cwd: repoRoot,
     env: {
       ...process.env,
-      KYCLAW_FORCE_MOCK: '1',
+      ...stub.env,
       KYCLAW_OFFICE_OPEN: fixture
     } as Record<string, string>
   })
