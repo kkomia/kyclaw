@@ -27,6 +27,9 @@ import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
 import { registerWorkbenchIpc } from './ipc/workbench'
+import { isKernelPortEnabled } from './kernel/feature-flag'
+import { defaultKernelRoot } from './kernel/kernel-layout'
+import { KernelStartupError, kernelFailureText } from './kernel/kernel-startup'
 import { createLocalModelService, type LocalModelService } from './llama/service'
 import { probeConfiguredProvidersQuietly } from './model-probe'
 import {
@@ -186,6 +189,13 @@ if (!app.requestSingleInstanceLock()) {
   /** 内嵌服务当前对外暴露的端点；服务没起来（或起失败）保持 null，IPC 侧会抛错 */
   let agentEndpoint: AgentEndpoint | null = null
 
+  /**
+   * B4 / 验收④：内核（或整个 agent 服务）起不来时的**可诊断文案**。
+   * `agent:endpoint` 在服务就绪前会轮询；一旦这里已有值就立刻抛该文案（不用干等 8s），
+   * 渲染端现有的错误卡对中文错误原样显示 —— 用户能看到「哪一步失败 + 错误码 + 退出码 + 日志路径」。
+   */
+  let agentStartupError: string | null = null
+
   /** 内嵌服务的追踪状态（T17）：服务没起来 = 没挂上导出 */
   let agentTelemetry: { langfuse: boolean } | null = null
   let agentRulesRegistered = false
@@ -210,6 +220,25 @@ if (!app.requestSingleInstanceLock()) {
 
     const userDataDir = app.getPath('userData')
     const secretsFile = secretsPath(userDataDir)
+    /**
+     * B4 / PB-006：内核启动参数（**只在 flag 开时注入**；flag 关不解析路径、不建目录、行为不变）。
+     *   - electronExecutable：安装版 = process.execPath（Electron-as-node 跑内核入口）；
+     *   - asarPath：内核根 —— 打包态 process.resourcesPath/kernel（extraResources 落的），
+     *     开发态 app.getAppPath()/resources/kernel（`pnpm fetch:kernel` 落的），
+     *     KYCLAW_KERNEL_ROOT 可覆盖（故障演练/排查）；
+     *   - dshHome：userData/dsh-home —— 内核数据不落仓库、不落安装目录（验收②）；
+     *   - logFile：userData/logs/kernel.log —— 启动失败可诊断（验收④）。
+     */
+    const kernelEnabled = isKernelPortEnabled()
+    const kernelRoot = kernelEnabled
+      ? defaultKernelRoot({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath(),
+          env: process.env
+        })
+      : ''
+    const kernelLogFile = join(userDataDir, 'logs', 'kernel.log')
     // 首轮设置/工作区 IPC 读取前补齐一次默认工作区；失败只记日志，不挡窗口启动。
     initializeDefaultWorkspace(userDataDir, app.getPath('home'))
 
@@ -277,7 +306,11 @@ if (!app.requestSingleInstanceLock()) {
     registerRulesIpc(userDataDir, { processorRegistered: () => agentRulesRegistered })
     // round 64：内置技能目录由这一层算（要 app），插件页总览与 agent 侧共用同一个路径
     registerPluginIpc(userDataDir, { builtinSkillsDir: builtinSkillsDir() })
-    registerAgentIpc(() => agentEndpoint)
+    registerAgentIpc(
+      () => agentEndpoint,
+      {},
+      () => agentStartupError
+    )
     // 模块 2：附件（PDF 文字层抽取在主进程跑，渲染端零新依赖）
     registerAttachmentsIpc()
     // 追踪通道（T17）：地址读 settings.json（与设置页写的是同一份），密钥在 secrets.json
@@ -411,10 +444,23 @@ if (!app.requestSingleInstanceLock()) {
         }
       },
       // round 64：内置技能目录（office 四件套）——agent 侧的技能清单与 use_skill 读的就是它
-      builtinSkillsDir: builtinSkillsDir()
+      builtinSkillsDir: builtinSkillsDir(),
+      // B4 / PB-006：内核迁移的真机注入（flag 关时整个字段不传，旧路径一行不变）。
+      // 内核根/DSH_HOME/日志落点全在这一处定；失败时 bootstrap 写 kernel.log 并抛带 code 的错误。
+      ...(kernelEnabled
+        ? {
+            kernel: {
+              electronExecutable: process.execPath,
+              asarPath: kernelRoot,
+              dshHome: join(userDataDir, 'dsh-home'),
+              logFile: kernelLogFile
+            }
+          }
+        : {})
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }
+        agentStartupError = null
         agentTelemetry = handle.telemetry
         agentRulesRegistered = handle.rules.processorRegistered
         agentProjectIdOf = handle.projectIdOf
@@ -434,7 +480,13 @@ if (!app.requestSingleInstanceLock()) {
       })
       .catch((error) => {
         agentRulesRegistered = false
-        console.error('[kyclaw] agent 服务启动失败', error)
+        // 验收④：内核启动失败 = 用户可见的可诊断错误（错误码/原因/退出码 + 日志路径）。
+        // 非内核类失败（端口/装配）用通用文案，别把 kernel.log 说成它们的日志。
+        agentStartupError =
+          error instanceof KernelStartupError
+            ? kernelFailureText(error, kernelLogFile)
+            : `agent 服务启动失败：${error instanceof Error ? error.message : String(error)}`
+        console.error('[kyclaw] agent 服务启动失败：', agentStartupError)
       })
 
     app.on('activate', () => {

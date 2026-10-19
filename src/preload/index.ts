@@ -53,6 +53,7 @@ import {
   type UpdateState
 } from '../shared/ipc'
 import { pdfExtractResultSchema } from '../shared/attachments'
+import { cleanIpcErrorMessage } from '../shared/ipc-error'
 import { translateResultSchema } from '../shared/translate'
 import {
   RULES_IPC_CHANNELS,
@@ -340,9 +341,14 @@ const knowledgeApi: KyclawKnowledgeApi = {
 /** 主进程回的端点：结构不对就抛（半截端点没法用，宁可让上层看到失败） */
 const agentApi: KyclawAgentApi = {
   endpoint: async () => {
-    const parsed = agentEndpointSchema.safeParse(
-      await ipcRenderer.invoke(IPC_CHANNELS.agent.endpoint)
-    )
+    let result: unknown
+    try {
+      result = await ipcRenderer.invoke(IPC_CHANNELS.agent.endpoint)
+    } catch (error) {
+      // B4 / 验收④：去掉 Electron 的 IPC 错误壳，内核失败原因（错误码/退出码/日志）原样到错误卡
+      throw new Error(cleanIpcErrorMessage(error))
+    }
+    const parsed = agentEndpointSchema.safeParse(result)
     if (!parsed.success) throw new Error('[kyclaw] agent 端点响应结构不合法')
     return parsed.data
   }
@@ -856,7 +862,9 @@ const officeApi: KyclawOfficeApi = {
       ok?: boolean
       message?: string
     }
-    return result.ok === true ? { ok: true } : { ok: false, message: result.message ?? 'session write failed' }
+    return result.ok === true
+      ? { ok: true }
+      : { ok: false, message: result.message ?? 'session write failed' }
   },
   sessionRestore: async () => {
     const parsed = officeSessionRestoreResultSchema.safeParse(

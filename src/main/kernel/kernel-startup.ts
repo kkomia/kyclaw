@@ -13,10 +13,14 @@
 
 export type KernelStartupCode =
   | 'KERNEL_NOT_CONFIGURED'
+  | 'KERNEL_MANIFEST_MISSING'
+  | 'KERNEL_MANIFEST_INVALID'
+  | 'KERNEL_SNAPSHOT_MISSING'
   | 'KERNEL_ENTRY_MISSING'
   | 'KERNEL_SPAWN_FAILED'
   | 'KERNEL_EXITED'
   | 'KERNEL_NOT_READY'
+  | 'KERNEL_START_FAILED'
 
 export interface KernelStartupErrorDetails {
   /** 进程退出码（仅 EXITED 类有） */
@@ -87,10 +91,36 @@ export function kernelNotConfiguredMessage(missing: MissingConfig): string {
  * 绝不把空串交给 `spawn()`（Node 会同步抛 `TypeError: The argument 'file' cannot be empty`）。
  */
 export function assertKernelLaunchConfigured(input: KernelLaunchConfigInput): void {
-  const executable = typeof input.electronExecutable === 'string' ? input.electronExecutable.trim() : ''
+  const executable =
+    typeof input.electronExecutable === 'string' ? input.electronExecutable.trim() : ''
   const kernelRoot = typeof input.kernelRoot === 'string' ? input.kernelRoot.trim() : ''
   if (executable !== '' && kernelRoot !== '') return
   const missing: MissingConfig =
-    executable === '' && kernelRoot === '' ? 'both' : executable === '' ? 'executable' : 'kernel-root'
+    executable === '' && kernelRoot === ''
+      ? 'both'
+      : executable === ''
+        ? 'executable'
+        : 'kernel-root'
   throw new KernelStartupError('KERNEL_NOT_CONFIGURED', kernelNotConfiguredMessage(missing))
+}
+
+/** 任意错误 → 带 code 的内核启动错误（bootstrap 在 spawn 之外失败时也走同一套口径） */
+export function asKernelStartupError(
+  error: unknown,
+  fallbackCode: KernelStartupCode = 'KERNEL_START_FAILED'
+): KernelStartupError {
+  if (error instanceof KernelStartupError) return error
+  const detail = error instanceof Error ? error.message : String(error)
+  return new KernelStartupError(fallbackCode, `内核启动失败（${fallbackCode}）：${detail}`)
+}
+
+/**
+ * 给用户看的可诊断文案（IPC → ErrorCard；也会写进 kernel.log）。
+ * 不改写已经带 code/退出码/入口的 message，只补日志落点（验收④：状态码/原因/退出码 + 日志）。
+ */
+export function kernelFailureText(error: unknown, logFile?: string): string {
+  const failure = asKernelStartupError(error)
+  return logFile === undefined || logFile === ''
+    ? failure.message
+    : `${failure.message}\n日志：${logFile}`
 }

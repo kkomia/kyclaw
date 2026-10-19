@@ -48,6 +48,12 @@ files:
   # 同目录找引擎包与 koffi —— asar 内那条路径它算不出来。不加这条会被 asarUnpack 的
   # resources/** 规则再抄一份进 app.asar.unpacked（白胖 194MB）。
   - '!resources/libreoffice-kit/**'
+  # 内核快照（0.2.0 / B4 / PB-006）：113.6 MiB / 11,935 文件的 rc.2 快照**必须不进 asar**
+  # （内核树要按真实文件路径启动 Node；node-pty 还要从磁盘 spawn 自己的 exe）。它由下面的
+  # extraResources 原样落到安装目录 resources/kernel/；不加这条会被 asarUnpack 的 resources/**
+  # 再抄一份进 app.asar.unpacked（白胖 113.6 MiB）。
+  # 构建输入由 `pnpm fetch:kernel` 落到 resources/kernel/rc.2（不进 git，见该目录 README）。
+  - '!resources/kernel/**'
   # 历史构建输出目录（round 62/63 的 dist-alt / dist-r63 等）**不进包**：electron-builder 只自动排除
   # 它自己的输出目录（directories.output，即 dist/），其他 dist-* 会被当普通目录收进去 ——
   # 实测 `pnpm package` 出来的 app.asar 里塞了 4.3GB 的旧构建产物（dist-r63 的 asar 又把 dist-alt
@@ -107,6 +113,20 @@ extraResources:
       - '!node_modules/**'
   - from: resources/libreoffice-kit/node_modules
     to: libreoffice-kit/node_modules
+    filter:
+      - '**/*'
+  # 内核快照（0.2.0 / B4 / PB-006）：仓库 `resources/kernel/`（`pnpm fetch:kernel` 落的
+  # current.json + rc.2/ 树）原样拷到安装目录 `resources/kernel/`。主进程按
+  # `process.resourcesPath/kernel/current.json` 找版本目录，再用 Electron-as-node 跑
+  # `kernel/<version>/node_modules/@deepseek-ai/dsh/lib/bin.js web`。
+  #
+  # 为什么整目录原样拷（不 tar.gz、不裁剪）：
+  #   · 内核树要从磁盘直接执行 bin.js / node-pty 的 exe，asar 外最自然；
+  #   · 不做"首次解压"：安装包落地即可 spawn，没有解压幂等/校验/并发问题；
+  #   · 版本目录天然并列，换内核 = 发新 app 换 current.json 指针（升级不必重装）。
+  # 注意：上面 files 的 `!resources/kernel/**` 必须与这条配对，否则会双份（+113.6 MiB）。
+  - from: resources/kernel
+    to: kernel
     filter:
       - '**/*'
 # asar 里 dlopen 不了 .node：libsql 的原生绑定（@libsql/win32-x64-msvc/index.node）必须解出来，

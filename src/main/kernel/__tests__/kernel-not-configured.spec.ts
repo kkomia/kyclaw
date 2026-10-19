@@ -95,4 +95,27 @@ describe('PB-017：flag 开但内核入口未配置 → 可诊断错误（不是
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
     }
   })
+
+  it('`.asar` 根必须进入 spawn 分支（plain Node 看不见 asar 内部，不能提前判 KERNEL_ENTRY_MISSING）', async () => {
+    const dir = tempDir()
+    try {
+      const failure = await startKernelProcess({
+        electronExecutable: process.execPath,
+        // 本机不存在的 .asar：plain Node 的 existsSync 看不见内部，按形态放行 → node 自己报 MODULE_NOT_FOUND
+        asarPath: join(dir, 'nope.asar'),
+        dshHome: join(dir, 'home'),
+        readyTimeoutMs: 15_000
+      }).then(
+        () => null,
+        (error: unknown) => error
+      )
+      expect(failure).toBeInstanceOf(Error)
+      expect(codeOf(failure)).not.toBe('KERNEL_ENTRY_MISSING')
+      // 真进入 spawn 后 node 找不到 asar 内的入口：EXITED（stderr 里带 MODULE_NOT_FOUND，可诊断）
+      expect(codeOf(failure)).toBe('KERNEL_EXITED')
+      expect((failure as Error).message).toContain('KERNEL_EXITED')
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    }
+  }, 30_000)
 })

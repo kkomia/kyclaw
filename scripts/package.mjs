@@ -24,13 +24,32 @@
  * 环境照传：pnpm 会把 .npmrc 的镜像写成 npm_config_electron_mirror /
  * npm_config_electron_builder_binaries_mirror，Electron 与 NSIS 的下载靠它走 npmmirror。
  *
+ * **构建环境前置（0.2.0 本机实测踩过，换机器/CI 必看）**：
+ *   1. electron-builder 的 pnpm node-module collector 会 `spawn powershell.exe` 再执行
+ *      `pnpm list --prod --json --depth Infinity`。Windows 上 PATH 必须能找到
+ *      `powershell.exe`（`C:\Windows\System32\WindowsPowerShell\v1.0`）**和** `pnpm` 可执行文件，
+ *      否则报 `spawn powershell.exe ENOENT` / `No JSON content found in output`（不是打包配置问题）。
+ *      本机（DSH 运行时）没有 pnpm 可执行文件，出包时用了一个本地 `.cmd` shim 把 pnpm.mjs 转发出来。
+ *   2. **不要用 `| Tee-Object` 包住 `pnpm package` 判成败**：Tee 的退出码会盖掉真实构建退出码，
+ *      看起来 exit 0 实际 electron-builder 已经失败（0.2.0 本机实测踩过）。要留日志就
+ *      `*> build.log` 后再看 `$LASTEXITCODE`。
+ *
  * 纯函数（expectedInstallerName / staleOutputs / cleanStaleOutputs / projectManifest /
  * releaseNotesPath / releaseNotesRelativePath / releaseNotesProblem / channelReleaseProblem /
  * bundledNotesProblem）导出供最小验证：直接执行才跑打包流程，被 `import()` 时只拿函数
  * （见终审 fix wave 报告的验证记录；发行日志那几条同时被 src/main/__tests__/release-notes-scripts.spec.ts 钉住）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  statSync
+} from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -43,6 +62,12 @@ const LLAMA_EXE = 'llama-server.exe'
 /** 随包的 LibreOffice 渲染引擎（round 68）：`pnpm fetch:libreoffice-kit` 落的 npm 平铺目录 */
 const KIT_DIR = join(ROOT, 'resources', 'libreoffice-kit')
 const KIT_CLI_RELATIVE = 'node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js'
+/**
+ * 随包内核快照（0.2.0 / B4 / PB-006）：`pnpm fetch:kernel` 落的 `resources/kernel/`
+ * （current.json + rc.2/ 树）。构建输入**不进 git**；出包前缺件直接停，出包后核对随包副本。
+ */
+const KERNEL_DIR = join(ROOT, 'resources', 'kernel')
+const KERNEL_SCRIPT_RELATIVE = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 /**
  * 随包引擎包里的关键件（**相对引擎包目录**）。`bin/libreoffice-kit.exe` 是自包含的引擎本体，
  * `licenses/` 与 `sources/` 是 MPL-2.0 的分发义务（许可文本 + 源码配方，见 THIRD_PARTY_NOTICES 第 3 节），
@@ -315,6 +340,110 @@ export function bundledNotesProblem(unpackedResourcesDir, version, notes) {
   return null
 }
 
+/**
+ * 读 asar 头（只读头部，不把 264MB 的 app.asar 整个读进内存）。
+ * asar 格式：4B(=4) + 4B(头 pickle 长度) + 4B(=头 JSON 长度?) + 4B(JSON 字节数)，
+ * 头部 JSON 从 offset 16 开始、长度在 offset 12（app-builder-lib 用的 @electron/asar 同款）。
+ */
+export function asarHeader(asarFile) {
+  const fd = openSync(asarFile, 'r')
+  try {
+    const sizeBuf = Buffer.alloc(16)
+    readSync(fd, sizeBuf, 0, 16, 0)
+    const headerSize = sizeBuf.readUInt32LE(12)
+    if (headerSize <= 0 || headerSize > 64 * 1024 * 1024) {
+      throw new Error(`asar 头部长度不合法：${String(headerSize)}（文件没坏？）`)
+    }
+    const headerBuf = Buffer.alloc(headerSize)
+    readSync(fd, headerBuf, 0, headerSize, 16)
+    return JSON.parse(headerBuf.toString('utf8'))
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** asar 里有没有某个路径（按 files 树逐段走；**不做字符串搜索**——头里是嵌套对象、不是路径串） */
+export function asarContainsPath(asarFile, segments) {
+  let node = asarHeader(asarFile)
+  for (const segment of segments) {
+    if (typeof node !== 'object' || node === null) return false
+    const files = node.files
+    if (typeof files !== 'object' || files === null || !(segment in files)) return false
+    node = files[segment]
+  }
+  return true
+}
+
+/** 内核树自检的共用部分（仓库输入与随包副本同口径）：current.json + 版本目录 + SNAPSHOT + 入口 */
+function kernelTreeProblem(kernelDir, label) {
+  const currentFile = join(kernelDir, 'current.json')
+  if (!existsSync(currentFile)) {
+    return (
+      `缺内核版本指针（${label}）：${currentFile}\n` +
+      '  先跑 `pnpm fetch:kernel`（快照 113.6 MiB 不入库，见 resources/kernel/README.md）'
+    )
+  }
+  let current
+  try {
+    current = JSON.parse(readFileSync(currentFile, 'utf8'))
+  } catch (error) {
+    return `内核 current.json 解析失败（${label}）：${error instanceof Error ? error.message : String(error)}`
+  }
+  if (
+    typeof current !== 'object' ||
+    current === null ||
+    typeof current.version !== 'string' ||
+    current.version === '' ||
+    typeof current.path !== 'string' ||
+    current.path === ''
+  ) {
+    return `内核 current.json 缺 version/path（${label}）：${currentFile}`
+  }
+  const versionDir = join(kernelDir, current.path)
+  const problems = []
+  if (!existsSync(join(versionDir, 'SNAPSHOT.json'))) {
+    problems.push(`缺 ${join(versionDir, 'SNAPSHOT.json')}`)
+  }
+  const script = join(versionDir, ...KERNEL_SCRIPT_RELATIVE.split('/'))
+  if (!existsSync(script)) problems.push(`缺内核入口 ${script}`)
+  if (problems.length > 0) {
+    return (
+      `内核快照不完整（${label}，版本 ${current.version}）：\n  - ${problems.join('\n  - ')}\n` +
+      '  重新跑 `pnpm fetch:kernel -- --force`，或核对 resources/kernel/README.md 的 SHA256'
+    )
+  }
+  return null
+}
+
+/** 出包前自检：仓库的 resources/kernel 必须是完整快照（缺件不接包） */
+export function kernelInputProblem(kernelDir = KERNEL_DIR) {
+  return kernelTreeProblem(kernelDir, 'resources/kernel')
+}
+
+/**
+ * 出包后自检（验收③/⑤）：随包 `resources/kernel` 与仓库输入逐项一致 —— 版本指针/入口/
+ * SNAPSHOT 在，文件数一致，current.json 的版本与 SHA256 一致（SHA256 就是取证值）。
+ */
+export function kernelBundledProblem(unpackedResourcesDir, kernelDir = KERNEL_DIR) {
+  const bundledDir = join(unpackedResourcesDir, 'kernel')
+  const problem = kernelTreeProblem(bundledDir, 'resources/kernel（随包）')
+  if (problem !== null) return problem
+  const expectedFiles = listFiles(kernelDir).length
+  const bundledFiles = listFiles(bundledDir).length
+  if (bundledFiles !== expectedFiles) {
+    return `随包内核文件数=${String(bundledFiles)}，仓库输入=${String(expectedFiles)}（extraResources 漏拷/多拷？）`
+  }
+  const input = JSON.parse(readFileSync(join(kernelDir, 'current.json'), 'utf8'))
+  const bundled = JSON.parse(readFileSync(join(bundledDir, 'current.json'), 'utf8'))
+  if (input.version !== bundled.version) {
+    return `随包内核版本=${String(bundled.version)}，仓库输入=${String(input.version)}`
+  }
+  if (String(input.sha256).toLowerCase() !== String(bundled.sha256).toLowerCase()) {
+    return `随包内核 SHA256 与仓库输入不一致：${String(bundled.sha256)} vs ${String(input.sha256)}`
+  }
+  return null
+}
+
 function main() {
   try {
     // 本机嵌入引擎的运行时必须是现成的：缺了它打出来的包"本地模型"一路直接不可用
@@ -349,6 +478,11 @@ function main() {
     const releaseNotes = readFileSync(notesFile, 'utf8')
     const notesProblem = releaseNotesProblem(manifest.version, releaseNotes)
     if (notesProblem !== null) fail(notesProblem)
+
+    // 0.2.0 / B4：内核快照随包（resources/kernel → 安装目录 resources/kernel/）。
+    // 缺件必须在**清上一次产物之前**停：快照 113.6 MiB 不入库，没跑 fetch:kernel 就打不出可用包。
+    const kernelProblem = kernelInputProblem()
+    if (kernelProblem !== null) fail(kernelProblem)
 
     const cleared = cleanStaleOutputs()
     if (cleared.length > 0) {
@@ -393,6 +527,37 @@ function main() {
           '  会把平台相关的可选依赖 @libsql/win32-x64-msvc 漏掉）。请用 `pnpm package`。'
       )
     }
+    // 0.2.0 / B4 / PB-006：内核快照随包（验收①③）
+    //  ① 随包 resources/kernel/ 必须完整（current.json / 版本目录 / SNAPSHOT.json / bin.js，且与仓库输入一致）；
+    //  ② 它**只能**走 extraResources：app.asar 里出现 resources/kernel（files 的排除失效）或
+    //     app.asar.unpacked/resources/kernel 出现（asarUnpack 的 resources/** 命中）都算双份/起不来。
+    const unpackedResourcesDir = join(DIST_DIR, 'win-unpacked', 'resources')
+    const kernelBundleProblem = kernelBundledProblem(unpackedResourcesDir)
+    if (kernelBundleProblem !== null) fail(kernelBundleProblem)
+    const asarFile = join(unpackedResourcesDir, 'app.asar')
+    if (asarContainsPath(asarFile, ['resources', 'kernel'])) {
+      fail(
+        'app.asar 里混进了 resources/kernel（electron-builder.yml 的 files `!resources/kernel/**` 失效了？）\n' +
+          '  内核必须只走 extraResources：装进 asar 会让包体双份、且内核树/原生件从 asar 里起不来。'
+      )
+    }
+    if (existsSync(join(UNPACKED_DIR, 'resources', 'kernel'))) {
+      fail(
+        'app.asar.unpacked/resources/kernel 出现了一份（asarUnpack 的 resources/** 命中了）——\n' +
+          '  与 extraResources 的 resources/kernel 构成双份，白胖 113.6 MiB。'
+      )
+    }
+    const asarBytes = statSync(asarFile).size
+    if (asarBytes > 300 * 1024 * 1024) {
+      fail(
+        `app.asar 已经 ${(asarBytes / 1024 / 1024).toFixed(1)} MB（基线 264 MB）——内核多半被卷进 asar 了。`
+      )
+    }
+    const kernelOutDir = join(unpackedResourcesDir, 'kernel')
+    const kernelBytes = listFiles(kernelOutDir).reduce(
+      (sum, name) => sum + statSync(join(kernelOutDir, name)).size,
+      0
+    )
     // 引擎运行时走 extraResources：应当在 resources/llama/ 下（**不在** app.asar.unpacked 里，
     // 也不该出现在 app.asar 内部——它也进不了 asar：exe/dll 得从磁盘直接执行）
     const engineDir = join(DIST_DIR, 'win-unpacked', 'resources', 'llama')
@@ -501,6 +666,13 @@ function main() {
     )
     console.log(
       `[package] 随包渲染引擎：resources/libreoffice-kit 共 ${(kitBytes / 1024 / 1024).toFixed(1)} MB（未压缩，含许可与源码配方）`
+    )
+    const kernelVersion = JSON.parse(
+      readFileSync(join(unpackedResourcesDir, 'kernel', 'current.json'), 'utf8')
+    ).version
+    console.log(
+      `[package] 随包内核：resources/kernel 共 ${(kernelBytes / 1024 / 1024).toFixed(1)} MB（未压缩，版本 ${String(kernelVersion)}；` +
+        'app.asar 内无 kernel / unpacked 无双份，已核对）'
     )
     console.log(
       `[package] 本版本发行日志：build/${releaseNotesRelativePath(manifest.version)}（` +

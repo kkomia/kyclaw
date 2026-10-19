@@ -5,12 +5,16 @@
  * 隔离：`DSH_HOME` 由调用方指到应用数据目录下的子目录，绝不指用户 `~/.dsh`。
  */
 import { spawn } from 'node:child_process'
-import { planKernelLaunch } from './kernel-entry'
+import { existsSync } from 'node:fs'
+import { chooseKernelScript, planKernelLaunch } from './kernel-entry'
 import { KernelStartupError, assertKernelLaunchConfigured } from './kernel-startup'
 
 export interface StartKernelProcessOptions {
   electronExecutable: string
+  /** 内核根（旧布局 = app.asar 根；新布局 = 版本目录 `<resources/kernel>/<version>`） */
   asarPath: string
+  /** 可选：显式内核树根（给了就优先按 `<root>/node_modules/...` 找入口） */
+  kernelRoot?: string
   /** 应用数据目录下的**专用** home（调用方保证不在用户 `~/.dsh`） */
   dshHome: string
   extraEnv?: Readonly<Record<string, string>>
@@ -55,9 +59,17 @@ export async function startKernelProcess(
     electronExecutable: options.electronExecutable,
     kernelRoot: options.asarPath
   })
+  // PB-006：两种布局按"入口实际存在"选（不靠版本号/flag 猜）；都不存在时抛 KERNEL_ENTRY_MISSING
+  const script = chooseKernelScript({
+    asarPath: options.asarPath,
+    ...(options.kernelRoot === undefined ? {} : { kernelRoot: options.kernelRoot }),
+    exists: existsSync
+  })
   const plan = planKernelLaunch({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,
+    ...(options.kernelRoot === undefined ? {} : { kernelRoot: options.kernelRoot }),
+    scriptPath: script.scriptPath,
     dshHome: options.dshHome,
     ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv })
   })

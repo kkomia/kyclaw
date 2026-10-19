@@ -28,6 +28,7 @@
     "build": "electron-vite build",
     "fetch:llama": "node scripts/fetch-llama.mjs",
     "fetch:libreoffice-kit": "node scripts/fetch-libreoffice-kit.mjs",
+    "fetch:kernel": "node scripts/fetch-kernel.mjs",
     "package": "node scripts/package.mjs",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
     "postinstall": "install-electron && node scripts/app-deps.mjs",

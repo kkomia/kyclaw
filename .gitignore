@@ -17,6 +17,11 @@ resources/llama/
 # render_ppt 随包的 LibreOffice 渲染引擎（round 68）：194MB 级二进制，不入库，
 # 用 `pnpm fetch:libreoffice-kit` 获取（版本 pin 在脚本里，npm 按 package-lock 的 integrity 校验）
 resources/libreoffice-kit/
+# 内核快照（0.2.0 / B4 / PB-006）：113.6 MiB / 11,935 文件，不入库，
+# 用 `pnpm fetch:kernel` 从冻结的 tar.gz 解出（版本 + SHA256 + 文件数 pin 在脚本里）。
+# README 是**入库**的可追溯锚点（反排除；否则下面的 ** 会把它一起吃掉）。
+resources/kernel/**
+!resources/kernel/README.md
 
 # 构建产物与临时目录（不入库）
 *.tsbuildinfo

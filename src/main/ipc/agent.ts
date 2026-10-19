@@ -32,7 +32,12 @@ function delay(ms: number): Promise<void> {
 
 export function registerAgentIpc(
   getEndpoint: () => AgentEndpoint | null,
-  policy: AgentEndpointWaitPolicy = {}
+  policy: AgentEndpointWaitPolicy = {},
+  /**
+   * B4 / 验收④：服务启动失败时的人话（内核错误码/退出码/日志路径）。
+   * 给了就**立刻**抛，不用等满 timeout —— 内核起不来是确定事实，让用户早点看到原因。
+   */
+  getFailure: () => string | null = () => null
 ): void {
   const timeoutMs = policy.timeoutMs ?? AGENT_ENDPOINT_WAIT_MS
   const intervalMs = policy.intervalMs ?? AGENT_ENDPOINT_POLL_MS
@@ -43,6 +48,9 @@ export function registerAgentIpc(
     for (;;) {
       const endpoint = getEndpoint()
       if (endpoint !== null) return endpoint
+      // 端点没有、但已经确定起不来：立即给可诊断错误（优先于继续轮询）
+      const failure = getFailure()
+      if (failure !== null) throw new Error(failure)
       const remaining = deadline - Date.now()
       if (remaining <= 0) throw new Error('agent 服务尚未启动')
       await delay(Math.min(intervalMs, remaining))

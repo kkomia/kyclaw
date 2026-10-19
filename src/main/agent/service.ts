@@ -192,7 +192,16 @@ export interface AgentServerOptions {
    * ⚠️ 不要把 `DSH_TOOLS_MODE` 设成 `none`：内核 boot 会因 tools 服务缺失失败
    * （8 个插件等待 tools），B3.1a 已实测踩坑。
    */
-  kernel?: { electronExecutable: string; asarPath: string; extraEnv?: Record<string, string> }
+  kernel?: {
+    electronExecutable: string
+    /** B4：内核根（打包态 = process.resourcesPath/kernel；开发态 = app.getAppPath()/resources/kernel） */
+    asarPath: string
+    /** B4：内核 home（生产 = userData/dsh-home；缺省 adapter 兜底 appDataDir/dsh-kernel-home） */
+    dshHome?: string
+    /** B4：内核启动日志落点（生产 = userData/logs/kernel.log） */
+    logFile?: string
+    extraEnv?: Record<string, string>
+  }
 }
 
 export interface AgentServerHandle extends AgentEndpoint {
@@ -536,6 +545,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     electronExecutable: options.kernel?.electronExecutable ?? '',
     asarPath: options.kernel?.asarPath ?? '',
     appDataDir: options.dataDir,
+    ...(options.kernel?.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
+    ...(options.kernel?.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
     ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
   }).catch(async (error: unknown) => {
     // flag 开但内核起不来：不能留半个 Mastra/storage（与下面 listen 失败同口径）
