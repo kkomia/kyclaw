@@ -223,13 +223,15 @@ export interface DependencyWasmBaseline {
   readonly why: string
 }
 
-/** pdfjs 的 4 个 + xxhash 的 1 个：缺席时 PDF 预览 / 哈希只会在运行时炸，包能装、点开就崩（CR-24） */
+/**
+ * pdfjs 的 4 个 wasm：缺席时 PDF 预览只会在运行时炸，包能装、点开就崩（CR-24）。
+ * 0.2.0 移除 `@mastra/libsql` 后不再有 `@libsql`；`xxhash-wasm` 同一批从 lock/package 移除，不要再加回。
+ */
 export const DEPENDENCY_WASM_BASELINE: readonly DependencyWasmBaseline[] = [
   { name: 'quickjs-eval.wasm', packageName: 'pdfjs-dist', why: 'PDF 内脚本沙箱' },
   { name: 'openjpeg.wasm', packageName: 'pdfjs-dist', why: 'JPEG2000 图像解码' },
   { name: 'jbig2.wasm', packageName: 'pdfjs-dist', why: 'JBIG2 扫描件解码' },
-  { name: 'qcms_bg.wasm', packageName: 'pdfjs-dist', why: '色彩管理' },
-  { name: 'xxhash.wasm', packageName: 'xxhash-wasm', why: '哈希' }
+  { name: 'qcms_bg.wasm', packageName: 'pdfjs-dist', why: '色彩管理' }
 ]
 
 /** Office 隔离面（`out/renderer/**`）应有的 wasm 数：4 DOCX + 1 XLSX + 1 PPTX */
@@ -256,12 +258,12 @@ function insidePackageDir(path: string, packageName: string): boolean {
  * 单测：`src/main/__tests__/packaged-wasm-gate.spec.ts`（离线、不碰打包件）。
  *
  * 两条互补、互不替代：
- *   1. **Office 面只许 6 个**（`out/renderer/**` 里、**且不属于依赖基线那 5 个名字**的 wasm）：
+ *   1. **Office 面只许 6 个**（`out/renderer/**` 里、**且不属于依赖基线那 4 个名字**的 wasm）：
  *      4 DOCX + 1 XLSX + 1 PPTX，不许漏打、不许多打。这 6 个名字带内容 hash（Vite 产物），
  *      所以按**数量**钉，不钉名字。
- *      排除依赖名（R2-06②）：万一哪天 Vite 把 pdfjs/xxhash 的 wasm 也收进了 `out/renderer`，
+ *      排除依赖名（R2-06②）：万一哪天 Vite 把 pdfjs 的 wasm 也收进了 `out/renderer`，
  *      它们不会把 6 顶成 7 造成误报；这种"依赖 wasm 被收进渲染端"只在依赖侧缺席时才作为线索报出。
- *   2. **依赖自带 5 个按「包目录 + 名字」逐个必须在**（pdfjs 4 + xxhash 1，见
+ *   2. **依赖自带 4 个按「包目录 + 名字」逐个必须在**（pdfjs 4，见
  *      {@link DEPENDENCY_WASM_BASELINE}）：将来 `files` 再收窄、或依赖升级把文件挪走/删掉，
  *      这里点名缺哪个、期望路径是什么、实际找到的同名文件在哪，而不是留给运行时去发现。
  *
@@ -303,7 +305,7 @@ export function wasmGateProblems(asarEntries: readonly string[]): string[] {
     problems.push(
       `app.asar 里缺依赖自带的 wasm（${String(missing.length)} 个；期望路径模式含 pnpm 的 ` +
         `\`.pnpm/<包>@<版本>/node_modules/<包>/**\` 深路径）：\n- ${missing.join('\n- ')}\n` +
-        '（pdfjs 预览 / xxhash 的运行时；打包排除项收窄、或依赖升级把它们挤掉了？）'
+        '（pdfjs 预览的运行时；打包排除项收窄、或依赖升级把它们挤掉了？）'
     )
   }
   return problems
@@ -371,11 +373,8 @@ export function packagedResourceProblems(layout: PackagedLayout, version: string
   if (!statSync(layout.unpacked, { throwIfNoEntry: false })?.isDirectory()) {
     problems.push(`没有 ${layout.unpacked}（asarUnpack 没生效？）`)
   } else {
-    if (findBySuffix(layout.unpacked, /@libsql[\\/]win32-x64-msvc[\\/]index\.node$/) === null) {
-      problems.push(
-        `app.asar.unpacked 里没有 @libsql 的 .node（装了也起不了库）：${layout.unpacked}`
-      )
-    }
+    // 0.2.0 移除 @mastra/libsql 后不再有 @libsql；xxhash-wasm 同批移除。
+    // 解包区的真实约束改为 node-pty 预构建件（下面）；pdfjs 的 4 个 wasm 由 wasmGateProblems 管。
     if (
       findBySuffix(layout.unpacked, /node-pty[\\/]prebuilds[\\/]win32-x64[\\/]pty\.node$/) === null
     ) {
