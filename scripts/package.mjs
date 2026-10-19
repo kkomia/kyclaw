@@ -7,8 +7,9 @@
  *      但 electron-builder 本身不发布；它在 CI 环境里默认会试着发布，这里永远关死）；
  *   2. 打包前**预清上一次的打包输出**（只清 electron-builder 自己写的那些条目，dist/ 里别的
  *      内容一律不碰），打包后自检两个"构建成功但装完会发现"的坑：**本版本**（绑 package.json
- *      的 name/version）的安装包在不在、asarUnpack 有没有真的把 libsql 的原生绑定
- *      （@libsql/win32-x64-msvc/index.node）与 ?asset 资源解到 app.asar.unpacked（T15①）。
+ *      的 name/version）的安装包在不在、asarUnpack 有没有真的把原生绑定（0.2.0 起为 node-pty 等
+ *      通用 `.node`；0.1.6 的 @libsql 已随 `@mastra/libsql` 移除）与 ?asset 资源解到
+ *      app.asar.unpacked（T15①），并正向校验内核快照里的 `@img/sharp-win32-x64`（PB-040）。
  *
  * 0.1.1 起还管**发行日志**：`build/release-notes/<版本>.md` 随包进渠道 yml 的 releaseNotes
  * （更新界面「关于」栏显示的那段更新内容）。两头自检：出包前文件必须在、且写着本版本的号
@@ -517,14 +518,12 @@ function main() {
 
     if (!existsSync(UNPACKED_DIR)) fail(`没有解包目录：${UNPACKED_DIR}（asarUnpack 没生效）`)
     const unpacked = listFiles(UNPACKED_DIR)
-    const libsqlBindings = unpacked.filter(
-      (path) => path.endsWith('.node') && path.includes('@libsql')
-    )
-    if (libsqlBindings.length === 0) {
+    // 0.2.0 / Step 2 B：移除 @mastra/libsql 后不再依赖 @libsql；本检查改为通用的 asarUnpack 校验
+    // （至少一个原生 .node），不再硬绑已删除的 @libsql/win32-x64-msvc。
+    const nativeBindings = unpacked.filter((path) => path.endsWith('.node'))
+    if (nativeBindings.length === 0) {
       fail(
-        'app.asar.unpacked 里没有 @libsql 的 .node——装了也起不了库。\n' +
-          '  常见原因：**没有经 pnpm 跑**（直接 `node scripts/package.mjs` 时 electron-builder 认不出 pnpm，\n' +
-          '  会把平台相关的可选依赖 @libsql/win32-x64-msvc 漏掉）。请用 `pnpm package`。'
+        'app.asar.unpacked 里没有任何原生 .node——asarUnpack 没生效（node-pty 等原生模块装完会起不来）。'
       )
     }
     // 0.2.0 / B4 / PB-006：内核快照随包（验收①③）
@@ -532,6 +531,31 @@ function main() {
     //  ② 它**只能**走 extraResources：app.asar 里出现 resources/kernel（files 的排除失效）或
     //     app.asar.unpacked/resources/kernel 出现（asarUnpack 的 resources/** 命中）都算双份/起不来。
     const unpackedResourcesDir = join(DIST_DIR, 'win-unpacked', 'resources')
+    // PB-040：真正决定「装完 read_image 能用」的是内核快照里的 sharp 平台包；这一项必须在构建后硬校验，
+    // 不能等用户装完才报 Could not load the "sharp" module。
+    const kernelSharpDir = join(
+      unpackedResourcesDir,
+      'kernel',
+      'rc.2',
+      'node_modules',
+      '@img',
+      'sharp-win32-x64'
+    )
+    if (
+      !existsSync(join(kernelSharpDir, 'package.json')) ||
+      !existsSync(join(kernelSharpDir, 'index.cjs'))
+    ) {
+      fail(
+        `随包内核缺 @img/sharp-win32-x64（PB-040）：${kernelSharpDir}\n` +
+          '  read_image 会在用户机器上报 Could not load the "sharp" module；请用含 sharp 的 rc.2 快照重建。'
+      )
+    }
+    const sharpFiles = listFiles(kernelSharpDir)
+    const sharpHasNode = sharpFiles.some((path) => /^lib\/sharp-win32-x64-.*\.node$/.test(path))
+    const sharpHasVips = sharpFiles.some((path) => /^lib\/libvips-.*\.dll$/.test(path))
+    if (!sharpHasNode || !sharpHasVips) {
+      fail(`随包 @img/sharp-win32-x64 不完整（PB-040）：${sharpFiles.join('、')}`)
+    }
     const kernelBundleProblem = kernelBundledProblem(unpackedResourcesDir)
     if (kernelBundleProblem !== null) fail(kernelBundleProblem)
     const asarFile = join(unpackedResourcesDir, 'app.asar')
@@ -660,7 +684,7 @@ function main() {
         `  dist/${name}  ${(statSync(join(DIST_DIR, name)).size / 1024 / 1024).toFixed(1)} MB`
       )
     }
-    console.log(`[package] 解包的原生绑定：${libsqlBindings.join('、')}`)
+    console.log(`[package] 解包的原生绑定：${nativeBindings.join('、')}`)
     console.log(
       `[package] 本机嵌入引擎：resources/llama 共 ${(engineBytes / 1024 / 1024).toFixed(1)} MB（未压缩）`
     )
