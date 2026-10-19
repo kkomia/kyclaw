@@ -1,12 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import {
-  SurfaceLoading,
-  loadingCopyOf,
-  loadingStageOf,
-  type LoadingStageInput
-} from '../SurfaceLoading'
+import { SurfaceLoading } from '../SurfaceLoading'
+import { loadingCopyOf, loadingStageOf, type LoadingStageInput } from '../surface-loading-model'
 
 /**
  * PB-019：加载态骨架 + 阶段读数。
@@ -33,7 +29,9 @@ describe('PB-019 loadingStageOf：四阶段只按事件前进', () => {
     expect(loadingStageOf(input({ kind: 'docx', doc: true }))).toBe(2)
     expect(loadingStageOf(input({ kind: 'docx', doc: true, fontsState: 'loading' }))).toBe(3)
     expect(
-      loadingStageOf(input({ kind: 'docx', doc: true, fontsState: 'ready', editorState: 'loading' }))
+      loadingStageOf(
+        input({ kind: 'docx', doc: true, fontsState: 'ready', editorState: 'loading' })
+      )
     ).toBe(3)
     expect(
       loadingStageOf(input({ kind: 'docx', doc: true, fontsState: 'ready', editorState: 'ready' }))
@@ -53,7 +51,9 @@ describe('PB-019 loadingStageOf：四阶段只按事件前进', () => {
       )
     ).toBe(3)
     expect(
-      loadingStageOf(input({ kind: 'pptx', doc: true, pptxFontsState: 'ready', editorState: 'ready' }))
+      loadingStageOf(
+        input({ kind: 'pptx', doc: true, pptxFontsState: 'ready', editorState: 'ready' })
+      )
     ).toBe(4)
   })
 

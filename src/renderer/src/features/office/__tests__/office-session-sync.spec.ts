@@ -4,13 +4,14 @@ import {
   useOfficeTabsStore,
   resetOfficeTabsStore
 } from '@renderer/features/office/office-tabs-store'
+import type { OfficeDocumentInfo } from '@shared/office-editor'
 import {
   resetOfficeSessionRuntime,
   restoreOfficeSessionOnce,
   startOfficeSessionSync
 } from '../office-session-sync'
 
-const doc = (id: string, kind: 'docx' | 'xlsx' | 'pptx' = 'docx') => ({
+const doc = (id: string, kind: 'docx' | 'xlsx' | 'pptx' = 'docx'): OfficeDocumentInfo => ({
   documentId: id,
   kind,
   displayName: `${id}.${kind}`,
@@ -37,7 +38,7 @@ afterEach(() => {
 
 describe('M4-T renderer session sync', () => {
   it('sync：300ms 节流、只报 documentId、dirty 过滤', async () => {
-    const sync = vi.fn(async (_ids: string[], _active: string | null) => ({ ok: true }))
+    const sync = vi.fn<typeof window.kyclaw.office.sessionSync>(async () => ({ ok: true }))
     window.kyclaw.office.sessionSync = sync
     const stop = startOfficeSessionSync()
     useOfficeTabsStore.getState().openDocumentChecked(doc('a'))

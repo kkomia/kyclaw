@@ -51,7 +51,10 @@ import { MindmapPage } from '../MindmapPage'
 import { DEFAULT_MINDMAP_TEXT, MINDMAP_STORAGE_KEY, NEW_MINDMAP_TEXT } from '../mindmap-text'
 
 const mountSpy = mountMock.mount as unknown as ReturnType<typeof vi.fn>
-const lastOptions = () => mountMock.lastOptions as { onError?: (e: unknown) => void; onRender?: () => void }
+const lastOptions = (): {
+  onError?: (e: unknown) => void
+  onRender?: () => void
+} => mountMock.lastOptions as { onError?: (e: unknown) => void; onRender?: () => void }
 
 beforeEach(() => {
   window.localStorage.clear()
@@ -115,9 +118,8 @@ describe('MindmapPage：文本 + 预览最小形态', () => {
   })
 
   it('侧边栏入口 + 路由可达：/mindmap 渲染导图页，入口按路径选中', async () => {
-    const { installKyclawBridge, clearKyclawBridge } = await import(
-      '@renderer/__tests__/kyclaw-bridge'
-    )
+    const { installKyclawBridge, clearKyclawBridge } =
+      await import('@renderer/__tests__/kyclaw-bridge')
     installKyclawBridge()
     try {
       const { AppRoutes } = await import('@renderer/App')
@@ -126,7 +128,9 @@ describe('MindmapPage：文本 + 预览最小形态', () => {
           <AppRoutes />
         </MemoryRouter>
       )
-      expect(await screen.findByTestId('mindmap-page', undefined, { timeout: 15_000 })).toBeInTheDocument()
+      expect(
+        await screen.findByTestId('mindmap-page', undefined, { timeout: 15_000 })
+      ).toBeInTheDocument()
       expect(screen.getByTestId('primary-nav-mindmap')).toHaveAttribute('aria-current', 'page')
     } finally {
       clearKyclawBridge()

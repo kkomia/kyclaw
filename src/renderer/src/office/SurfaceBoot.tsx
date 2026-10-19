@@ -42,7 +42,8 @@ import {
 import { DocxEditorPane, type DocxEditorPaneHandle, type DocxErrorPhase } from './DocxEditorPane'
 import { PptxEditorPane, type PptxEditorPaneHandle } from './PptxEditorPane'
 import { XlsxEditorPane, type XlsxEditorPaneHandle } from './XlsxEditorPane'
-import { SurfaceLoading, loadingStageOf } from './SurfaceLoading'
+import { SurfaceLoading } from './SurfaceLoading'
+import { loadingStageOf } from './surface-loading-model'
 import type { OfficeSaveState } from './components/OfficeRibbonView'
 import {
   ensureSurfaceFonts,
@@ -583,6 +584,7 @@ export function SurfaceBoot(): React.JSX.Element {
    */
   useEffect(() => {
     if (doc?.kind !== 'pptx') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- PB-048: 既有 pptx 字体复位，0.2.x 重构
       setPptxFonts(null)
       setPptxFontsState('idle')
       setPptxFontsError('')
@@ -638,6 +640,7 @@ export function SurfaceBoot(): React.JSX.Element {
     pptxFontsState,
     editorState
   })
+  // eslint-disable-next-line react-hooks/purity -- PB-048: 既有挂载时刻取时，0.2.x 重构
   const mountedAtRef = useRef(performance.now())
   const shownAtRef = useRef<number | null>(null)
   const [skeletonShown, setSkeletonShown] = useState(false)
@@ -645,6 +648,7 @@ export function SurfaceBoot(): React.JSX.Element {
   useEffect(() => {
     if (loadingError) {
       // 错误态：立即撤（不等最短展示），错误条/重试优先可见
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- PB-048: 既有错误态收骨架，0.2.x 重构
       setSkeletonDone(true)
       return
     }
@@ -658,6 +662,7 @@ export function SurfaceBoot(): React.JSX.Element {
   }, [editorState, loadingError, skeletonShown, skeletonDone])
   useEffect(() => {
     if (loadingError) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- PB-048: 既有错误态收骨架，0.2.x 重构
       setSkeletonDone(true)
       return
     }
@@ -797,54 +802,54 @@ export function SurfaceBoot(): React.JSX.Element {
             <SurfaceEditorBoundary onError={(message) => handleEditorError('open', message)}>
               {doc.kind === 'xlsx' ? (
                 <XlsxEditorPane
-              key={`${doc.documentId}:${editorRetry}`}
-              ref={editorPaneRef}
-              documentId={doc.documentId}
-              name={doc.name}
-              bytes={doc.bytes}
-              readOnly={doc.readOnly}
-              theme={theme}
-              probe={probe}
-              onChanged={handleChanged}
-              onSaveRequest={requestSave}
-              onLoaded={() => handleLoaded(0)}
-              onError={handleEditorError}
-            />
-          ) : doc.kind === 'pptx' ? (
-            // M4-P：PptxEditorPane 由 office-engineer 提供；字体 ready 后才走到这里
-            <PptxEditorPane
-              key={`${doc.documentId}:${editorRetry}`}
-              ref={editorPaneRef}
-              documentId={doc.documentId}
-              name={doc.name}
-              bytes={doc.bytes}
-              readOnly={doc.readOnly}
-              theme={theme}
-              fonts={pptxFonts?.fonts ?? []}
-              probe={probe}
-              onChanged={handleChanged}
-              onSaveRequest={requestSave}
-              onLoaded={() => handleLoaded(0)}
-              // PB-020 E1：幻灯片总数 → 状态栏「共 N 页」（首次打开与插删页后都上报）
-              onPageCount={(count) => handleLoaded(count)}
-              onError={handleEditorError}
-            />
-          ) : (
-            <DocxEditorPane
-              key={`${doc.documentId}:${editorRetry}`}
-              ref={editorPaneRef}
-              documentId={doc.documentId}
-              name={doc.name}
-              bytes={doc.bytes}
-              readOnly={doc.readOnly}
-              theme={theme}
-              onChanged={handleChanged}
-              onSaveRequest={requestSave}
-              onLoaded={handleLoaded}
-              onError={handleEditorError}
-              saveState={saveState}
-            />
-            )}
+                  key={`${doc.documentId}:${editorRetry}`}
+                  ref={editorPaneRef}
+                  documentId={doc.documentId}
+                  name={doc.name}
+                  bytes={doc.bytes}
+                  readOnly={doc.readOnly}
+                  theme={theme}
+                  probe={probe}
+                  onChanged={handleChanged}
+                  onSaveRequest={requestSave}
+                  onLoaded={() => handleLoaded(0)}
+                  onError={handleEditorError}
+                />
+              ) : doc.kind === 'pptx' ? (
+                // M4-P：PptxEditorPane 由 office-engineer 提供；字体 ready 后才走到这里
+                <PptxEditorPane
+                  key={`${doc.documentId}:${editorRetry}`}
+                  ref={editorPaneRef}
+                  documentId={doc.documentId}
+                  name={doc.name}
+                  bytes={doc.bytes}
+                  readOnly={doc.readOnly}
+                  theme={theme}
+                  fonts={pptxFonts?.fonts ?? []}
+                  probe={probe}
+                  onChanged={handleChanged}
+                  onSaveRequest={requestSave}
+                  onLoaded={() => handleLoaded(0)}
+                  // PB-020 E1：幻灯片总数 → 状态栏「共 N 页」（首次打开与插删页后都上报）
+                  onPageCount={(count) => handleLoaded(count)}
+                  onError={handleEditorError}
+                />
+              ) : (
+                <DocxEditorPane
+                  key={`${doc.documentId}:${editorRetry}`}
+                  ref={editorPaneRef}
+                  documentId={doc.documentId}
+                  name={doc.name}
+                  bytes={doc.bytes}
+                  readOnly={doc.readOnly}
+                  theme={theme}
+                  onChanged={handleChanged}
+                  onSaveRequest={requestSave}
+                  onLoaded={handleLoaded}
+                  onError={handleEditorError}
+                  saveState={saveState}
+                />
+              )}
             </SurfaceEditorBoundary>
           </div>
         ) : null}

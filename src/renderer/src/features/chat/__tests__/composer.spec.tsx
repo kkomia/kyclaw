@@ -1017,7 +1017,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
   })
 
   /** 打开模型菜单并展开某个二级浮层 */
-  async function openSubmenu(_testId: string): Promise<void> {
+  async function openSubmenu(): Promise<void> {
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     await tick()
   }
@@ -1155,7 +1155,7 @@ describe('round 18 · 模型浮窗两截 / 思考强度 / 对话长度 / 上下�
 
   it('对话长度：滑块 10–100，拖动只改草稿、松手（pointerUp）才落盘；显示百分比与换算', async () => {
     setup()
-    await openSubmenu('model-context')
+    await openSubmenu()
 
     const range = screen.getByTestId('model-context-range')
     expect(range).toHaveAttribute('min', '10')
@@ -1578,7 +1578,7 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
     return bridge
   }
 
-  async function openSubmenu(_testId: string): Promise<void> {
+  async function openSubmenu(): Promise<void> {
     fireEvent.keyDown(screen.getByTestId('composer-model'), { key: 'ArrowDown' })
     await tick()
   }
@@ -1591,12 +1591,12 @@ describe('round 22 · probed 实测优先（菜单值来自真实元数据）', 
   it('滑块与换算用实测 1M——注册表按名字猜的 128K 被盖过（用户点名的纠错）', async () => {
     // 先确认注册表口径确实是 128K（对照），再证明 probed 盖过它
     mountChip({})
-    await openSubmenu('model-context')
+    await openSubmenu()
     expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 128K / 128K')
 
     cleanup()
     mountChip(probedNow())
-    await openSubmenu('model-context')
+    await openSubmenu()
     expect(screen.getByTestId('model-context-slider')).toHaveTextContent('≈ 1M / 1M')
   })
 
