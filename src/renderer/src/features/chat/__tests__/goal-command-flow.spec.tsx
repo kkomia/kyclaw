@@ -105,8 +105,13 @@ describe('PB-039 /goal 提交路径', () => {
 
     expect(await screen.findByTestId('goal-command-card')).toHaveTextContent('完成迁移')
     expect(screen.queryByTestId('goal-command-error')).not.toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledTimes(4)
-    const retried = JSON.parse((fetchMock.mock.calls[3]?.[1] as RequestInit).body as string)
+    // PB-039 接线后 `GoalDockContainer` 挂载也会 GET 一次 goal，总请求数不再是固定 4；
+    // 这里只钉"POST 两次（首次 409 + 重发）"与"重发用的是最新 revision"，不锁总次数。
+    const postCalls = fetchMock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(postCalls).toHaveLength(2)
+    const retried = JSON.parse((postCalls[1]?.[1] as RequestInit).body as string)
     expect(retried.action).toBe('pause')
     expect(retried.ref).toEqual({ id: 'g1', revision: 5 })
     expect(control.requests).toHaveLength(0)
