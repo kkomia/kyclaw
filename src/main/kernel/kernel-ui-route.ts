@@ -12,15 +12,14 @@
  *   - 命令**不产生模型消息**：这条路由不调 `startTurn`，renderer 也不把命令写进消息流；
  *   - 帧复用 adapter 的 onFrame 语义（`data: <json>\n\n`、一次一个事件），不另造协议；
  *   - `threadId` 缺失/为空一律 400（PB-018 批复：不许静默落到 adapter 的 defaultSessionId）；
- *   - flag 关时**不静默**：goal 走 `kernel-command-fallback.ts`（旧 store，PB-020 删除），
- *     其它内核命令在 flag 关不存在（renderer 只在 flag 关拦 `/goal`）。
+ *   - flag 关时**不静默**：内核命令在 flag 关不可用（PB-020 A2a 起旧 goal store 降级已删），
+ *     统一回 503 / 命令错误；renderer 不再走旧解析器。
  *
  * 归属：main 侧 UI 网关由 PB-018 交付；adapter 的命令/投影方法已接受可选 `threadId`
  * （Bao 的 B3.4/PB-004 前置，见 `kernel-adapter.ts:89-97`），这里一律按会话调用，不落默认会话。
  */
 import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
-import type { GoalState } from '../../shared/goal'
 import type {
   KernelCommandFrame,
   KernelCommandResult,
@@ -28,18 +27,16 @@ import type {
   KernelPlanProjection,
   KernelProjectionSnapshot
 } from '../../shared/kernel-ui'
-import type { SessionGoalStore } from '../../mastra/session-goal'
 import { projectGoalDock } from './goal-projection'
-import { projectLegacyGoalState, runLegacySlashCommand } from './kernel-command-fallback'
 import type { KernelAdapter } from './kernel-adapter'
 
 export const KERNEL_UI_ROUTE_PREFIX = '/api/kernel'
 
 export interface KernelUiRouterOptions {
-  /** flag 开时非 null；flag 关为 null（goal 走旧 store 降级） */
+  /** 内核 adapter；flag 关/内核未起时为 null（命令面回 503，不再降级旧 store） */
   adapter: KernelAdapter | null
-  /** flag 关降级用（PB-020 删除） */
-  legacyGoal: SessionGoalStore
+  /** PB-020 A2a：旧 store 降级已删；字段仅为旧测试编译保留（A2b 删） */
+  legacyGoal?: unknown
 }
 
 const SSE_HEADERS = {
@@ -48,7 +45,7 @@ const SSE_HEADERS = {
   connection: 'keep-alive'
 } as const
 
-function jsonError(error: string, message: string, status: 400 | 500 | 502): Response {
+function jsonError(error: string, message: string, status: 400 | 500 | 502 | 503): Response {
   return Response.json({ error, message }, { status })
 }
 
@@ -133,14 +130,6 @@ async function runKernelCommand(
   return { result, goal: snapshot.goal, plan: snapshot.plan }
 }
 
-async function readLegacyProjection(
-  store: SessionGoalStore,
-  threadId: string
-): Promise<KernelProjectionSnapshot> {
-  const state = (await store.state(threadId)) as GoalState
-  return { goal: projectLegacyGoalState(state), plan: null }
-}
-
 /**
  * 命令执行 → SSE：`command/run` 在**执行前**发出，`command/done` 带结算结果与最新投影。
  * 客户端断开/写入失败只停止发帧，不影响命令本身（命令没有可取消的模型轮）。
@@ -209,8 +198,14 @@ export function createKernelUiRouter(options: KernelUiRouterOptions): Hono {
       )
     }
     try {
-      if (adapter !== null) return context.json(await readProjection(adapter, threadId))
-      return context.json(await readLegacyProjection(options.legacyGoal, threadId))
+      if (adapter === null) {
+        return jsonError(
+          'KERNEL_DISABLED',
+          '内核未启用：0.2.0 起内核必启；请检查内核启动错误或重启应用。',
+          503
+        )
+      }
+      return context.json(await readProjection(adapter, threadId))
     } catch (error) {
       return jsonError(
         'KERNEL_PROJECTION_FAILED',
@@ -239,7 +234,14 @@ export function createKernelUiRouter(options: KernelUiRouterOptions): Hono {
       const outcome =
         adapter !== null
           ? await runKernelCommand(adapter, threadId, line)
-          : await runLegacySlashCommand(options.legacyGoal, threadId, line)
+          : {
+              result: {
+                kind: 'error' as const,
+                text: '内核未启用：0.2.0 起内核必启，命令不可用。'
+              },
+              goal: null,
+              plan: null
+            }
       emit({ type: 'command/done', commandId, line, ...outcome })
     })
   })

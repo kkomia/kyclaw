@@ -1,5 +1,8 @@
 /**
- * 内嵌 agent 服务（链路原型①）：Mastra（@mastra/hono 适配器）挂在 Node http 上，只监听 127.0.0.1。
+ * 内嵌 agent 服务：本地 HTTP/SSE + Bearer token（只监听 127.0.0.1）。
+ *
+ * 0.2.0（PB-020）起旧 Mastra 内核装配已在 A2a 移除：chat 由 `kernelAdapter` 承接，
+ * 八条旧宿主 API 由 PB-022 的 501 mount 占位；当前 flag 仍在（A2b 会把内核改成必启）。
  *
  * 边界就两条：
  *   1. 端口随机（缺省让 OS 分配空闲端口；显式给了端口但被占用就换，≤5 次）——
@@ -12,17 +15,10 @@
  * Mastra 系依赖 ESM-only、主进程产物 CJS：运行时依赖一律动态 import()。
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { createKyclawMastra } from '../../mastra/index'
-import { KYCLAW_AGENT_ID } from '../../mastra/agents/kyclaw'
-import { resolveModel, selectProviderConfig, type KyclawModel } from '../model'
-import { detectRenderer, type PptRenderer } from '../../mastra/tools/render-ppt'
-import type { SkillRuntimeFacts } from '../../mastra/skills/runtime'
-import { probedKeyOf, visionOf } from '../../shared/models'
-import type { ModelResolver } from '../../mastra/agents/kyclaw'
-import type { LangfuseExportConfig } from '../telemetry-config'
-import { readSettings, settingsPath, updateSettings } from '../settings'
-import { readProjectRules } from '../project-rules'
-import type { RulesProcessorDependencies } from '../../mastra/rules'
+import { isAbsolute, relative } from 'node:path'
+import { KYCLAW_AGENT_ID } from '../../shared/agent-id'
+import type { KyclawModel } from '../model'
+import { readSettings, settingsPath } from '../settings'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
 import { InteractionHub, applyInteractionEvent, feedKernelEvent } from '../kernel/interaction-hub'
@@ -35,10 +31,8 @@ import {
   createKernelThreadsUnavailableRouter
 } from '../threads/kernel-threads'
 import { createThreadCwdResolver } from '../threads/thread-cwd'
-import { pluginsDirs } from '../plugins/store'
 import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
 import type { Project } from '../../shared/projects'
-import type { SkillSource } from '../../shared/skills'
 import type { AuthoringRuntime } from '../../shared/authoring'
 import type {
   AppSettings,
@@ -49,13 +43,23 @@ import type {
   Workspace
 } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
-import type { LibSQLStore } from '@mastra/libsql'
-import type { Mastra } from '@mastra/core/mastra'
-import type { MastraMemory } from '@mastra/core/memory'
-import type { MastraEmbeddingModel } from '@mastra/core/vector'
-import type { LocalEmbeddingEndpoint, RecallRuntime } from '../../mastra/embedding'
 import type { PdfPrinter } from '../print-pdf'
 import type { WebSearchRuntime } from '../../shared/search'
+
+/**
+ * PB-020 A2a 过渡类型：旧 Mastra loop 的运行时装配已删，下面这些形状只为让尚未改写的旧测试
+ * 继续通过 typecheck（A2b 会连同测试一起删）。生产路径不再使用它们。
+ */
+type ModelResolver = () => Promise<KyclawModel>
+type PptRenderer = 'powerpoint' | 'libreoffice' | 'none'
+type SkillRuntimeFacts = { pptRenderer: PptRenderer; vision: boolean | null }
+interface RecallRuntimeLike {
+  /** PB-020 A2a：内核路径没有语义召回实现，`off` 是显式「未开启」，不是旧枚举值。 */
+  readonly source: SemanticRecallSettings['source'] | 'off'
+  status(): unknown
+  settled(): Promise<void>
+  markUnavailable(detail: string): void
+}
 
 const HOST = '127.0.0.1'
 
@@ -120,7 +124,8 @@ export interface AgentServerOptions {
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */
   projects?: () => readonly Project[]
-  rules?: Pick<RulesProcessorDependencies, 'readGlobalRules' | 'readProjectRules' | 'onDiagnostics'>
+  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
+  rules?: unknown
   /**
    * "永久允许"规则（T13）：同样是**现读**的取值函数（审批卡里点"永久允许"落进 settings.json，
    * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
@@ -135,7 +140,8 @@ export interface AgentServerOptions {
    * T17：Langfuse 追踪配置（现读）。生产由 main/index.ts 注入"读设置 + safeStorage 密钥"的实现；
    * 缺省 = null（不导出）——本模块刻意不 import electron，读不到 safeStorage 里的密钥。
    */
-  langfuse?: () => LangfuseExportConfig | null
+  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
+  langfuse?: () => unknown
   /**
    * round 28：语义召回设置（现读；**装配只在启动时做一次**，改设置要重启应用才生效）。
    * 缺省 = 从 dataDir/settings.json 的 semanticRecall 读（与设置页写的是同一份）。
@@ -150,9 +156,10 @@ export interface AgentServerOptions {
    * round 28 模块 3B：本机引擎的端点（缺省 = 没接上）。生产由 main/index.ts 注入
    * `localModelService.embeddingEndpoint`（它会确保引擎起来）；测试可以注入假端点。
    */
-  localEmbedding?: () => Promise<LocalEmbeddingEndpoint | null>
-  /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测） */
-  recallEmbedder?: MastraEmbeddingModel<string>
+  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
+  localEmbedding?: unknown
+  /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测）；PB-020 过渡字段 */
+  recallEmbedder?: unknown
   /**
    * 模块 4：PDF 打印钩子（HTML → PDF 字节）。**缺省 = 没有**（create_pdf 报"环境不支持"）。
    * 生产由 main/index.ts 注入 Electron printToPDF 的实现（本模块刻意不 import electron）。
@@ -215,7 +222,7 @@ export interface AgentServerHandle extends AgentEndpoint {
    * round 28：本次装配的语义召回状态（设置页/记忆页用它说"已开启 / 重启后开启 / 准备中"）。
    * 现读（本地模型的后台准备会改它）；`settled()` 等后台活干完（测试与收尾用，不抛）。
    */
-  recall: RecallRuntime
+  recall: RecallRuntimeLike
   /**
    * round 15：会话 → 项目 id（session_projects 内存镜像，同步）。
    * `workspace:list-files` 借它把 threadId 解析成会话根（与文件工具同口径）；
@@ -285,9 +292,9 @@ async function listenOn(
  * 导出只为一件事：失败路径没法用真句柄造（shutdown 抛错），单测拿假件打这条顺序。
  */
 export async function teardownQuietly(
-  mastra: Mastra,
-  storage: LibSQLStore,
-  memory?: Pick<MastraMemory, 'settled'>
+  mastra: { shutdown(): Promise<unknown> },
+  storage: { close(): Promise<unknown> },
+  memory?: { settled(): Promise<unknown> }
 ): Promise<void> {
   try {
     await mastra.shutdown()
@@ -310,27 +317,7 @@ export async function teardownQuietly(
 }
 
 /**
- * 缺省模型来源：按 dataDir 下的 settings.providers 解析（没配 provider → 内置 mock）。
- *
- * 这里没有密钥来源（密钥在 electron 的 safeStorage 里，本模块刻意不 import electron），
- * 所以**配了必须密钥的渠道（anthropic）时会以"配置不完整：缺 API 密钥"失败**——生产路径由
- * main/index.ts 注入带 secrets 的 resolveModel；故意的失败好过静默回落 mock（T8 裁决）。
- * openai 兼容族不算"必须密钥"（本机服务那类），没有密钥也照发。
- */
-function settingsModelResolver(dataDir: string): ModelResolver {
-  return async () => {
-    const providers = readSettings(settingsPath(dataDir)).providers
-    return (await resolveModel(providers, () => null)).model
-  }
-}
-
-/**
- * round 65：装配 `shared/authoring.ts` 的**作者运行时**（技能 / MCP 落盘的那份依赖）。
- * 抽成导出函数只为一件事：让 spec 能直接钉"写入落到哪"（skillsDir = `<dataDir>/skills`、
- * 落盘走传入的 saveServers），而不是只能靠"读代码相信"。
- *
- * 现读口径与其它注入一致：`installedSkillDirs` / `readServers` 都是取值函数 —— 用户刚装的插件、
- * 刚改的 MCP 配置，下一轮对话就反映出来。
+ * PB-020 A2a：旧 loop 的缺省模型来源已删；`resolveModel` 选项仅为旧测试保留（A2b 删）。
  */
 export function authoringRuntimeFor(options: {
   /** 用户技能目录（生产 = `<dataDir>/skills`） */
@@ -364,182 +351,61 @@ export function authoringRuntimeFor(options: {
 }
 
 /**
- * round 68：**本部署事实**的来源（`use_skill` 加载技能时拼在全文末尾的那一段，见
- * `mastra/skills/runtime.ts`）。两件事都问本机，不问技能文件：
- *
- *   ① `render_ppt` 能不能真渲染 —— 走 render-ppt 的 `detectRenderer`（**同一条探测**：技能里说的
- *      "能渲染"必须就是工具那一刻的实情，两处各写一份探测必然分叉）；
- *   ② 当前模型能不能读图 —— 走消费侧同一套口径 `visionOf`（探测结论 > 注册表 > 保守 false），
- *      provider 选哪一条同 `selectProviderConfig`（与 resolveModel 选的是同一条）。
- *
- * **现读**：每次加载技能都重算（换模型 / 装或卸 PowerPoint 之后下一轮就对）。
- * 抽成导出函数只为一件事：spec 直接钉两种口径（不装 Office、没探过视觉的机器上也测得出来）。
- * 拿不到结论（一条 provider 都没配 / 没有模型名）→ 相应字段给 `null`，那一段会如实写"未知"（不编造）。
+ * PB-020 A2a：旧 loop 的技能事实来源已删；函数仅为旧测试保留（A2b 删）。
+ * 旧 Mastra `render_ppt` 探测（`detectRenderer`）不再由宿主调用；缺省 `none`、vision 未知。
  */
 export function skillRuntimeFactsFor(options: {
   /** 现读设置（生产 = dataDir/settings.json 的那份） */
   settings: () => AppSettings
-  /** 渲染器探测（缺省 = render-ppt 的 detectRenderer；spec 注入假件） */
+  /** 渲染器探测（测试注入假件；生产缺省 none） */
   detectRenderer?: () => PptRenderer
 }): () => SkillRuntimeFacts | null {
-  const detect = options.detectRenderer ?? detectRenderer
-  return () => {
-    const settings = options.settings()
-    const provider = selectProviderConfig(settings.providers)
-    const model = provider?.model.trim() ?? ''
-    const vision =
-      provider === undefined || model === ''
-        ? null
-        : visionOf(model, settings.probedModels[probedKeyOf(provider.id, model)])
-    return { pptRenderer: detect(), vision }
-  }
+  const detect = options.detectRenderer ?? ((): PptRenderer => 'none')
+  return () => ({ pptRenderer: detect(), vision: null })
 }
 
 export async function startAgentServer(options: AgentServerOptions): Promise<AgentServerHandle> {
-  const [{ Hono }, { cors }, { MastraServer }] = await Promise.all([
-    import('hono'),
-    import('hono/cors'),
-    import('@mastra/hono')
-  ])
+  const [{ Hono }, { cors }] = await Promise.all([import('hono'), import('hono/cors')])
 
-  const staticModel = options.model
-  const resolveModelFor: ModelResolver =
-    options.resolveModel ??
-    (staticModel !== undefined ? async () => staticModel : settingsModelResolver(options.dataDir))
   // 工具权限边界走同一份 settings.json（设置页的 workspace:* 通道写的也是它）；
-  // "永久允许"规则（T13）同样现读，审批卡点完下一轮就生效；默认工作区与项目清单（T18）同理 ——
-  // 用户在侧栏建项目 / 指认默认工作区，下一个会话/下一轮工具调用就反映出来
+  // 默认工作区与项目清单（T18）同理 —— 用户在侧栏建项目 / 指认默认工作区，下一轮就反映出来。
   const settingsFor = (): AppSettings => readSettings(settingsPath(options.dataDir))
-  const workspacesFor = options.workspaces ?? (() => settingsFor().workspaces)
   const defaultWorkspaceFor = options.defaultWorkspace ?? (() => settingsFor().defaultWorkspace)
   const projectsFor = options.projects ?? (() => settingsFor().projects)
-  const permissionRulesFor = options.permissionRules ?? (() => settingsFor().permissions.rules)
-  const mcpServersFor = options.mcpServers ?? (() => settingsFor().mcpServers)
-  // 追踪（T17）：缺省不导出（密钥在 safeStorage 里，本模块读不到；生产由 main/index.ts 注入）
-  const langfuseFor = options.langfuse ?? ((): LangfuseExportConfig | null => null)
-  // 语义召回（round 28）：设置现读（装配只做一次，改设置要重启生效）；密钥同样在 safeStorage 里
-  const semanticRecallFor = options.semanticRecall ?? (() => settingsFor().semanticRecall)
-  const embeddingKeyFor = options.embeddingKey ?? ((): string | null => null)
-  // round 45：联网搜索设置现读；Key 在 safeStorage 里（本模块读不到 → 缺省没有，走免费档）
-  const webSearchFor =
-    options.webSearch ??
-    ((): WebSearchRuntime => ({
-      settings: settingsFor().webSearch,
-      searchKey: null,
-      readerKey: null
-    }))
-  // round 73：fetch 出站边界的白名单现读（设置页 → `network.allowLocalHosts`）。
-  // 旧落盘文件没有 `network` 这个键 → 空表 = 一律拒绝（fail closed，与 fetch.ts 的判定一致）
-  const networkFor =
-    options.network ?? ((): NetworkSettings => settingsFor().network ?? { allowLocalHosts: [] })
-  // round 64：技能来源现读（内置目录 + 已装插件复制到 `<userData>/skills` 的那批）。
-  // 每轮现扫：用户刚装/卸的插件，下一轮对话就反映出来，不必重启。
-  const skillSourcesFor = (): readonly SkillSource[] =>
-    skillSourcesForFn({
-      skillsDir: pluginsDirs(options.dataDir).skills,
-      installed: settingsFor().installedPlugins,
-      builtinDir: options.builtinSkillsDir ?? null
-    })
-  // round 68：本部署事实（技能加载时拼在全文末尾）——现读；缺省从设置 + 本机渲染器探测算
-  const skillFactsFor = options.skillRuntimeFacts ?? skillRuntimeFactsFor({ settings: settingsFor })
-  /**
-   * MCP 配置的落盘口（round 65 抽出来给两处共用）：MCP 管理路由 `PUT /api/mcp/servers` 与
-   * agent 侧的 add_mcp_server / remove_mcp_server **同一条路** —— 校验（路由/工具各自先跑
-   * shared/mcp.ts 的 mcpServersProblems）+ updateSettings 落盘，不另起第二套写盘实现。
-   *
-   * PB-023：MCP 连接改由 DSH 内核插件 `@deepseek-ai/dsh-mcp-client` 负责（宿主不再持有 MCP 客户端），
-   * 落盘后不再有"当场对齐连接"这一步 —— 改动在下次应用启动时由 kernel 读 home patch 生效。
-   */
-  const saveMcpServers = (servers: McpServerConfig[]): readonly McpServerConfig[] =>
-    updateSettings(settingsPath(options.dataDir), { mcpServers: servers }).mcpServers
-  /**
-   * round 65：让模型自己落地技能 / MCP 的运行时（工具层只调这几个函数，见 shared/authoring.ts）。
-   * 现读：skillsDir 是固定路径，插件技能目录与 MCP 列表每轮重新取（用户刚装的插件、刚改的配置
-   * 下一轮就反映出来）。
-   */
-  const authoringFor = (): AuthoringRuntime =>
-    authoringRuntimeFor({
-      skillsDir: pluginsDirs(options.dataDir).skills,
-      builtinSkillsDir: options.builtinSkillsDir ?? null,
-      installedSkillDirs: settingsFor().installedPlugins.flatMap((record) => record.skillDirs),
-      readServers: mcpServersFor,
-      saveServers: saveMcpServers
-    })
-  const {
-    mastra,
-    storage,
-    memory,
-    sessionProjects,
-    sessionPptTemplates,
-    telemetry,
-    recall,
-    rules,
-    goals
-  } = await createKyclawMastra({
-    dataDir: options.dataDir,
-    resolveModel: resolveModelFor,
-    workspaces: workspacesFor,
-    defaultWorkspace: defaultWorkspaceFor,
-    projects: projectsFor,
-    rules: options.rules ?? {
-      readGlobalRules: () => ({ text: settingsFor().globalRules, diagnostics: [] }),
-      readProjectRules
-    },
-    permissionRules: permissionRulesFor,
-    mcpServers: mcpServersFor,
-    langfuse: langfuseFor,
-    semanticRecall: semanticRecallFor,
-    embeddingKey: embeddingKeyFor,
-    ...(options.localEmbedding === undefined ? {} : { localEmbedding: options.localEmbedding }),
-    ...(options.recallEmbedder === undefined ? {} : { recallEmbedder: options.recallEmbedder }),
-    // 模块 4：产出物的 PDF 钩子（缺省没有 —— 无窗口环境/测试里 create_pdf 会明确报不支持）
-    ...(options.printPdf === undefined ? {} : { printPdf: options.printPdf }),
-    // round 45：联网搜索（web_search + fetch 阅读模式共用这一份运行时配置）
-    webSearch: webSearchFor,
-    // round 73：fetch 出站边界的白名单（现读设置；撤掉就恢复拦截）
-    network: networkFor,
-    // round 64：技能来源（内置技能目录 + 插件的技能目录）——指令里的技能清单与 use_skill 共用
-    skillSources: skillSourcesFor,
-    // round 68：本部署事实（渲染器 / 读图能力）—— use_skill 加载技能时拼在全文末尾的那一段
-    skillRuntimeFacts: skillFactsFor,
-    // round 65：作者能力（技能 / MCP 落盘）——create_skill / add_mcp_server 等共用这份运行时
-    authoring: authoringFor
-  })
 
-  // 会话↔项目映射的镜像载入（重启后映射要回来）。载入失败不挡服务：这些会话按"没有项目"跑
-  // （退化为默认工作区），下一轮写入/重启还会再试 —— 一条副线不该让整个对话起不来。
-  await sessionProjects.load().catch((error: unknown) => {
-    console.warn('[kyclaw] 会话↔项目映射载入失败（这些会话按无项目处理，不影响对话）', error)
-  })
-  // round 66：会话↔PPT 模板映射同理（重启后"这个会话固定了哪套模板"要回来）。载入失败不挡服务：
-  // 退化为"没有固定模板"（create_ppt 按内容自动挑），不影响对话。
-  await sessionPptTemplates.load().catch((error: unknown) => {
-    console.warn(
-      '[kyclaw] 会话↔PPT 模板映射载入失败（这些会话按没有固定模板处理，不影响对话）',
-      error
-    )
-  })
+  // PB-020 A2a（R3）：thread → project 的唯一来源 = 内核 session 的 cwd 反查 projects。
+  // cwdOf 拿不到（未 list 过 / 刚启动 / 内核未起）→ null；调用点按「项目映射暂不可用」处理，
+  // 绝不回落到 defaultWorkspace（Lead 红线）。用 mutable holder 避免 adapter 初始化期 TDZ。
+  // eslint-disable-next-line prefer-const -- adapter 建好后（下面 await）才回填
+  let kernelCwdOf: ((threadId: string) => string | undefined) | undefined
+  const projectIdOf = (threadId: string): string | null => {
+    const cwd = kernelCwdOf?.(threadId)
+    if (cwd === undefined || cwd === '') return null
+    const project = projectsFor().find((item) => {
+      const rel = relative(item.path, cwd)
+      return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+    })
+    return project?.id ?? null
+  }
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
 
   /**
    * PB-024 R3：cwd 的唯一权威是 thread/workspace，不是 adapter.appDataDir。
-   * PB-019：解析器抽成 `threads/thread-cwd.ts`（不依赖旧 Mastra store），Kai 在 PB-020
-   * 只要换 `projectIdOf` 的数据源即可；同一个闭包同时喂 adapter 与 threads router。
+   * PB-019：解析器抽成 `threads/thread-cwd.ts`（不依赖旧 Mastra store）；
+   * PB-020 A2a：数据源换成上面的 `projectIdOf`（内核 cwd 反查），同一个闭包同时喂 adapter 与 threads router。
    */
   const resolveThreadCwd = createThreadCwdResolver({
-    projectIdOf: (threadId) => sessionProjects.get(threadId),
+    projectIdOf,
     projects: projectsFor,
     defaultWorkspace: defaultWorkspaceFor,
     fallback: options.dataDir
   })
 
   /**
-   * B3.1b：**flag 判定的唯一入口**（回退只需关 `KYCLAW_KERNEL_PORT`）。
-   * - flag 关 → `maybeStartKernelAdapter` 直接返回 null（不 spawn、不碰路径）；下面不注册 chat 路由，
-   *   旧 Mastra chat 路径**一行未改**；
+   * B3.1b：flag 判定入口（PB-020 A2a 后旧 Mastra loop 已删）。
+   * - flag 关 → `maybeStartKernelAdapter` 返回 null：没有 chat（旧实现已删），A2b 会把内核改成必启；
    * - flag 开 → 起真内核（token/cookie 只在 main），chat 帧由 adapter 出。
-   * 两条路并存、不删旧 loop。
    */
   // PB-004/PB-025：交互中枢（审批/提问状态源）。flag 关也建（只是永远没有内核事件进来），
   // 这样 /ask-user/pending 在两种 flag 下都返回 200 —— 404 会让 renderer composer 永久 disabled。
@@ -560,11 +426,12 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     ...(options.kernel?.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
     ...(options.kernel?.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
     ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
-  }).catch(async (error: unknown) => {
-    // flag 开但内核起不来：不能留半个 Mastra/storage（与下面 listen 失败同口径）
-    await teardownQuietly(mastra, storage, memory)
+  }).catch((error: unknown) => {
+    // PB-020 A2a：旧 Mastra 装配已删，没有 storage/memory 可清理；内核失败直接抛。
     throw error
   })
+  // 内核 adapter 建好后，projectIdOf 的 cwd 来源才可用（建之前一律 null，不回落默认工作区）。
+  kernelCwdOf = (threadId) => kernelAdapter?.cwdOf(threadId)
 
   const app = new Hono()
   app.use(
@@ -596,16 +463,15 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     })
   )
 
-  // B3.1b：flag 开才注册内核 chat 分支（同一路径、同一 token 闸门；先注册者优先于 Mastra 的 /chat）
+  // B3.1b：flag 开才注册内核 chat 分支（同一路径、同一 token 闸门）。
+  // PB-020 A2a：旧 `MastraServer.init()` 已删——旧 `/chat/:agentId`（Mastra 实现）不再注册；
+  // 现在 chat 只有内核这一条路（flag 关时暂无 chat，A2b 会把 kernel 改成必启）。
   if (kernelAdapter !== null) {
     app.post(`/chat/${KYCLAW_AGENT_ID}`, createKernelChatHandler(kernelAdapter))
     console.warn(
       `[kyclaw] kernel chat enabled (session=${kernelAdapter.sessionId}, port=${String(kernelAdapter.port)})`
     )
   }
-
-  const mastraServer = new MastraServer({ app, mastra })
-  await mastraServer.init()
 
   app.route('/api/tasks', createFeatureDisabledRouter('tasks'))
 
@@ -634,10 +500,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   app.route(GOAL_ROUTE_PREFIX, createFeatureDisabledRouter('goal'))
   // PB-018（B3.3 renderer 半端）：renderer 的命令菜单/结果卡/六行投影统一走这层网关。
   // flag 开 → 内核命令平面；flag 关 → 旧 goal store 降级（临时，PB-020 删）。旧 /api/goal 一行未改。
-  app.route(
-    KERNEL_UI_ROUTE_PREFIX,
-    createKernelUiRouter({ adapter: kernelAdapter, legacyGoal: goals })
-  )
+  app.route(KERNEL_UI_ROUTE_PREFIX, createKernelUiRouter({ adapter: kernelAdapter }))
   app.route(PROJECTS_ROUTE_PREFIX, createFeatureDisabledRouter('projects'))
 
   // round 66：会话↔PPT 模板映射 API（对话页「PPT」胶囊的读/写；create_ppt 的缺省模板读同一份镜像）
@@ -652,7 +515,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   // 记忆 API（T14）：working memory 的查看/编辑/清空 + 语义召回的运行状态（round 28）
   app.route(MEMORY_ROUTE_PREFIX, createFeatureDisabledRouter('memory'))
 
-  // 用量 API（T14）：窗口统计；表在 createKyclawMastra 里已建好，这里共用同一个 store
+  // 用量 API（T14）：已由 PB-022 统一 501；旧 store 随 A2a 装配删除
   app.route(USAGE_ROUTE_PREFIX, createFeatureDisabledRouter('usage'))
 
   // 轨迹数据面（用户反馈 015 / 017）：逐次模型请求的摘要 + 按 id 取正文。
@@ -679,9 +542,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   }
 
   if (!server) {
-    // 起不来就不留半个服务：把已经建好的 Mastra/storage/连接收掉，再带着原因抛出去
+    // 起不来就不留半个服务：把已经建好的内核连接收掉，再带着原因抛出去
     await kernelAdapter?.stop()
-    await teardownQuietly(mastra, storage, memory)
     throw new Error(`agent 服务启动失败：${attempts} 次都没能监听 ${HOST} 的端口`, {
       cause: lastError
     })
@@ -692,10 +554,19 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     baseUrl: `http://${HOST}:${port}`,
     token,
     port,
-    telemetry,
-    recall,
-    rules,
-    projectIdOf: (threadId) => sessionProjects.get(threadId),
+    // PB-020 A2a：旧 Mastra 装配已删。追踪/语义召回/规则处理器都随旧 loop 下线；
+    // 内核版本前没有对应实现 → 如实报「未开启」，不假装成功（设置页按这个显示）。
+    telemetry: { langfuse: false },
+    recall: {
+      source: 'off',
+      status: () => ({ state: 'off', detail: null }),
+      settled: async () => {},
+      markUnavailable: (detail: string) => {
+        console.warn('[kyclaw] 语义召回不可用（0.2.0 内核路径未实现）', detail)
+      }
+    },
+    rules: { processorRegistered: false },
+    projectIdOf,
     stop: async () => {
       if (stopped) return
       stopped = true
@@ -706,10 +577,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           server.close((error) => (error ? reject(error) : resolve()))
         })
       } finally {
-        // 内核子进程/WS 先收（不留孤儿）；MCP 由内核子进程及其插件连接持有，随内核一起下线；
-        // 再收 Mastra / memory / storage
+        // 内核子进程/WS 先收（不留孤儿）；MCP 由内核子进程及其插件连接持有，随内核一起下线。
         await kernelAdapter?.stop()
-        await teardownQuietly(mastra, storage, memory)
       }
     }
   }
