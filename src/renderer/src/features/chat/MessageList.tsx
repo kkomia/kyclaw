@@ -17,6 +17,7 @@ import { Message } from './Message'
 import { MessageRail } from './MessageRail'
 import { WaitingLine } from './parts/WaitingLine'
 import { useChatFollow } from './use-chat-follow'
+import { isRetryKeepMessage } from './retry-keep'
 import { shouldShowWaitingLine } from './waiting-line'
 // P1b：对话区的签名动效（角色令牌全在 motion.css，本文件只做 chat 域类名/关键帧）
 import './chat-motion.css'
@@ -225,37 +226,42 @@ export function MessageList({
         onScroll={follow.onScroll}
       >
         <div className="chat-content mx-auto flex w-full max-w-[calc(var(--chat-content-width)+32px)] flex-col gap-6 px-4 py-6">
-          {messages.map((message, index) => (
-            <Fragment key={message.id}>
-              {index === markerIndex ? (
-                <CompactionMarker compaction={compaction} compacting={compacting} />
-              ) : null}
-              <Message
-                message={message}
-                streaming={status === 'streaming' && message.id === lastAssistantId}
-                animateSend={status !== 'ready' && index === lastUserIndex}
-                onEdit={onEdit}
-                onUndo={onUndo}
-                /* 「重新生成」只挂最后一条助手消息上（`lastAssistantId` 与本条同一判据：
-                   最后一条消息就是助手消息时它才是"最后一条助手回复"） */
-                onRegenerate={
-                  onRegenerate === undefined || message.id !== lastAssistantId
-                    ? undefined
-                    : () => onRegenerate(message.id)
-                }
-                /* 交付卡只给轮末那条助手消息；其余助手消息显式给空数组（压掉自己的卡） */
-                deliverables={turnDeliverables[index]}
-                onQuoteSelection={
-                  onQuoteSelection === undefined
-                    ? undefined
-                    : (text) => onQuoteSelection(text, { messageId: message.id })
-                }
-                /* 引用 allowlist 本轮共享；来源面板只给轮末那条，非轮末显式空数组 */
-                knownSources={citationTurns[index]?.knownSources}
-                citationSources={citationTurns[index]?.sources}
-              />
-            </Fragment>
-          ))}
+          {messages.map((message, index) =>
+            // PB-035 B′：`kyclawRetryKeep` 标记的 user 消息是"保留内容再试"发出去的续跑指令，
+            // 只给模型看，不给用户看（否则会凭空多出一条「继续」气泡）。索引仍按原数组算，
+            // 所以 markerIndex / lastUserIndex 等派生值不受影响。
+            isRetryKeepMessage(message) ? null : (
+              <Fragment key={message.id}>
+                {index === markerIndex ? (
+                  <CompactionMarker compaction={compaction} compacting={compacting} />
+                ) : null}
+                <Message
+                  message={message}
+                  streaming={status === 'streaming' && message.id === lastAssistantId}
+                  animateSend={status !== 'ready' && index === lastUserIndex}
+                  onEdit={onEdit}
+                  onUndo={onUndo}
+                  /* 「重新生成」只挂最后一条助手消息上（`lastAssistantId` 与本条同一判据：
+                     最后一条消息就是助手消息时它才是"最后一条助手回复"） */
+                  onRegenerate={
+                    onRegenerate === undefined || message.id !== lastAssistantId
+                      ? undefined
+                      : () => onRegenerate(message.id)
+                  }
+                  /* 交付卡只给轮末那条助手消息；其余助手消息显式给空数组（压掉自己的卡） */
+                  deliverables={turnDeliverables[index]}
+                  onQuoteSelection={
+                    onQuoteSelection === undefined
+                      ? undefined
+                      : (text) => onQuoteSelection(text, { messageId: message.id })
+                  }
+                  /* 引用 allowlist 本轮共享；来源面板只给轮末那条，非轮末显式空数组 */
+                  knownSources={citationTurns[index]?.knownSources}
+                  citationSources={citationTurns[index]?.sources}
+                />
+              </Fragment>
+            )
+          )}
           {/* 落在末尾（含"一条消息都没有"）：列表末尾那一份分界线 */}
           {markerIndex === messages.length ? (
             <CompactionMarker compaction={compaction} compacting={compacting} />
@@ -272,7 +278,10 @@ export function MessageList({
         </div>
       </div>
       {/* 导览轨挂在滚动区外：它自己固定在聊天区右缘，不跟着消息滚 */}
-      <MessageRail messages={messages} containerRef={viewRef} />
+      <MessageRail
+        messages={messages.filter((message) => !isRetryKeepMessage(message))}
+        containerRef={viewRef}
+      />
     </div>
   )
 }

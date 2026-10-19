@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { ChatPage, ChatSession } from '@renderer/features/chat/ChatPage'
 import { ErrorCard } from '@renderer/features/chat/ErrorCard'
+import { RETRY_KEEP_PROMPT } from '@renderer/features/chat/retry-keep'
+import { truncateThread } from '@renderer/lib/threads-api'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { resetSessionsStore } from '@renderer/features/sessions/sessions-store'
 import { createMockTransport, type MockTransport } from './mock-transport'
@@ -284,5 +286,67 @@ describe('端点取不到（服务没起来）', () => {
     })
     expect(screen.getByTestId('composer-input')).toBeInTheDocument()
     vi.unstubAllGlobals()
+  })
+})
+
+/**
+ * PB-035 B′（用户：「重试直接就是整轮重试 之前的东西都没了」）：
+ * 失败轮**有产出**时给两条路 —— 「保留内容再试」（不清空、不 truncate，新起一轮追加）
+ * 与「清空重来」（现状语义）；**无产出**时只留一个按钮，且三个词都不叫「重试」。
+ */
+describe('PB-035 B′：保留内容再试', () => {
+  it('ErrorCard：有产出 → 两个按钮 + 保留说明；无产出 → 只有一个按钮', () => {
+    const onRetry = vi.fn()
+    const onRetryKeep = vi.fn()
+    const { rerender } = render(
+      <ErrorCard error={new Error('断了')} onRetry={onRetry} onRetryKeep={onRetryKeep} preservedRecords={3} />
+    )
+    expect(screen.getByTestId('error-retry-keep')).toHaveTextContent('保留内容再试')
+    expect(screen.getByTestId('error-retry')).toHaveTextContent('清空重来')
+    expect(screen.getByTestId('error-preserve-note')).toHaveTextContent('已产生 3 条记录')
+    // 三个词都不叫「重试」
+    expect(screen.getByTestId('error-retry-keep')).not.toHaveTextContent('重试')
+    expect(screen.getByTestId('error-retry')).not.toHaveTextContent('重试')
+
+    rerender(
+      <ErrorCard error={new Error('断了')} onRetry={onRetry} onRetryKeep={onRetryKeep} preservedRecords={0} />
+    )
+    expect(screen.queryByTestId('error-retry-keep')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('error-preserve-note')).not.toBeInTheDocument()
+    expect(screen.getByTestId('error-retry')).toHaveTextContent('再跑一次')
+    expect(screen.getByTestId('error-retry')).not.toHaveTextContent('重试')
+  })
+
+  it('端到端：断流后点「保留内容再试」→ 不 truncate、旧内容保留、新起一轮追加，且标记消息不显示', async () => {
+    installKyclawBridge()
+    const control = createMockTransport()
+    await renderSession(control)
+
+    send('问题')
+    await waitFor(() => expect(control.requests).toHaveLength(1))
+    await act(async () => {
+      control.push('说到一半')
+    })
+    await act(async () => {
+      control.disconnect()
+    })
+    expect(await screen.findByTestId('error-card')).toBeInTheDocument()
+    expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
+
+    vi.mocked(truncateThread).mockClear()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('error-retry-keep'))
+    })
+
+    await waitFor(() => expect(control.requests).toHaveLength(2))
+    // ① 不清空：服务端 truncate 一次都没调
+    expect(vi.mocked(truncateThread)).not.toHaveBeenCalled()
+    // ② 新起一轮：请求里带着上一轮的内容（不止一条），且多出一条续跑指令
+    expect(control.requests[1].messages.length).toBeGreaterThanOrEqual(2)
+    expect(userTexts(control, 1)).toEqual(['问题', RETRY_KEEP_PROMPT])
+    // ③ 旧内容仍在原位
+    expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
+    // ④ 续跑指令不渲染成用户气泡
+    expect(screen.getByTestId('message-list')).not.toHaveTextContent(RETRY_KEEP_PROMPT)
   })
 })

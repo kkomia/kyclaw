@@ -55,6 +55,7 @@ import type { ChatView } from './ChatHeader'
 import { CollapsibleRow } from './CollapsibleRow'
 import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
+import { RETRY_KEEP_METADATA_KEY, RETRY_KEEP_PROMPT, preservedRecordsOf } from './retry-keep'
 import { GoalCommandCard } from './GoalCommandCard'
 import { parseGoalCommand, type GoalCommandAction } from './goal-command'
 import { fetchGoal, postGoalWithRetry } from './goal-api'
@@ -1355,6 +1356,31 @@ function ActiveChat({
   const retry = useCallback(() => regenerateReply(null), [regenerateReply])
 
   /**
+   * PB-035 B′（用户：「重试直接就是整轮重试 之前的东西都没了」）：
+   * **保留已有内容再试** —— 不清空、不 truncate、不 regenerate，改为**新起一轮**：
+   * 发一条带 `kyclawRetryKeep` 标记的 user 消息（UI 上隐藏，见 MessageList），
+   * 新回复作为**新消息追加**在旧内容之后。
+   * 安全口径：① 不带 `metadata.goalRound`（否则 goal 准入会拿已消费的 revision 再准入 → 409）；
+   * ② 与既有重试走同一道 `isLocked()` 闸门（等审批/流式中不动作）。
+   */
+  const retryKeep = useCallback(() => {
+    if (isLocked()) return
+    setPendingSync(null)
+    void sendMessage(
+      { text: RETRY_KEEP_PROMPT, metadata: { [RETRY_KEEP_METADATA_KEY]: true } },
+      threadRequestOptions(threadId)
+    )
+  }, [isLocked, sendMessage, threadId])
+
+  /**
+   * 失败轮（最后一条助手消息）里用户看得见的记录条数：非空正文 + 工具调用各算一条。
+   * 0 → 错误卡只给一个按钮（没东西可丢，不给无意义的分叉）。
+   */
+  const lastMessage = messages.length === 0 ? undefined : messages[messages.length - 1]
+  const retryPreservedRecords =
+    lastMessage !== undefined && lastMessage.role === 'assistant' ? preservedRecordsOf(lastMessage) : 0
+
+  /**
    * 撤回一条用户消息（round 61，消息动作行的「撤回」，Kimi 口径的 kyclaw 版）：
    * 这条消息**及之后的对话**从上下文与列表里移除，这条消息的原文放回输入框；
    * 工作区里已改动的文件不在这里、也不受影响（那是工具干的事）。
@@ -1557,7 +1583,12 @@ function ActiveChat({
           // 卡片左缘 = 正文文本左缘（不再横跨整个页脚、不超出正文左基线）
           <div className="mx-auto w-full max-w-[calc(var(--chat-content-width)+32px)] px-4 pt-2">
             <div className="pl-[var(--chat-reading-indent)]">
-              <ErrorCard error={toError(error)} onRetry={retry} />
+              <ErrorCard
+                error={toError(error)}
+                onRetry={retry}
+                onRetryKeep={retryKeep}
+                preservedRecords={retryPreservedRecords}
+              />
             </div>
           </div>
         ) : null}

@@ -14,7 +14,18 @@ import { Button } from '@renderer/components/ui/button'
  */
 export interface ErrorCardProps {
   error: Error
+  /**
+   * 「清空重来」= 现状语义：服务端 truncate 掉失败那条助手消息及其之后 + 客户端 regenerate。
+   * 保留 testid `error-retry`（既有用例与闸门语义不变）。
+   */
   onRetry: () => void
+  /**
+   * PB-035 B′：「保留内容再试」——不清空、不 truncate、不 regenerate，新起一轮，
+   * 新回复追加在旧内容之后（见 retry-keep.ts）。只有 `preservedRecords > 0` 时才提供。
+   */
+  onRetryKeep?: () => void
+  /** 失败轮里用户看得见的记录条数（非空正文 + 工具调用）；0 = 什么都没产出来 */
+  preservedRecords?: number
 }
 
 /** 认证类错误：HTTP 401（APICallError.statusCode）或文案里带 key/unauthorized/authentication */
@@ -46,7 +57,14 @@ export function describeError(error: Error): string {
   return '本轮生成失败，可重试。原始信息见下方详情。'
 }
 
-export function ErrorCard({ error, onRetry }: ErrorCardProps): React.JSX.Element {
+export function ErrorCard({
+  error,
+  onRetry,
+  onRetryKeep,
+  preservedRecords = 0
+}: ErrorCardProps): React.JSX.Element {
+  // PB-035 B′：失败轮已经有产出 → 给"保留/清空"两条路；什么都没产出 → 只留一个按钮（没有分叉的必要）
+  const keepAvailable = onRetryKeep !== undefined && preservedRecords > 0
   return (
     <div
       data-testid="error-card"
@@ -69,20 +87,54 @@ export function ErrorCard({ error, onRetry }: ErrorCardProps): React.JSX.Element
           里检查模型与 Key。
         </p>
       ) : null}
+      {/*
+        PB-035 B′ 顺序按 Gwen 的 720 规格（§2）：**说明 → 主按钮 → 详情**。
+        理由：说明解释两条路各自的后果，应紧贴主按钮 8px；「详情」是第三层信息放最后，
+        破坏性的「清空重来」在 DOM/Tab 顺序上也落到最后（主按钮 → summary → 清空重来）。
+      */}
+      {keepAvailable ? (
+        <p data-testid="error-preserve-note" className="min-w-0 break-words text-c1 text-ink-tertiary">
+          已产生 {preservedRecords} 条记录：
+          <span className="whitespace-nowrap">「保留内容再试」</span>会保留
+          {preservedRecords === 1 ? '它' : '它们'}并接着跑；
+          <span className="whitespace-nowrap">「清空重来」</span>会清空
+          {preservedRecords === 1 ? '它' : '它们'}重跑。
+        </p>
+      ) : null}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {keepAvailable ? (
+          <Button size="sm" variant="ghost" data-testid="error-retry-keep" onClick={onRetryKeep}>
+            保留内容再试
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" data-testid="error-retry" onClick={onRetry}>
+            再跑一次
+          </Button>
+        )}
+      </div>
       <details data-testid="error-details" className="min-w-0 text-c1 text-ink-tertiary">
-        <summary className="cursor-pointer select-none">详情</summary>
+        <summary className="inline-flex min-h-6 cursor-pointer items-center select-none">详情</summary>
         <pre
           data-testid="error-raw"
           className="mt-1 max-w-full min-w-0 overflow-x-hidden font-mono break-all whitespace-pre-wrap text-ink-secondary"
         >
           {error.message}
         </pre>
+        {/* 有产出时「清空重来」收进详情里：破坏性动作多一步（展开详情）且排在最后 */}
+        {keepAvailable ? (
+          <div className="mt-2 flex min-w-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="error-retry"
+              onClick={onRetry}
+              className="text-ink-tertiary"
+            >
+              清空重来
+            </Button>
+          </div>
+        ) : null}
       </details>
-      <div>
-        <Button size="sm" variant="ghost" data-testid="error-retry" onClick={onRetry}>
-          重试
-        </Button>
-      </div>
     </div>
   )
 }
