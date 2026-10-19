@@ -594,7 +594,10 @@ test.describe('interactive features — production UI functional evidence', () =
     const expectedSource = (state: Awaited<ReturnType<typeof shell>>): 'auto' | 'none' => {
       const safeLeft = state.sidebar === 'collapsed' ? 0 : sidebarWidth
       const panelWidth = Number.parseFloat(state.panelPreference) || 400
-      return state.innerWidth - edgeGap - safeLeft - panelWidth < minChatWidth ? 'auto' : 'none'
+      // 0.2.0 壳：内容区起点含 primary-nav-rail(56)，与 shell-store 的 auto 判据保持一致
+      return state.innerWidth - primaryNavRail - edgeGap - safeLeft - panelWidth < minChatWidth
+        ? 'auto'
+        : 'none'
     }
 
     try {
