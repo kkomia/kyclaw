@@ -9,7 +9,7 @@
  * 消息体照抄 DSH `driver/lib/index.js:11-18`；metadata 字段名严格 `{goalId, round, revision}`。
  * 轮尽不在这里 block（由调用方按契约发 `POST block {code:'round-limit'}`）。
  */
-import type { GoalView } from '@shared/goal'
+import type { GoalRequest, GoalState, GoalView } from '@shared/goal'
 
 /** 默认关闭：等上层入口（轮上限 / blocked 阈值）接好再打开（Lead 口径） */
 export const GOAL_DRIVER_ENABLED = false
@@ -89,5 +89,69 @@ export function planGoalRound(input: GoalRoundGateInput): GoalRoundDecision {
     metadata: {
       goalRound: { goalId: input.goal.id, round, revision: input.goal.revision }
     }
+  }
+}
+
+/** driver 需要的网络依赖（注入以便单测；生产用 goal-api 的函数） */
+export interface GoalDriverDeps {
+  fetchGoal: (threadId: string) => Promise<GoalState>
+  postGoal: (request: GoalRequest) => Promise<GoalState>
+  /** 只记日志/上报，绝不影响轮次本身 */
+  log?: (message: string, error?: unknown) => void
+}
+
+/** 同一会话的在途集合：重复调用不重复发（幂等的本地第一道闸） */
+const inFlight = new Set<string>()
+
+/**
+ * 轮数耗尽 → `POST block {code:'round-limit'}`（Bao 契约文案）。
+ * 幂等：先 GET 复查（已非 active / 已不轮尽 / goal 变了 → 不发）；并发/重复调用由 inFlight 挡住。
+ * 返回 true = 本次真的发了 block。
+ */
+export async function blockGoalRoundLimit(
+  threadId: string,
+  deps: GoalDriverDeps
+): Promise<boolean> {
+  if (inFlight.has(threadId)) return false
+  inFlight.add(threadId)
+  try {
+    const state = await deps.fetchGoal(threadId)
+    const goal = state.goal
+    if (goal === null || goal.phase !== 'active') return false
+    if (goal.roundsStarted < goal.maxGoalRounds) return false
+    await deps.postGoal({
+      threadId,
+      action: 'block',
+      ref: { id: goal.id, revision: goal.revision },
+      blocked: {
+        code: 'round-limit',
+        message: `Goal reached its configured limit of ${goal.maxGoalRounds} rounds.`
+      }
+    })
+    return true
+  } catch (error) {
+    deps.log?.('[goal-driver] block round-limit 失败（不影响本轮）', error)
+    return false
+  } finally {
+    inFlight.delete(threadId)
+  }
+}
+
+/**
+ * 轮末 abort / 流错误 → `POST disarm`（只改 activation，不动 phase/revision）。
+ * **永不抛**：失败只记日志；幂等由服务端（disarm 幂等）+ inFlight 双保险。
+ */
+export async function disarmGoalOnAbort(
+  threadId: string,
+  deps: GoalDriverDeps
+): Promise<void> {
+  if (inFlight.has(threadId)) return
+  inFlight.add(threadId)
+  try {
+    await deps.postGoal({ threadId, action: 'disarm' } as GoalRequest)
+  } catch (error) {
+    deps.log?.('[goal-driver] disarm 失败（忽略）', error)
+  } finally {
+    inFlight.delete(threadId)
   }
 }
