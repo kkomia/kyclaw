@@ -739,12 +739,12 @@ test.describe('interactive features — production UI functional evidence', () =
       }
       await page.mouse.up()
       expect(crossing, '拖宽到聊天不足最小可读宽时应立刻转 auto').not.toBeNull()
-      // 越界阈值 = innerWidth − rail(56) − sidebar(240) − 最小可读宽(480)（1280 下 ≈ 504；
-      // 旧 554 是漏 rail 的算法）。crossing 处的 panelPreference 应略高于该阈值。
-      expect(Number.parseFloat(crossing!.panelPreference)).toBeGreaterThan(
-        crossing!.innerWidth - primaryNavRail - sidebarWidth - minChatWidth
-      )
+      // auto 触发后 preference 仍停在用户最后一次显式宽度（500），实际 panelWidth 已铺满；
+      // 用实测宽对账：panelWidth ≈ innerWidth − rail(56) − gap(6)（1280 下 ≈ 1218）。
       expect(crossing!.mainDisplay).toBe('none')
+      expect(
+        Math.abs(crossing!.panelWidth - (crossing!.innerWidth - primaryNavRail - edgeGap))
+      ).toBeLessThanOrEqual(8)
       expect(crossing!.panelSource).toBe(expectedSource(crossing!))
       // 松手后停稳：仍是 auto（宽度停在越界那一步，不会回弹）
       const pastBoundary = await settledShell()
