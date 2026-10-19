@@ -78,16 +78,16 @@ export function kernelNotConfiguredMessage(missing: MissingConfig): string {
         ? '缺少 Electron 可执行文件（electronExecutable）'
         : '缺少内核目录（asarPath/kernelRoot；打包态应为安装目录 resources/kernel）'
   return [
-    `内核入口未配置（KERNEL_NOT_CONFIGURED）：KYCLAW_KERNEL_PORT=1，但${what}。`,
+    `内核入口未配置（KERNEL_NOT_CONFIGURED）：${what}。`,
     '  期望来源：生产由 src/main/index.ts 注入 process.execPath + process.resourcesPath/kernel；',
     '  开发态为 app.getAppPath()/resources/kernel（先跑 `pnpm fetch:kernel` 把快照落到 resources/kernel/rc.2），',
     '  也可用环境变量 KYCLAW_KERNEL_ROOT 指到现成的内核树。',
-    '  只想走旧路径时不要设 KYCLAW_KERNEL_PORT=1（flag/env：KYCLAW_KERNEL_PORT）。'
+    '  0.2.0 起内核必启：没有关闭内核的 flag；这是安装/构建不完整，请重装或重新打包。'
   ].join('\n')
 }
 
 /**
- * spawn 前的硬校验（PB-017）：flag 已开但调用方没注入内核参数时 fail fast，
+ * spawn 前的硬校验（PB-017）：调用方没注入内核参数时 fail fast，
  * 绝不把空串交给 `spawn()`（Node 会同步抛 `TypeError: The argument 'file' cannot be empty`）。
  */
 export function assertKernelLaunchConfigured(input: KernelLaunchConfigInput): void {

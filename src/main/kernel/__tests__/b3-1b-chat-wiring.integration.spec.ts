@@ -1,4 +1,4 @@
-﻿// @vitest-environment node
+// @vitest-environment node
 /**
  * B3.1b 端到端（**默认跳过**）：**真实 HTTP chat 端点** + 真内核 adapter（flag 开）。
  *
@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { startAgentServer, type AgentServerHandle } from '../../agent/service'
-import { KYCLAW_AGENT_ID } from '../../../mastra/agents/kyclaw'
+import { KYCLAW_AGENT_ID } from '../../../shared/agent-id'
 
 const ENABLED = process.env.KYCLAW_KERNEL_E2E === '1'
 const ELECTRON = process.env.KYCLAW_KERNEL_ELECTRON ?? 'F:\\deepseekharness\\DeepSeek Harness.exe'
@@ -132,12 +132,10 @@ async function waitNoProcesses(dataDir: string): Promise<number[]> {
   return remaining
 }
 
-describe.runIf(ENABLED)('B3.1b：真实 HTTP chat 端点 + 真内核（flag 开）', () => {
+describe.runIf(ENABLED)('B3.1b：真实 HTTP chat 端点 + 真内核（内核必启）', () => {
   it('一轮 SSE 与 0.1.6 参考逐字段一致；stop 后无孤儿/端口残留', async () => {
     const stub = await startStub()
     const dataDir = mkdtempSync(join(tmpdir(), 'kyclaw-b31b-chat-'))
-    const previous = process.env.KYCLAW_KERNEL_PORT
-    process.env.KYCLAW_KERNEL_PORT = '1'
     let server: AgentServerHandle | undefined
     try {
       server = await startAgentServer({
@@ -176,8 +174,6 @@ describe.runIf(ENABLED)('B3.1b：真实 HTTP chat 端点 + 真内核（flag 开�
       ).rejects.toThrow()
     } finally {
       await server?.stop()
-      if (previous === undefined) delete process.env.KYCLAW_KERNEL_PORT
-      else process.env.KYCLAW_KERNEL_PORT = previous
       await new Promise<void>((resolve) => {
         stub.server.close(() => {
           resolve()

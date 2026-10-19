@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * PB-017（Eve 在 PB-005 实测崩溃）：`KYCLAW_KERNEL_PORT=1` 但没注入 `options.kernel` 时，
+ * PB-017/PB-020（Eve 在 PB-005 实测崩溃）：内核必启后，调用方没注入 `options.kernel` 时，
  * `service.ts` 兜底成空串 `<empty>`，`spawn('')` 抛**同步 TypeError**（ERR_INVALID_ARG_VALUE），
  * 三套 spec 直接崩。
  *
@@ -29,15 +29,14 @@ function codeOf(error: unknown): string | undefined {
     : undefined
 }
 
-describe('PB-017：flag 开但内核入口未配置 → 可诊断错误（不是 TypeError）', () => {
+describe('PB-017/PB-020：内核入口未配置 → 可诊断错误（不是 TypeError）', () => {
   it('未注入 options.kernel（两个路径都空）：fail fast，给 KERNEL_NOT_CONFIGURED', async () => {
     const dir = tempDir()
     try {
       const failure = await maybeStartKernelAdapter({
         electronExecutable: '',
         asarPath: '',
-        appDataDir: dir,
-        env: { KYCLAW_KERNEL_PORT: '1' }
+        appDataDir: dir
       }).then(
         () => null,
         (error: unknown) => error
@@ -45,7 +44,7 @@ describe('PB-017：flag 开但内核入口未配置 → 可诊断错误（不是
       expect(failure).toBeInstanceOf(Error)
       expect(failure).not.toBeInstanceOf(TypeError)
       expect((failure as Error).message).toContain('内核入口未配置')
-      expect((failure as Error).message).toContain('KYCLAW_KERNEL_PORT=1')
+      expect((failure as Error).message).toContain('0.2.0 起内核必启')
       // 期望配置来源要说清（谁注入、内核快照在哪）
       expect((failure as Error).message).toContain('kernel')
       expect(codeOf(failure)).toBe('KERNEL_NOT_CONFIGURED')
@@ -60,8 +59,7 @@ describe('PB-017：flag 开但内核入口未配置 → 可诊断错误（不是
       const failure = await maybeStartKernelAdapter({
         electronExecutable: process.execPath,
         asarPath: '',
-        appDataDir: dir,
-        env: { KYCLAW_KERNEL_PORT: '1' }
+        appDataDir: dir
       }).then(
         () => null,
         (error: unknown) => error

@@ -1,4 +1,4 @@
-﻿// @vitest-environment node
+// @vitest-environment node
 /**
  * B3.2：两轮续接（同会话上下文）+ HTTP 断流取消。
  * 默认跳过（KYCLAW_KERNEL_E2E=1）。
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { startAgentServer, type AgentServerHandle } from '../../agent/service'
-import { KYCLAW_AGENT_ID } from '../../../mastra/agents/kyclaw'
+import { KYCLAW_AGENT_ID } from '../../../shared/agent-id'
 
 const ENABLED = process.env.KYCLAW_KERNEL_E2E === '1'
 const ELECTRON = process.env.KYCLAW_KERNEL_ELECTRON ?? 'F:\\deepseekharness\\DeepSeek Harness.exe'
@@ -99,22 +99,15 @@ function startStub(options: { delayMs: number; texts: string[] }): Promise<Stub>
 
 async function startServer(stub: Stub): Promise<{ server: AgentServerHandle; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'kyclaw-b32-multi-'))
-  const previous = process.env.KYCLAW_KERNEL_PORT
-  process.env.KYCLAW_KERNEL_PORT = '1'
-  try {
-    const server = await startAgentServer({
-      dataDir: dir,
-      kernel: {
-        electronExecutable: ELECTRON,
-        asarPath: ASAR,
-        extraEnv: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }
-      }
-    })
-    return { server, dir }
-  } finally {
-    if (previous === undefined) delete process.env.KYCLAW_KERNEL_PORT
-    else process.env.KYCLAW_KERNEL_PORT = previous
-  }
+  const server = await startAgentServer({
+    dataDir: dir,
+    kernel: {
+      electronExecutable: ELECTRON,
+      asarPath: ASAR,
+      extraEnv: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }
+    }
+  })
+  return { server, dir }
 }
 
 async function chat(

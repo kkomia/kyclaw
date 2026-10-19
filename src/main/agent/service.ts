@@ -12,12 +12,10 @@
  *
  * 纯 Node 模块：**顶层不 import electron**（dataDir 由调用方注入——生产传 app.getPath('userData')，
  * 测试传临时目录），所以整条链路能在 vitest（node 环境）里真跑起来。
- * Mastra 系依赖 ESM-only、主进程产物 CJS：运行时依赖一律动态 import()。
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { isAbsolute, relative } from 'node:path'
 import { KYCLAW_AGENT_ID } from '../../shared/agent-id'
-import type { KyclawModel } from '../model'
 import { readSettings, settingsPath } from '../settings'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
@@ -31,35 +29,9 @@ import {
   createKernelThreadsUnavailableRouter
 } from '../threads/kernel-threads'
 import { createThreadCwdResolver } from '../threads/thread-cwd'
-import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
 import type { Project } from '../../shared/projects'
-import type { AuthoringRuntime } from '../../shared/authoring'
-import type {
-  AppSettings,
-  McpServerConfig,
-  NetworkSettings,
-  PermissionRule,
-  SemanticRecallSettings,
-  Workspace
-} from '../../shared/settings'
+import type { AppSettings } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
-import type { PdfPrinter } from '../print-pdf'
-import type { WebSearchRuntime } from '../../shared/search'
-
-/**
- * PB-020 A2a 过渡类型：旧 Mastra loop 的运行时装配已删，下面这些形状只为让尚未改写的旧测试
- * 继续通过 typecheck（A2b 会连同测试一起删）。生产路径不再使用它们。
- */
-type ModelResolver = () => Promise<KyclawModel>
-type PptRenderer = 'powerpoint' | 'libreoffice' | 'none'
-type SkillRuntimeFacts = { pptRenderer: PptRenderer; vision: boolean | null }
-interface RecallRuntimeLike {
-  /** PB-020 A2a：内核路径没有语义召回实现，`off` 是显式「未开启」，不是旧枚举值。 */
-  readonly source: SemanticRecallSettings['source'] | 'off'
-  status(): unknown
-  settled(): Promise<void>
-  markUnavailable(detail: string): void
-}
 
 const HOST = '127.0.0.1'
 
@@ -103,20 +75,8 @@ const TOKEN_BYTES = 32
 const ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:5174', 'null']
 
 export interface AgentServerOptions {
-  /** 应用数据目录：libsql 库文件落这里（生产 = userData），settings.json 也从这里读 provider */
+  /** 应用数据目录（生产 = userData）：settings.json 从这里读，内核 home 缺省也用它 */
   dataDir: string
-  /** 注入模型（测试用，整场不变） */
-  model?: KyclawModel
-  /**
-   * 每轮对话重新解析模型（**生产用**：main/index.ts 注入"读 settings + secrets"的实现，
-   * 于是用户配好 provider/密钥后不用重启，下一轮就是真模型）。
-   */
-  resolveModel?: ModelResolver
-  /**
-   * 授权工作区（文件工具的权限边界）：**现读**的取值函数，用户中途加工作区/切模式下一轮就生效。
-   * 缺省 = 从 dataDir/settings.json 的 workspaces 读（与设置页写入的是同一份）。
-   */
-  workspaces?: () => readonly Workspace[]
   /**
    * 默认工作区（T18）：**现读**；缺省 = 从 dataDir/settings.json 读。
    * 未指定项目的会话落在它**下面的会话子目录**里（round 55，规则见 shared/session-dir.ts）。
@@ -124,90 +84,24 @@ export interface AgentServerOptions {
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */
   projects?: () => readonly Project[]
-  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
-  rules?: unknown
-  /**
-   * "永久允许"规则（T13）：同样是**现读**的取值函数（审批卡里点"永久允许"落进 settings.json，
-   * 下一轮工具调用就不再弹审批）。缺省 = 从 dataDir/settings.json 的 permissions.rules 读。
-   */
-  permissionRules?: () => readonly PermissionRule[]
-  /**
-   * MCP server 设置（T12）：现读的取值函数（设置页的 /api/mcp/servers 写的就是这份）。
-   * 缺省 = 从 dataDir/settings.json 的 mcpServers 读。
-   */
-  mcpServers?: () => readonly McpServerConfig[]
-  /**
-   * T17：Langfuse 追踪配置（现读）。生产由 main/index.ts 注入"读设置 + safeStorage 密钥"的实现；
-   * 缺省 = null（不导出）——本模块刻意不 import electron，读不到 safeStorage 里的密钥。
-   */
-  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
-  langfuse?: () => unknown
-  /**
-   * round 28：语义召回设置（现读；**装配只在启动时做一次**，改设置要重启应用才生效）。
-   * 缺省 = 从 dataDir/settings.json 的 semanticRecall 读（与设置页写的是同一份）。
-   */
-  semanticRecall?: () => SemanticRecallSettings
-  /**
-   * round 28：嵌入服务的 API Key（safeStorage 明文；缺省 = null——本模块不 import electron）。
-   * 生产由 main/index.ts 注入"读 secrets.json"的实现。
-   */
-  embeddingKey?: () => string | null
-  /**
-   * round 28 模块 3B：本机引擎的端点（缺省 = 没接上）。生产由 main/index.ts 注入
-   * `localModelService.embeddingEndpoint`（它会确保引擎起来）；测试可以注入假端点。
-   */
-  /** PB-020 过渡：旧 loop 已删；字段保留仅为旧测试编译（A2b 删）。 */
-  localEmbedding?: unknown
-  /** round 28：测试用——直接给一个 embedder（跳过设置解析与探测）；PB-020 过渡字段 */
-  recallEmbedder?: unknown
-  /**
-   * 模块 4：PDF 打印钩子（HTML → PDF 字节）。**缺省 = 没有**（create_pdf 报"环境不支持"）。
-   * 生产由 main/index.ts 注入 Electron printToPDF 的实现（本模块刻意不 import electron）。
-   */
-  printPdf?: PdfPrinter
-  /**
-   * round 45：联网搜索的运行时配置（现读：设置 + 三个可选 Key）。
-   * 缺省 = 从 dataDir/settings.json 读设置、没有 Key（密钥在 safeStorage 里，本模块不 import electron；
-   * 生产由 main/index.ts 注入"读设置 + 解密钥"的实现）。
-   */
-  webSearch?: () => WebSearchRuntime
-  /**
-   * round 73：fetch 出站边界的白名单（现读：设置页改了**下一轮工具调用**就生效，不必重启）。
-   * 缺省 = 从 dataDir/settings.json 的 `network` 读；旧落盘文件没有这个键也算"空表"（一律拒绝）——
-   * 与 shared/settings.ts 里 `network` 为什么是 optional 同一口径。
-   */
-  network?: () => NetworkSettings
-  /**
-   * round 64：技能（内置 office 四件套）根目录 = 打包后 `<resources>/skills`、
-   * 开发态仓库的 `resources/skills`。**路径只有 main/index.ts 算得出来**（要 app/process.resourcesPath），
-   * 所以由它注入；缺省 = 只有插件技能、没有内置技能。
-   */
-  builtinSkillsDir?: string | null
-  /**
-   * round 68：**本部署事实**（技能加载时拼在全文末尾的那一段：渲染器能不能用 + 当前模型能不能读图）。
-   * 缺省 = 现算（`skillRuntimeFactsFor`：设置里的视觉探测结论 + 本机 PowerPoint 探测）；
-   * 测试可以注入假件（不装 Office 的机器上也能钉住两种口径）。
-   */
-  skillRuntimeFacts?: () => SkillRuntimeFacts | null
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
   attempts?: number
   /**
-   * B3.1b：flag 开（`KYCLAW_KERNEL_PORT=1`）时的内核位置。**生产由 main/index.ts 注入**
-   * （`process.execPath` + `<resources>/app.asar`）；测试注入本机已安装的 DSH 路径。
-   * flag 关时本字段完全不读（旧 Mastra 路径字节级不变）。
+   * PB-020 B：内核必启（没有 flag）。**生产由 main/index.ts 注入**
+   * （`process.execPath` + `resources/kernel`）；测试注入本机已安装的 DSH 路径。
    *
    * ⚠️ 不要把 `DSH_TOOLS_MODE` 设成 `none`：内核 boot 会因 tools 服务缺失失败
    * （8 个插件等待 tools），B3.1a 已实测踩坑。
    */
-  kernel?: {
+  kernel: {
     electronExecutable: string
-    /** B4：内核根（打包态 = process.resourcesPath/kernel；开发态 = app.getAppPath()/resources/kernel） */
+    /** 内核根（打包态 = process.resourcesPath/kernel；开发态 = app.getAppPath()/resources/kernel） */
     asarPath: string
-    /** B4：内核 home（生产 = userData/dsh-home；缺省 adapter 兜底 appDataDir/dsh-kernel-home） */
+    /** 内核 home（生产 = userData/dsh-home；缺省 adapter 兜底 appDataDir/dsh-kernel-home） */
     dshHome?: string
-    /** B4：内核启动日志落点（生产 = userData/logs/kernel.log） */
+    /** 内核启动日志落点（生产 = userData/logs/kernel.log） */
     logFile?: string
     extraEnv?: Record<string, string>
   }
@@ -215,21 +109,16 @@ export interface AgentServerOptions {
 
 export interface AgentServerHandle extends AgentEndpoint {
   port: number
-  /** T17：本次装配的追踪状态（设置页「追踪」栏用它说"已开启 / 重启后开启"） */
+  /** 本次装配的追踪状态（0.2.0 内核路径没有 Langfuse 导出，恒 false；设置页按这个显示） */
   telemetry: { langfuse: boolean }
   rules: { processorRegistered: boolean }
   /**
-   * round 28：本次装配的语义召回状态（设置页/记忆页用它说"已开启 / 重启后开启 / 准备中"）。
-   * 现读（本地模型的后台准备会改它）；`settled()` 等后台活干完（测试与收尾用，不抛）。
-   */
-  recall: RecallRuntimeLike
-  /**
-   * round 15：会话 → 项目 id（session_projects 内存镜像，同步）。
+   * 会话 → 项目 id（R3：内核 session cwd → projects 反查，同步）。
    * `workspace:list-files` 借它把 threadId 解析成会话根（与文件工具同口径）；
-   * 没有映射（或镜像没载入）回 null —— 上游按"无项目"回落。
+   * 拿不到（未 list 过/刚启动）回 null —— 上游按「项目映射暂不可用」处理，不回落默认工作区。
    */
   projectIdOf(threadId: string): string | null
-  /** 断开监听、收掉 Mastra 与 storage；重复调用是空操作 */
+  /** 断开监听、收掉内核子进程；重复调用是空操作 */
   stop(): Promise<void>
 }
 
@@ -285,85 +174,6 @@ async function listenOn(
   return { server, port: address.port }
 }
 
-/**
- * 静默收尾：收不掉只记日志（不能盖住调用方真正关心的那个错误）。
- * storage 是句柄的真正持有者 —— 无论 Mastra 收尾成不成功都要关（try/finally，T6 随修）；
- * memory 给了就先等它把后台活干完（T9：标题落库之类的写入不能和 storage.close 赛跑）。
- * 导出只为一件事：失败路径没法用真句柄造（shutdown 抛错），单测拿假件打这条顺序。
- */
-export async function teardownQuietly(
-  mastra: { shutdown(): Promise<unknown> },
-  storage: { close(): Promise<unknown> },
-  memory?: { settled(): Promise<unknown> }
-): Promise<void> {
-  try {
-    await mastra.shutdown()
-  } catch (error) {
-    console.warn('[kyclaw] agent 服务收尾失败（Mastra）', error)
-  } finally {
-    if (memory !== undefined) {
-      try {
-        await memory.settled()
-      } catch (error) {
-        console.warn('[kyclaw] agent 服务收尾失败（memory）', error)
-      }
-    }
-    try {
-      await storage.close()
-    } catch (error) {
-      console.warn('[kyclaw] agent 服务收尾失败（storage）', error)
-    }
-  }
-}
-
-/**
- * PB-020 A2a：旧 loop 的缺省模型来源已删；`resolveModel` 选项仅为旧测试保留（A2b 删）。
- */
-export function authoringRuntimeFor(options: {
-  /** 用户技能目录（生产 = `<dataDir>/skills`） */
-  skillsDir: string
-  /** 内置技能根目录（缺省 = 没有内置技能，内置名清单为空） */
-  builtinSkillsDir?: string | null
-  /** 插件复制进来的技能目录名（不许覆盖/删除） */
-  installedSkillDirs: readonly string[]
-  /** 现读 MCP 配置 */
-  readServers: () => readonly McpServerConfig[]
-  /** 整表落盘（与 PUT /api/mcp/servers 同一个函数） */
-  saveServers: (servers: McpServerConfig[]) => readonly McpServerConfig[]
-  /** 落盘成功后的连接对齐（尽力而为） */
-  onServersChanged?: () => void
-}): AuthoringRuntime {
-  return {
-    skillsDir: options.skillsDir,
-    pluginSkillDirs: [...options.installedSkillDirs],
-    // 内置技能名（`resources/skills/*` 的目录名）：同名不许占用（否则 use_skill 先命中内置那份）
-    builtinSkillNames: skillSourcesForFn({
-      skillsDir: '',
-      installed: [],
-      builtinDir: options.builtinSkillsDir ?? null
-    }).map((source) => source.dir),
-    readMcpServers: options.readServers,
-    saveMcpServers: options.saveServers,
-    ...(options.onServersChanged === undefined
-      ? {}
-      : { onMcpServersChanged: options.onServersChanged })
-  }
-}
-
-/**
- * PB-020 A2a：旧 loop 的技能事实来源已删；函数仅为旧测试保留（A2b 删）。
- * 旧 Mastra `render_ppt` 探测（`detectRenderer`）不再由宿主调用；缺省 `none`、vision 未知。
- */
-export function skillRuntimeFactsFor(options: {
-  /** 现读设置（生产 = dataDir/settings.json 的那份） */
-  settings: () => AppSettings
-  /** 渲染器探测（测试注入假件；生产缺省 none） */
-  detectRenderer?: () => PptRenderer
-}): () => SkillRuntimeFacts | null {
-  const detect = options.detectRenderer ?? ((): PptRenderer => 'none')
-  return () => ({ pptRenderer: detect(), vision: null })
-}
-
 export async function startAgentServer(options: AgentServerOptions): Promise<AgentServerHandle> {
   const [{ Hono }, { cors }] = await Promise.all([import('hono'), import('hono/cors')])
 
@@ -412,8 +222,8 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const interactionHub = new InteractionHub()
 
   const kernelAdapter = await maybeStartKernelAdapter({
-    electronExecutable: options.kernel?.electronExecutable ?? '',
-    asarPath: options.kernel?.asarPath ?? '',
+    electronExecutable: options.kernel.electronExecutable,
+    asarPath: options.kernel.asarPath,
     appDataDir: options.dataDir,
     resolveCwd: resolveThreadCwd,
     // PB-004/PB-025：交互中枢——内核 session 事件与 `$events` waterfall 都喂给同一个 hub
@@ -423,9 +233,9 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     onInteractionEvent: (event) => {
       applyInteractionEvent(interactionHub, event)
     },
-    ...(options.kernel?.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
-    ...(options.kernel?.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
-    ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
+    ...(options.kernel.dshHome === undefined ? {} : { dshHome: options.kernel.dshHome }),
+    ...(options.kernel.logFile === undefined ? {} : { logFile: options.kernel.logFile }),
+    ...(options.kernel.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
   }).catch((error: unknown) => {
     // PB-020 A2a：旧 Mastra 装配已删，没有 storage/memory 可清理；内核失败直接抛。
     throw error
@@ -557,14 +367,6 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     // PB-020 A2a：旧 Mastra 装配已删。追踪/语义召回/规则处理器都随旧 loop 下线；
     // 内核版本前没有对应实现 → 如实报「未开启」，不假装成功（设置页按这个显示）。
     telemetry: { langfuse: false },
-    recall: {
-      source: 'off',
-      status: () => ({ state: 'off', detail: null }),
-      settled: async () => {},
-      markUnavailable: (detail: string) => {
-        console.warn('[kyclaw] 语义召回不可用（0.2.0 内核路径未实现）', detail)
-      }
-    },
     rules: { processorRegistered: false },
     projectIdOf,
     stop: async () => {

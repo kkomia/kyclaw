@@ -7,7 +7,6 @@
  * 这里用假 exists 钉选择顺序与"都找不到时"的可诊断错误。
  */
 import { describe, expect, it } from 'vitest'
-import { isKernelPortEnabled, KERNEL_PORT_ENV } from '../feature-flag'
 import {
   DSH_KERNEL_ARGS,
   chooseKernelScript,
@@ -44,15 +43,6 @@ describe('kernel-entry：启动计划（B1.5 实测口径）', () => {
     })
     expect(plan.env.DEEPSEEK_BASE_URL).toBe('http://127.0.0.1:1234')
     expect(plan.args).toContain('web')
-  })
-})
-
-describe('feature flag：默认关（B2 不改现有行为）', () => {
-  it('未设 / 非 1 一律 false；只有 KYCLAW_KERNEL_PORT=1 才开', () => {
-    expect(isKernelPortEnabled({})).toBe(false)
-    expect(isKernelPortEnabled({ [KERNEL_PORT_ENV]: '0' })).toBe(false)
-    expect(isKernelPortEnabled({ [KERNEL_PORT_ENV]: 'true' })).toBe(false)
-    expect(isKernelPortEnabled({ [KERNEL_PORT_ENV]: '1' })).toBe(true)
   })
 })
 

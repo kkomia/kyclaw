@@ -6,15 +6,13 @@
  *   1. 菜单目录来自 adapter.listCommands（唯一来源），flag 关不假装有命令；
  *   2. command 的 SSE 帧顺序 `command/run` → `command/done`，且**不调 startTurn**（命令不产生模型消息）；
  *   3. threadId 必填且一路透传给 adapter（不落默认会话）；
- *   4. flag 关降级：goal 走旧 store，六行按旧口径 `x/256`；未知命令给可诊断错误（不是 undefined）。
+ *   4. adapter 为 null（内核未起）时不静默：projection 回 503 KERNEL_DISABLED，command 给可诊断错误。
  */
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import type { GoalState } from '../../../shared/goal'
 import type { KernelAdapter } from '../kernel-adapter'
 import { createKernelUiRouter, KERNEL_UI_ROUTE_PREFIX } from '../kernel-ui-route'
-import type { SessionGoalStore } from '../../../mastra/session-goal'
 
 const KERNEL_GOAL = {
   goal: {
@@ -27,23 +25,6 @@ const KERNEL_GOAL = {
   roundsStarted: 1,
   createdAt: 1,
   updatedAt: 2
-}
-
-function legacyState(overrides: Partial<GoalState> = {}): GoalState {
-  return {
-    goal: {
-      id: 'g1',
-      revision: 2,
-      objective: '完成迁移',
-      phase: 'active',
-      roundsStarted: 1,
-      maxGoalRounds: 256,
-      createdAt: 1,
-      updatedAt: 2
-    },
-    activation: 'armed',
-    ...overrides
-  }
 }
 
 interface FakeAdapterOptions {
@@ -120,57 +101,12 @@ function fakeAdapter(options: FakeAdapterOptions = {}): {
   return { adapter, calls }
 }
 
-function fakeGoalStore(state: GoalState = legacyState()): {
-  store: SessionGoalStore
-  stateCalls: string[]
-} {
-  const stateCalls: string[] = []
-  const store = {
-    async ensureTable() {
-      await Promise.resolve()
-    },
-    async state(threadId: string) {
-      stateCalls.push(threadId)
-      return state
-    },
-    async create() {
-      return state
-    },
-    async edit() {
-      return state
-    },
-    async pause() {
-      return state
-    },
-    async resume() {
-      return state
-    },
-    async complete() {
-      return state
-    },
-    async block() {
-      return state
-    },
-    async clear() {
-      return state
-    },
-    async disarm() {
-      return state
-    },
-    async admitRound() {
-      return state
-    }
-  } as unknown as SessionGoalStore
-  return { store, stateCalls }
-}
-
-function appWith(options: { adapter: KernelAdapter | null; store?: SessionGoalStore }): Hono {
+function appWith(options: { adapter: KernelAdapter | null }): Hono {
   const app = new Hono()
   app.route(
     KERNEL_UI_ROUTE_PREFIX,
     createKernelUiRouter({
-      adapter: options.adapter,
-      legacyGoal: options.store ?? fakeGoalStore().store
+      adapter: options.adapter
     })
   )
   return app
@@ -312,50 +248,29 @@ describe('kernel-ui-route：flag 开（内核命令平面）', () => {
   })
 })
 
-describe('kernel-ui-route：flag 关降级（旧 goal store，PB-020 删除）', () => {
-  it('status=false；projection 走旧 store，六行按旧口径 x/256', async () => {
-    const { store, stateCalls } = fakeGoalStore()
-    const app = appWith({ adapter: null, store })
+describe('kernel-ui-route：adapter=null（内核未起，不静默）', () => {
+  it('status/catalog 报 disabled；projection 回 503 KERNEL_DISABLED', async () => {
+    const app = appWith({ adapter: null })
     const status = await app.request(`${KERNEL_UI_ROUTE_PREFIX}/status`)
     expect(await status.json()).toEqual({ enabled: false })
     const catalog = await app.request(`${KERNEL_UI_ROUTE_PREFIX}/catalog`)
     expect(await catalog.json()).toEqual({ enabled: false, commands: [] })
 
     const response = await app.request(`${KERNEL_UI_ROUTE_PREFIX}/projection?threadId=thread-old`)
-    const body = (await response.json()) as {
-      goal: { visible: boolean; rows: Array<{ id: string; value: string }>; commands: string[] }
-    }
-    expect(body.goal.visible).toBe(true)
-    expect(body.goal.rows.find((row) => row.id === 'rounds')?.value).toBe('1/256')
-    expect(body.goal.rows.find((row) => row.id === 'activation')?.value).toBe('armed')
-    expect(body.goal.commands).toEqual(['goal pause', 'goal edit', 'goal clear'])
-    expect(stateCalls).toEqual(['thread-old'])
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ error: 'KERNEL_DISABLED' })
   })
 
-  it('`/goal` 状态走旧 store；非 goal 命令给可诊断错误（不静默 undefined）', async () => {
-    const { store } = fakeGoalStore()
-    const app = appWith({ adapter: null, store })
-    const goalFrames = parseSse(await (await command(app, { threadId: 't', line: '/goal' })).text())
-    expect(goalFrames[1]).toMatchObject({
+  it('command 仍回 command/run → command/done，kind=error 且说明内核未启用', async () => {
+    const app = appWith({ adapter: null })
+    const frames = parseSse(await (await command(app, { threadId: 't', line: '/goal' })).text())
+    expect(frames[0]).toMatchObject({ type: 'command/run', line: '/goal' })
+    expect(frames[1]).toMatchObject({
       type: 'command/done',
-      result: { kind: 'success' },
+      result: { kind: 'error' },
+      goal: null,
       plan: null
     })
-    expect((goalFrames[1]?.goal as { visible: boolean }).visible).toBe(true)
-
-    const planFrames = parseSse(await (await command(app, { threadId: 't', line: '/plan' })).text())
-    expect(planFrames[1]).toMatchObject({
-      type: 'command/done',
-      result: { kind: 'error' }
-    })
-  })
-
-  it('flag 关没有 goal：projection 的 goal 为 null（dock 隐藏）', async () => {
-    const { store } = fakeGoalStore(legacyState({ goal: null }))
-    const app = appWith({ adapter: null, store })
-    const body = (await (
-      await app.request(`${KERNEL_UI_ROUTE_PREFIX}/projection?threadId=t`)
-    ).json()) as { goal: null }
-    expect(body.goal).toBeNull()
+    expect(String((frames[1]?.result as { text?: string }).text)).toContain('内核未启用')
   })
 })

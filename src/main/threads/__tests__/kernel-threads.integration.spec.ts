@@ -90,7 +90,7 @@ describe.runIf(ENABLED)('PB-024 kernel threads 真机集成', () => {
     const appData = join(root, 'appdata')
     mkdirSync(workspace, { recursive: true })
     mkdirSync(appData, { recursive: true })
-    let adapter: KernelAdapter | null = null
+    let adapter: KernelAdapter | undefined
     try {
       adapter = await maybeStartKernelAdapter({
         electronExecutable: ELECTRON,
@@ -102,12 +102,10 @@ describe.runIf(ENABLED)('PB-024 kernel threads 真机集成', () => {
           DEEPSEEK_API_KEY: 'test',
           DEEPSEEK_BASE_URL: stub.baseUrl
         },
-        env: { ...process.env, KYCLAW_KERNEL_PORT: '1' },
         readyTimeoutMs: 30_000,
         turnTimeoutMs: 60_000
       })
-      expect(adapter).not.toBeNull()
-      const live = adapter as KernelAdapter
+      const live = adapter
       const ops = createKernelSessionOpsForAdapter(live)
       const app = createKernelThreadsRouter({
         ops,

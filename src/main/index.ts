@@ -27,7 +27,6 @@ import { pushUpdateState, registerUpdatesIpc } from './ipc/updates'
 import { registerWindowIpc } from './ipc/window'
 import { registerWorkspaceIpc } from './ipc/workspace'
 import { registerWorkbenchIpc } from './ipc/workbench'
-import { isKernelPortEnabled } from './kernel/feature-flag'
 import { defaultKernelRoot } from './kernel/kernel-layout'
 import { KernelStartupError, kernelFailureText } from './kernel/kernel-startup'
 import { ensureMcpHomePatch } from './kernel/mcp-profile'
@@ -39,11 +38,9 @@ import {
   OFFICE_SCHEME_PRIVILEGES
 } from './office-protocol'
 import { pluginsDirs, sweepPluginResidue } from './plugins/store'
-import { printPdf } from './print-pdf'
 import { readBundledReleaseNotes } from './release-notes'
 import { getProviderKey, secretsPath } from './secrets'
 import { initializeDefaultWorkspace, readSettings, settingsPath } from './settings'
-import { readLangfuseConfig } from './telemetry'
 import {
   createInertUpdater,
   createKyclawUpdater,
@@ -57,15 +54,8 @@ import { applyThemeMode, currentResolvedTheme, showMainWindow } from './window'
 import { isQuitting, markQuitting, registerCloseAllowGuard } from './window-close'
 import { createOfficeQuitGuard, registerOfficeQuitIpc } from './office-quit'
 import { installWebviewGuard } from './webview'
-import { resolveModel } from './model'
 import { killAllRunning } from './tools/exec'
-import { EMBEDDING_KEY_SECRET_ID } from '../shared/memory'
-import { SEARCH_KEY_SECRET_ID } from '../shared/search'
 import { IPC_CHANNELS, type AgentEndpoint } from '../shared/ipc'
-
-// R18：本地优先姿态 —— 关掉 Mastra 遥测（默认会往 PostHog 打点）。
-// 必须在这里、在任何动态 import mastra 之前设置；main/index.ts 是应用最早的执行点。
-process.env.MASTRA_TELEMETRY_DISABLED = 'true'
 
 /**
  * M3-S1：`kyclaw-office://` 隔离面协议的 **privileged 注册**。
@@ -230,15 +220,12 @@ if (!app.requestSingleInstanceLock()) {
      *   - dshHome：userData/dsh-home —— 内核数据不落仓库、不落安装目录（验收②）；
      *   - logFile：userData/logs/kernel.log —— 启动失败可诊断（验收④）。
      */
-    const kernelEnabled = isKernelPortEnabled()
-    const kernelRoot = kernelEnabled
-      ? defaultKernelRoot({
-          isPackaged: app.isPackaged,
-          resourcesPath: process.resourcesPath,
-          appPath: app.getAppPath(),
-          env: process.env
-        })
-      : ''
+    const kernelRoot = defaultKernelRoot({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      env: process.env
+    })
     const kernelLogFile = join(userDataDir, 'logs', 'kernel.log')
     /** 内核的隔离 home（PB-006 验收②；MCP home patch 也落这里，两处必须同一个路径） */
     const kernelDshHome = join(userDataDir, 'dsh-home')
@@ -248,26 +235,21 @@ if (!app.requestSingleInstanceLock()) {
      * 语义：**改配置后需重启应用生效**（内核在 boot 时读 patch，没有 host 侧 reload 接口）。
      * 写失败不挡内核启动：MCP 是加法能力，错误只记日志（内核日志/控制台）。
      */
-    if (kernelEnabled) {
-      try {
-        const mcpPatch = ensureMcpHomePatch(
-          kernelDshHome,
-          readSettings(settingsPath(userDataDir)).mcpServers
-        )
-        if (mcpPatch.changed) {
-          console.info(
-            `[kyclaw] MCP 配置已写入内核 patch：${mcpPatch.file}（启用 ${String(mcpPatch.included.length)} 个 server）`
-          )
-        }
-        if (mcpPatch.skipped.length > 0) {
-          console.warn('[kyclaw] MCP 配置有跳过项（未写入内核 patch）', mcpPatch.skipped)
-        }
-      } catch (error) {
-        console.warn(
-          '[kyclaw] MCP 配置写入内核 patch 失败（MCP 本次不可用，不影响其它功能）',
-          error
+    try {
+      const mcpPatch = ensureMcpHomePatch(
+        kernelDshHome,
+        readSettings(settingsPath(userDataDir)).mcpServers
+      )
+      if (mcpPatch.changed) {
+        console.info(
+          `[kyclaw] MCP 配置已写入内核 patch：${mcpPatch.file}（启用 ${String(mcpPatch.included.length)} 个 server）`
         )
       }
+      if (mcpPatch.skipped.length > 0) {
+        console.warn('[kyclaw] MCP 配置有跳过项（未写入内核 patch）', mcpPatch.skipped)
+      }
+    } catch (error) {
+      console.warn('[kyclaw] MCP 配置写入内核 patch 失败（MCP 本次不可用，不影响其它功能）', error)
     }
     // 首轮设置/工作区 IPC 读取前补齐一次默认工作区；失败只记日志，不挡窗口启动。
     initializeDefaultWorkspace(userDataDir, app.getPath('home'))
@@ -444,49 +426,14 @@ if (!app.requestSingleInstanceLock()) {
     // 服务启动不挡窗口：先让壳起来，端点好了再挂上（渲染端要端点时会等它）
     startAgentServer({
       dataDir: userDataDir,
-      // 每轮对话现读设置与密钥：设置页配好 provider 后下一轮就是真模型，不用重启；
-      // 密钥从 safeStorage 解出来只经过主进程内存（模型构建那一下），不进日志、不回渲染端
-      resolveModel: async () => {
-        const providers = readSettings(settingsPath(userDataDir)).providers
-        const resolved = await resolveModel(providers, (id) => getProviderKey(secretsFile, id))
-        return resolved.model
-      },
-      // 追踪（T17）：启动时读一次——配齐了就挂 Langfuse 导出，改配置要重启应用才生效
-      langfuse: () => readLangfuseConfig(userDataDir, secretsFile),
-      // 语义召回（round 28）：设置现读、装配只做一次（改设置要重启生效）；远程 API Key 在
-      // secrets.json 的保留槽位里，解出来的明文只进内存（不进日志、不回渲染端）
-      semanticRecall: () => readSettings(settingsPath(userDataDir)).semanticRecall,
-      embeddingKey: () => getProviderKey(secretsFile, EMBEDDING_KEY_SECRET_ID),
-      // 模块 3B：本机引擎这一路（设置里来源选它时才会被调用）。返回 null = 还没有启用的本机模型；
-      // 引擎起不来会抛（装配层把它翻成"这次运行没有召回"的人话，不拦对话）
-      localEmbedding: () => localModels.embeddingEndpoint(),
-      // 模块 4：产出物的 PDF 导出（工具层不 import electron，真实现只能在主进程这一侧给；
-      // 隐窗 + printToPDF 见 main/print-pdf.ts）
-      printPdf,
-      // round 45：联网搜索（现读设置 + 两个可选 Key）。自定义 Key 按当前服务商取；
-      // Jina Key 与搜索链无关，只给 fetch 的阅读模式。明文只进内存，不回渲染端、不进日志。
-      webSearch: () => {
-        const settings = readSettings(settingsPath(userDataDir)).webSearch
-        return {
-          settings,
-          searchKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID[settings.provider]),
-          readerKey: getProviderKey(secretsFile, SEARCH_KEY_SECRET_ID.jina)
-        }
-      },
-      // round 64：内置技能目录（office 四件套）——agent 侧的技能清单与 use_skill 读的就是它
-      builtinSkillsDir: builtinSkillsDir(),
-      // B4 / PB-006：内核迁移的真机注入（flag 关时整个字段不传，旧路径一行不变）。
-      // 内核根/DSH_HOME/日志落点全在这一处定；失败时 bootstrap 写 kernel.log 并抛带 code 的错误。
-      ...(kernelEnabled
-        ? {
-            kernel: {
-              electronExecutable: process.execPath,
-              asarPath: kernelRoot,
-              dshHome: kernelDshHome,
-              logFile: kernelLogFile
-            }
-          }
-        : {})
+      // PB-020 B：内核必启（无 flag）。内核根/DSH_HOME/日志落点全在这一处定；
+      // 失败时 bootstrap 写 kernel.log 并抛带 code 的错误，由 agentStartupError 呈现。
+      kernel: {
+        electronExecutable: process.execPath,
+        asarPath: kernelRoot,
+        dshHome: kernelDshHome,
+        logFile: kernelLogFile
+      }
     })
       .then((handle) => {
         agentEndpoint = { baseUrl: handle.baseUrl, token: handle.token }

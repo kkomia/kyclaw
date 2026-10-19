@@ -11,7 +11,6 @@
  * flag 关：第一行就返回 null（不解析路径、不建日志、不 spawn）——旧路径字节级不变。
  */
 import { join } from 'node:path'
-import { isKernelPortEnabled } from './feature-flag'
 import { startKernelAdapter, type KernelAdapter, type KernelAdapterOptions } from './kernel-adapter'
 import { resolveKernelLayout } from './kernel-layout'
 import { createKernelLog } from './kernel-log'
@@ -23,7 +22,6 @@ import {
 } from './kernel-startup'
 
 export interface KernelBootstrapOptions extends KernelAdapterOptions {
-  env?: Readonly<Record<string, string | undefined>>
   /** 内核启动日志落点（生产 = `<userData>/logs/kernel.log`）；缺省不写文件（测试/纯诊断） */
   logFile?: string
 }
@@ -33,14 +31,11 @@ function firstLine(text: string): string {
   return text.split('\n')[0] ?? text
 }
 
-/** flag 关：返回 null（不 spawn、不连网、行为与现在完全一致）；flag 开：起真内核 */
+/** PB-020 B：内核必启（不再有 flag）；env 仅为旧测试签名保留，已不参与判定。 */
 export async function maybeStartKernelAdapter(
   options: KernelBootstrapOptions
-): Promise<KernelAdapter | null> {
-  const env = options.env ?? process.env
-  if (!isKernelPortEnabled(env)) return null
-  const { env: _ignored, logFile, ...adapterOptions } = options
-  void _ignored
+): Promise<KernelAdapter> {
+  const { logFile, ...adapterOptions } = options
   // PB-017：flag 开但没注入内核参数（service.ts 把缺省值兜成空串）时，spawn('') 会同步抛
   // TypeError。必须在 spawn 之前 fail fast，给「内核入口未配置」+ 配置来源的可诊断错误。
   assertKernelLaunchConfigured({
