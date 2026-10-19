@@ -276,7 +276,7 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         { text: '…', delayMs: 1200 },
         { text: '…', delayMs: 1200 },
         { text: '…', delayMs: 1200 },
-        { tool: { id, name: 'get_goal', input: {} }, delayMs: 500 }
+        { tool: { id, name: 'pwsh', input: { command: 'Start-Sleep -Seconds 2; Write-Output ok', description: '等待两秒探针' } }, delayMs: 500 }
       ],
       stop: 'tool_use'
     })
