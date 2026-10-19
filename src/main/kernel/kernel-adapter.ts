@@ -35,6 +35,10 @@ export interface KernelTurnResult {
   /** 逐帧 `data: <json>`（与现有 chat SSE 的写法一致） */
   sse: string
   text: string
+  /** 内核错误轮（工具错误码等）；**已交付的文本帧仍在 frames 里**，错误帧追加在末尾 */
+  error?: { code?: string; message: string }
+  /** 内核侧取消（文本同样保留） */
+  cancelled?: boolean
 }
 
 export interface KernelAdapter {
@@ -44,6 +48,8 @@ export interface KernelAdapter {
   /** 诊断用：内核回环端口（不含 token/cookie） */
   readonly port: number
   startTurn(text: string): Promise<KernelTurnResult>
+  /** 取消当前轮（协作式；文本保留，由内核 `session/cancel` 结算） */
+  cancelTurn(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -84,19 +90,28 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     let snapshot: (() => void) | undefined
     let closed = false
 
-    const settleTurn = (error?: Error): void => {
+    const settleTurn = (
+      failure?: Error,
+      outcome?: { error?: KernelTurnResult['error']; cancelled?: boolean }
+    ): void => {
       if (turn === undefined) return
       const current = turn
       turn = undefined
       clearTimeout(current.timer)
-      if (error !== undefined) {
-        current.reject(error)
+      if (failure !== undefined) {
+        current.reject(failure)
         return
       }
       const text = current.frames
         .flatMap((frame) => (frame.type === 'text-delta' ? [frame.delta] : []))
         .join('')
-      current.resolve({ frames: current.frames, sse: framesToSse(current.frames), text })
+      current.resolve({
+        frames: current.frames,
+        sse: framesToSse(current.frames),
+        text,
+        ...(outcome?.error === undefined ? {} : { error: outcome.error }),
+        ...(outcome?.cancelled === true ? { cancelled: true } : {})
+      })
     }
 
     ws.onClose((error) => {
@@ -123,12 +138,19 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       const frames = mapper.push(value)
       turn.frames.push(...frames)
       if (value.type === 'event' && value.event.type === 'turn/end') {
-        const reason = value.event.data?.reason as { kind?: string } | undefined
-        settleTurn(
-          reason?.kind === 'completed'
-            ? undefined
-            : new Error(`kernel adapter: turn ended with ${reason?.kind ?? 'unknown'}`)
-        )
+        const reason = value.event.data?.reason as
+          { kind?: string; error?: { code?: string; message?: string } } | undefined
+        // 错误/取消：**保留已交付帧**（R11 基线），只把结算信息带回去；只有传输层错误才 reject
+        if (reason?.kind === 'cancelled') settleTurn(undefined, { cancelled: true })
+        else if (reason?.kind === 'completed') settleTurn()
+        else
+          settleTurn(undefined, {
+            error: {
+              ...(reason?.error?.code === undefined ? {} : { code: reason.error.code }),
+              message:
+                reason?.error?.message ?? `kernel turn ended with ${reason?.kind ?? 'unknown'}`
+            }
+          })
       }
     })
 
@@ -183,6 +205,15 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
           settleTurn(error instanceof Error ? error : new Error(String(error)))
         }
         return promise
+      },
+      async cancelTurn(): Promise<void> {
+        if (stopped) return
+        try {
+          await rpc.call('session/cancel', { request: { sessionId } })
+        } catch (error) {
+          // 取消是尽力而为：内核未接受时不要盖住原始流错误
+          console.warn('[kyclaw] kernel adapter: cancel failed', error)
+        }
       },
       async stop(): Promise<void> {
         if (stopped) return

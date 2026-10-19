@@ -33,6 +33,8 @@ import { readSettings, settingsPath, updateSettings } from '../settings'
 import { readProjectRules } from '../project-rules'
 import type { RulesProcessorDependencies } from '../../mastra/rules'
 import { McpLifecycle } from '../mcp/lifecycle'
+import { createKernelChatHandler } from '../kernel/kernel-chat'
+import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
 import { pluginsDirs } from '../plugins/store'
 import { skillSourcesFor as skillSourcesForFn } from '../plugins/skills'
 import { LOCAL_USER_RESOURCE_ID } from '../../shared/threads'
@@ -182,6 +184,15 @@ export interface AgentServerOptions {
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
   attempts?: number
+  /**
+   * B3.1b：flag 开（`KYCLAW_KERNEL_PORT=1`）时的内核位置。**生产由 main/index.ts 注入**
+   * （`process.execPath` + `<resources>/app.asar`）；测试注入本机已安装的 DSH 路径。
+   * flag 关时本字段完全不读（旧 Mastra 路径字节级不变）。
+   *
+   * ⚠️ 不要把 `DSH_TOOLS_MODE` 设成 `none`：内核 boot 会因 tools 服务缺失失败
+   * （8 个插件等待 tools），B3.1a 已实测踩坑。
+   */
+  kernel?: { electronExecutable: string; asarPath: string; extraEnv?: Record<string, string> }
 }
 
 export interface AgentServerHandle extends AgentEndpoint {
@@ -514,6 +525,24 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
 
+  /**
+   * B3.1b：**flag 判定的唯一入口**（回退只需关 `KYCLAW_KERNEL_PORT`）。
+   * - flag 关 → `maybeStartKernelAdapter` 直接返回 null（不 spawn、不碰路径）；下面不注册 chat 路由，
+   *   旧 Mastra chat 路径**一行未改**；
+   * - flag 开 → 起真内核（token/cookie 只在 main），chat 帧由 adapter 出。
+   * 两条路并存、不删旧 loop。
+   */
+  const kernelAdapter = await maybeStartKernelAdapter({
+    electronExecutable: options.kernel?.electronExecutable ?? '',
+    asarPath: options.kernel?.asarPath ?? '',
+    appDataDir: options.dataDir,
+    ...(options.kernel?.extraEnv === undefined ? {} : { extraEnv: options.kernel.extraEnv })
+  }).catch(async (error: unknown) => {
+    // flag 开但内核起不来：不能留半个 Mastra/storage（与下面 listen 失败同口径）
+    await teardownQuietly(mastra, storage, memory)
+    throw error
+  })
+
   const app = new Hono()
   app.use(
     '*',
@@ -532,6 +561,14 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     }
     return next()
   })
+
+  // B3.1b：flag 开才注册内核 chat 分支（同一路径、同一 token 闸门；先注册者优先于 Mastra 的 /chat）
+  if (kernelAdapter !== null) {
+    app.post(`/chat/${KYCLAW_AGENT_ID}`, createKernelChatHandler(kernelAdapter))
+    console.warn(
+      `[kyclaw] kernel chat enabled (session=${kernelAdapter.sessionId}, port=${String(kernelAdapter.port)})`
+    )
+  }
 
   const mastraServer = new MastraServer({ app, mastra })
   await mastraServer.init()
@@ -638,6 +675,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
 
   if (!server) {
     // 起不来就不留半个服务：把已经建好的 Mastra/storage/连接收掉，再带着原因抛出去
+    await kernelAdapter?.stop()
     await mcpLifecycle.stop()
     await teardownQuietly(mastra, storage, memory)
     throw new Error(`agent 服务启动失败：${attempts} 次都没能监听 ${HOST} 的端口`, {
@@ -669,11 +707,11 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           server.close((error) => (error ? reject(error) : resolve()))
         })
       } finally {
-        // MCP 子进程随连接断开而下线（应用退出前收干净）；再收 Mastra / memory / storage
+        // 内核子进程/WS 先收（不留孤儿）；MCP 子进程随连接断开而下线；再收 Mastra / memory / storage
+        await kernelAdapter?.stop()
         await mcpLifecycle.stop()
         await teardownQuietly(mastra, storage, memory)
       }
     }
   }
 }
-

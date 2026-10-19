@@ -78,6 +78,7 @@ export class KernelSseMapper {
   private readonly textIds = new Map<number, string>()
   private pendingUsage: KernelAssistantChunk['usage'] | undefined
   private finished = false
+  private errored = false
 
   /** 喂一条 item.value；返回本次应发出的 SSE 帧（按现有顺序） */
   push(value: KernelFollowValue): RendererSseFrame[] {
@@ -93,17 +94,39 @@ export class KernelSseMapper {
       this.messageId = `kernel-${frame.attemptId}`
       return [{ type: 'start', messageId: this.messageId }]
     }
-    if (frame.type === 'end') return []
+    if (frame.type === 'end') {
+      // 失败/取消的 assistant 流：帧里带 outcome。已交付的文本帧必须先于 error（R11 基线）。
+      const outcome = (
+        frame as { outcome?: { kind?: string; error?: { code?: string; message?: string } } }
+      ).outcome
+      if (outcome?.kind === 'failed' || outcome?.kind === 'error') return this.errorFrames(outcome)
+      return []
+    }
     return this.onChunk(frame.chunk)
   }
 
   private onEvent(event: { type: string; data?: Record<string, unknown> }): RendererSseFrame[] {
     if (event.type !== 'turn/end') return []
-    const reason = event.data?.reason as { kind?: string } | undefined
+    const reason = event.data?.reason as
+      { kind?: string; error?: { code?: string; message?: string } } | undefined
     if (reason?.kind === 'completed' || reason?.kind === 'cancelled') return []
-    // 错误轮：现有 renderer 的 error 帧（字段名沿用我们 chat 路由的 `errorText`）
-    const error = reason as { error?: { message?: string } } | undefined
-    return [{ type: 'error', errorText: error?.error?.message ?? 'kernel turn failed' }]
+    return this.errorFrames(reason)
+  }
+
+  /**
+   * 错误帧：**不重排、不丢弃**之前已产出的文本帧；错误只追加在末尾。
+   * 内核工具错误码（`TOOL_OUTCOME_UNKNOWN` / `TOOL_NOT_STARTED` / `ABORTED_BEFORE_DISPATCH`）
+   * 以 `[CODE] message` 形式进现有 errorText（renderer 直接展示）。
+   * ⚠️ 工具调用事件本身（tool/call、tool/result 映射）**本批未覆盖**，见 evidence 文档。
+   */
+  private errorFrames(reason?: {
+    error?: { code?: string; message?: string }
+  }): RendererSseFrame[] {
+    if (this.errored) return []
+    this.errored = true
+    const code = reason?.error?.code
+    const message = reason?.error?.message ?? 'kernel turn failed'
+    return [{ type: 'error', errorText: code === undefined ? message : `[${code}] ${message}` }]
   }
 
   private onChunk(chunk: KernelAssistantChunk): RendererSseFrame[] {

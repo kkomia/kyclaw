@@ -80,4 +80,86 @@ describe('内核 assistant-stream → 现有 SSE 帧（字段级等价）', () =
       }
     })
   })
+
+  it('错误轮：已交付文本帧保留，错误帧只追加在末尾（含工具错误码）', () => {
+    const mapper = new KernelSseMapper()
+    const frames = [
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: { type: 'start', attemptId: 'attempt-1' }
+      }),
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: {
+          type: 'chunk',
+          attemptId: 'attempt-1',
+          chunk: { type: 'block-start', index: 0, blockType: 'text' }
+        }
+      }),
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: {
+          type: 'chunk',
+          attemptId: 'attempt-1',
+          chunk: { type: 'text-delta', index: 0, text: '已经交付的正文' }
+        }
+      }),
+      ...mapper.push({
+        type: 'event',
+        event: {
+          type: 'turn/end',
+          data: {
+            turn: 1,
+            reason: {
+              kind: 'error',
+              error: { code: 'TOOL_OUTCOME_UNKNOWN', message: 'tool outcome unknown' }
+            }
+          }
+        }
+      })
+    ]
+    const types = frames.map((frame) => frame.type)
+    const textIndex = types.indexOf('text-delta')
+    const errorIndex = types.indexOf('error')
+    expect(textIndex).toBeGreaterThanOrEqual(0)
+    expect(errorIndex).toBe(types.length - 1) // 错误在末尾
+    expect(textIndex).toBeLessThan(errorIndex) // 正文先交付
+    expect(frames[textIndex]).toMatchObject({ type: 'text-delta', delta: '已经交付的正文' })
+    expect(frames[errorIndex]).toMatchObject({
+      type: 'error',
+      errorText: '[TOOL_OUTCOME_UNKNOWN] tool outcome unknown'
+    })
+  })
+
+  it('取消轮：已交付文本保留，不追加 error 帧（与现有取消形状一致）', () => {
+    const mapper = new KernelSseMapper()
+    const frames = [
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: { type: 'start', attemptId: 'attempt-2' }
+      }),
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: {
+          type: 'chunk',
+          attemptId: 'attempt-2',
+          chunk: { type: 'block-start', index: 0, blockType: 'text' }
+        }
+      }),
+      ...mapper.push({
+        type: 'assistant-stream',
+        frame: {
+          type: 'chunk',
+          attemptId: 'attempt-2',
+          chunk: { type: 'text-delta', index: 0, text: '取消前正文' }
+        }
+      }),
+      ...mapper.push({
+        type: 'event',
+        event: { type: 'turn/end', data: { turn: 1, reason: { kind: 'cancelled' } } }
+      })
+    ]
+    expect(frames.some((frame) => frame.type === 'text-delta')).toBe(true)
+    expect(frames.some((frame) => frame.type === 'error')).toBe(false)
+  })
 })
