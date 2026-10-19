@@ -14,12 +14,19 @@ export interface GoalDockContainerProps {
   onHasGoalChange?: (hasGoal: boolean) => void
   /** 编辑入口交给上层（内联编辑不在本组件内实现） */
   onEdit?: (goal: GoalView) => void
+  /**
+   * 外部要求重取的信号（值变化即重取一次）。
+   * 为什么需要：`/goal <objective>` 这类命令在别处改完 goal 后，本容器只在挂载/换会话时取数，
+   * 不刷新就看不到新条（命令建了 goal、条却不出现）。
+   */
+  refreshKey?: number
 }
 
 export function GoalDockContainer({
   threadId,
   onHasGoalChange,
-  onEdit
+  onEdit,
+  refreshKey = 0
 }: GoalDockContainerProps): React.JSX.Element | null {
   const [state, setState] = useState<GoalState | null>(null)
 
@@ -36,7 +43,7 @@ export function GoalDockContainer({
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+  }, [refresh, refreshKey])
 
   const act = useCallback(
     async (action: 'pause' | 'resume' | 'clear') => {

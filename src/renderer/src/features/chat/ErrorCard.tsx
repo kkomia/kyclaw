@@ -93,7 +93,10 @@ export function ErrorCard({
         破坏性的「清空重来」在 DOM/Tab 顺序上也落到最后（主按钮 → summary → 清空重来）。
       */}
       {keepAvailable ? (
-        <p data-testid="error-preserve-note" className="min-w-0 break-words text-c1 text-ink-tertiary">
+        <p
+          data-testid="error-preserve-note"
+          className="min-w-0 break-words text-c1 text-ink-tertiary"
+        >
           已产生 {preservedRecords} 条记录：
           <span className="whitespace-nowrap">「保留内容再试」</span>会保留
           {preservedRecords === 1 ? '它' : '它们'}并接着跑；
@@ -113,7 +116,9 @@ export function ErrorCard({
         )}
       </div>
       <details data-testid="error-details" className="min-w-0 text-c1 text-ink-tertiary">
-        <summary className="inline-flex min-h-6 cursor-pointer items-center select-none">详情</summary>
+        <summary className="inline-flex min-h-6 cursor-pointer items-center select-none">
+          详情
+        </summary>
         <pre
           data-testid="error-raw"
           className="mt-1 max-w-full min-w-0 overflow-x-hidden font-mono break-all whitespace-pre-wrap text-ink-secondary"

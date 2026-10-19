@@ -57,6 +57,9 @@ import { Composer } from './Composer'
 import { ErrorCard } from './ErrorCard'
 import { RETRY_KEEP_METADATA_KEY, RETRY_KEEP_PROMPT, preservedRecordsOf } from './retry-keep'
 import { GoalCommandCard } from './GoalCommandCard'
+import { GoalDockContainer } from './GoalDockContainer'
+import { useUsageStream } from './useUsageStream'
+import { pushUsage } from './usage-live'
 import { parseGoalCommand, type GoalCommandAction } from './goal-command'
 import { fetchGoal, postGoalWithRetry } from './goal-api'
 import type { GoalActivation, GoalState, GoalView } from '@shared/goal'
@@ -616,6 +619,13 @@ function ActiveChat({
     activation: GoalActivation
     error?: string
   } | null>(null)
+  /**
+   * PB-039：本会话是否挂着 goal（`GoalDockContainer` 上报）。
+   * 用途：dock 顺序「审批/提问 > goal > 海獭」+ **有 goal 时隐藏输入卡右上角的海獭**（避免两条状态抢视线）。
+   */
+  const [hasGoal, setHasGoal] = useState(false)
+  /** 让 goal 条重取的计数器：/goal 命令改过 goal 后 +1（挂载/换会话之外的唯一刷新入口） */
+  const [goalRefresh, setGoalRefresh] = useState(0)
 
   const {
     messages,
@@ -650,6 +660,23 @@ function ActiveChat({
     if (changed) void tasksStore.getState().load(threadId)
   }, [messages, ready, threadId])
   const busy = status === 'submitted' || status === 'streaming'
+  /**
+   * PB-033 接线：把**流内** provider usage（`data-usage` part）直推给输入框底部读数。
+   * 只跟"最近一条助手消息"的 parts 走（parts 身份变了才重算），
+   * 没拿到 reported 也没有 contextInput 时不推 —— 否则会把上一轮的数字清空。
+   */
+  const lastAssistantParts = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message !== undefined && message.role === 'assistant') return message.parts
+    }
+    return []
+  }, [messages])
+  const { latest: latestUsage } = useUsageStream(lastAssistantParts)
+  useEffect(() => {
+    if (!latestUsage.reported && latestUsage.contextInput === null) return
+    pushUsage(latestUsage)
+  }, [latestUsage])
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
@@ -1228,6 +1255,8 @@ function ActiveChat({
           next = await postGoalWithRetry({ threadId, action: 'clear', ref: ref! }, threadId)
         }
         setGoalCommandResult({ goal: next.goal, activation: next.activation })
+        // 命令改过 goal → 让 dock 条重取一次（否则命令建了 goal、条要等换会话才出现）
+        setGoalRefresh((count) => count + 1)
       } catch (cause) {
         setGoalCommandResult({
           goal: null,
@@ -1378,7 +1407,9 @@ function ActiveChat({
    */
   const lastMessage = messages.length === 0 ? undefined : messages[messages.length - 1]
   const retryPreservedRecords =
-    lastMessage !== undefined && lastMessage.role === 'assistant' ? preservedRecordsOf(lastMessage) : 0
+    lastMessage !== undefined && lastMessage.role === 'assistant'
+      ? preservedRecordsOf(lastMessage)
+      : 0
 
   /**
    * 撤回一条用户消息（round 61，消息动作行的「撤回」，Kimi 口径的 kyclaw 版）：
@@ -1746,6 +1777,12 @@ function ActiveChat({
               workspaces={workspaces}
               onDecide={decideApproval}
             />
+            {/* PB-039：goal 条排在「审批/提问」之后、「海獭」（在输入卡里）之前 */}
+            <GoalDockContainer
+              threadId={threadId}
+              onHasGoalChange={setHasGoal}
+              refreshKey={goalRefresh}
+            />
           </div>
           {/* round 66：「选择项目」在输入卡**上方**单独一行（用户口径："放到对话框上面，
               不要嵌入到里面"）——与卡片同列宽、左缘对齐（行的 px-1，与卡片内容同一口径），
@@ -1799,6 +1836,10 @@ function ActiveChat({
             compactDisabled={locked || !ready}
             externalNotice={compactNotice}
             usageVersion={usageVersion}
+            // PB-033：轮末（不忙）→ 读数切回落库值；流式中走流内直推的实时值
+            settled={!busy}
+            // PB-039：挂着 goal 时隐藏输入卡右上角的海獭（两个状态不抢视线）
+            hideOtter={hasGoal}
             // R92：草稿过桥放行位（只有"系统初始化落位"那一次为 true，见 ChatPage 的判定）
             allowCarryover={carryoverAllowed}
           />

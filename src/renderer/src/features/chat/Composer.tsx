@@ -130,6 +130,16 @@ export interface ComposerProps {
    */
   usageVersion?: number
   /**
+   * PB-033：轮末 settled=true → 上下文读数一律取**落库值**（live 与库不一致时以库为准）。
+   * 流式中传 false，读数走流内直推的实时值。
+   */
+  settled?: boolean
+  /**
+   * PB-039：本会话挂着 goal 时隐藏输入卡右上角的海獭 —— goal 条已经是这一屏的状态主视觉，
+   * 两个状态同时抢视线会互相打架（Lead 口径：有 goal 就不显示海獭）。
+   */
+  hideOtter?: boolean
+  /**
    * round 64：**初始页（空会话）**——输入区给高一档的默认最小高（`--composer-input-min-height-hero`）。
    *
    * 用户实拍两条：①"默认对话输入框高度偏低，可以调整高一点" → 常态最小高从 48 提到 56；
@@ -238,6 +248,8 @@ export function Composer({
   compactDisabled = false,
   externalNotice = null,
   usageVersion = 0,
+  settled = false,
+  hideOtter = false,
   hero = false,
   pending = null,
   mode = null,
@@ -426,7 +438,7 @@ export function Composer({
    * reduced（用户「减弱」/系统减弱/「总是」）由 useEffectiveMotion 折算 → `paused` 静态帧。
    */
   const mascotState = useChatMascotState(threadId ?? '')
-  const showOtter = threadId !== null && !hero
+  const showOtter = threadId !== null && !hero && !hideOtter
   // **响应式订阅 mappings**，不要只选 store 上的 projectOf 函数：函数引用恒定，mappings 变了
   // （「移至项目」/ 映射快照迟到）组件不重渲染 → 会话根停在旧值。口径与工作台
   // use-workbench-root.ts 同一套（那边是用户实报的同一类缺陷）。
@@ -1285,6 +1297,7 @@ export function Composer({
                 compactBusy={compactBusy}
                 compactDisabled={compactDisabled}
                 usageVersion={usageVersion}
+                settled={settled}
               />
             </>
           )}
