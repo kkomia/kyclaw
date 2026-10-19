@@ -112,7 +112,7 @@ function listFiles(root, prefix = '') {
  * 校验一棵内核树。返回 { problems, summary }：problems 非空即不可出包。
  * 全量 SHA256 只在"解压/显式 --verify"时跑（运行期不做，见研究 §2）。
  */
-function verifyTree(dir, options = {}) {
+function verifyTree(dir) {
   const problems = []
   const snapshotFile = join(dir, 'SNAPSHOT.json')
   const sumsFile = join(dir, 'SHA256SUMS.txt')
