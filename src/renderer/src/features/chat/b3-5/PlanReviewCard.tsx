@@ -50,7 +50,7 @@ export function PlanReviewCard({
       </div>
       <div
         data-testid="plan-review-markdown"
-        className="max-h-[min(44vh,26rem)] min-w-0 overflow-y-auto overscroll-contain rounded-control border-(length:--hairline-width) border-hairline bg-surface px-3 py-2 text-c1"
+        className="max-h-[min(30vh,18rem)] min-w-0 overflow-y-auto overscroll-contain rounded-control border-(length:--hairline-width) border-hairline bg-surface px-3 py-2 text-c1"
       >
         <TextPart text={review.detail} />
       </div>

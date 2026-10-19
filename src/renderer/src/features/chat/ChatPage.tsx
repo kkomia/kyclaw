@@ -1718,10 +1718,16 @@ function ActiveChat({
                 notice={kernelInteractions.notice}
                 submittingEventId={kernelInteractions.submittingEventId}
                 onRespondApproval={(eventId, outcome) => {
-                  void kernelInteractions.respondApproval(eventId, outcome)
+                  void kernelInteractions.respondApproval(eventId, outcome).then(() => {
+                    // PB-044：批准/拒绝后内核可能进出 plan mode，重取一次投影让 chip/任务清单跟上
+                    setGoalRefresh((count) => count + 1)
+                  })
                 }}
                 onRespondQuestion={(eventId, answers) => {
-                  void kernelInteractions.respondQuestion(eventId, answers)
+                  void kernelInteractions.respondQuestion(eventId, answers).then(() => {
+                    // PB-044：plan review 的 Keep planning/Approve 都会改 plan 投影
+                    setGoalRefresh((count) => count + 1)
+                  })
                 }}
                 onClearNotice={kernelInteractions.clearNotice}
               />
