@@ -259,12 +259,20 @@ export class KernelSseMapper {
       }
       case 'text-delta': {
         const index = chunk.index ?? 0
-        const id = this.textIds.get(index) ?? `text-${String(index)}`
+        // PB-039（P0）：没有 text-start 的 delta 不合法（renderer 会报 missing text part）——
+        // 只有 block-start 是 text 时才登记过 id，这里按登记表取，取不到就丢。
+        const id = this.textIds.get(index)
+        if (id === undefined) return []
         return [{ type: 'text-delta', id, delta: chunk.text ?? '' }]
       }
       case 'block-end': {
         const index = chunk.index ?? 0
-        const id = this.textIds.get(index) ?? `text-${String(index)}`
+        // PB-039（P0）：**只有文本块**才发 text-end。工具/思考等非文本块的 block-start 在
+        // 上面就被忽略了（从不发 text-start），若无条件发 text-end，renderer（AI SDK）会抛
+        // `Received text-end for missing text part` —— 先说话再调工具的轮次整轮失败（Nia R07a）。
+        const id = this.textIds.get(index)
+        if (id === undefined) return []
+        this.textIds.delete(index)
         return [{ type: 'text-end', id }]
       }
       case 'usage': {
