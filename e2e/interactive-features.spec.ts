@@ -743,7 +743,10 @@ test.describe('interactive features — production UI functional evidence', () =
       // 用实测宽对账：panelWidth ≈ innerWidth − rail(56) − gap(6)（1280 下 ≈ 1218）。
       expect(crossing!.mainDisplay).toBe('none')
       expect(
-        Math.abs(crossing!.panelWidth - (crossing!.innerWidth - primaryNavRail - edgeGap))
+        Math.abs(
+          crossing!.panelWidth -
+            (crossing!.innerWidth - primaryNavRail - sidebarWidth - edgeGap)
+        )
       ).toBeLessThanOrEqual(8)
       expect(crossing!.panelSource).toBe(expectedSource(crossing!))
       // 松手后停稳：仍是 auto（宽度停在越界那一步，不会回弹）
