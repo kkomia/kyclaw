@@ -38,6 +38,7 @@
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const http = require('node:http')
+const path = require('node:path')
 
 const DSH_WEB_READY_PREFIX = 'dsh web: '
 
@@ -85,6 +86,48 @@ const sessions = new Map()
 const streams = new Map()
 let turnCounter = 0
 
+/**
+ * 落盘：真内核把会话 log 持久化在 `DSH_HOME`；stub 也照做，否则「关应用再开」的 e2e（R11 reopen）
+ * 会看到空 session/page —— 那是替身缺陷，不是产品行为。文件只在 DSH_HOME 下，随 userData 清理。
+ */
+const SESSION_STORE = process.env.DSH_HOME === undefined || process.env.DSH_HOME === ''
+  ? ''
+  : path.join(process.env.DSH_HOME, 'e2e-stub-sessions.json')
+
+function saveSessionStore() {
+  if (SESSION_STORE === '') return
+  try {
+    const out = {}
+    for (const [sessionId, session] of sessions) {
+      out[sessionId] = { cwd: session.cwd, seq: session.seq, used: session.used === true, records: session.records }
+    }
+    fs.mkdirSync(path.dirname(SESSION_STORE), { recursive: true })
+    fs.writeFileSync(SESSION_STORE, JSON.stringify({ sessions: out }), 'utf8')
+  } catch {
+    // 持久化失败不影响协议（只是 reopen 场景少证据）
+  }
+}
+
+function loadSessionStore() {
+  if (SESSION_STORE === '' || !fs.existsSync(SESSION_STORE)) return
+  try {
+    const raw = JSON.parse(fs.readFileSync(SESSION_STORE, 'utf8'))
+    const stored = raw?.sessions ?? {}
+    for (const [sessionId, session] of Object.entries(stored)) {
+      sessions.set(sessionId, {
+        cwd: typeof session.cwd === 'string' ? session.cwd : process.cwd(),
+        seq: typeof session.seq === 'number' ? session.seq : 0,
+        streams: new Set(),
+        turn: null,
+        used: session.used === true,
+        records: Array.isArray(session.records) ? session.records : []
+      })
+    }
+  } catch {
+    // 读不了就当空 home
+  }
+}
+
 function logStub(event, data) {
   if (LOG_FILE === '') return
   try {
@@ -103,10 +146,27 @@ function nextSeq(session) {
 function ensureSession(sessionId, cwd) {
   let session = sessions.get(sessionId)
   if (session === undefined) {
-    session = { cwd: typeof cwd === 'string' ? cwd : process.cwd(), seq: 0, streams: new Set(), turn: null }
+    session = {
+      cwd: typeof cwd === 'string' ? cwd : process.cwd(),
+      seq: 0,
+      streams: new Set(),
+      turn: null,
+      /** 内核 `session/list.blank` 语义：没有过任何 prompt 的会话才是 blank（PB-030 的列表过滤依赖它） */
+      used: false,
+      /** `session/page` 回放用的事件记录（真内核持久化 log 的替身；R11/线程历史读路径依赖它） */
+      records: []
+    }
     sessions.set(sessionId, session)
   }
   return session
+}
+
+/** 往会话 log 记一条内核事件（session/page 回放用；形状对齐 thread-projection 的输入） */
+function recordEvent(session, type, data) {
+  const seq = nextSeq(session)
+  session.records.push({ type: 'event', event: { type, seq, time: Date.now(), data } })
+  saveSessionStore()
+  return seq
 }
 
 // ── WS 帧编码 / 解析（只服务 ws-mux.ts 的 client 侧：文本帧 + ping/pong/close） ──────────────
@@ -179,6 +239,21 @@ async function runTurn(session, text) {
   broadcast(session, {
     type: 'event',
     event: { type: 'turn/start', seq: nextSeq(session), time: Date.now(), data: { turn: turnNumber } }
+  })
+  // 内核持久化 log 替身：turn/start + inbox spliced（失败轮投影依赖 inserted；见 thread-projection）
+  recordEvent(session, 'turn/start', { turn: turnNumber })
+  recordEvent(session, 'agent/inbox/spliced', {
+    target: 'next-turn',
+    inserted: [
+      {
+        id: `u-${String(turnNumber)}`,
+        role: 'user',
+        content: [{ type: 'text', text }],
+        source: { kind: 'user' }
+      }
+    ],
+    removedCount: 0,
+    outcome: 'applied'
   })
   // PB-013 重试形态：前 N 次 attempt 先交付一段"将被作废"的正文，然后新 attempt 重来。
   // 宿主 mapper 看到 attemptId 变化会发 reset-step（实时流），有效帧里只留最终 attempt 的正文。
@@ -360,6 +435,7 @@ async function runTurn(session, text) {
         data: { reason: { kind: 'error', error: ERROR } }
       }
     })
+    recordEvent(session, 'turn/end', { turn: turnNumber, reason: { kind: 'error', error: ERROR } })
   } else {
     broadcast(session, {
       type: 'assistant-stream',
@@ -394,6 +470,7 @@ async function runTurn(session, text) {
         data: { reason: { kind: 'completed' } }
       }
     })
+    recordEvent(session, 'turn/end', { turn: turnNumber, reason: { kind: 'completed' } })
   }
   turn.settled = true
   session.turn = null
@@ -421,6 +498,7 @@ function cancelTurn(session) {
       data: { reason: { kind: 'cancelled' } }
     }
   })
+  recordEvent(session, 'turn/end', { turn: turnCounter, reason: { kind: 'cancelled' } })
   logStub('turn-cancelled', {})
 }
 
@@ -449,8 +527,34 @@ function handleRpc(endpoint, args) {
           sessionId,
           cwd: session.cwd,
           running: session.turn !== null,
-          blank: true
+          // 真内核语义：没被 prompt 过的会话才 blank=true；PB-030 的 threads 列表按此过滤幽灵会话
+          blank: session.used !== true
         }))
+      })
+    }
+    case 'session/page': {
+      // 内核持久化 log 的回放：threads 读消息（thread-projection）依赖它；形状 = {records:[{type:'event',event}]}
+      const request = input.request ?? {}
+      const address = request.address ?? {}
+      const sessionId = typeof address.sessionId === 'string' ? address.sessionId : ''
+      const session = sessions.get(sessionId)
+      if (session === undefined) return rpcResult({ records: [], hasMore: false })
+      const throughSeq =
+        typeof request.throughSeq === 'number' ? request.throughSeq : Number.MAX_SAFE_INTEGER
+      const beforeSeq = typeof request.beforeSeq === 'number' ? request.beforeSeq : undefined
+      const maxMessages = typeof request.maxMessages === 'number' ? Math.max(1, request.maxMessages) : 200
+      const events = session.records
+        .map((record) => record.event)
+        .filter(
+          (event) =>
+            typeof event.seq === 'number' &&
+            event.seq <= throughSeq &&
+            (beforeSeq === undefined || event.seq < beforeSeq)
+        )
+      const page = events.slice(-maxMessages)
+      return rpcResult({
+        records: page.map((event) => ({ type: 'event', event })),
+        hasMore: false
       })
     }
     case 'session/prompt': {
@@ -469,6 +573,9 @@ function handleRpc(endpoint, args) {
             )
             .join('')
         : ''
+      // 只要发过 prompt 就不再是 blank（否则 PB-030 的幽灵会话过滤会把真实会话也滤掉）
+      session.used = true
+      saveSessionStore()
       logStub('session-prompt', { sessionId, text })
       void runTurn(session, text)
       return rpcResult({ accepted: true })
@@ -785,6 +892,7 @@ server.on('error', (error) => {
   process.exit(1)
 })
 
+loadSessionStore()
 server.listen(0, '127.0.0.1', () => {
   const address = server.address()
   if (address === null || typeof address === 'string') {
