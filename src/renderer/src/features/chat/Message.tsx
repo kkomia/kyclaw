@@ -840,7 +840,10 @@ export function Message({
     (chunk) => chunk.index > lastProcessIndex && chunk.part.text.trim() !== ''
   )
   const processRunning = streaming && !answerStarted
-  const hasTurnAnswer = textChunks.some((chunk) => chunk.part.text.trim() !== '')
+  // PB-031：只有"最后一次过程之后"的正文算最终回答；工具行上方的分隔线只看它（中间正文不算）
+  const hasTurnAnswer = textChunks.some(
+    (chunk) => chunk.index > lastProcessIndex && chunk.part.text.trim() !== ''
+  )
 
   return (
     <>
@@ -877,14 +880,17 @@ export function Message({
           ) : null}
           {/* 正文独立流式区（DSH：中间区域输出该轮正文，不塞进过程块） */}
           <div data-testid="turn-answer" className="flex flex-col gap-2">
-            {textChunks.map((chunk) => (
-              <TextPart
-                key={`text-${chunk.index}`}
-                text={chunk.part.text}
-                streaming={streaming && chunk.index === lastIndex}
-                knownSources={knownSources}
-              />
-            ))}
+            {/* PB-031：流式中只实时显示"最后一次过程之后"的最终回答；中间轮次正文等轮末按原顺序一次全出 */}
+            {textChunks
+              .filter((chunk) => !streaming || chunk.index > lastProcessIndex)
+              .map((chunk) => (
+                <TextPart
+                  key={`text-${chunk.index}`}
+                  text={chunk.part.text}
+                  streaming={streaming && chunk.index === lastIndex}
+                  knownSources={knownSources}
+                />
+              ))}
           </div>
           {/* 最新步骤固定底部（仅 running 时挂载；过程区内滚不影响这条） */}
           {hasTurnProcess ? (
