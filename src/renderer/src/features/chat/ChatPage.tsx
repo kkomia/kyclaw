@@ -58,6 +58,7 @@ import { ErrorCard } from './ErrorCard'
 import { RETRY_KEEP_METADATA_KEY, RETRY_KEEP_PROMPT, preservedRecordsOf } from './retry-keep'
 import { GoalCommandCard } from './GoalCommandCard'
 import { GoalDockContainer } from './GoalDockContainer'
+import { failurePresentationOf } from './turn-failure'
 import { useUsageStream } from './useUsageStream'
 import { pushUsage } from './usage-live'
 import { fetchKernelCatalog, kernelEnabled, runKernelCommand } from './kernel-command-api'
@@ -703,6 +704,11 @@ function ActiveChat({
   const workspaces = useSettingsStore((state) => state.settings.workspaces)
   /** 还停在等审批（挂起轮）：发送/编辑都要按"忙"处理，见下面各处 */
   const waitingApproval = pendingApprovals(messages[messages.length - 1]).length > 0
+  /**
+   * PB-037：失败轮的「消息内错误卡 vs 页脚 dock 错误卡」单一判定。
+   * 有 turnFailure 的消息卡优先；dock 只在该轮没有消息卡时出现（见 turn-failure.ts）。
+   */
+  const failurePresentation = failurePresentationOf(messages, error ?? null)
   const askState = useAskUserStore((state) => state.threads.get(threadId) ?? EMPTY_ASK_USER_THREAD)
   const askDrafts = useAskUserStore((state) => state.drafts)
   const plan = useStore(rendererPlansStore, (state) => planSession(state, threadId))
@@ -1721,7 +1727,8 @@ function ActiveChat({
             />
           </div>
         )}
-        {error ? (
+        {failurePresentation.dockErrorVisible && error ? (
+          // PB-037：有消息内 turnFailure 卡时，同一轮不再在页脚重复 dock 错误卡
           // PB-036：轮次失败卡与消息正文同栅格——先与消息列同宽居中，再进 18px 阅读缩进，
           // 卡片左缘 = 正文文本左缘（不再横跨整个页脚、不超出正文左基线）
           <div className="mx-auto w-full max-w-[calc(var(--chat-content-width)+32px)] px-4 pt-2">

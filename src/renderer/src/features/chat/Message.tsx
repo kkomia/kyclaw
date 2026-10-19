@@ -33,6 +33,8 @@ import {
 } from '@renderer/features/workbench/ContextMenu'
 import { DeliverableCard } from './DeliverableCard'
 import { deliverableOf, deliverablesOfMessage, type Deliverable } from './deliverable'
+import { TurnFailureCard } from './TurnFailureCard'
+import { turnFailureOfMessage } from './turn-failure'
 import { ImageLightbox } from './ImageLightbox'
 import { MessageAction, MessageActions, MessageActionsDivider } from './MessageActions'
 import {
@@ -523,6 +525,8 @@ export function Message({
   if (message.role === 'user') {
     const text = userText(message)
     const files = userFiles(message)
+    /** PB-037：PB-034 失败轮 metadata（没有/坏形状 = null，不渲染） */
+    const turnFailure = turnFailureOfMessage(message)
     /** 图片走固定尺寸缩略图（模块 2，点击放大）；非图片 file part 与上下文图标项一起排在气泡下方 */
     const images = files.filter((part) => part.mediaType.startsWith('image/'))
     const fileParts = files.filter((part) => !part.mediaType.startsWith('image/'))
@@ -659,6 +663,7 @@ export function Message({
               </div>
             )}
             {body}
+            {turnFailure === null ? null : <TurnFailureCard failure={turnFailure} />}
           </>
         ) : (
           <div className="flex w-full flex-col items-end gap-2">
