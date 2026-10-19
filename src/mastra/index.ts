@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mastra 实例装配：kyclaw agent + libsql storage + agent 级 Memory + AI SDK 兼容的 chat 路由。
  *
  * - storage 落 `dataDir/kyclaw.db`（生产即 %APPDATA%/kyclaw/kyclaw.db）：thread / resource 等
@@ -93,6 +93,7 @@ import { AskUserRuntime } from './ask-user-runtime'
 import { createSessionPlanStore, type SessionPlanStore } from './session-plan'
 import { createSessionGoalStore, SessionGoalError, type SessionGoalStore } from './session-goal'
 import { GOAL_ROUND_CONTEXT_KEY, goalRoundFromChatBody } from '../shared/goal'
+import { createFailedRoundFilter, withFailedRoundCapture } from './failed-round'
 import { createPlanRuntime, planRefOf, type PlanRuntime, type PlanSuspension } from './plan-runtime'
 import { createPlanRoutes } from './routes/plans'
 import { planRefSchema } from '../shared/plan'
@@ -559,6 +560,8 @@ export async function createKyclawMastra(options: {
     inputProcessors: [
       createCompactionProcessor(compactionStore),
       ...(rulesProcessor === null ? [] : [rulesProcessor]),
+      // PB-035 C：失败轮的 assistant 消息不进下一轮上下文（重试 = 干净历史重跑一轮）
+      createFailedRoundFilter(),
       tasksContext.processor
     ]
   }
@@ -694,7 +697,12 @@ export async function createKyclawMastra(options: {
                 // 这一轮的 runId：续跑（审批 / ask_user）用挂起时那一轮的 runId；新的一轮用
                 // `prepareTaskChatParams` 刚产出的那个（任务处理链按它校验每一步）
                 stream: tapStreamFailures(
-                  withUsageStreamParts(stream, usageParts) as typeof stream,
+                  withFailedRoundCapture(withUsageStreamParts(stream, usageParts) as typeof stream, {
+                    memory,
+                    threadId: memoryScope.thread,
+                    onError: (error) =>
+                      console.warn('[kyclaw] 失败轮内容保留失败（降级为只留 error part）', error)
+                  }) as typeof stream,
                   noteFailure(memoryScope.thread, resumedRunId ?? preparedRunId(params))
                 )
               })
@@ -737,6 +745,7 @@ export async function createKyclawMastra(options: {
     recall
   }
 }
+
 
 
 
