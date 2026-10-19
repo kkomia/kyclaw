@@ -79,7 +79,57 @@ describe('PB-026 写面：POST /api/kernel/interactions/:eventId/respond', () =>
       body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
     })
     expect(again.status).toBe(409)
-    expect(await again.json()).toEqual({ error: 'already-settled', eventId: 'evt-a' })
+    const conflict = (await again.json()) as Record<string, unknown>
+    expect(conflict['error']).toBe('already-settled')
+    expect(conflict['eventId']).toBe('evt-a')
+    // PB-026 契约：409 带终态信息（UI 可直接渲结果行，不必再拉快照）
+    expect(conflict['threadId']).toBe('thread-A')
+    expect(conflict['kind']).toBe('approval')
+    expect(typeof conflict['at']).toBe('number')
+    // 此刻内核 decided 还没到 → 关联不到结果行，result 明确为 null（不是缺字段）
+    expect(conflict['result']).toBeNull()
+  })
+
+  it('409 在 decided 已到达时带回终态（outcome/copy/settledBy）', async () => {
+    const hub = new InteractionHub()
+    applyInteractionEvent(hub, {
+      kind: 'approval',
+      eventId: 'evt-b',
+      threadId: 'thread-A',
+      toolName: 'pwsh',
+      callId: 'call-9',
+      reason: '要写盘'
+    })
+    const { app } = appWithResponder(hub, () => Promise.resolve())
+    const first = await app.request('/api/kernel/interactions/evt-b/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'rejected' })
+    })
+    expect(first.status).toBe(200)
+    // 内核随后把 decided 事件投下来（同一 callId → 结果行被关联上）
+    hub.applyApprovalDecided('thread-A', { id: 'ap-9', outcome: 'rejected' }, 7, 1_700_000_000_999)
+
+    const again = await app.request('/api/kernel/interactions/evt-b/respond', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'approval', outcome: 'allowed-once' })
+    })
+    expect(again.status).toBe(409)
+    const body = (await again.json()) as {
+      result: {
+        outcome: string
+        settledBy: string
+        at: number
+        reason?: string
+        copy: { title: string }
+      } | null
+    }
+    expect(body.result?.outcome).toBe('rejected')
+    expect(body.result?.settledBy).toBe('user')
+    expect(body.result?.at).toBe(1_700_000_000_999)
+    expect(body.result?.reason).toBe('要写盘')
+    expect(body.result?.copy.title).toBe('你拒绝了这次操作')
   })
 
   it('未知 eventId → 404 unknown-event（与 409 区分开）', async () => {

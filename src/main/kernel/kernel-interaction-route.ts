@@ -202,10 +202,35 @@ export function createKernelInteractionRouter(options: KernelInteractionRouterOp
     if (responder === undefined)
       return context.json({ error: 'interactions-unavailable' }, 503)
     const pending = hub.findPendingByEventId(eventId)
-    if (pending === null)
-      return hub.isSettledEvent(eventId)
-        ? context.json({ error: 'already-settled', eventId }, 409)
-        : context.json({ error: 'unknown-event', eventId }, 404)
+    if (pending === null) {
+      const settled = hub.findSettledEvent(eventId)
+      if (settled === null) return context.json({ error: 'unknown-event', eventId }, 404)
+      // PB-026 契约：409 带**终态**，UI 可直接渲结果行、不必再拉一次快照。
+      // `result` 只在能按 callId 关联到结果行时给（关联不到 → null，UI 刷新快照一次）。
+      return context.json(
+        {
+          error: 'already-settled',
+          eventId,
+          threadId: settled.threadId,
+          kind: settled.kind,
+          ...(settled.at === undefined ? {} : { at: settled.at }),
+          result:
+            settled.result === null
+              ? null
+              : {
+                  outcome: settled.result.outcome,
+                  copy: settled.result.copy,
+                  settledBy: settled.result.settledBy,
+                  matchedBy: settled.result.matchedBy,
+                  ...(settled.result.at === undefined ? {} : { at: settled.result.at }),
+                  ...(settled.result.reason === undefined
+                    ? {}
+                    : { reason: settled.result.reason })
+                }
+        },
+        409
+      )
+    }
     const response: InteractionResponse = { ...parsed.response, eventId }
     try {
       await responder.respondInteraction(response)

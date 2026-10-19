@@ -60,7 +60,7 @@ export interface KernelAdapterOptions {
    */
   onSessionEvent?: (
     threadId: string,
-    event: { type: string; seq?: number; data?: Record<string, unknown> }
+    event: { type: string; seq?: number; time?: number; data?: Record<string, unknown> }
   ) => void
   /**
    * PB-025：内核 **Remote 事件流（`$events`）** 里的交互请求（审批 / 阻塞式提问）。
@@ -502,8 +502,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       // PB-004：内核 session 事件原样喂给 main 侧（InteractionHub 的审批四态/提问状态都来自这里）
       if (value.type === 'event' && options.onSessionEvent !== undefined) {
         try {
-          options.onSessionEvent(state.sessionId, value.event)
-        } catch {
+          options.onSessionEvent(state.sessionId, value.event)        } catch {
           // 订阅方异常不能打断内核流
         }
       }

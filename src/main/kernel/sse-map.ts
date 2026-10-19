@@ -75,7 +75,11 @@ export type KernelFollowValue =
           }
         | { type: 'end'; attemptId: string; outcome?: { kind?: string; seq?: number } }
     }
-  | { type: 'event'; event: { type: string; seq?: number; data?: Record<string, unknown> } }
+  /**
+   * 会话事件：`time` 是内核写入时间（epoch ms，rc.2 的 SessionWireEvent 字段）。
+   * 审批结果行「什么时候结算的」直接取它（PB-026 契约），不要在交付侧重算。
+   */
+  | { type: 'event'; event: { type: string; seq?: number; time?: number; data?: Record<string, unknown> } }
 
 const FINISH_REASONS: Readonly<Record<string, string>> = {
   stop: 'stop',

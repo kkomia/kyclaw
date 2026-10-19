@@ -83,15 +83,26 @@ describe('审批生命周期（asked → decided，一次结算）', () => {
         threadId: 'thread-A',
         id: 'ap-1',
         source: 'asked',
+        // PB-026 契约：asked 只有审计 id，不能应答
+        respondable: false,
+        actions: [],
         toolName: 'bash',
         callId: 'call-1',
         askedAtSeq: 10
       }
     ])
 
-    const result = hub.applyApprovalDecided('thread-A', { id: 'ap-1', outcome: 'unavailable' }, 12)
+    const result = hub.applyApprovalDecided(
+      'thread-A',
+      { id: 'ap-1', outcome: 'unavailable' },
+      12,
+      1_700_000_000_123
+    )
     expect(result?.outcome).toBe('unavailable')
     expect(result?.systemInitiated).toBe(true)
+    // PB-026 契约：结果行要带 谁结束的 / 什么时候 / 为什么
+    expect(result?.settledBy).toBe('system')
+    expect(result?.at).toBe(1_700_000_000_123)
     expect(result?.decidedAtSeq).toBe(12)
     expect(hub.hasPending('thread-A')).toBe(false)
     expect(hub.snapshot('thread-A').approvals.results).toHaveLength(1)
@@ -146,12 +157,17 @@ describe('feedKernelEvent（内核事件 → hub）', () => {
       feedKernelEvent(hub, 'thread-A', {
         type: 'approval/decided',
         seq: 4,
+        time: 1_700_000_000_456,
         data: { id: 'ap-1', outcome: 'rejected' }
       })
     ).toBe(true)
     const result = hub.snapshot('thread-A').approvals.results[0]
     expect(result?.copy.title).toBe('你拒绝了这次操作')
     expect(result?.systemInitiated).toBe(false)
+    // PB-026 契约：结果行带 谁结束的 / 什么时候 / 为什么（reason 从 asked 带过来）
+    expect(result?.settledBy).toBe('user')
+    expect(result?.at).toBe(1_700_000_000_456)
+    expect(result?.reason).toBe('写文件需要授权')
 
     // 未知 outcome / 缺字段：不处理、不伪造
     expect(
@@ -219,7 +235,7 @@ describe('PB-025 waterfall → hub 接线', () => {
     reason: '要写 workspace 之外'
   }
 
-  it('approval waterfall → 可应答挂起（source=waterfall，id=eventId）', () => {
+  it('approval waterfall → 可应答挂起（source=waterfall，id=eventId，respondable=true）', () => {
     const hub = new InteractionHub()
     expect(applyInteractionEvent(hub, approvalFrame)).toBe(true)
     expect(hub.snapshot('thread-A').approvals.pending).toEqual([
@@ -227,6 +243,9 @@ describe('PB-025 waterfall → hub 接线', () => {
         threadId: 'thread-A',
         id: 'evt-1',
         source: 'waterfall',
+        // PB-026 契约：UI 直接看 respondable/actions，不读 source
+        respondable: true,
+        actions: ['allow-once', 'reject'],
         toolName: 'pwsh',
         callId: 'call-1',
         reason: '要写 workspace 之外'

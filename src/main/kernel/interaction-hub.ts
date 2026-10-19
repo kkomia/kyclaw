@@ -105,6 +105,14 @@ export interface PendingApproval {
   id: string
   /** `waterfall` = 我们收得到也能答（PB-025）；`asked` = 只从 session 事件看到（无应答通道时） */
   source: 'waterfall' | 'asked'
+  /**
+   * PB-026 契约：**UI 是否该给这条显示「允许/拒绝」按钮**。
+   * 由 hub 算好，UI **不要**再按 `source` 字符串猜：`asked` 项只是观察（内核审计事件），
+   * 点它也没有可回执的 eventId。
+   */
+  respondable: boolean
+  /** 可应答项的动作集（不可应答 → 空数组），UI 直接渲染按钮 */
+  actions: readonly ('allow-once' | 'reject')[]
   toolName: string
   callId?: string
   reason?: string
@@ -124,6 +132,12 @@ export interface ApprovalResult {
   copy: ApprovalCopy
   /** 是否「不是你点的」——回归提示条按这个筛（取消/自动拒绝/策略拒绝） */
   systemInitiated: boolean
+  /** 谁结束的：用户动作（allowed-once / rejected）还是系统（cancelled / unavailable） */
+  settledBy: 'user' | 'system'
+  /** 为什么问（从挂起项带过来；没有就是 undefined，不编） */
+  reason?: string
+  /** 结算时间（内核事件 `time`，epoch ms；事件没带就是 undefined） */
+  at?: number
   askedAtSeq?: number
   decidedAtSeq?: number
 }
@@ -194,8 +208,18 @@ export class InteractionHub {
   private readonly askUser = new Map<string, AskUserState>()
   private readonly pendingQuestions = new Map<string, Map<string, PendingQuestion>>()
   private readonly settledIds = new Map<string, Set<string>>()
-  /** 已结算/已应答的交互 eventId（写面用来区分 409 与 404；跨 thread 统一存） */
-  private readonly settledEventIds = new Set<string>()
+  /** 已结算/已应答的交互 eventId → 终态摘要（写面用来区分 409 与 404，并给 UI 直接渲结果行） */
+  private readonly settledEvents = new Map<
+    string,
+    {
+      threadId: string
+      kind: 'approval' | 'question'
+      at?: number
+      callId?: string
+      toolName?: string
+      reason?: string
+    }
+  >()
   private readonly listeners = new Set<Listener>()
   private readonly maxResults: number
 
@@ -239,6 +263,9 @@ export class InteractionHub {
       threadId,
       id: request.eventId,
       source: 'waterfall',
+      // PB-026 契约：waterfall 带 eventId → 可应答；UI 直接看 respondable/actions，别读 source
+      respondable: true,
+      actions: ['allow-once', 'reject'],
       toolName: request.toolName,
       ...(request.callId === undefined ? {} : { callId: request.callId }),
       ...(request.reason === undefined ? {} : { reason: request.reason })
@@ -255,6 +282,9 @@ export class InteractionHub {
       threadId,
       id: event.id,
       source: 'asked',
+      // 只有审计事件、没有可回执的 eventId → 只观察，不给按钮
+      respondable: false,
+      actions: [],
       toolName: event.toolName,
       ...(event.callId === undefined ? {} : { callId: event.callId }),
       ...(event.reason === undefined ? {} : { reason: event.reason }),
@@ -264,10 +294,18 @@ export class InteractionHub {
   }
 
   /** 应答成功后摘掉挂起项（只摘本地状态；内核侧由 `$events/result` 结算） */
-  dismissPending(threadId: string, id: string): boolean {
+  dismissPending(threadId: string, id: string, at?: number): boolean {
     const byId = this.pending.get(threadId)
+    const pending = byId?.get(id)
     if (byId === undefined || !byId.delete(id)) return false
-    this.settledEventIds.add(id)
+    this.settledEvents.set(id, {
+      threadId,
+      kind: 'approval',
+      at: at ?? Date.now(),
+      ...(pending?.callId === undefined ? {} : { callId: pending.callId }),
+      ...(pending?.toolName === undefined ? {} : { toolName: pending.toolName }),
+      ...(pending?.reason === undefined ? {} : { reason: pending.reason })
+    })
     this.notify(threadId)
     return true
   }
@@ -288,7 +326,37 @@ export class InteractionHub {
 
   /** 这个 eventId 是否**曾经**挂着、现在已结算（用于 409 而不是 404，避免把重复提交说成"不存在"） */
   isSettledEvent(eventId: string): boolean {
-    return this.settledEventIds.has(eventId)
+    return this.settledEvents.has(eventId)
+  }
+
+  /**
+   * PB-026：409 回执用——**已结算**那条的终态信息（UI 收到 409 可直接渲结果行，不必再拉快照）。
+   * `result` 只在能按 callId 关联到结果行时给（关联不到就是 `null`，UI 刷新一次快照）。
+   */
+  findSettledEvent(eventId: string):
+    | {
+        threadId: string
+        kind: 'approval' | 'question'
+        at?: number
+        callId?: string
+        result: ApprovalResult | null
+      }
+    | null {
+    const info = this.settledEvents.get(eventId)
+    if (info === undefined) return null
+    const result =
+      info.kind === 'approval' && info.callId !== undefined
+        ? ([...(this.results.get(info.threadId) ?? [])]
+            .reverse()
+            .find((item) => item.callId === info.callId) ?? null)
+        : null
+    return {
+      threadId: info.threadId,
+      kind: info.kind,
+      ...(info.at === undefined ? {} : { at: info.at }),
+      ...(info.callId === undefined ? {} : { callId: info.callId }),
+      result
+    }
   }
 
   /** PB-025：`user-questions/request` waterfall → 可应答的提问挂起（id = eventId） */
@@ -301,10 +369,14 @@ export class InteractionHub {
   }
 
   /** 回答提交成功后摘掉提问挂起 */
-  dismissQuestion(threadId: string, eventId: string): boolean {
+  dismissQuestion(threadId: string, eventId: string, at?: number): boolean {
     const byId = this.pendingQuestions.get(threadId)
     if (byId === undefined || !byId.delete(eventId)) return false
-    this.settledEventIds.add(eventId)
+    this.settledEvents.set(eventId, {
+      threadId,
+      kind: 'question',
+      at: at ?? Date.now()
+    })
     this.notify(threadId)
     return true
   }
@@ -321,7 +393,8 @@ export class InteractionHub {
   applyApprovalDecided(
     threadId: string,
     event: ApprovalDecidedEvent,
-    seq?: number
+    seq?: number,
+    at?: number
   ): ApprovalResult | null {
     const settled = this.settledIds.get(threadId) ?? new Set<string>()
     this.settledIds.set(threadId, settled)
@@ -330,19 +403,44 @@ export class InteractionHub {
 
     const byId = this.pending.get(threadId)
     const copy = approvalOutcomeCopy(event.outcome)
-    let matched: PendingApproval | undefined
+    let matchedTool: string | undefined
+    let matchedCallId: string | undefined
+    let matchedReason: string | undefined
+    let matchedAskedAtSeq: number | undefined
     let matchedBy: ApprovalResult['matchedBy'] = 'none'
     const direct = byId?.get(event.id)
     if (direct !== undefined) {
-      matched = direct
       matchedBy = 'id'
+      matchedTool = direct.toolName
+      matchedCallId = direct.callId
+      matchedReason = direct.reason
+      matchedAskedAtSeq = direct.askedAtSeq
       byId?.delete(event.id)
     } else if (byId !== undefined && byId.size === 1) {
       const [sole] = [...byId.values()]
       if (sole !== undefined) {
-        matched = sole
         matchedBy = 'sole'
+        matchedTool = sole.toolName
+        matchedCallId = sole.callId
+        matchedReason = sole.reason
+        matchedAskedAtSeq = sole.askedAtSeq
         byId.delete(sole.id)
+      }
+    } else {
+      // 用户已经应答（waterfall eventId 已从 pending 摘掉）、decided 现在才到：
+      // 按"该 thread **唯一一个**已应答但还没结果行的项"补链 callId/toolName/reason。
+      // 多个候选项时**不猜**（matchedBy 保持 'none'）。
+      const unlinked = [...this.settledEvents.values()].filter((info) => {
+        if (info.threadId !== threadId || info.kind !== 'approval') return false
+        if (info.callId === undefined) return false
+        return !(this.results.get(threadId) ?? []).some((item) => item.callId === info.callId)
+      })
+      const only = unlinked.length === 1 ? unlinked[0] : undefined
+      if (only !== undefined) {
+        matchedBy = 'sole'
+        matchedTool = only.toolName
+        matchedCallId = only.callId
+        matchedReason = only.reason
       }
     }
     const result: ApprovalResult = {
@@ -352,9 +450,15 @@ export class InteractionHub {
       outcome: event.outcome,
       copy,
       systemInitiated: copy.attribution !== 'user',
-      ...(matched?.toolName === undefined ? {} : { toolName: matched.toolName }),
-      ...(matched?.callId === undefined ? {} : { callId: matched.callId }),
-      ...(matched?.askedAtSeq === undefined ? {} : { askedAtSeq: matched.askedAtSeq }),
+      // PB-026 契约：谁结束的（allowed-once/rejected = 用户动作；cancelled/unavailable = 系统）
+      settledBy: copy.attribution === 'user' ? 'user' : 'system',
+      ...(matchedTool === undefined ? {} : { toolName: matchedTool }),
+      ...(matchedCallId === undefined ? {} : { callId: matchedCallId }),
+      // 「为什么问」从挂起项带过来（没有就不给，不编）
+      ...(matchedReason === undefined ? {} : { reason: matchedReason }),
+      // 「什么时候」= 内核事件 time（epoch ms）；事件没带就不给
+      ...(at === undefined ? {} : { at }),
+      ...(matchedAskedAtSeq === undefined ? {} : { askedAtSeq: matchedAskedAtSeq }),
       ...(seq === undefined ? {} : { decidedAtSeq: seq })
     }
     const list = this.results.get(threadId) ?? []
@@ -368,6 +472,14 @@ export class InteractionHub {
   /**
    * 内核投影 `session/projections.values.userQuestions`（view = `{active, settled}`）：
    * 提问状态**整体替换**（投影是全量视图），`continued` 原样保留为"仍可答"。
+   */
+  /**
+   * 内核投影 `session/projections.values.userQuestions`（view = `{active, settled}`）：
+   * 提问状态**整体替换**（投影是全量视图），`continued` 原样保留为"仍可答"。
+   *
+   * ⚠️ **没有倒计时字段**（PB-026 拍板，不编）：内核 rc.2 的投影只有 `{active, settled}`，
+   * `questionSchema` 没有 timeout/deadline，waterfall `user-questions/request.request` 也只带
+   * `questions` → 我们拿不到 deadline。UI **不要显示倒计时**，只用 `state: 'open' | 'continued'`。
    */
   applyUserQuestionsProjection(
     threadId: string,
@@ -447,11 +559,13 @@ export class InteractionHub {
  * 只认审批两条事件；其余（turn/start、tool/call…）走既有 SSE 映射链路，这里不碰。
  * 返回是否有状态变化（便于上层决定要不要推给 renderer）。
  *
- * 注意：`threadId` 就是内核 `sessionId`（B3.4 的映射口径）。
- */export function feedKernelEvent(
+ * 注意：`threadId` 就是内核 `sessionId`（B3.4 的映射口径）。`time` = 内核事件时间（epoch ms），
+ * 会被带进结果行的 `at` 字段。
+ */
+export function feedKernelEvent(
   hub: InteractionHub,
   threadId: string,
-  event: { type?: string; seq?: number; data?: Record<string, unknown> }
+  event: { type?: string; seq?: number; time?: number; data?: Record<string, unknown> }
 ): boolean {
   if (event.type === 'approval/asked') {
     const data = event.data as
@@ -474,7 +588,12 @@ export class InteractionHub {
     const data = event.data as { id?: unknown; outcome?: unknown } | undefined
     if (typeof data?.id !== 'string' || !isApprovalOutcome(data.outcome)) return false
     return (
-      hub.applyApprovalDecided(threadId, { id: data.id, outcome: data.outcome }, event.seq) !== null
+      hub.applyApprovalDecided(
+        threadId,
+        { id: data.id, outcome: data.outcome },
+        event.seq,
+        event.time
+      ) !== null
     )
   }
   return false
