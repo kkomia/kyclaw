@@ -273,8 +273,8 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       {
         preDelayMs: 400,
         deltas: [
-          { text: '先读设置。' },
-          { tool: { id: 'toolu_r08_ok', name: 'read', input: { file_path: 'settings.json' } }, delayMs: 500 }
+          { text: '先看目标。' },
+          { tool: { id: 'toolu_r08_ok', name: 'get_goal', input: {} }, delayMs: 500 }
         ],
         stop: 'tool_use'
       },
@@ -282,22 +282,19 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
         // 工具结果之后故意等 2.5s：让可观测的 `tool-result` 阶段稳定 ≥1.2s（Ada 口径 R08-a）
         preDelayMs: 2_500,
         deltas: [
-          { text: '再读缺失文件。' },
-          { tool: { id: 'toolu_r08_fail', name: 'read', input: { file_path: 'missing-r08.txt' } }, delayMs: 500 }
+          { text: '再看一次目标。' },
+          { tool: { id: 'toolu_r08_fail', name: 'get_goal', input: {} }, delayMs: 500 }
         ],
         stop: 'tool_use'
       },
-      { preDelayMs: 800, deltas: [{ text: '完成。' }], stop: 'end_turn' }
+      { preDelayMs: 2_500, deltas: [{ text: '完成。' }], stop: 'end_turn' }
     ])
     const launched = await launchApp({ kernel: 'real', env: { DEEPSEEK_API_KEY: 'test', DEEPSEEK_BASE_URL: stub.baseUrl }, keepUserData: true })
     const samples: Array<Record<string, unknown>> = []
     try {
       await waitForChat(launched.page)
-      // PB-045 解阻：本机 windows-acl 沙箱坏了（sandbox-local 临时授权失败）→ 切 danger-full-access，
-      // 让 read 真正执行（否则稳定 tool-error，R08-a 的 tool-result 永远采不到）。
-      await sendMessage(launched.page, '/permission danger-full-access')
-      await launched.page.waitForTimeout(1_500)
-      await sendMessage(launched.page, '跑两个 read')
+      // 不依赖 read（本机 windows-acl 沙箱坏，PB-045）→ 用 get_goal 成功工具 + "工具结果后延迟"造 tool-result 稳定窗口
+      await sendMessage(launched.page, '跑两个 get_goal')
       const deadline = Date.now() + 60_000
       while (Date.now() < deadline) {
         samples.push(await sample(launched.page))
@@ -322,18 +319,24 @@ test.describe('R07/R08/R06/R16 真内核采样', () => {
       const motions = samples.map((item) => item.motion).filter((motion) => typeof motion === 'string')
       expect(motions.length, `R08-a 没采到 data-motion（${file}）`).toBeGreaterThan(0)
       expect(motions.every((motion) => motion === 'full'), `R08-a 默认 data-motion 应为 full（${file}）`).toBe(true)
-      // 只在同一 stage 稳定 ≥1.2s（6×200ms）的窗口上断言文案（1s 说法锁的过渡帧不算错）
+      // 同一 stage 稳定 ≥1.6s（8×200ms）才断言文案；且要跳过前 1.2s（1s 说法锁 + 换词动画的过渡帧）
       let stableRuns = 0
       let toolResultRuns = 0
-      for (let i = 0; i + 6 < samples.length; i += 1) {
-        const key = String(samples[i]?.stage ?? '')
-        const stable = [1, 2, 3, 4, 5, 6].every((offset) => String(samples[i + offset]?.stage ?? '') === key)
-        if (!stable || key === '' || LABELS[key] === undefined) continue
-        stableRuns += 1
-        expect(samples[i]?.label, `R08-a stage=${key} 稳定 1.2s 后文案不符（${file}）`).toBe(LABELS[key])
-        if (key === 'tool-result') toolResultRuns += 1
+      let runStart = 0
+      for (let i = 1; i <= samples.length; i += 1) {
+        const current = i === samples.length ? undefined : String(samples[i]?.stage ?? '')
+        const start = String(samples[runStart]?.stage ?? '')
+        if (i < samples.length && current === start) continue
+        const runLength = i - runStart
+        if (runLength >= 8 && start !== '' && LABELS[start] !== undefined) {
+          stableRuns += 1
+          const settled = samples[runStart + 7]
+          expect(settled?.label, `R08-a stage=${start} 稳定 1.6s 后文案不符（${file}）`).toBe(LABELS[start])
+          if (start === 'tool-result') toolResultRuns += 1
+        }
+        runStart = i
       }
-      expect(stableRuns, `R08-a 没有任何阶段稳定 ≥1.2s，样本不足（${file}）`).toBeGreaterThan(0)
+      expect(stableRuns, `R08-a 没有任何阶段稳定 ≥1.6s，样本不足（${file}）`).toBeGreaterThan(0)
       expect(toolResultRuns, `R08-a 未观测到 tool-result 稳定窗口（${file}）`).toBeGreaterThan(0)
     } finally {
       await closeApp(launched)
