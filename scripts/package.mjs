@@ -422,6 +422,36 @@ export function kernelInputProblem(kernelDir = KERNEL_DIR) {
 }
 
 /**
+ * 出包前自检（0.2.1）：卸载器的「同时删除本地历史数据」勾选框靠 `build/installer.nsh`
+ * 经 `electron-builder.yml` 的 `nsis.include` 注入。缺一个 electron-builder 不报错，
+ * 卸载器只会静默退回"不删数据"——用户看到的就是功能没生效。返回一句人话或 null。
+ */
+export function uninstallerIncludeProblem(root = ROOT) {
+  const script = join(root, 'build', 'installer.nsh')
+  if (!existsSync(script)) {
+    return (
+      `缺卸载器自定义脚本：${script}\n` +
+      '  （卸载时「同时删除本地历史数据」的勾选框靠它实现；没有它卸载器会静默不删数据）'
+    )
+  }
+  const scriptText = readFileSync(script, 'utf8')
+  for (const marker of ['customUnWelcomePage', 'customUnInstall', '同时删除本地历史数据']) {
+    if (!scriptText.includes(marker)) {
+      return `卸载器脚本缺关键段「${marker}」：${script}`
+    }
+  }
+  const configFile = join(root, 'electron-builder.yml')
+  const config = existsSync(configFile) ? readFileSync(configFile, 'utf8') : ''
+  if (!/^\s*include:\s*build\/installer\.nsh$/mu.test(config)) {
+    return (
+      'electron-builder.yml 的 nsis.include 没挂 build/installer.nsh —— ' +
+      '卸载器的「同时删除本地历史数据」勾选框不会进安装包'
+    )
+  }
+  return null
+}
+
+/**
  * 出包后自检（验收③/⑤）：随包 `resources/kernel` 与仓库输入逐项一致 —— 版本指针/入口/
  * SNAPSHOT 在，文件数一致，current.json 的版本与 SHA256 一致（SHA256 就是取证值）。
  */
@@ -484,6 +514,12 @@ function main() {
     // 缺件必须在**清上一次产物之前**停：快照 113.6 MiB 不入库，没跑 fetch:kernel 就打不出可用包。
     const kernelProblem = kernelInputProblem()
     if (kernelProblem !== null) fail(kernelProblem)
+
+    // 0.2.1（用户口径）：卸载器要带「同时删除本地历史数据」勾选框——靠 build/installer.nsh
+    // 经 electron-builder.yml 的 nsis.include 注入。缺一个 electron-builder 不会报错，卸载器
+    // 只是静默退回「不删数据」；用户看到的就是功能没生效。出包前硬校验。
+    const uninstallerProblem = uninstallerIncludeProblem()
+    if (uninstallerProblem !== null) fail(uninstallerProblem)
 
     const cleared = cleanStaleOutputs()
     if (cleared.length > 0) {

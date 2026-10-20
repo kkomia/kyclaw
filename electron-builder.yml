@@ -168,7 +168,13 @@ nsis:
   perMachine: false
   oneClick: false
   allowToChangeInstallationDirectory: true
-  # 卸载保留 userData：%APPDATA%\kyclaw 里是会话库与 safeStorage 密钥，重装还得用
+  # 卸载数据清理（0.2.1 新增，用户口径）：卸载向导里给一个**勾选框**，勾选则同时删除
+  # 本机历史数据（%APPDATA%\kyclaw：会话/设置/加密密钥/日志/模型缓存/旧 kyclaw.db；
+  # 以及 %LOCALAPPDATA%\kyclaw-updater 更新缓存）。不删默认工作区里的用户文件；
+  # 自动更新/静默卸载默认保留数据（显式 --delete-app-data 才删）。
+  # 实现走 build/installer.nsh（customUnWelcomePage + customUnInstall），
+  # 所以 electron-builder 内置的 deleteAppDataOnUninstall 保持 false（那会无提示静默删）。
+  include: build/installer.nsh
   deleteAppDataOnUninstall: false
 compression: normal
 mac:
