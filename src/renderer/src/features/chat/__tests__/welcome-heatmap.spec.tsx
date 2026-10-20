@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { FeatureDisabledError } from '@renderer/lib/feature-disabled'
 import type { UsageCalendar, UsageCalendarDay } from '@shared/usage'
 import { WelcomeHeatmap } from '../parts/WelcomeHeatmap'
 
@@ -200,6 +201,31 @@ describe('task-127 欢迎页日历热力图', () => {
     renderHeatmap(async (year) => calendar(year, [day('2026-10-17', 5, 5, 1, 1)]))
     await waitFor(() => expect(screen.getByTestId('welcome-heatmap-stat')).toBeInTheDocument())
     expect(screen.getByTestId('welcome-heatmap-stat')).toHaveTextContent('从 2026-10-17 开始记录')
+  })
+
+  /**
+   * 0.2.1（PB-053 泛化）：/api/usage/calendar 是 0.2.0 起**主动下架**（501）→
+   * 热力图只给中性说明，不画「本地活动读取失败」红字、不给永远失败的重试。
+   */
+  it('本版下架（501）：中性说明，不报错、不重试', async () => {
+    renderHeatmap(async () => {
+      throw new FeatureDisabledError('usage')
+    })
+    expect(await screen.findByTestId('welcome-heatmap-unavailable')).toHaveTextContent(
+      '本版暂不可用（0.2.x 恢复）'
+    )
+    expect(screen.queryByTestId('welcome-heatmap-error')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
+    // 网格照出（不闪空/不塌布局）
+    expect(screen.getByTestId('welcome-heatmap-grid')).toBeInTheDocument()
+  })
+
+  it('普通读取失败：仍是错误行 + 重试（下架降级不吞真实失败）', async () => {
+    renderHeatmap(async () => {
+      throw new Error('服务返回 500')
+    })
+    expect(await screen.findByTestId('welcome-heatmap-error')).toHaveTextContent('服务返回 500')
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
   })
 
   it('CSS 契约：暖色阶、2px 圆角/3px gap、reduced 静态、矮窗压缩/隐藏、focus 可见', () => {

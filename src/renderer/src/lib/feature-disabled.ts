@@ -1,8 +1,11 @@
 /**
- * PB-022：0.2.0 下架的宿主 API 统一回 501 feature-disabled。
+ * PB-022：0.2.0 起主动下架的宿主 API 统一回 501 feature-disabled。
  * renderer 统一显示这一句，不把 `feature-disabled` 这种内部 code 直接给用户看。
+ *
+ * 0.2.1（PB-053）：措辞从「0.2.0 暂不可用」改成「本版暂不可用」——0.2.1 是本版，
+ * 旧措辞会在 0.2.1 里指向错误版本（PB-052 同类：过期措辞）。
  */
-export const FEATURE_DISABLED_MESSAGE = '0.2.0 暂不可用（0.2.x 恢复）'
+export const FEATURE_DISABLED_MESSAGE = '本版暂不可用（0.2.x 恢复）'
 
 export function isFeatureDisabled(response: Response): boolean {
   return response.status === 501

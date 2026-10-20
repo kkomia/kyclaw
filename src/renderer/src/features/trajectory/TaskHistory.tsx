@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TaskHistory as History } from '@shared/tasks'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { fetchTaskHistory } from '@renderer/lib/tasks-api'
 import { projectTaskSnapshot } from '../chat/task-history'
 import { Button } from '@renderer/components/ui/button'
@@ -28,8 +29,17 @@ export function TaskHistory({
       (history) => {
         if (alive) setResult({ threadId, history, error: null })
       },
-      () => {
-        if (alive) setResult({ threadId, history: null, error: '任务历史加载失败，请重试' })
+      (cause: unknown) => {
+        // 0.2.1（PB-053 泛化）：/api/tasks 是本版主动下架（501），不是"加载失败"：
+        // 不显示错误行、不加重试（重试永远失败），任务历史这块直接不出现。
+        if (alive) {
+          const unavailable = isFeatureDisabledError(cause)
+          setResult({
+            threadId,
+            history: null,
+            error: unavailable ? null : '任务历史加载失败，请重试'
+          })
+        }
       }
     )
     return () => {

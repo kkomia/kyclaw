@@ -3,6 +3,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Chip } from '@renderer/components/ui/chip'
 import { cn } from '@renderer/components/ui/cn'
 import { Skeleton } from '@renderer/components/ui/skeleton'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { fetchUsage } from '@renderer/lib/usage-api'
 import { formatTokens } from '@renderer/lib/usage-format'
 import { usageRangeSchema, type UsageRange, type UsageResponse } from '@shared/usage'
@@ -157,21 +158,33 @@ export function UsagePanel(): React.JSX.Element {
           <Skeleton className="h-4 w-1/2" />
         </div>
       ) : current.error !== null ? (
-        <div
-          data-testid="usage-error"
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-panel bg-secondary p-4"
-        >
-          <p className="text-b2 text-ink-secondary">{current.error.message}</p>
-          <Button
-            size="sm"
-            variant="ghost"
-            data-testid="usage-retry"
-            onClick={() => setReloadToken((token) => token + 1)}
+        isFeatureDisabledError(current.error) ? (
+          // 0.2.1（PB-053 泛化）：/api/usage 是 0.2.0 起**主动下架**（501），不是加载失败。
+          // 不给红字/重试（重试永远失败），只说一句中性的"本版暂不可用"。
+          <div
+            data-testid="usage-unavailable"
+            className="rounded-panel bg-secondary p-4"
+            role="status"
           >
-            重试
-          </Button>
-        </div>
+            <p className="text-b2 text-ink-secondary">用量统计本版暂不可用（0.2.x 恢复）。</p>
+          </div>
+        ) : (
+          <div
+            data-testid="usage-error"
+            role="alert"
+            className="flex flex-col items-start gap-3 rounded-panel bg-secondary p-4"
+          >
+            <p className="text-b2 text-ink-secondary">{current.error.message}</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="usage-retry"
+              onClick={() => setReloadToken((token) => token + 1)}
+            >
+              重试
+            </Button>
+          </div>
+        )
       ) : current.data === null ? null : (
         <div key={resolveKey} className="animate-fade-in flex flex-col gap-6">
           <UsageReport data={current.data} />

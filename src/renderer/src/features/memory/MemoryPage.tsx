@@ -6,6 +6,7 @@ import { Skeleton } from '@renderer/components/ui/skeleton'
 import { RecallStatusLine } from '@renderer/features/settings/RecallSettings'
 import { TextPart } from '@renderer/features/chat/parts/TextPart'
 import { useSessionsStore } from '@renderer/features/sessions/sessions-store'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { clearMemory, fetchMemory, saveMemory } from '@renderer/lib/memory-api'
 import type { ThreadSummary } from '@shared/threads'
 
@@ -159,21 +160,33 @@ export function MemoryPanel(): React.JSX.Element {
           <Skeleton className="h-4 w-2/3" />
         </div>
       ) : current.error !== null ? (
-        <div
-          data-testid="memory-error"
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-panel bg-secondary p-4"
-        >
-          <p className="text-b2 text-ink-secondary">{current.error.message}</p>
-          <Button
-            size="sm"
-            variant="ghost"
-            data-testid="memory-retry"
-            onClick={() => setResolveKey((key) => key + 1)}
+        isFeatureDisabledError(current.error) ? (
+          // 0.2.1（PB-053 泛化）：记忆接口 /api/memory 是 0.2.0 起**主动下架**（501），
+          // 不是加载失败：不给红字/重试，只说一句中性的"本版暂不可用"。
+          <div
+            data-testid="memory-unavailable"
+            className="rounded-panel bg-secondary p-4"
+            role="status"
           >
-            重试
-          </Button>
-        </div>
+            <p className="text-b2 text-ink-secondary">记忆查看与编辑本版暂不可用（0.2.x 恢复）。</p>
+          </div>
+        ) : (
+          <div
+            data-testid="memory-error"
+            role="alert"
+            className="flex flex-col items-start gap-3 rounded-panel bg-secondary p-4"
+          >
+            <p className="text-b2 text-ink-secondary">{current.error.message}</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="memory-retry"
+              onClick={() => setResolveKey((key) => key + 1)}
+            >
+              重试
+            </Button>
+          </div>
+        )
       ) : (
         <div
           key={loadKey}

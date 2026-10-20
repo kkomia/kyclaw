@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { UsageCalendar } from '@shared/usage'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { formatTokens } from '@renderer/lib/usage-format'
 import { buildHeatmap, weekdayLabelOf, type HeatmapCell, type HeatmapModel } from './heatmap-model'
 import './welcome-heatmap.css'
@@ -59,6 +60,11 @@ export function WelcomeHeatmap({
   const [calendar, setCalendar] = useState<UsageCalendar | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * 0.2.1（PB-053 泛化）：/api/usage/calendar 本版主动下架（501）→ 这是"本版没有本地活动
+   * 统计"，不是"读取失败"。这一档只给中性说明，不画红字、不给重试。
+   */
+  const [unavailable, setUnavailable] = useState(false)
   const [hover, setHover] = useState<{
     cell: HeatmapCell
     left: number
@@ -80,12 +86,21 @@ export function WelcomeHeatmap({
       .then((next) => {
         if (requestRef.current !== request) return
         setCalendar(next)
+        setError(null)
+        setUnavailable(false)
         setLoading(false)
       })
       .catch((cause: unknown) => {
         if (requestRef.current !== request) return
         setCalendar(null)
-        setError(cause instanceof Error ? cause.message : '读取失败')
+        if (isFeatureDisabledError(cause)) {
+          // 本版主动下架（501）：不是失败——中性说明，不报错、不重试
+          setError(null)
+          setUnavailable(true)
+        } else {
+          setError(cause instanceof Error ? cause.message : '读取失败')
+          setUnavailable(false)
+        }
         setLoading(false)
       })
     return () => {
@@ -116,6 +131,7 @@ export function WelcomeHeatmap({
     if (next === year) return
     setCalendar(null)
     setError(null)
+    setUnavailable(false)
     setLoading(true)
     setYear(next)
   }
@@ -300,21 +316,38 @@ export function WelcomeHeatmap({
             onClick={() => {
               setCalendar(null)
               setError(null)
+              setUnavailable(false)
               setLoading(true)
               void Promise.resolve()
                 .then(() => load(year))
                 .then((next) => {
                   setCalendar(next)
+                  setUnavailable(false)
                   setLoading(false)
                 })
                 .catch((cause: unknown) => {
-                  setError(cause instanceof Error ? cause.message : '读取失败')
+                  if (isFeatureDisabledError(cause)) {
+                    setError(null)
+                    setUnavailable(true)
+                  } else {
+                    setError(cause instanceof Error ? cause.message : '读取失败')
+                  }
                   setLoading(false)
                 })
             }}
           >
             重试
           </button>
+        </div>
+      ) : unavailable ? (
+        <div
+          className="welcome-heatmap-foot"
+          data-testid="welcome-heatmap-unavailable"
+          role="status"
+        >
+          <span className="welcome-heatmap-stat font-mono">
+            本地活动统计本版暂不可用（0.2.x 恢复）
+          </span>
         </div>
       ) : model.totalActiveDays === 0 ? (
         <div className="welcome-heatmap-empty" data-testid="welcome-heatmap-empty">

@@ -175,6 +175,37 @@ describe('记忆页：查看', () => {
     expect(screen.queryByTestId('memory-error')).not.toBeInTheDocument()
   })
 
+  it('PB-053：/api/memory 501（本版下架）→ 中性「本版暂不可用」，不报错、不重试', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input))
+        if (url.pathname === '/api/memory/recall') {
+          return json({
+            recall: {
+              state: 'off',
+              active: false,
+              enabled: false,
+              source: 'remote',
+              detail: '未开启'
+            }
+          })
+        }
+        return new Response(
+          JSON.stringify({ error: 'feature-disabled', feature: 'memory', availableIn: '0.2.x' }),
+          { status: 501, headers: { 'content-type': 'application/json' } }
+        )
+      })
+    )
+    render(<MemoryPage />)
+
+    expect(await screen.findByTestId('memory-unavailable')).toHaveTextContent(
+      '本版暂不可用（0.2.x 恢复）'
+    )
+    expect(screen.queryByTestId('memory-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('memory-retry')).not.toBeInTheDocument()
+  })
+
   it('切换会话：重拉并换成那个会话的记忆（编辑中的草稿作废）', async () => {
     installFakeMemory({ 'thread-1': 'A 会话的记忆', 'thread-2': 'B 会话的记忆' })
     render(<MemoryPage />)

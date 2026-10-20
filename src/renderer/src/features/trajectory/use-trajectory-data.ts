@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { StoredMessage, ThreadCompaction } from '@shared/threads'
 import type { TrajectoryRequestSummary, TrajectoryUsageRun } from '@shared/trajectory'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { fetchThreadCompaction, fetchThreadMessages } from '@renderer/lib/threads-api'
 import { fetchThreadRequestSummaries, fetchThreadUsageRuns } from '@renderer/lib/trajectory-api'
 import { buildTrajectory, type TrajectoryDoc } from './model'
@@ -104,6 +105,9 @@ export function useTrajectoryData(options: UseTrajectoryDataOptions): Trajectory
       try {
         return { value: await load(), notice: null }
       } catch (cause) {
+        // 0.2.1（PB-053 泛化）：本版**主动下架**的接口（/api/trajectory、/api/usage 等回 501）
+        // 不是"取数失败"。轨迹照出、不提示、不重试——这是本版没有的能力，不该在界面上报错。
+        if (isFeatureDisabledError(cause)) return { value: fallback, notice: null }
         return { value: fallback, notice: degrade(label, lose, cause) }
       }
     }

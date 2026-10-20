@@ -53,7 +53,7 @@ describe('任务 API', () => {
     await expect(writeTasks('t1', input, endpoint)).rejects.toThrow('冲突回包格式')
   })
 
-  it('501 feature-disabled → 统一显示 0.2.0 暂不可用', async () => {
+  it('501 feature-disabled → 统一显示 本版暂不可用', async () => {
     vi.stubGlobal(
       'fetch',
       vi
@@ -62,7 +62,7 @@ describe('任务 API', () => {
           response({ error: 'feature-disabled', feature: 'tasks', availableIn: '0.2.x' }, 501)
         )
     )
-    await expect(fetchTasks('t1', endpoint)).rejects.toThrow('0.2.0 暂不可用（0.2.x 恢复）')
-    await expect(writeTasks('t1', input, endpoint)).rejects.toThrow('0.2.0 暂不可用（0.2.x 恢复）')
+    await expect(fetchTasks('t1', endpoint)).rejects.toThrow('本版暂不可用（0.2.x 恢复）')
+    await expect(writeTasks('t1', input, endpoint)).rejects.toThrow('本版暂不可用（0.2.x 恢复）')
   })
 })

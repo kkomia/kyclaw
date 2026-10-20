@@ -85,12 +85,13 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
 })
 
 /**
- * 0.2.1（PB-053）：0.2.x 把会话↔项目映射的宿主路由下架成 501 feature-disabled；
- * **旧项目数据不兼容、直接舍弃**。回归钉两件事：
+ * 0.2.1（PB-053 + 泛化）：0.2.x 把 8 条宿主 API（含会话↔项目映射、用量、记忆、轨迹…）下架成
+ * 501 feature-disabled；**旧数据不兼容、直接舍弃**。回归钉三件事：
  *   ① 侧栏不再画「项目加载失败 + 重试」（曾经每次启动都出现，重试永远失败）；
- *   ② 依赖旧映射的项目入口（侧栏项目区 / 初始页「选择项目」胶囊）整体不出现。
+ *   ② 依赖旧映射的项目入口（侧栏项目区 / 初始页「选择项目」胶囊）整体不出现；
+ *   ③ 其它下架功能（首页热力图 / 用量页）只给中性「本版暂不可用」，不画红字、不给重试。
  */
-test('旧项目数据（PB-053）：侧栏不报「项目加载失败」，项目入口整体不出现', async () => {
+test('下架功能/旧数据（PB-053）：界面不报「加载失败」，项目入口不出现，用量/热力图中性', async () => {
   const launched = await launchApp({
     settings: {
       projects: [
@@ -126,6 +127,27 @@ test('旧项目数据（PB-053）：侧栏不报「项目加载失败」，项�
     await expect(page.getByTestId('composer-project-row')).toHaveCount(0)
     await expect(page.getByText('使用现有文件夹', { exact: true })).toHaveCount(0)
     await expect(page.getByTestId('new-session')).toBeVisible()
+
+    // ③ 首页热力图（/api/usage/calendar 501）：中性说明，没有「读取失败」红字/重试
+    await page.getByTestId('new-session').click()
+    await expect(page.getByTestId('welcome-heatmap-unavailable')).toBeVisible()
+    await expect(page.getByTestId('welcome-heatmap-error')).toHaveCount(0)
+    await expect(page.getByText('读取失败', { exact: false })).toHaveCount(0)
+
+    // ④ 用量页（/api/usage 501）：中性不可用块，不是错误行
+    await page.evaluate(() => {
+      location.hash = '#/usage'
+    })
+    await expect(page.getByTestId('usage-unavailable')).toBeVisible()
+    await expect(page.getByTestId('usage-error')).toHaveCount(0)
+    await expect(page.getByTestId('usage-retry')).toHaveCount(0)
+
+    // 设置页「用量」栏复用同一块面板，同样不报错
+    await page.evaluate(() => {
+      location.hash = '#/settings/usage'
+    })
+    await expect(page.getByTestId('usage-unavailable')).toBeVisible()
+    await expect(page.getByTestId('usage-error')).toHaveCount(0)
   } finally {
     await closeApp(launched)
   }

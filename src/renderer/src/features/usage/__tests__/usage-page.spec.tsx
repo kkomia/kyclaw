@@ -191,7 +191,7 @@ describe('用量页：今日', () => {
     expect(screen.getByTestId('usage-tokens')).toHaveTextContent('1,500')
   })
 
-  it('PB-022：/api/usage 501 → 页面显示 0.2.0 暂不可用（不是内部 code）', async () => {
+  it('PB-022/PB-053：/api/usage 501（本版下架）→ 中性「本版暂不可用」，不报错、不重试', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -203,9 +203,12 @@ describe('用量页：今日', () => {
       )
     )
     render(<UsagePage />)
-    expect(await screen.findByTestId('usage-error')).toHaveTextContent(
-      '0.2.0 暂不可用（0.2.x 恢复）'
+    expect(await screen.findByTestId('usage-unavailable')).toHaveTextContent(
+      '本版暂不可用（0.2.x 恢复）'
     )
+    // 下架不是失败：不给红字错误行，也不给永远失败的重试
+    expect(screen.queryByTestId('usage-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('usage-retry')).not.toBeInTheDocument()
   })
 
   it('数字排版（P2 字体统一）：用量/次数是 mono + tabular-nums，「Token/次」标签保持 sans', async () => {
