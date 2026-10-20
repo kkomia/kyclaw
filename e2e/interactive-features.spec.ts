@@ -227,72 +227,14 @@ test.describe('interactive features — production UI functional evidence', () =
       ).toBe(true)
       await functionEvidence(app.page, 'rules-next-turn.png')
 
+      // 0.2.1（PB-053）：会话↔项目映射的宿主路由在 0.2.x 主动下架（501 feature-disabled），
+      // 旧项目数据不兼容、直接舍弃。初始页「选择项目」胶囊与侧栏项目区都不再出现——
+      // 这里把回归钉在"入口不存在、也没有那条假的加载失败"上（不重试、不画红字）。
       await app.page.getByTestId('new-session').click()
-      await app.page.getByTestId('composer-project').click()
-      await app.page.getByTestId('project-pick-new-blank').click()
-      await app.page.getByTestId('project-name-input').fill('InteractiveRulesProject')
-      await expect(app.page.getByTestId('project-path-value')).toContainText(app.workspace)
-      await app.page.getByTestId('project-create-save').click()
-      await expect(app.page.getByTestId('composer-project')).toContainText(
-        'InteractiveRulesProject'
-      )
-      const project = await app.page.evaluate(async () => {
-        const settings = await window.kyclaw.settings.get()
-        const selected = settings.projects.find((item) => item.name === 'InteractiveRulesProject')
-        if (!selected) throw new Error('UI project creation did not persist')
-        return selected
-      })
-      await app.page.evaluate(() => {
-        location.hash = '/settings/rules'
-      })
-      // 同上：编辑器在二级弹窗里，先点开「记忆指令」入口
-      await app.page.getByTestId('rules-open').click()
-      await app.page
-        .getByLabel('全局记忆指令')
-        .fill('INTERACTIVE_GLOBAL_FORMAT：同一事项默认使用文档。')
-      await app.page.getByRole('button', { name: '保存', exact: true }).click()
-      await expect(app.page.getByText('已保存', { exact: true })).toBeVisible()
-      // 002：项目选择器是产品自定义下拉（不再是原生 select）——点开面板，再点那条项目
-      await app.page.getByTestId('rules-project-select').click()
-      await app.page.getByTestId(`rules-project-${project.id}`).click()
-      const projectRules = 'INTERACTIVE_PROJECT_FORMAT：同一事项改用表格，覆盖全局默认。'
-      const editor = app.page.getByLabel('项目记忆指令', { exact: true })
-      await editor.fill(projectRules)
-      await editor.locator('..').getByRole('button', { name: '保存', exact: true }).click()
-      await expect
-        .poll(() => {
-          const file = join(project.path, '.kyclaw', 'rules.md')
-          return existsSync(file) ? readFileSync(file, 'utf8') : null
-        })
-        .toBe(projectRules)
-      // 008：来源只说项目内的相对位置；长绝对路径挂在 tooltip 上（悬停可核对）
-      const source = app.page.getByText('.kyclaw/rules.md（项目内）', { exact: true })
-      await expect(source).toBeVisible()
-      await expect(source).toHaveAttribute('title', join(project.path, '.kyclaw', 'rules.md'))
-      await functionEvidence(app.page, 'project-rules-saved-source.png')
-      await app.page.evaluate(() => {
-        location.hash = '/chat'
-      })
-      await expect(app.page.getByTestId('composer-project')).toContainText(
-        'InteractiveRulesProject'
-      )
-      const projectBefore = provider.requests.length
-      provider.enqueue({ text: 'PROJECT_RULES_REQUEST_VERIFIED' })
-      await sendMessage(app.page, 'INTERACTIVE_PROJECT_RULES_NEXT_TURN')
-      await expect(app.page.getByTestId('message-text').last()).toContainText(
-        'PROJECT_RULES_REQUEST_VERIFIED'
-      )
-      const projectRequest = provider.requests
-        .slice(projectBefore)
-        .find((request) => request.stream)
-      const system = JSON.stringify(
-        projectRequest?.messages.filter((message) => message.role === 'system')
-      )
-      expect(system).toContain('INTERACTIVE_GLOBAL_FORMAT')
-      expect(system).toContain('INTERACTIVE_PROJECT_FORMAT')
-      expect(system).toContain('source: bound project .kyclaw/rules.md')
-      expect(system).toContain('project preferences override global preferences on the same matter')
-      await functionEvidence(app.page, 'project-rules-bound-next-turn.png')
+      await expect(app.page.getByTestId('composer-project')).toHaveCount(0)
+      await expect(app.page.getByTestId('composer-project-row')).toHaveCount(0)
+      await expect(app.page.getByTestId('project-error')).toHaveCount(0)
+      await expect(app.page.getByText('项目加载失败', { exact: false })).toHaveCount(0)
     } finally {
       await app.close()
       await provider.close()

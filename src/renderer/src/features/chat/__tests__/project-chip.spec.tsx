@@ -110,6 +110,19 @@ describe('胶囊文案', () => {
     render(<ProjectChip threadId={null} />)
     expect(screen.queryByTestId('composer-project')).not.toBeInTheDocument()
   })
+
+  /**
+   * 0.2.1（PB-053）：映射通道本版下架（501）→ 旧项目数据不兼容，「选择项目」不出现
+   * （没有映射，选了也不生效；不给白点的入口）。
+   */
+  it('映射通道不可用：整枚胶囊不渲染（旧项目数据不兼容）', () => {
+    const initial = { ...defaultSettings(), projects: PROJECTS }
+    installKyclawBridge(initial)
+    useSettingsStore.setState({ settings: initial, loaded: true })
+    useProjectsStore.setState({ mappings: {}, loaded: true, unavailable: true })
+    render(<ProjectChip threadId="t1" />)
+    expect(screen.queryByTestId('composer-project')).not.toBeInTheDocument()
+  })
 })
 
 describe('已有会话：选中即写映射', () => {

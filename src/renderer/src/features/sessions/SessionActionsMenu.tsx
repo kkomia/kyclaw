@@ -98,14 +98,20 @@ export function SessionActionsMenu({
       testId: `session-pin-${threadId}`,
       onSelect: () => togglePin(!context.pinned)
     },
-    {
-      id: 'move',
-      type: 'submenu',
-      label: '移至项目',
-      icon: <FolderInput />,
-      testId: `session-move-${threadId}`,
-      items: moveItems
-    },
+    // 0.2.1（PB-053）：映射通道本版下架时「移至项目」入口整体不出现
+    // （旧项目数据不兼容，不给一个点了也不生效的子菜单）；能力可用时照旧渲染。
+    ...(context.projectsAvailable === false
+      ? []
+      : [
+          {
+            id: 'move',
+            type: 'submenu' as const,
+            label: '移至项目',
+            icon: <FolderInput />,
+            testId: `session-move-${threadId}`,
+            items: moveItems
+          } satisfies MenuEntry
+        ]),
     // 图3 的「从 <项目> 中移除」：归属项目时才出现（= 归属置空，T18 映射通道）
     ...(currentProject === null
       ? []

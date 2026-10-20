@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { tick } from '@renderer/components/ui/__tests__/tick'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
 import { defaultSettings, type AppSettings } from '@shared/settings'
 import { RulesSettings } from '../RulesSettings'
 
@@ -21,6 +22,7 @@ import { RulesSettings } from '../RulesSettings'
  */
 beforeEach(() => {
   useSettingsStore.setState({ settings: defaultSettings(), loaded: true })
+  resetProjectsStore()
 })
 
 /**
@@ -350,5 +352,28 @@ describe('「选择项目」下拉（002 换掉原生 select）', () => {
 
     expect(screen.queryByLabelText('项目记忆指令')).not.toBeInTheDocument()
     expect(screen.getByTestId('rules-project-select')).toHaveTextContent('请选择项目')
+  })
+})
+
+/**
+ * 0.2.1（PB-053）：会话↔项目映射的宿主路由本版下架（501）→ 旧项目数据不兼容，
+ * 项目记忆指令那一块整体不出现；全局那份照常可用。
+ */
+describe('映射通道下架（PB-053）', () => {
+  it('不可用：只留全局，项目下拉 / 项目编辑器都不出现', () => {
+    installKyclawBridge()
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        projects: [{ id: 'p', name: 'P', path: 'D:\\P', createdAt: '' }]
+      }
+    })
+    useProjectsStore.setState({ unavailable: true })
+
+    render(<RulesSettings />)
+
+    expect(screen.getByLabelText('全局记忆指令')).toBeInTheDocument()
+    expect(screen.queryByTestId('rules-project-select')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('项目记忆指令')).not.toBeInTheDocument()
   })
 })

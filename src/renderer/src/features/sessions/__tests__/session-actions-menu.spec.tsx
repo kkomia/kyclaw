@@ -67,6 +67,8 @@ function mount(
     workspaces?: Array<{ path: string; mode: 'ask' | 'full' }>
     /** round 26：把这轮渲染的会话做成"草稿"（镜像里没有它，还没物化） */
     draft?: boolean
+    /** 0.2.1（PB-053）：映射通道本版下架（501）→ 项目归属相关入口整体不出现 */
+    projectsUnavailable?: boolean
   } = {}
 ): Harness {
   const initial = {
@@ -83,6 +85,7 @@ function mount(
         ? {}
         : { [THREAD_ID]: options.projectId },
     loaded: true,
+    unavailable: options.projectsUnavailable === true,
     error: null
   })
   useSessionsStore.setState({
@@ -172,6 +175,18 @@ describe('SessionActionsMenu · 结构与顺序（图3）', () => {
 
     const leave = screen.getByTestId('session-leave-project-t1')
     expect(leave).toHaveTextContent('从「项目一」中移除')
+  })
+
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射的宿主路由本版下架（501）→ 旧项目数据不兼容，
+   * 「移至项目 / 从项目中移除」整体不出现（不给点了也不生效的入口）。
+   */
+  it('映射通道不可用：没有「移至项目」也没有「从项目中移除」', () => {
+    mount({ projectsUnavailable: true, projectId: 'p1' })
+    openMenu()
+
+    expect(screen.queryByTestId('session-move-t1')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-leave-project-t1')).not.toBeInTheDocument()
   })
 })
 

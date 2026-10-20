@@ -15,6 +15,7 @@ function installFakeServer(initial: MappingRow[] = []): {
   rows: MappingRow[]
   calls: { method: string; path: string; body: unknown }[]
   putStatus: number
+  getStatus: number
   failNextGet: Error | null
   /** PUT 卡住用（在飞期间的观察）：非 null 时先 await 它再回包 */
   putWait: Promise<void> | null
@@ -23,6 +24,7 @@ function installFakeServer(initial: MappingRow[] = []): {
     rows: [...initial],
     calls: [] as { method: string; path: string; body: unknown }[],
     putStatus: 200,
+    getStatus: 200,
     failNextGet: null as Error | null,
     putWait: null as Promise<void> | null
   }
@@ -42,6 +44,16 @@ function installFakeServer(initial: MappingRow[] = []): {
           const error = server.failNextGet
           server.failNextGet = null
           throw error
+        }
+        if (server.getStatus !== 200) {
+          return new Response(
+            JSON.stringify({
+              error: 'feature-disabled',
+              feature: 'projects',
+              availableIn: '0.2.x'
+            }),
+            { status: server.getStatus, headers: { 'content-type': 'application/json' } }
+          )
         }
         return new Response(JSON.stringify({ sessions: server.rows }), {
           status: 200,
@@ -97,6 +109,38 @@ describe('projects-store：读映射', () => {
     await expect(useProjectsStore.getState().ensureLoaded()).resolves.toBeUndefined()
     expect(useProjectsStore.getState().error).toContain('服务没起来')
     expect(useProjectsStore.getState().loaded).toBe(true)
+  })
+
+  /**
+   * 0.2.1（PB-053）：501 feature-disabled = 本版主动下架，不是"加载失败"。
+   * 不能落 error（侧栏会画红字「项目加载失败 + 重试」，而重试永远失败），映射保持空。
+   */
+  it('501 feature-disabled：落 unavailable、不落 error、不留映射（不是加载失败）', async () => {
+    const server = installFakeServer([{ threadId: 't1', projectId: 'p1' }])
+    server.getStatus = 501
+
+    await expect(useProjectsStore.getState().ensureLoaded()).resolves.toBeUndefined()
+    const state = useProjectsStore.getState()
+    expect(state.unavailable).toBe(true)
+    expect(state.error).toBeNull()
+    expect(state.mappings).toEqual({})
+    expect(state.loaded).toBe(true)
+    // 已经知道不可用就不再反复打路由（重试没有意义）
+    await useProjectsStore.getState().ensureLoaded()
+    expect(server.calls.filter((call) => call.method === 'GET')).toHaveLength(1)
+  })
+
+  it('501 之后写映射：直接跳过（不 PUT、不报错、不假装成功）', async () => {
+    const server = installFakeServer()
+    server.getStatus = 501
+    await useProjectsStore.getState().ensureLoaded()
+    server.calls.length = 0
+
+    await useProjectsStore.getState().assignSession('t1', 'p1')
+
+    expect(server.calls).toEqual([])
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().error).toBeNull()
   })
 })
 

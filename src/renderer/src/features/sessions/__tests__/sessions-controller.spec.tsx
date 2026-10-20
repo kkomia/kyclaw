@@ -5,7 +5,7 @@ import { tick } from '@renderer/components/ui/__tests__/tick'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { useThreadRunStore } from '@renderer/features/chat/thread-run-store'
-import { resetProjectsStore } from '@renderer/features/projects/projects-store'
+import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { defaultSettings } from '@shared/settings'
 import type { AppSettings } from '@shared/settings'
@@ -31,7 +31,8 @@ interface MappingRow {
 
 function installFakeServer(
   initial: ThreadRow[] = [],
-  mappings: MappingRow[] = []
+  mappings: MappingRow[] = [],
+  options: { mappingsUnavailable?: boolean } = {}
 ): {
   threads: ThreadRow[]
   mappings: MappingRow[]
@@ -88,6 +89,16 @@ function installFakeServer(
         return respond(row)
       }
       if (url.pathname === '/api/projects/mappings' && method === 'GET') {
+        if (options.mappingsUnavailable === true) {
+          return new Response(
+            JSON.stringify({
+              error: 'feature-disabled',
+              feature: 'projects',
+              availableIn: '0.2.x'
+            }),
+            { status: 501, headers: { 'content-type': 'application/json' } }
+          )
+        }
         return respond({ sessions: server.mappings })
       }
       if (url.pathname === '/api/projects/mappings' && method === 'PUT') {
@@ -178,6 +189,37 @@ describe('SessionsController：首屏与列表', () => {
     expect(screen.getByTestId('session-row-t-a')).toHaveClass('bg-selected')
     // round 50：导航滚动容器挂静置隐藏的滚动条（机制与实测见 styles/__tests__/scrollbar-contract.spec.ts）
     expect(screen.getByTestId('sidebar-nav-scroll')).toHaveClass('scrollbar-auto-hide')
+  })
+
+  it('映射路由本版下架（501/PB-053）：侧栏没有项目区，也没有「项目加载失败」假报错', async () => {
+    installFakeServer(THREADS, [], { mappingsUnavailable: true })
+    // 旧数据里还留着项目清单——迁移/兼容不做，界面也不再尝试用它
+    useSettingsStore.setState({
+      settings: {
+        ...defaultSettings(),
+        projects: [
+          {
+            id: 'p-old',
+            name: '旧项目',
+            path: 'D:\\old',
+            createdAt: '2026-10-11T00:00:00.000Z'
+          }
+        ]
+      }
+    })
+    renderController()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(useProjectsStore.getState().unavailable).toBe(true)
+    })
+    expect(screen.queryByTestId('project-error')).not.toBeInTheDocument()
+    expect(screen.queryByText('项目加载失败', { exact: false })).not.toBeInTheDocument()
+    // 项目区整块不出现（只剩「任务」组）
+    expect(screen.queryByText('项目', { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByTestId('tasks-sessions')).toBeInTheDocument()
   })
 
   it('点会话：选中它并回到对话页', async () => {

@@ -84,6 +84,53 @@ test('启动：窗口出现、三栏骨架在、标题栏按钮可用', async ()
   }
 })
 
+/**
+ * 0.2.1（PB-053）：0.2.x 把会话↔项目映射的宿主路由下架成 501 feature-disabled；
+ * **旧项目数据不兼容、直接舍弃**。回归钉两件事：
+ *   ① 侧栏不再画「项目加载失败 + 重试」（曾经每次启动都出现，重试永远失败）；
+ *   ② 依赖旧映射的项目入口（侧栏项目区 / 初始页「选择项目」胶囊）整体不出现。
+ */
+test('旧项目数据（PB-053）：侧栏不报「项目加载失败」，项目入口整体不出现', async () => {
+  const launched = await launchApp({
+    settings: {
+      projects: [
+        {
+          id: 'p-old',
+          name: '旧项目',
+          path: 'D:\\legacy-project',
+          createdAt: '2026-10-11T00:00:00.000Z'
+        }
+      ],
+      archivedProjects: [
+        {
+          projectId: 'p-old',
+          name: '旧项目',
+          path: 'D:\\legacy-project',
+          archivedAt: '2026-10-11T00:00:00.000Z'
+        }
+      ],
+      pinnedProjects: ['p-old']
+    }
+  })
+  const { page } = launched
+
+  try {
+    await waitForChat(page)
+
+    // ① 不再有那条假的加载失败（红字 + 重试）
+    await expect(page.getByTestId('project-error')).toHaveCount(0)
+    await expect(page.getByText('项目加载失败', { exact: false })).toHaveCount(0)
+
+    // ② 依赖旧映射的入口不出现：初始页的项目胶囊、侧栏项目区的两个创建入口
+    await expect(page.getByTestId('composer-project')).toHaveCount(0)
+    await expect(page.getByTestId('composer-project-row')).toHaveCount(0)
+    await expect(page.getByText('使用现有文件夹', { exact: true })).toHaveCount(0)
+    await expect(page.getByTestId('new-session')).toBeVisible()
+  } finally {
+    await closeApp(launched)
+  }
+})
+
 test('关窗到托盘（R14 换口径）：偏好「最小化到托盘」时点关闭钮 → 窗口隐藏不销毁、应用继续活着', async () => {
   // 偏好直接预置成 tray：ask 档要弹原生模态框（Playwright 点不到），它的三种选择与
   // 「记住我的选择」落盘由 src/main/__tests__/window-close.spec.ts 钉住、

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
 import {
   defaultSettings,
   type AppSettings,
@@ -60,6 +61,7 @@ async function mount(initial: AppSettings): Promise<ReturnType<typeof installKyc
 
 beforeEach(() => {
   useSettingsStore.setState({ settings: defaultSettings(), loaded: false })
+  resetProjectsStore()
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -276,5 +278,25 @@ describe('归档组 · 项目分区（round 25）', () => {
       'Error invoking remote method'
     )
     expect(screen.getByTestId('archive-project-row-p1')).toBeInTheDocument()
+  })
+})
+
+/**
+ * 0.2.1（PB-053）：会话↔项目映射的宿主路由本版下架（501）→ 旧项目数据不兼容，
+ * 归档页的项目分区连同旧项目归档快照都不出现；会话归档照常。
+ */
+describe('映射通道下架（PB-053）', () => {
+  it('不可用：项目分区不出现，旧项目归档数据不展示；会话归档照常', async () => {
+    useProjectsStore.setState({ unavailable: true })
+    const initial = withArchived(
+      [archived({ threadId: 't1' })],
+      [PROJECT],
+      [archivedProject({ projectId: 'p1' })]
+    )
+    await mount(initial)
+
+    expect(screen.getByTestId('archive-row-t1')).toBeInTheDocument()
+    expect(screen.queryByTestId('archive-project-row-p1')).not.toBeInTheDocument()
+    expect(screen.queryByText('还没有归档的项目。')).not.toBeInTheDocument()
   })
 })

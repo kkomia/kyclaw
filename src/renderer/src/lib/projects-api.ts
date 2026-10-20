@@ -29,7 +29,7 @@ async function authorized(path: string, init: RequestInit = {}): Promise<Respons
 }
 
 async function json<T>(response: Response, schema: z.ZodType<T>, what: string): Promise<T> {
-  if (isFeatureDisabled(response)) throw featureDisabledError()
+  if (isFeatureDisabled(response)) throw featureDisabledError('projects')
   if (!response.ok) throw new Error(`${what}服务返回 ${response.status}`)
   const parsed = schema.safeParse(await response.json())
   if (!parsed.success) {
@@ -52,6 +52,6 @@ export async function putSessionProject(threadId: string, projectId: string | nu
     method: 'PUT',
     body: JSON.stringify(body)
   })
-  if (isFeatureDisabled(response)) throw featureDisabledError()
+  if (isFeatureDisabled(response)) throw featureDisabledError('projects')
   if (!response.ok) throw new Error(`项目映射服务返回 ${response.status}`)
 }

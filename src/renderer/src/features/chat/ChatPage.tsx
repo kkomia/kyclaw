@@ -223,6 +223,8 @@ export function ChatPage(): React.JSX.Element {
 
   useEffect(() => {
     // 权限入口与工作台根都依赖会话项目映射；页面本身也要触发首轮加载。
+    // 0.2.1（PB-053）：0.2.x 该路由下架（501）→ store 落 unavailable、不落 error；
+    // 依赖它的入口各自隐藏（App 根也会拉一次，这里是既有单测口径，重复调用由 loadPromise 去重）。
     void ensureProjectsLoaded()
   }, [ensureProjectsLoaded])
 
@@ -580,6 +582,12 @@ function ActiveChat({
 }: ActiveChatProps): React.JSX.Element {
   /** 实例就绪（round 76）：没就绪时不发不发、也不去服务端动历史，消息区画占位 */
   const ready = pending === null
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射本版下架（501）→ 初始页那行「选择项目」整行不出现
+   * （ProjectChip 自己也会返回 null；这里一并把行容器与信笺引线收掉，不留一条空行）。
+   * 旧项目数据不做兼容/迁移。
+   */
+  const projectsUnavailable = useProjectsStore((state) => state.unavailable)
   /**
    * round 62：排队队列**在会话 store 里**（按 threadId 存，见 sessions-store 的 `queues`）。
    *
@@ -1804,20 +1812,22 @@ function ActiveChat({
           >
             {hero ? <WelcomeHeatmap /> : null}
           </div>
-          <CollapsibleRow
-            active={hero}
-            testId="composer-project-row"
-            className="mx-auto mb-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
-          >
-            <ProjectChip threadId={threadId} />
-            {/* A · 信笺：行尾一根 1px 引线（l1）拉满剩余宽度，把这一行做成「收件人行」；
-                纯装饰，进对话随整行一起收合。 */}
-            <span
-              data-testid="welcome-project-rule"
-              aria-hidden="true"
-              className="welcome-project-rule"
-            />
-          </CollapsibleRow>
+          {projectsUnavailable ? null : (
+            <CollapsibleRow
+              active={hero}
+              testId="composer-project-row"
+              className="mx-auto mb-2 flex w-full max-w-(--chat-input-max-width) items-center px-1"
+            >
+              <ProjectChip threadId={threadId} />
+              {/* A · 信笺：行尾一根 1px 引线（l1）拉满剩余宽度，把这一行做成「收件人行」；
+                  纯装饰，进对话随整行一起收合。 */}
+              <span
+                data-testid="welcome-project-rule"
+                aria-hidden="true"
+                className="welcome-project-rule"
+              />
+            </CollapsibleRow>
+          )}
           {/* 就绪之前：`threadId` 给 null（会话级控件——权限 chip、@ 文件、上下文环——在那一刻
               没有可动的对象，与其拿占位 id 去问服务端要个 404，不如先不出现），发送被 `pending` 挡住。 */}
           <Composer

@@ -7,6 +7,7 @@ import { Textarea } from '@renderer/components/ui/input'
 import { Menu, type MenuEntry } from '@renderer/components/ui/menu'
 import { useSettingsStore } from '@renderer/lib/settings-store'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
+import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import { RULES_SCOPE_MAX_BYTES, rulesByteLength, rulesTextProblem } from '@shared/rules'
 import type { ProjectRulesView } from '@shared/rules-ipc'
 import type { AppSettings } from '@shared/settings'
@@ -298,6 +299,11 @@ export interface RulesSettingsProps {
 
 export function RulesSettings(props: RulesSettingsProps = {}): React.JSX.Element {
   const settings = useSettingsStore((state) => state.settings)
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射本版下架（501）→ 项目那份记忆指令不出现（旧项目数据不兼容）。
+   * 全局那份照常可用（host 侧设置通道，与 mapping 通道无关）。
+   */
+  const projectsUnavailable = useProjectsStore((state) => state.unavailable)
   // 草稿：null = 跟 store 走（没编辑过），有值 = 用户在编辑（未保存内容保护）。
   // 不再用 effect 把 store 的值同步回草稿 —— 那会连带把没保存的输入顶掉。
   const [internalDraft, setInternalDraft] = useState<string | null>(null)
@@ -371,7 +377,9 @@ export function RulesSettings(props: RulesSettingsProps = {}): React.JSX.Element
         <div className="flex flex-col gap-0.5">
           <span className="text-b2 text-ink">全局</span>
           <p className="text-c1 text-ink-secondary">
-            对所有会话生效；同一条在项目里写了以项目为准。
+            {projectsUnavailable
+              ? '对所有会话生效。'
+              : '对所有会话生效；同一条在项目里写了以项目为准。'}
           </p>
         </div>
         <RuleEditor
@@ -409,26 +417,29 @@ export function RulesSettings(props: RulesSettingsProps = {}): React.JSX.Element
         ) : null}
       </div>
 
-      {/* 项目那一份：与全局分开一段（上面是全局偏好，这里是某一个项目的） */}
-      <div className="flex flex-col gap-2 border-t border-surface-border pt-4">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-b2 text-ink">项目</span>
-          <p className="text-c1 text-ink-secondary">
-            选中哪个项目就改它那一份；与全局合计最多 24 KiB。
-          </p>
+      {/* 项目那一份：与全局分开一段（上面是全局偏好，这里是某一个项目的）。
+          0.2.1（PB-053）：映射通道下架时整段不出现。 */}
+      {projectsUnavailable ? null : (
+        <div className="flex flex-col gap-2 border-t border-surface-border pt-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-b2 text-ink">项目</span>
+            <p className="text-c1 text-ink-secondary">
+              选中哪个项目就改它那一份；与全局合计最多 24 KiB。
+            </p>
+          </div>
+          <ProjectPicker projects={settings.projects} projectId={projectId} onPick={setProjectId} />
+          {settings.projects.some((project) => project.id === projectId) ? (
+            // key 带上 globalRules：全局记忆指令一变就得重读项目记忆指令（合计上限受它影响）——
+            // 靠重挂重置编辑器状态（view / 草稿 / 提示），不再在 effect 里同步 setView(null)
+            <ProjectRulesEditor
+              key={JSON.stringify([projectId, settings.globalRules])}
+              projectId={projectId}
+              draft={props.projectDraft}
+              onDraftChange={props.onProjectDraftChange}
+            />
+          ) : null}
         </div>
-        <ProjectPicker projects={settings.projects} projectId={projectId} onPick={setProjectId} />
-        {settings.projects.some((project) => project.id === projectId) ? (
-          // key 带上 globalRules：全局记忆指令一变就得重读项目记忆指令（合计上限受它影响）——
-          // 靠重挂重置编辑器状态（view / 草稿 / 提示），不再在 effect 里同步 setView(null)
-          <ProjectRulesEditor
-            key={JSON.stringify([projectId, settings.globalRules])}
-            projectId={projectId}
-            draft={props.projectDraft}
-            onDraftChange={props.onProjectDraftChange}
-          />
-        ) : null}
-      </div>
+      )}
     </div>
   )
 }
@@ -444,6 +455,7 @@ export function RulesEntry(): React.JSX.Element {
   const [draft, setDraft] = useState<string | null>(null)
   const [projectId, setProjectId] = useState('')
   const [projectDraft, setProjectDraft] = useState<string | null>(null)
+  const projectsUnavailable = useProjectsStore((state) => state.unavailable)
 
   /** 换项目 = 换一份文件：上一份没保存的输入不带到新项目上 */
   const pickProject = (next: string): void => {
@@ -478,7 +490,9 @@ export function RulesEntry(): React.JSX.Element {
           </div>
         </Dialog>
       </div>
-      <p className="text-c1 text-ink-secondary">全局与项目各一份，点开编辑。</p>
+      <p className="text-c1 text-ink-secondary">
+        {projectsUnavailable ? '全局一份，点开编辑。' : '全局与项目各一份，点开编辑。'}
+      </p>
     </div>
   )
 }

@@ -65,6 +65,11 @@ export function ProjectChip({ threadId }: ProjectChipProps): React.JSX.Element |
   const projects = useSettingsStore((state) => state.settings.projects)
   // **响应式订阅 mappings**（不要只拿 store 上的 projectOf 函数：引用恒定，映射变了不重渲染）
   const mappings = useProjectsStore((state) => state.mappings)
+  /**
+   * 0.2.1（PB-053）：映射通道本版下架（501）→ 这枚胶囊不出现。
+   * 旧项目数据不做兼容/迁移：没有映射，"选项目"就是一个点了也不生效的入口，不给。
+   */
+  const unavailable = useProjectsStore((state) => state.unavailable)
   /** 这条会话服务端已经认识了（物化完成）—— 草稿与真线程的写法在这一处分岔 */
   const materialized = useSessionsStore((state) =>
     threadId === null ? false : state.threads.some((thread) => thread.id === threadId)
@@ -83,7 +88,7 @@ export function ProjectChip({ threadId }: ProjectChipProps): React.JSX.Element |
     void useProjectsStore.getState().assignSession(threadId, choice)
   }, [threadId, materialized])
 
-  if (threadId === null) return null
+  if (threadId === null || unavailable) return null
 
   const projectId = mappings[threadId] ?? draftProjectChoiceOf(threadId) ?? null
   const current = projects.find((project) => project.id === projectId) ?? null

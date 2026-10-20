@@ -27,7 +27,7 @@ import { useProjectsStore } from './projects-store'
  * 跳设置页的工作区栏（/settings/workspaces，默认工作区与授权目录都在那儿管），
  * 与「新建空白项目 / 使用现有文件夹」两条创建路径同一个图标入口。
  */
-export function ProjectsSection(): React.JSX.Element {
+export function ProjectsSection(): React.JSX.Element | null {
   const navigate = useNavigate()
   const settings = useSettingsStore((state) => state.settings)
   const removeProject = useSettingsStore((state) => state.removeProject)
@@ -44,6 +44,7 @@ export function ProjectsSection(): React.JSX.Element {
   const mappings = useProjectsStore((state) => state.mappings)
   const ensureLoaded = useProjectsStore((state) => state.ensureLoaded)
   const error = useProjectsStore((state) => state.error)
+  const unavailable = useProjectsStore((state) => state.unavailable)
   const clearProjectMappings = useProjectsStore((state) => state.clearProjectMappings)
 
   const [dialog, setDialog] = useState<{ mode: CreateProjectMode; key: number } | null>(null)
@@ -169,6 +170,10 @@ export function ProjectsSection(): React.JSX.Element {
       archivedAt: new Date().toISOString()
     }).catch((cause: unknown) => report('[kyclaw] 归档项目失败', cause))
   }
+
+  // 0.2.1（PB-053）：映射通道本版下架（501）→ 整个项目区不出现（不画"加载失败/重试"）。
+  // 旧项目数据不做兼容/迁移；项目能力交给内核时代的新模型（0.2.x 之后）。
+  if (unavailable) return null
 
   return (
     <div className="shrink-0">

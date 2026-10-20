@@ -4,6 +4,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
 import { useSettingsStore } from '@renderer/lib/settings-store'
+import { useProjectsStore } from '@renderer/features/projects/projects-store'
 import type { ArchivedProject, ArchivedThread } from '@shared/settings'
 
 /**
@@ -35,8 +36,22 @@ function SectionTitle({ children }: { children: string }): React.JSX.Element {
 
 export function ArchiveSettings(): React.JSX.Element {
   const archived = useSettingsStore((state) => state.settings.archivedThreads)
-  const archivedProjects = useSettingsStore((state) => state.settings.archivedProjects)
-  const projects = useSettingsStore((state) => state.settings.projects)
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射本版下架（501）→ 项目那一段不出现，旧项目归档数据不兼容、
+   * 不再展示（直接舍弃）。会话归档照常。
+   */
+  const projectsUnavailable = useProjectsStore((state) => state.unavailable)
+  const archivedProjectsAll = useSettingsStore((state) => state.settings.archivedProjects)
+  const projectsAll = useSettingsStore((state) => state.settings.projects)
+  // 映射通道下架（PB-053）时旧项目数据直接舍弃：不喂给任何 useMemo（否则旧快照会重新出现在筛选/列表里）
+  const archivedProjects = useMemo(
+    () => (projectsUnavailable ? [] : archivedProjectsAll),
+    [projectsUnavailable, archivedProjectsAll]
+  )
+  const projects = useMemo(
+    () => (projectsUnavailable ? [] : projectsAll),
+    [projectsUnavailable, projectsAll]
+  )
   const unarchiveThread = useSettingsStore((state) => state.unarchiveThread)
   const unarchiveProject = useSettingsStore((state) => state.unarchiveProject)
   const [query, setQuery] = useState('')
@@ -93,7 +108,7 @@ export function ArchiveSettings(): React.JSX.Element {
       <Input
         data-testid="archive-search"
         aria-label="搜索归档内容"
-        placeholder="搜索归档的会话或项目"
+        placeholder={projectsUnavailable ? '搜索归档的会话' : '搜索归档的会话或项目'}
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
@@ -106,7 +121,9 @@ export function ArchiveSettings(): React.JSX.Element {
 
       {archived.length === 0 && archivedProjects.length === 0 ? (
         <p data-testid="archive-empty" className="text-b2 text-ink-secondary">
-          还没有归档的会话或项目：在会话/项目行的 ⋯ 菜单里选「归档」，它就出现在这里。
+          {projectsUnavailable
+            ? '还没有归档的会话：在会话行的 ⋯ 菜单里选「归档」，它就出现在这里。'
+            : '还没有归档的会话或项目：在会话/项目行的 ⋯ 菜单里选「归档」，它就出现在这里。'}
         </p>
       ) : threadRows.length === 0 && projectRows.length === 0 ? (
         <p data-testid="archive-no-match" className="text-b2 text-ink-secondary">
@@ -154,43 +171,47 @@ export function ArchiveSettings(): React.JSX.Element {
             ))
           )}
 
-          <SectionTitle>项目</SectionTitle>
-          {archivedProjects.length === 0 ? (
-            <p className="text-c1 text-ink-tertiary">还没有归档的项目。</p>
-          ) : projectRows.length === 0 ? (
-            <p className="text-c1 text-ink-tertiary">没有匹配的项目。</p>
-          ) : (
-            projectRows.map((entry) => (
-              <section
-                key={entry.projectId}
-                data-testid={`archive-project-row-${entry.projectId}`}
-                className="flex flex-wrap items-center gap-3 border-t border-hairline p-3"
-              >
-                <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
-                  <span
-                    data-testid={`archive-project-title-${entry.projectId}`}
-                    className="text-b2 text-ink"
+          {projectsUnavailable ? null : (
+            <>
+              <SectionTitle>项目</SectionTitle>
+              {archivedProjects.length === 0 ? (
+                <p className="text-c1 text-ink-tertiary">还没有归档的项目。</p>
+              ) : projectRows.length === 0 ? (
+                <p className="text-c1 text-ink-tertiary">没有匹配的项目。</p>
+              ) : (
+                projectRows.map((entry) => (
+                  <section
+                    key={entry.projectId}
+                    data-testid={`archive-project-row-${entry.projectId}`}
+                    className="flex flex-wrap items-center gap-3 border-t border-hairline p-3"
                   >
-                    {entry.name}
-                  </span>
-                  <span className="min-w-0 truncate text-c1 text-ink-secondary">
-                    {entry.path} · 归档于 {localTime(entry.archivedAt)}
-                  </span>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid={`archive-project-restore-${entry.projectId}`}
-                  loading={pendingKey === `project:${entry.projectId}`}
-                  disabled={pendingKey !== null && pendingKey !== `project:${entry.projectId}`}
-                  onClick={() => restoreProject(entry)}
-                >
-                  {/* 图标随字号 scale（task-69）：走 --icon-size-sm token，不写死 16px */}
-                  <ArchiveRestore aria-hidden="true" className="size-(--icon-size-sm)" />
-                  取消归档
-                </Button>
-              </section>
-            ))
+                    <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
+                      <span
+                        data-testid={`archive-project-title-${entry.projectId}`}
+                        className="text-b2 text-ink"
+                      >
+                        {entry.name}
+                      </span>
+                      <span className="min-w-0 truncate text-c1 text-ink-secondary">
+                        {entry.path} · 归档于 {localTime(entry.archivedAt)}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid={`archive-project-restore-${entry.projectId}`}
+                      loading={pendingKey === `project:${entry.projectId}`}
+                      disabled={pendingKey !== null && pendingKey !== `project:${entry.projectId}`}
+                      onClick={() => restoreProject(entry)}
+                    >
+                      {/* 图标随字号 scale（task-69）：走 --icon-size-sm token，不写死 16px */}
+                      <ArchiveRestore aria-hidden="true" className="size-(--icon-size-sm)" />
+                      取消归档
+                    </Button>
+                  </section>
+                ))
+              )}
+            </>
           )}
         </>
       )}

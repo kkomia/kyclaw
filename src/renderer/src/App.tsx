@@ -1,7 +1,8 @@
-import { lazy, useLayoutEffect } from 'react'
+import { lazy, useEffect, useLayoutEffect } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { AppShell } from './components/shell/AppShell'
 import { ModuleHost } from './components/shell/ModuleHost'
+import { useProjectsStore } from './features/projects/projects-store'
 import { advanceStartupSplash, dismissStartupSplash } from './lib/startup-splash'
 import { startupMark } from './lib/startup-timing'
 
@@ -82,6 +83,14 @@ function App(): React.JSX.Element {
     startupMark('首屏已提交')
     advanceStartupSplash('react-committed')
     dismissStartupSplash()
+  }, [])
+
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射的可用性判一次（从深链直接进设置页也要知道）。
+   * 0.2.x 该宿主路由主动下架（501）→ store 落 `unavailable`、不报错；依赖它的入口各自隐藏。
+   */
+  useEffect(() => {
+    void useProjectsStore.getState().ensureLoaded()
   }, [])
 
   return (

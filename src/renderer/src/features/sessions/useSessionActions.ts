@@ -26,6 +26,11 @@ export interface SessionActionsContext {
   pinned: boolean
   /** 「移至项目 ▸」与「从 <项目> 中移除」用的项目清单 */
   projects: ReadonlyArray<{ id: string; name: string }>
+  /**
+   * 项目归属能力本版是否可用（0.2.1/PB-053：映射通道下架时 false →「移至项目」入口整体不出现）。
+   * 缺省按可用处理（既有调用方/测试不传就是旧行为）。
+   */
+  projectsAvailable?: boolean
   /** 当前所属项目（null = 无项目；归属项目时才出「从…中移除」） */
   projectId: string | null
   /** 能不能在文件资源管理器里打开（判不出唯一工作区 = false → 菜单项禁用） */
@@ -54,6 +59,11 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
   const { threadId, title } = options
   const settings = useSettingsStore((state) => state.settings)
   const mappings = useProjectsStore((state) => state.mappings)
+  /**
+   * 0.2.1（PB-053）：映射通道本版下架（501）→ 项目归属相关动作整体不提供。
+   * 旧项目数据不做兼容/迁移：`移至项目` 在这时没有任何可生效的目标。
+   */
+  const projectsUnavailable = useProjectsStore((state) => state.unavailable)
 
   // onError 的失败文案出口（调用方决定露在哪）；作为依赖参与回调身份，不玩 ref 逃生舱
   const onError = options.onError
@@ -67,10 +77,13 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
   )
 
   const projects = useMemo(
-    () => settings.projects.map((project) => ({ id: project.id, name: project.name })),
-    [settings.projects]
+    () =>
+      projectsUnavailable
+        ? []
+        : settings.projects.map((project) => ({ id: project.id, name: project.name })),
+    [settings.projects, projectsUnavailable]
   )
-  const projectId = mappings[threadId] ?? null
+  const projectId = projectsUnavailable ? null : (mappings[threadId] ?? null)
   const canOpenExplorer = useMemo(
     () =>
       sessionWorkspaceOf({
@@ -117,13 +130,15 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
 
   const moveToProject = useCallback(
     (nextProjectId: string | null): void => {
+      // 本版映射通道下架：菜单入口已隐藏，这里也不做（不写、不假装成功）
+      if (projectsUnavailable) return
       void ensureThread().then((ready) => {
         if (!ready) return
         // 失败由 projects-store 回滚 + 落 error（项目区那行）——与侧栏既有口径一致
         void useProjectsStore.getState().assignSession(threadId, nextProjectId)
       })
     },
-    [threadId, ensureThread]
+    [threadId, ensureThread, projectsUnavailable]
   )
 
   const openInExplorer = useCallback((): void => {
@@ -179,6 +194,7 @@ export function useSessionActions(options: SessionActionsOptions): SessionAction
     context: {
       pinned: settings.pinnedThreads.includes(threadId),
       projects,
+      projectsAvailable: !projectsUnavailable,
       projectId,
       canOpenExplorer
     },

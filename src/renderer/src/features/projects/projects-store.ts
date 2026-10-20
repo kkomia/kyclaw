@@ -15,6 +15,7 @@
  * 失败一律落 `error`（侧栏显示），不抛给调用方。
  */
 import { unwrapIpcError } from '@renderer/lib/ipc-error'
+import { isFeatureDisabledError } from '@renderer/lib/feature-disabled'
 import { create } from 'zustand'
 import type { SessionProjectEntry } from '@shared/projects'
 import { fetchSessionProjects, putSessionProject } from '../../lib/projects-api'
@@ -41,6 +42,13 @@ export interface ProjectsState {
   pending: Record<string, true>
   /** 初次加载是否结束（成功或失败都算结束） */
   loaded: boolean
+  /**
+   * 0.2.1（PB-053）：会话↔项目映射这条宿主路由在 0.2.x **主动下架**（501 feature-disabled）。
+   * 这是"本版没有这个能力"，不是"加载失败"——不能落 `error`（侧栏会画成红字"项目加载失败"
+   * 并给一个永远失败的重试）。`unavailable = true` 时所有依赖映射的入口（项目区、选择项目胶囊、
+   * 移至项目、项目记忆指令块、归档页项目分区）一律隐藏；旧项目数据不做迁移/兼容。
+   */
+  unavailable: boolean
   /** 最近一次失败的文案（侧栏显示；成功后清空） */
   error: string | null
 
@@ -58,6 +66,7 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   mappings: {},
   pending: {},
   loaded: false,
+  unavailable: false,
   error: null,
 
   ensureLoaded: () => {
@@ -65,8 +74,14 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     loadPromise ??= (async () => {
       try {
         const entries = await fetchSessionProjects()
-        set({ mappings: mergeSnapshot(entries), loaded: true, error: null })
+        set({ mappings: mergeSnapshot(entries), loaded: true, unavailable: false, error: null })
       } catch (error) {
+        if (isFeatureDisabledError(error)) {
+          // 本版主动下架（501）：不是失败。映射为空、不报错、不再重试；入口由各组件按
+          // `unavailable` 隐藏（PB-053）。旧项目数据直接舍弃，不做兼容/迁移。
+          set({ mappings: {}, pending: {}, loaded: true, unavailable: true, error: null })
+          return
+        }
         // 映射读不到不炸侧栏：项目区空着，会话仍按"无项目"显示与工作（服务端那边同理退化为默认工作区）
         console.error('[kyclaw] 会话项目映射加载失败', error)
         set({ loaded: true, error: messageOf(error) })
@@ -80,8 +95,12 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   refresh: async () => {
     try {
       const entries = await fetchSessionProjects()
-      set({ mappings: mergeSnapshot(entries), loaded: true, error: null })
+      set({ mappings: mergeSnapshot(entries), loaded: true, unavailable: false, error: null })
     } catch (error) {
+      if (isFeatureDisabledError(error)) {
+        set({ mappings: {}, pending: {}, loaded: true, unavailable: true, error: null })
+        return
+      }
       console.error('[kyclaw] 刷新会话项目映射失败', error)
       set({ error: messageOf(error) })
     }
@@ -93,6 +112,8 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   },
 
   assignSession: async (threadId, projectId) => {
+    // 映射通道本版不可用：不写、不假装成功、也不报错（入口已隐藏；这里只是防御）
+    if (get().unavailable) return
     const previous = get().mappings[threadId] ?? null
     set((state) => ({
       mappings: withMapping(state.mappings, threadId, projectId),
@@ -102,6 +123,17 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     try {
       await putSessionProject(threadId, projectId)
     } catch (error) {
+      if (isFeatureDisabledError(error)) {
+        // 服务中途变成不可用：回滚 + 切到 unavailable，不落 error（不在侧栏画"失败"）
+        set((state) => ({
+          mappings: withMapping(state.mappings, threadId, previous),
+          pending: withPending(state.pending, threadId, false),
+          loaded: true,
+          unavailable: true,
+          error: null
+        }))
+        return
+      }
       console.error('[kyclaw] 会话项目归属没能记上', error)
       // 回滚本地视图：服务端不知道的归属不该在侧栏里显示出来（否则这个会话会悄悄用默认工作区）
       set((state) => ({
@@ -172,5 +204,11 @@ function withPending(
 export function resetProjectsStore(): void {
   loadPromise = null
   pendingPatch = {}
-  useProjectsStore.setState({ mappings: {}, pending: {}, loaded: false, error: null })
+  useProjectsStore.setState({
+    mappings: {},
+    pending: {},
+    loaded: false,
+    unavailable: false,
+    error: null
+  })
 }
