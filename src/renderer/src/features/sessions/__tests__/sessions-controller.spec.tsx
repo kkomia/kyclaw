@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tick } from '@renderer/components/ui/__tests__/tick'
-import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import {
+  clearKyclawBridge,
+  installKyclawBridge,
+  PICKED_FOLDER
+} from '@renderer/__tests__/kyclaw-bridge'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
 import { useThreadRunStore } from '@renderer/features/chat/thread-run-store'
 import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
@@ -17,11 +21,14 @@ import { resetSessionsStore, useSessionsStore } from '../sessions-store'
  * 首屏拉列表、新建/切换/重命名/删除四条交互真的打到 HTTP（假 fetch）上，
  * 以及列表载入失败时的就地错误行 + 重试。
  * T18 起侧栏中部还有「项目」区（它自己拉 /api/projects/mappings），所以假服务也实现那两条口子。
+ * 0.2.2：映射路由 501 后项目区改由「内核 cwd + settings.projects」推导，见文件末尾的 describe。
  */
 interface ThreadRow {
   id: string
   title: string | null
   updatedAt: string
+  /** 0.2.2：内核 session 的 cwd（假服务按 POST 的 projectId 回填，模拟服务端用项目 path 当 cwd） */
+  cwd?: string
 }
 
 interface MappingRow {
@@ -74,14 +81,21 @@ function installFakeServer(
         return respond({ threads: server.threads })
       }
       if (url.pathname === '/api/threads' && method === 'POST') {
-        const { threadId, title } = JSON.parse(String(init.body)) as {
+        const { threadId, title, projectId } = JSON.parse(String(init.body)) as {
           threadId: string
           title?: string
+          projectId?: string
         }
+        // 0.2.2：真服务端带 projectId 时用项目 path 当内核 cwd（见 kernel-threads 的 POST）
+        const project =
+          projectId === undefined
+            ? undefined
+            : useSettingsStore.getState().settings.projects.find((item) => item.id === projectId)
         const row: ThreadRow = {
           id: threadId,
           title: title ?? null,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          ...(project === undefined ? {} : { cwd: project.path })
         }
         if (!server.threads.some((thread) => thread.id === threadId)) {
           server.threads = [row, ...server.threads]
@@ -191,21 +205,29 @@ describe('SessionsController：首屏与列表', () => {
     expect(screen.getByTestId('sidebar-nav-scroll')).toHaveClass('scrollbar-auto-hide')
   })
 
-  it('映射路由本版下架（501/PB-053）：侧栏没有项目区，也没有「项目加载失败」假报错', async () => {
-    installFakeServer(THREADS, [], { mappingsUnavailable: true })
-    // 旧数据里还留着项目清单——迁移/兼容不做，界面也不再尝试用它
+  /**
+   * 0.2.1（PB-053）时映射下架 = 整块项目区消失；0.2.2 用户拍板**恢复项目区**：501 下归属改由
+   * 内核 session 的 cwd 推导，组头 / 管理菜单 / 项目行照常出现，但那条"永远失败的重试"红字不出现
+   * （PB-053 的中性化纪律不变）。
+   */
+  it('映射路由下架（501）：项目区照常渲染、无「项目加载失败」红字；会话按内核 cwd 归组', async () => {
+    const PROJECT = {
+      id: 'p-old',
+      name: '旧项目',
+      path: 'D:\\ws\\插件',
+      createdAt: '2026-10-11T00:00:00.000Z'
+    }
+    installFakeServer(
+      [
+        { id: 't-a', title: '今天的会话', updatedAt: TODAY },
+        // cwd 落在项目路径下 → 归到旧项目；没登记过任何映射（映射通道本就 501）
+        { id: 't-b', title: '插件里的会话', updatedAt: EARLIER, cwd: 'D:\\ws\\插件\\src' }
+      ],
+      [],
+      { mappingsUnavailable: true }
+    )
     useSettingsStore.setState({
-      settings: {
-        ...defaultSettings(),
-        projects: [
-          {
-            id: 'p-old',
-            name: '旧项目',
-            path: 'D:\\old',
-            createdAt: '2026-10-11T00:00:00.000Z'
-          }
-        ]
-      }
+      settings: { ...defaultSettings(), projects: [PROJECT] }
     })
     renderController()
 
@@ -215,11 +237,43 @@ describe('SessionsController：首屏与列表', () => {
     await waitFor(() => {
       expect(useProjectsStore.getState().unavailable).toBe(true)
     })
+
+    // 0.2.2：项目区恢复（组头 + 管理菜单 + 项目行），不再整块消失
+    expect(screen.getByTestId('project-section')).toBeInTheDocument()
+    expect(screen.getByTestId('project-section-title')).toHaveTextContent('项目')
+    expect(screen.getByTestId('project-add')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p-old')).toHaveTextContent('旧项目')
+    })
+    // PB-053 纪律：501 不是"加载失败"，没有红字、没有永远失败的重试
     expect(screen.queryByTestId('project-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('project-retry')).not.toBeInTheDocument()
     expect(screen.queryByText('项目加载失败', { exact: false })).not.toBeInTheDocument()
-    // 项目区整块不出现（只剩「任务」组）
-    expect(screen.queryByText('项目', { exact: true })).not.toBeInTheDocument()
-    expect(screen.getByTestId('tasks-sessions')).toBeInTheDocument()
+
+    // 会话按内核 cwd 自动归到对应项目；没有 cwd 的留在「任务」组
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p-old')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+    expect(screen.getByTestId('tasks-sessions')).toContainElement(
+      screen.getByTestId('session-item-t-a')
+    )
+  })
+
+  it('501 且一个项目都没有：项目区在、给可点的空态（不是光秃秃一行标题）', async () => {
+    installFakeServer(THREADS, [], { mappingsUnavailable: true })
+    renderController()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-t-a')).toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(useProjectsStore.getState().unavailable).toBe(true)
+    })
+    expect(screen.getByTestId('project-section')).toBeInTheDocument()
+    expect(screen.getByTestId('project-empty')).toHaveTextContent('使用现有文件夹')
+    expect(screen.queryByTestId('project-error')).not.toBeInTheDocument()
   })
 
   it('点会话：选中它并回到对话页', async () => {
@@ -1046,5 +1100,138 @@ describe('SessionsController·round 61：「任务」组（没有项目的会话
       screen.getByTestId('session-running-t-b')
     )
     expect(screen.getAllByTestId(/^session-running-/)).toHaveLength(1)
+  })
+})
+
+/**
+ * 0.2.2（用户 2026-10-20 拍板）：501 下恢复侧栏「项目」区，且**新会话必须落进项目目录**。
+ *
+ * 501 下归属由内核 session 的 cwd 推导（projects-store.syncFromCwd），所以"落进项目"不能靠
+ * 旧映射表——靠物化 `POST /api/threads` 带 projectId（服务端把项目 path 变成内核 cwd）。
+ * 这里从侧栏的真实入口走一遍：项目行 ⊕、新建项目后自动开会话、删项目后会话回「任务」组。
+ */
+describe('0.2.2：501 下的项目区（恢复 + 新会话落项目目录）', () => {
+  const PROJECTS: AppSettings['projects'] = [
+    { id: 'p1', name: '插件', path: 'D:\\ws\\插件', createdAt: '2026-10-11T00:00:00.000Z' }
+  ]
+
+  /** 挂一个"映射通道 501、项目清单里有 p1"的侧栏，并等落位与推导完成 */
+  async function mountUnavailable(
+    threads: ThreadRow[] = []
+  ): Promise<{ server: ReturnType<typeof installFakeServer> }> {
+    const server = installFakeServer(threads, [], { mappingsUnavailable: true })
+    clearKyclawBridge()
+    installKyclawBridge({ ...defaultSettings(), projects: PROJECTS })
+    await useSettingsStore.getState().load()
+    renderController('/settings')
+    await waitFor(() => {
+      expect(useProjectsStore.getState().unavailable).toBe(true)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('project-item-p1')).toBeInTheDocument()
+    })
+    return { server }
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    window.localStorage.clear()
+  })
+
+  it('项目行 ⊕：草稿挂进项目（不写映射通道）；物化时 POST 带 projectId 落进项目目录', async () => {
+    const { server } = await mountUnavailable([])
+
+    fireEvent.click(screen.getByTestId('project-new-session-p1'))
+
+    const draftId = useSessionsStore.getState().activeId!
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId(`session-item-${draftId}`)
+      )
+    })
+    // 501 下没有映射写入（写通道本版没有）
+    expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
+
+    await act(async () => {
+      await useSessionsStore.getState().materialize(draftId)
+    })
+
+    // 物化带 projectId：服务端据此把内核 cwd 设成项目 path（会话真落进项目目录）
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId, projectId: 'p1' }
+    })
+    // 物化回包带 cwd 后，会话仍挂在项目下（这次靠的是 cwd 归组，不是草稿记账）
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId(`session-item-${draftId}`)
+      )
+    })
+    expect(useProjectsStore.getState().draftProjectOf(draftId)).toBeNull()
+  })
+
+  it('新建项目（使用现有文件夹）→ 自动开一条该项目下的会话；物化同样带 projectId', async () => {
+    const { server } = await mountUnavailable([])
+
+    // 组头 ＋ → 使用现有文件夹（创建本身走 local IPC，不受 501 影响）
+    pick('project-add', 'project-create-folder')
+    const nameInput = await screen.findByTestId('project-name-input')
+    fireEvent.change(nameInput, { target: { value: '新项目' } })
+    fireEvent.click(screen.getByTestId('project-path-field'))
+    await waitFor(() => {
+      expect(screen.getByTestId('project-path-value')).toHaveTextContent(PICKED_FOLDER)
+    })
+    fireEvent.click(screen.getByTestId('project-create-save'))
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().settings.projects).toHaveLength(2)
+    })
+    const created = useSettingsStore
+      .getState()
+      .settings.projects.find((project) => project.name === '新项目')
+    expect(created).toBeDefined()
+    const draftId = useSessionsStore.getState().activeId!
+    expect(draftId).not.toBe('')
+    await waitFor(() => {
+      expect(screen.getByTestId(`project-group-${created!.id}`)).toContainElement(
+        screen.getByTestId(`session-item-${draftId}`)
+      )
+    })
+    expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
+
+    await act(async () => {
+      await useSessionsStore.getState().materialize(draftId)
+    })
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId, projectId: created!.id }
+    })
+  })
+
+  it('删项目：项目行消失，名下会话按 cwd 不再命中任何项目 → 回到「任务」组', async () => {
+    await mountUnavailable([
+      { id: 't-a', title: '无项目会话', updatedAt: TODAY },
+      { id: 't-b', title: '插件里的会话', updatedAt: EARLIER, cwd: 'D:\\ws\\插件\\src' }
+    ])
+    await waitFor(() => {
+      expect(screen.getByTestId('project-sessions-p1')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
+
+    pick('project-more-p1', 'project-delete-p1')
+    fireEvent.click(await screen.findByTestId('project-delete-confirm'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('project-item-p1')).not.toBeInTheDocument()
+    })
+    // 项目没了 → cwd 推不出归属：会话回到「任务」组（不是永远挂在已删项目下）
+    await waitFor(() => {
+      expect(screen.getByTestId('tasks-sessions')).toContainElement(
+        screen.getByTestId('session-item-t-b')
+      )
+    })
   })
 })

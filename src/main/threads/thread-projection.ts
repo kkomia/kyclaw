@@ -294,12 +294,15 @@ export function applySurfaceOps(
   return surface
 }
 
-/** `session.list` item → 旧侧栏 ThreadSummary（id/title/updatedAt ISO）。 */
+/** `session.list` item → 旧侧栏 ThreadSummary（id/title/updatedAt ISO + 0.2.2 的 cwd）。 */
 export function projectThreadSummary(summary: KernelSessionSummary): ThreadSummary {
   return {
     id: summary.sessionId,
     title: summary.title,
-    updatedAt: new Date(summary.updatedAt).toISOString()
+    updatedAt: new Date(summary.updatedAt).toISOString(),
+    // 0.2.2：cwd 是会话归属项目的唯一事实来源（旧映射 API 501 后侧栏靠它归组）；
+    // 内核没给（旧 session / 不可读）就缺省，由读侧按"无项目"处理，不编路径。
+    ...(summary.cwd === undefined ? {} : { cwd: summary.cwd })
   }
 }
 

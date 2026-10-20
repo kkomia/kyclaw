@@ -136,6 +136,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
             initLandedId: state.activeId === null ? landed : null
           }
         })
+        // 0.2.2：项目归属从内核 cwd 推导（旧映射 API 501）；列表一到就重算一次侧栏分组
+        useProjectsStore.getState().syncFromCwd(threads)
       } catch (error) {
         // 列表没载入也要能继续：开草稿对话（服务通不通由对话页的错误卡说）。
         // 界面上只说"会话列表加载失败"（雷点 2.2：不把后端原文写给用户看），
@@ -163,6 +165,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     try {
       const threads = await fetchThreads()
       set({ threads, loaded: true, error: null })
+      // 0.2.2：刷新即重算项目归组（内核 cwd 是归属的唯一事实来源）
+      useProjectsStore.getState().syncFromCwd(threads)
     } catch (error) {
       console.error('[kyclaw] 刷新会话列表失败', error)
       set({ error: messageOf(error) })
@@ -180,9 +184,9 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
   startNew: (projectId = null) => {
     const threadId = newThreadId()
     set({ activeId: threadId, initLandedId: null })
-    // 归属记在服务端（映射表）：新建会话的那一刻就写，第一轮工具调用读到的是它。
-    // 失败由 projects-store 回滚 + 落 error（这个会话就按"没有项目"跑，不会悄悄用错根）。
-    if (projectId !== null) void useProjectsStore.getState().assignSession(threadId, projectId)
+    // 0.2.2：草稿在项目下开出来时先记本地归属（侧栏马上挂进项目、物化时带上 projectId 当
+    // 内核 cwd）。映射通道可用时它内部仍走服务端写（历史口径不变）。
+    if (projectId !== null) useProjectsStore.getState().rememberDraftProject(threadId, projectId)
     return threadId
   },
 
@@ -217,13 +221,23 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
    */
   materialize: async (threadId) => {
     if (get().threads.some((thread) => thread.id === threadId)) return
-    const created = await createThread(threadId, get().draftTitles[threadId])
+    // 0.2.2：「项目行 ⊕ / 项目刚建好」开出来的草稿把项目带过去——服务端用项目 path 当新会话的
+    // 内核 cwd，会话因此落进项目目录（侧栏按 cwd 归组、工具根同源）。没有项目归属时保持老形状
+    // （只传 threadId/title），别给每次物化都塞一个空 projectId。
+    const projectId = useProjectsStore.getState().draftProjectOf(threadId)
+    const title = get().draftTitles[threadId]
+    const created =
+      projectId === null
+        ? await createThread(threadId, title)
+        : await createThread(threadId, title, projectId)
     set((state) => ({
       threads: state.threads.some((thread) => thread.id === threadId)
         ? state.threads
         : [created, ...state.threads],
       draftTitles: withoutKey(state.draftTitles, threadId)
     }))
+    // 0.2.2：物化回包带 cwd 后归属改由内核 cwd 决定（草稿那笔本地记账在这里退场）
+    useProjectsStore.getState().syncFromCwd(get().threads)
     // round 66：服务端现在认识这条会话了 —— 草稿期间在「PPT」胶囊里挑的模板这一笔补记上
     // （不 await 的写法会让"发出去的第一轮 create_ppt"与这次 PUT 赛跑，等它落地再返回）。
     // 补写失败不抛：会话已经建好了，模板没记上只是这个会话按自动挑跑（store 自己记日志）。
@@ -245,6 +259,8 @@ export const useSessionsStore = create<SessionsState>()((set, get) => ({
     }
     // 被删会话的内存态一起丢掉（连同还在跑的流）：它不会再被渲染，留着只会泄漏消息与请求
     dropThreadChat(threadId, { stop: true })
+    // 0.2.2：草稿的本地项目归属（含 pending）随草稿一起丢掉；真会话的归属由 cwd 推导，刷新即收敛
+    if (!listed) useProjectsStore.getState().forgetLocalSession(threadId)
     const remaining = get().threads.filter((thread) => thread.id !== threadId)
     set((state) => ({
       threads: remaining,

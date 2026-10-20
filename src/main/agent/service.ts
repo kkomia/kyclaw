@@ -19,6 +19,7 @@ import { KYCLAW_AGENT_ID } from '../../shared/agent-id'
 import { readSettings, settingsPath } from '../settings'
 import { createKernelChatHandler } from '../kernel/kernel-chat'
 import { maybeStartKernelAdapter } from '../kernel/kernel-bootstrap'
+import { syncKernelModel, type KernelModelSyncResult } from '../kernel/kernel-model-bridge'
 import { InteractionHub, applyInteractionEvent, feedKernelEvent } from '../kernel/interaction-hub'
 import { createKernelInteractionRouter } from '../kernel/kernel-interaction-route'
 import { createKernelSessionOpsForAdapter } from '../kernel/kernel-session-ops'
@@ -30,6 +31,8 @@ import {
 } from '../threads/kernel-threads'
 import { createThreadCwdResolver } from '../threads/thread-cwd'
 import type { Project } from '../../shared/projects'
+import type { ProbedModel } from '../../shared/settings'
+import type { ProviderConfig } from '../../shared/providers'
 import type { AppSettings } from '../../shared/settings'
 import type { AgentEndpoint } from '../../shared/ipc'
 
@@ -84,6 +87,18 @@ export interface AgentServerOptions {
   defaultWorkspace?: () => string | null
   /** 项目清单（T18）：**现读**；缺省 = 从 dataDir/settings.json 读 */
   projects?: () => readonly Project[]
+  /**
+   * 0.2.2 模型桥：把设置页里的 provider/密钥桥到 DSH 内核（内核只认它自己的活配置）。
+   * 全部现读：providers 来自 settings.json、密钥由 main 用 safeStorage 解（只留在主进程里、
+   * 经一次内核 RPC 写进 credential store，不落日志、不进 renderer）。
+   * 不传 = 不桥（既有测试/工具形态不变，内核按它自己的缺省配置跑）。
+   */
+  model?: {
+    providers: () => readonly ProviderConfig[]
+    probedModels: () => Readonly<Record<string, ProbedModel>>
+    /** 返回明文密钥（主进程内唯一口子；null = 没配/解不开） */
+    readKey: (providerId: string) => string | null
+  }
   /** 起始端口；缺省交给 OS 分配（随机空闲端口） */
   port?: number
   /** 端口尝试上限（默认 5，至少 1） */
@@ -118,6 +133,12 @@ export interface AgentServerHandle extends AgentEndpoint {
    * 拿不到（未 list 过/刚启动）回 null —— 上游按「项目映射暂不可用」处理，不回落默认工作区。
    */
   projectIdOf(threadId: string): string | null
+  /**
+   * 0.2.2 模型桥：把 kyclaw 当前 providers + 密钥重新同步到内核（启动时已自动跑过一次；
+   * 设置页改 provider / 写密钥 / 删 provider、模型 chip 切模型之后由 main 调）。
+   * 同步失败只留日志、**不抛**（对话会在下一轮按内核现状给错误卡，不挡界面保存）。
+   */
+  syncModelConfig(): Promise<KernelModelSyncResult | null>
   /** 断开监听、收掉内核子进程；重复调用是空操作 */
   stop(): Promise<void>
 }
@@ -191,11 +212,20 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   const projectIdOf = (threadId: string): string | null => {
     const cwd = kernelCwdOf?.(threadId)
     if (cwd === undefined || cwd === '') return null
-    const project = projectsFor().find((item) => {
+    /**
+     * 0.2.2：嵌套项目时取**路径最长**的那个（= 最具体的项目），与渲染端 `project-cwd.ts`
+     * 同一口径。旧实现 `find` 首个匹配：侧栏按最长匹配显示在 A 项目下，主进程却把会话根
+     * 解析成 B 项目（或反过来），显示与工具权限会各说各话。
+     */
+    let best: { id: string; length: number } | null = null
+    for (const item of projectsFor()) {
       const rel = relative(item.path, cwd)
-      return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-    })
-    return project?.id ?? null
+      if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) continue
+      if (best === null || item.path.length > best.length) {
+        best = { id: item.id, length: item.path.length }
+      }
+    }
+    return best?.id ?? null
   }
 
   const token = randomBytes(TOKEN_BYTES).toString('base64url')
@@ -209,7 +239,10 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     projectIdOf,
     projects: projectsFor,
     defaultWorkspace: defaultWorkspaceFor,
-    fallback: options.dataDir
+    fallback: options.dataDir,
+    // 0.2.2：内核里已经落盘的会话以它自己的 cwd 为准（项目删了 / 会话建在项目目录外时
+    // 不能再用配置覆盖，否则会话复用会被判 session/conflict）
+    knownCwdOf: (threadId) => kernelCwdOf?.(threadId)
   })
 
   /**
@@ -242,6 +275,38 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
   })
   // 内核 adapter 建好后，projectIdOf 的 cwd 来源才可用（建之前一律 null，不回落默认工作区）。
   kernelCwdOf = (threadId) => kernelAdapter?.cwdOf(threadId)
+
+  /**
+   * 0.2.2 模型桥：把 kyclaw 设置里的 providers + 密钥写进**内核的活配置**
+   * （`llm-deepseek` / `llm-pi-ai` + `credentials` + `agent-default-model`）。
+   * 启动时先桥一次：首轮对话之前内核就得认识用户配置的模型；之后 main 在设置变更后调
+   * `handle.syncModelConfig()`。失败只留日志（桥不上时对话按内核现状报错误卡，不挡应用启动）。
+   */
+  const modelBridge = options.model
+  const syncModelConfig = async (): Promise<KernelModelSyncResult | null> => {
+    if (modelBridge === undefined) return null
+    try {
+      const result = await syncKernelModel((method, args) => kernelAdapter.rpcCall(method, args), {
+        providers: modelBridge.providers(),
+        probedModels: modelBridge.probedModels(),
+        readKey: modelBridge.readKey
+      })
+      if (result.applied) {
+        console.info(
+          `[kyclaw] 模型配置已桥到内核（${result.mode ?? '?'}）：${result.route ?? '?'}/${result.model ?? '?'}`
+        )
+      } else {
+        console.info(
+          `[kyclaw] 模型配置未桥到内核（${result.reason ?? 'unknown'}）：内核先按自己的缺省模型跑`
+        )
+      }
+      return result
+    } catch (error) {
+      console.warn('[kyclaw] 模型配置桥到内核失败（对话可能报模型密钥错误）', error)
+      return null
+    }
+  }
+  await syncModelConfig()
 
   const app = new Hono()
   app.use(
@@ -301,7 +366,9 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
           ...(kernelThreadsDefaultSessionId === undefined
             ? {}
             : { defaultSessionId: kernelThreadsDefaultSessionId }),
-          cwdOf: resolveThreadCwd
+          cwdOf: resolveThreadCwd,
+          // 0.2.2：POST /api/threads 带 projectId 时用该项目的 path 当内核 cwd（新建会话落进项目目录）
+          projects: projectsFor
         })
   )
 
@@ -369,6 +436,7 @@ export async function startAgentServer(options: AgentServerOptions): Promise<Age
     telemetry: { langfuse: false },
     rules: { processorRegistered: false },
     projectIdOf,
+    syncModelConfig,
     stop: async () => {
       if (stopped) return
       stopped = true

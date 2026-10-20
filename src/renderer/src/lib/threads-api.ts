@@ -55,11 +55,21 @@ export async function fetchThreads(): Promise<ThreadSummary[]> {
  * 建线程（round 26）：把草稿会话"物化"成真实线程——与"首条消息建线程"同一条服务端路径
  * （memory.createThread），只是不带消息。置顶/归档/移至项目这类要给会话记归属的动作
  * 先物化再执行；已经在的线程幂等回现况（动作重试/两个入口同时点都安全）。
+ *
+ * 0.2.2：`projectId` 非空 = 把这个会话建在该项目的工作区里（服务端用项目 path 当内核 cwd）。
+ * 侧栏「项目」区的 ⊕ 与"项目刚建好"那条路靠它让新会话**落进项目目录**，而不是默认工作区。
  */
-export async function createThread(threadId: string, title?: string): Promise<ThreadSummary> {
+export async function createThread(
+  threadId: string,
+  title?: string,
+  projectId?: string
+): Promise<ThreadSummary> {
+  const body: { threadId: string; title?: string; projectId?: string } = { threadId }
+  if (title !== undefined) body.title = title
+  if (projectId !== undefined) body.projectId = projectId
   const response = await authorized('/api/threads', {
     method: 'POST',
-    body: JSON.stringify(title === undefined ? { threadId } : { threadId, title })
+    body: JSON.stringify(body)
   })
   return json(response, threadSummarySchema)
 }

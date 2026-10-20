@@ -45,4 +45,28 @@ describe('PB-019 thread-cwd：不依赖旧 store 的 thread→cwd 解析', () =>
     })
     expect(resolve('t1')).toBe('E:\\default')
   })
+
+  it('0.2.2：内核里已有会话 → 以它自己的 cwd 为准（项目删了也不回落默认工作区）', () => {
+    const known = createThreadCwdResolver({
+      projectIdOf: () => null,
+      projects: () => projects,
+      defaultWorkspace: () => 'E:\\default',
+      fallback: 'E:\\fallback',
+      knownCwdOf: (threadId) => (threadId === 't-old' ? 'E:\\work\\deleted-project' : undefined)
+    })
+    expect(known('t-old')).toBe('E:\\work\\deleted-project')
+    // 新线程（内核还没有会话）照旧走配置
+    expect(known('t-new')).toBe('E:\\default')
+  })
+
+  it('0.2.2：knownCwdOf 给空串等同于"不知道"，不吃掉默认工作区', () => {
+    const resolve = createThreadCwdResolver({
+      projectIdOf: () => null,
+      projects: () => projects,
+      defaultWorkspace: () => 'E:\\default',
+      fallback: 'E:\\fallback',
+      knownCwdOf: () => '   '
+    })
+    expect(resolve('t1')).toBe('E:\\default')
+  })
 })

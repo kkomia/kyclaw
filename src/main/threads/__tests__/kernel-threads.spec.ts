@@ -154,6 +154,29 @@ describe('kernel-threads：9 个端点', () => {
     expect(body.threads.map((thread) => thread.id)).toEqual(['t1', 't2', 'session-kyclaw-pending'])
   })
 
+  it('GET /api/threads：回包带内核 session 的 cwd（0.2.2 侧栏按它归组）', async () => {
+    const app = createKernelThreadsRouter({ ops: fakeOps(), defaultCwd: '/workspace' })
+    const response = await app.request('/')
+    const body = await jsonOf<{ threads: Array<{ id: string; cwd?: string }> }>(response)
+    expect(body.threads.find((thread) => thread.id === 't1')?.cwd).toBe('/workspace')
+    // 内核没给 cwd 的会话不带这一格（读侧按无项目处理，不编路径）
+    const bareOps: KernelSessionOps = {
+      ...fakeOps(),
+      async listSessions() {
+        return [{ sessionId: 'no-cwd', title: null, updatedAt: 0 }]
+      }
+    }
+    const bare = createKernelThreadsRouter({ ops: bareOps, defaultCwd: '/workspace' })
+    const bareBody = await jsonOf<{ threads: Array<{ id: string; cwd?: string }> }>(
+      await bare.request('/')
+    )
+    expect(bareBody.threads[0]).toEqual({
+      id: 'no-cwd',
+      title: null,
+      updatedAt: new Date(0).toISOString()
+    })
+  })
+
   it('POST /api/threads：cwdOf 优先，返回 summary', async () => {
     const ops = fakeOps()
     const app = createKernelThreadsRouter({
@@ -168,7 +191,64 @@ describe('kernel-threads：9 个端点', () => {
     })
     expect(response.status).toBe(200)
     expect(ops.calls).toContain('create:new-thread:/ws/new-thread')
-    await expect(jsonOf(response)).resolves.toMatchObject({ id: 'new-thread', title: '新会话' })
+    // 回包同样透出 cwd（renderer 拿它走侧栏归组；服务端列出前也不落空）
+    await expect(jsonOf(response)).resolves.toMatchObject({
+      id: 'new-thread',
+      title: '新会话',
+      cwd: '/workspace'
+    })
+  })
+
+  it('POST /api/threads：带 projectId 用项目 path 当内核 cwd（新建会话落进项目目录）', async () => {
+    const ops = fakeOps()
+    const app = createKernelThreadsRouter({
+      ops,
+      defaultCwd: '/workspace',
+      cwdOf: (threadId) => `/ws/${threadId}`,
+      projects: () => [
+        { id: 'p1', name: '项目一', path: '/projects/p1', createdAt: '2026-10-11T00:00:00.000Z' },
+        { id: 'p2', name: '项目二', path: '/projects/p2', createdAt: '2026-10-11T00:00:00.000Z' }
+      ]
+    })
+    const response = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'new-thread', projectId: 'p2' })
+    })
+    expect(response.status).toBe(200)
+    // projectId 优先于 cwdOf：会话的内核 cwd 必须是项目目录
+    expect(ops.calls).toContain('create:new-thread:/projects/p2')
+  })
+
+  it('POST /api/threads：非法 projectId（不存在 / 路径为空 / 没有读取器）回 400，不建会话', async () => {
+    const ops = fakeOps()
+    const app = createKernelThreadsRouter({
+      ops,
+      defaultCwd: '/workspace',
+      projects: () => [
+        { id: 'empty-path', name: '空路径', path: '  ', createdAt: '2026-10-11T00:00:00.000Z' }
+      ]
+    })
+    for (const projectId of ['missing', 'empty-path']) {
+      const response = await app.request('/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ threadId: 'new-thread', projectId })
+      })
+      expect(response.status).toBe(400)
+      await expect(jsonOf(response)).resolves.toMatchObject({
+        error: expect.stringContaining('invalid-input') as unknown as string
+      })
+    }
+    // 项目读取器没注入（服务端接线缺失）：同样 400，不假装签收
+    const noReader = createKernelThreadsRouter({ ops, defaultCwd: '/workspace' })
+    const response = await noReader.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'new-thread', projectId: 'p1' })
+    })
+    expect(response.status).toBe(400)
+    expect(ops.calls.some((call) => call.startsWith('create:new-thread'))).toBe(false)
   })
 
   it('GET messages：事件投影成旧 StoredMessage', async () => {

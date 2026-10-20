@@ -23,6 +23,7 @@ import {
 } from '../../shared/threads'
 import type { KernelSessionOps, KernelSessionSummary } from '../kernel/kernel-session-ops'
 import { KernelSessionOpsError } from '../kernel/kernel-session-ops'
+import type { Project } from '../../shared/projects'
 import {
   projectThreadCompaction,
   projectThreadMessages,
@@ -45,6 +46,14 @@ export interface KernelThreadsRouterOptions {
    * 不该出现在侧栏（Nia 的 e2e：`kyclaw-pending` 被读路径建出后侧栏 2 行变 3 行）。
    */
   excludeBlank?: boolean
+  /**
+   * 0.2.2：项目清单读取器（`settings.projects`）。POST /api/threads 带 `projectId` 时，
+   * 用该项目的 path 当新内核 session 的 cwd——新建的会话因此**落进项目目录**（侧栏按 cwd 归组、
+   * 工具根也按同一事实解析）。
+   *
+   * 由调用方（agent/service.ts）注入；不注入时带 projectId 的请求回 400（不静默落默认目录）。
+   */
+  projects?: () => readonly Project[]
 }
 
 function errorBody(error: string, detail?: string): { error: string; detail?: string } {
@@ -136,7 +145,18 @@ export function createKernelThreadsRouter(options: KernelThreadsRouterOptions): 
   app.post('/', async (context) => {
     const body = createThreadRequestSchema.safeParse(await context.req.json().catch(() => null))
     if (!body.success) return context.json(errorBody('invalid-input: 线程 id'), 400)
-    const cwd = options.cwdOf?.(body.data.threadId) ?? options.defaultCwd
+    // 0.2.2：带 projectId = 在项目目录里建会话（取 settings.projects 的 path 当 cwd）。
+    // 找不到项目 / 路径为空 → 400，不静默落到默认工作区（那会让用户以为在项目里干活）。
+    let cwd: string
+    if (body.data.projectId === undefined) {
+      cwd = options.cwdOf?.(body.data.threadId) ?? options.defaultCwd
+    } else {
+      const project = options.projects?.().find((item) => item.id === body.data.projectId)
+      if (project === undefined || project.path.trim() === '') {
+        return context.json(errorBody('invalid-input: 项目不存在或没有工作区路径'), 400)
+      }
+      cwd = project.path
+    }
     if (cwd.trim() === '') return context.json(errorBody('invalid-input: cwd'), 400)
     try {
       const result = await ops.createSession({

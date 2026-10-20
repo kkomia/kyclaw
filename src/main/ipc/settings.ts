@@ -54,6 +54,13 @@ export interface SettingsIpcHooks {
   onThemeSaved?: (theme: ThemeMode) => void
   /** 当前解析后的明暗（主进程 nativeTheme 为准） */
   effectiveTheme?: () => ResolvedTheme
+  /**
+   * 0.2.2：模型配置变了（providers 落盘 / 密钥写入或清除 / provider 删除）之后的通知。
+   * 对话由 DSH 内核承接，内核只认它自己的模型配置（llm-deepseek / llm-pi-ai + credentials），
+   * 所以这里要把 kyclaw 的 providers + 密钥重新桥给内核（见 main/kernel/kernel-model-bridge.ts）。
+   * 落盘成功才调；同步由监听方异步做、失败只留日志（不挡保存、不把写盘结果翻回去）。
+   */
+  onModelSettingsChanged?: () => void
 }
 
 export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks = {}): void {
@@ -88,6 +95,8 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
       for (const provider of next.providers) {
         void probeProviderModelsQuietly({ file, readKey, providerId: provider.id })
       }
+      // 0.2.2：providers 变了 → 内核的模型路由/默认模型要跟着变（异步；不挡保存）
+      hooks.onModelSettingsChanged?.()
     }
     return next
   })
@@ -100,6 +109,8 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
       IPC_CHANNELS.settings.setProviderKey
     )
     setProviderKey(secrets, id, key)
+    // 0.2.2：密钥写进 secrets 之后，内核那边也要拿到同一把（否则「测试连接成功、发消息 401」）
+    hooks.onModelSettingsChanged?.()
     return { hasKey: true }
   })
 
@@ -221,6 +232,8 @@ export function registerSettingsIpc(userDataDir: string, hooks: SettingsIpcHooks
       providers: current.providers.filter((provider) => provider.id !== id)
     })
     clearProviderKeyQuietly(secrets, id)
+    // 0.2.2：provider 没了 → 内核的默认模型/路由要重算（可能没 provider 了，那就空着）
+    hooks.onModelSettingsChanged?.()
     return next
   })
 }

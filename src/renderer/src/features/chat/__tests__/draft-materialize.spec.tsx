@@ -29,10 +29,13 @@ vi.mock('@renderer/lib/threads-api', () => ({
     { id: 't-other', title: '别的会话', updatedAt: new Date().toISOString() }
   ]),
   fetchThreadMessages: vi.fn(async () => []),
-  createThread: vi.fn(async (id: string, title?: string) => ({
+  // 0.2.2：带 projectId 物化 = 服务端把项目 path 当内核 cwd；假实现照这个口径回填 cwd，
+  // 于是"物化后归属由 cwd 推导"这条链在单测里也跑得通（真行为见 kernel-threads.spec）。
+  createThread: vi.fn(async (id: string, title?: string, projectId?: string) => ({
     id,
     title: title ?? null,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...(projectId === undefined ? {} : { cwd: 'D:\\ws\\插件' })
   })),
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
@@ -160,8 +163,9 @@ describe('发送即物化（round 49）', () => {
       screen.getByTestId(`session-item-${draftId}`)
     )
 
-    // 靠的是发送那一刻的物化：POST /api/threads 带的就是草稿 id，并进了服务端镜像；消息照发（没被挡）
-    expect(vi.mocked(createThread)).toHaveBeenCalledWith(draftId, undefined)
+    // 靠的是发送那一刻的物化：POST /api/threads 带的就是草稿 id 与项目 id（0.2.2：项目 id 决定
+    // 内核 cwd，会话因此落进项目目录），并进了服务端镜像；消息照发（没被挡）
+    expect(vi.mocked(createThread)).toHaveBeenCalledWith(draftId, undefined, 'p1')
     expect(useSessionsStore.getState().threads.some((thread) => thread.id === draftId)).toBe(true)
     expect(control.requests).toHaveLength(1)
   })

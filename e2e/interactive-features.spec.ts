@@ -228,8 +228,9 @@ test.describe('interactive features — production UI functional evidence', () =
       await functionEvidence(app.page, 'rules-next-turn.png')
 
       // 0.2.1（PB-053）：会话↔项目映射的宿主路由在 0.2.x 主动下架（501 feature-disabled），
-      // 旧项目数据不兼容、直接舍弃。初始页「选择项目」胶囊与侧栏项目区都不再出现——
-      // 这里把回归钉在"入口不存在、也没有那条假的加载失败"上（不重试、不画红字）。
+      // 旧项目数据不兼容、直接舍弃。**写映射**的入口（初始页「选择项目」胶囊）不出现；
+      // 0.2.2 起侧栏「项目」区恢复渲染（归属改由内核 cwd 推导），这里只钉"入口不存在、
+      // 也没有那条假的加载失败"（不重试、不画红字）。
       await app.page.getByTestId('new-session').click()
       await expect(app.page.getByTestId('composer-project')).toHaveCount(0)
       await expect(app.page.getByTestId('composer-project-row')).toHaveCount(0)

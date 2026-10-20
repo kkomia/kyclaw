@@ -26,8 +26,13 @@ import { useProjectsStore } from './projects-store'
  * round 64（用户口径："项目也要由项目菜单管理"）：组头的管理菜单里多一条「管理工作区」——
  * 跳设置页的工作区栏（/settings/workspaces，默认工作区与授权目录都在那儿管），
  * 与「新建空白项目 / 使用现有文件夹」两条创建路径同一个图标入口。
+ *
+ * 0.2.2（侧栏「项目」区恢复）：0.2.1 里映射 API 下架成 501 后这里曾整块 `return null`，连组头
+ * 与两条创建路径都没了。现在**项目区照常渲染**：会话归属改由内核 session 的 cwd 推导
+ * （projects-store 的 syncFromCwd，见 project-cwd.ts），501 下不再出现「项目加载失败 / 重试」
+ * 那行红字（`unavailable` 不再等于"出错了"，只表示"写映射的入口本版不可用"，那些入口各自隐藏）。
  */
-export function ProjectsSection(): React.JSX.Element | null {
+export function ProjectsSection(): React.JSX.Element {
   const navigate = useNavigate()
   const settings = useSettingsStore((state) => state.settings)
   const removeProject = useSettingsStore((state) => state.removeProject)
@@ -46,6 +51,7 @@ export function ProjectsSection(): React.JSX.Element | null {
   const error = useProjectsStore((state) => state.error)
   const unavailable = useProjectsStore((state) => state.unavailable)
   const clearProjectMappings = useProjectsStore((state) => state.clearProjectMappings)
+  const syncFromCwd = useProjectsStore((state) => state.syncFromCwd)
 
   const [dialog, setDialog] = useState<{ mode: CreateProjectMode; key: number } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -59,6 +65,17 @@ export function ProjectsSection(): React.JSX.Element | null {
   useEffect(() => {
     void ensureLoaded()
   }, [ensureLoaded])
+
+  /**
+   * 0.2.2：501 下会话归属由"内核 cwd + settings.projects"推导。依赖三件事重算：
+   *   1. `threads` —— 会话列表加载/刷新（新会话物化、切工作区、删会话）；
+   *   2. `unavailable` —— 501 的判定可能晚于会话列表到达（App 与侧栏各拉各的），落位后补算；
+   *   3. `settings.projects` —— 项目新建/重命名（路径变了）/删除之后，归组要跟着变。
+   * 映射通道可用（历史版本）时 syncFromCwd 自己空操作，服务端快照仍为权威。
+   */
+  useEffect(() => {
+    syncFromCwd(threads)
+  }, [syncFromCwd, threads, unavailable, settings.projects])
 
   const archivedProjectIds = useMemo(
     () => new Set(settings.archivedProjects.map((entry) => entry.projectId)),
@@ -111,7 +128,11 @@ export function ProjectsSection(): React.JSX.Element | null {
     setActionError(unwrapIpcError(cause))
   }
 
-  /** 在这个项目里开一个新会话（round 25 的 ⊕ 与"项目刚建好"两条路共用） */
+  /**
+   * 在这个项目里开一个新会话（round 25 的 ⊕ 与"项目刚建好"两条路共用）。
+   * 0.2.2：这里只记本地归属；会话**真正落进项目目录**发生在物化（发送/动作触发的
+   * POST /api/threads 带 projectId → 内核 cwd = 项目 path），而不是默认工作区。
+   */
   const openSessionIn = (projectId: string | null): void => {
     startNew(projectId)
     navigate('/chat')
@@ -171,10 +192,7 @@ export function ProjectsSection(): React.JSX.Element | null {
     }).catch((cause: unknown) => report('[kyclaw] 归档项目失败', cause))
   }
 
-  // 0.2.1（PB-053）：映射通道本版下架（501）→ 整个项目区不出现（不画"加载失败/重试"）。
-  // 旧项目数据不做兼容/迁移；项目能力交给内核时代的新模型（0.2.x 之后）。
-  if (unavailable) return null
-
+  // 0.2.2：501 不再隐藏项目区——`unavailable` 只表示"写映射的入口不可用"，渲染照旧（见文件头）。
   return (
     <div className="shrink-0">
       <ProjectList

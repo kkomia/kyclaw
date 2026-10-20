@@ -6,17 +6,25 @@ import {
   usePptTemplatesStore
 } from '@renderer/features/chat/ppt-templates-store'
 import { resetThreadChats } from '@renderer/features/chat/thread-chats'
+import { resetProjectsStore, useProjectsStore } from '@renderer/features/projects/projects-store'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { defaultSettings, type AppSettings } from '@shared/settings'
 import { resetSessionsStore, useSessionsStore } from '../sessions-store'
 
 /**
  * 会话状态（T9）：线程数据以服务端为准——列表/重命名/删除/标题生成都是 HTTP；
  * store 只做镜像 + 活跃态 + 完成提醒。
  * 网络用一个假 fetch 打桩（按路径路由），断言直接看"发了什么请求、store 变成了什么"。
+ *
+ * 0.2.2：新建会话落项目走 `POST /api/threads` 的可选 projectId（服务端把它变成内核 cwd），
+ * 最后一个 describe 钉住这条链。
  */
 interface ThreadRow {
   id: string
   title: string | null
   updatedAt: string
+  /** 0.2.2：内核 session 的 cwd（假服务按 POST 的 projectId 回填，模拟服务端用项目 path 当 cwd） */
+  cwd?: string
 }
 
 interface FakeServer {
@@ -61,11 +69,22 @@ function installFakeServer(initial: ThreadRow[] = []): FakeServer {
         return respond({ threads: server.threads })
       }
       if (url.pathname === '/api/threads' && method === 'POST') {
-        const { threadId, title } = body as { threadId: string; title?: string }
+        const { threadId, title, projectId } = body as {
+          threadId: string
+          title?: string
+          projectId?: string
+        }
+        // 0.2.2：真服务端带 projectId 时用项目 path 当内核 cwd（见 kernel-threads 的 POST）；
+        // 假服务照这个口径回填，让 store 的 cwd 推导能在单测里跑完整条链。
+        const project =
+          projectId === undefined
+            ? undefined
+            : useSettingsStore.getState().settings.projects.find((item) => item.id === projectId)
         const row: ThreadRow = {
           id: threadId,
           title: title ?? null,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          ...(project === undefined ? {} : { cwd: project.path })
         }
         if (!server.threads.some((thread) => thread.id === threadId)) {
           server.threads = [row, ...server.threads]
@@ -134,6 +153,7 @@ let errorLog: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   installKyclawBridge()
   resetSessionsStore()
+  resetProjectsStore()
   resetPptTemplatesStore()
   resetThreadChats()
   FakeNotification.instances = []
@@ -537,5 +557,90 @@ describe('round 62：发送队列（按会话存，切会话不丢）', () => {
     const queues = useSessionsStore.getState().queues
     expect('t-new' in queues).toBe(false)
     expect(queues['t-old']?.map((item) => item.text)).toEqual(['别的会话的排队'])
+  })
+})
+
+/**
+ * 0.2.2（侧栏「项目」区恢复）：新会话落项目目录这条链。
+ *
+ * 口径：501 下没有"会话↔项目映射"通道，归属由**内核 session 的 cwd** 决定。所以新建会话要落进
+ * 项目有且只有一条路——物化 `POST /api/threads` 时带上 projectId，服务端用项目 path 当内核 cwd。
+ * 这里钉住 store 这一半：草稿先记本地归属（侧栏立刻可见 + 工作台先别按兜底根开工），物化带
+ * projectId，cwd 回来后收敛为"按 cwd 归组"。
+ */
+describe('0.2.2：新建会话落项目（projectId → 内核 cwd）', () => {
+  const PROJECTS: AppSettings['projects'] = [
+    { id: 'p1', name: '插件', path: 'D:\\ws\\插件', createdAt: '2026-10-20T00:00:00.000Z' }
+  ]
+
+  /** 501 的落位状态：映射通道下架，项目区改由 cwd 推导 */
+  function givenUnavailable(): void {
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), projects: PROJECTS },
+      loaded: true
+    })
+    useProjectsStore.setState({ unavailable: true, loaded: true })
+  }
+
+  it('startNew(projectId)：草稿先记本地归属（侧栏可见）、标 pending，不写映射通道', async () => {
+    const server = installFakeServer(THREADS)
+    givenUnavailable()
+
+    const draftId = useSessionsStore.getState().startNew('p1')
+
+    expect(useSessionsStore.getState().activeId).toBe(draftId)
+    expect(useProjectsStore.getState().mappings).toEqual({ [draftId]: 'p1' })
+    expect(useProjectsStore.getState().pending).toEqual({ [draftId]: true })
+    expect(useProjectsStore.getState().draftProjectOf(draftId)).toBe('p1')
+    // 501 下不往映射通道写（也没有那条通道）
+    expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
+  })
+
+  it('materialize：把 projectId 带给服务端（内核 cwd = 项目 path）；归属随 cwd 收敛、pending 收起', async () => {
+    const server = installFakeServer([])
+    givenUnavailable()
+    const draftId = useSessionsStore.getState().startNew('p1')
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId, projectId: 'p1' }
+    })
+    const projectsState = useProjectsStore.getState()
+    // 假服务回填了 cwd = 项目 path → 归属由 cwd 推导得出，草稿那笔本地记账退场
+    expect(projectsState.mappings).toEqual({ [draftId]: 'p1' })
+    expect(projectsState.pending).toEqual({})
+    expect(projectsState.draftProjectOf(draftId)).toBeNull()
+    // 会话进了镜像（侧栏挂在项目下靠的是它 + 推导出的映射）
+    expect(useSessionsStore.getState().threads.map((thread) => thread.id)).toEqual([draftId])
+  })
+
+  it('没有项目归属的草稿物化：照旧只发 threadId（不凭空带 projectId）', async () => {
+    const server = installFakeServer([])
+    givenUnavailable()
+    const draftId = useSessionsStore.getState().startNew()
+
+    await useSessionsStore.getState().materialize(draftId)
+
+    expect(server.calls).toContainEqual({
+      method: 'POST',
+      path: '/api/threads',
+      body: { threadId: draftId }
+    })
+  })
+
+  it('删草稿：本地项目归属（mappings / pending）一起丢掉，不写服务端', async () => {
+    const server = installFakeServer(THREADS)
+    givenUnavailable()
+    const draftId = useSessionsStore.getState().startNew('p1')
+    server.calls.length = 0
+
+    await useSessionsStore.getState().remove(draftId)
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(server.calls.some((call) => call.method === 'PUT')).toBe(false)
   })
 })

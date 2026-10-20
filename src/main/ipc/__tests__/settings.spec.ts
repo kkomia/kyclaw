@@ -725,3 +725,50 @@ describe('settings:remove-provider（删配置连带清密钥）', () => {
     expect(() => handlerOf(IPC_CHANNELS.settings.removeProvider)(EVENT, '')).toThrow(IpcInputError)
   })
 })
+
+/**
+ * 0.2.2 模型桥的通知点：对话由 DSH 内核承接，内核只认它自己的模型配置 ——
+ * kyclaw 这边的 providers / 密钥变化必须通知主进程去重新桥（main/index.ts 的
+ * `onModelSettingsChanged` → agent 服务 `syncModelConfig()`）。落盘成功才通知。
+ */
+describe('0.2.2：模型配置变更通知（onModelSettingsChanged）', () => {
+  /** 用带 hook 的实例重注册一遍（beforeEach 里那个没有 hook） */
+  function registerWithHook(hook: () => void): void {
+    mocks.handlers.clear()
+    registerSettingsIpc(dir, { onModelSettingsChanged: hook })
+  }
+
+  it('providers 落盘后通知一次；只改主题/字号不通知', () => {
+    const hook = vi.fn()
+    registerWithHook(hook)
+
+    configure(DEEPSEEK)
+    expect(hook).toHaveBeenCalledTimes(1)
+
+    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { theme: 'dark' })
+    handlerOf(IPC_CHANNELS.settings.update)(EVENT, { uiFontSize: 16 })
+    expect(hook).toHaveBeenCalledTimes(1)
+  })
+
+  it('写密钥后通知（内核要拿到同一把 key）', () => {
+    const hook = vi.fn()
+    registerWithHook(hook)
+    configure(DEEPSEEK)
+
+    handlerOf(IPC_CHANNELS.settings.setProviderKey)(EVENT, 'deepseek', KEY)
+    expect(hook).toHaveBeenCalledTimes(2)
+  })
+
+  it('删 provider 后通知一次；删不存在的 id 不通知', () => {
+    const hook = vi.fn()
+    registerWithHook(hook)
+    configure(DEEPSEEK)
+    hook.mockClear()
+
+    handlerOf(IPC_CHANNELS.settings.removeProvider)(EVENT, 'nope')
+    expect(hook).not.toHaveBeenCalled()
+
+    handlerOf(IPC_CHANNELS.settings.removeProvider)(EVENT, 'deepseek')
+    expect(hook).toHaveBeenCalledTimes(1)
+  })
+})

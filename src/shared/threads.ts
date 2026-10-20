@@ -32,7 +32,17 @@ export const threadSummarySchema = z.strictObject({
   /** 标题：未生成为 null（存储里是空串，路由层归一化） */
   title: z.string().nullable(),
   /** ISO 时间串（分组"今天/更早"、排序都用它） */
-  updatedAt: z.string()
+  updatedAt: z.string(),
+  /**
+   * 0.2.2：内核 session 的 cwd（`session/list` 的 `items[].cwd`）。
+   *
+   * 侧栏「项目」区靠它把会话归到项目：旧映射 HTTP API 在 0.2.x 下架（501），但会话本体
+   * 自带"在哪个目录下跑"这个事实——渲染端拿 cwd 反查 `settings.projects` 的路径包含关系，
+   * 主进程用同一份事实解析会话根（service.ts 的 projectIdOf），两边显示与权限口径一致。
+   *
+   * 读侧宽容：旧回包 / 旧内核可能没有这一格（缺省 = "不知道"，按无项目处理），所以是可选。
+   */
+  cwd: z.string().min(1).optional()
 })
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>
@@ -72,7 +82,14 @@ export const renameThreadRequestSchema = z.strictObject({
 export const createThreadRequestSchema = z.strictObject({
   threadId: z.string().min(1).max(200),
   /** 创建时就带标题（草稿被就地重命名过时把本地标题带过来；不传 = 无标题） */
-  title: z.string().trim().min(1).max(120).optional()
+  title: z.string().trim().min(1).max(120).optional(),
+  /**
+   * 0.2.2：把这个会话建在哪个项目的工作区里——服务端取 `settings.projects` 里该项目的 path
+   * 当内核 session 的 cwd（于是后续工具根 / 侧栏归组都按这个项目走）。
+   * 不传 = 现有行为（`cwdOf` / 默认工作区）。项目不存在或路径为空 → 400，不静默落默认目录
+   * （否则用户以为在项目里干活，实际写到了别处）。
+   */
+  projectId: z.string().min(1).max(200).optional()
 })
 
 /** POST /api/threads/:id/truncate 的入参（R2：编辑重发的服务端半边，从这条消息起截掉） */

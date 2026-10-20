@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearKyclawBridge, installKyclawBridge } from '@renderer/__tests__/kyclaw-bridge'
+import { useSettingsStore } from '@renderer/lib/settings-store'
+import { defaultSettings, type AppSettings } from '@shared/settings'
+import type { ThreadSummary } from '@shared/threads'
 import { resetProjectsStore, useProjectsStore } from '../projects-store'
 
 /**
  * 会话↔项目映射的 store（T18）：与服务端（/api/projects/mappings）的读写口径。
  * 关注：镜像以服务端为准；写是乐观 + 失败回滚；在飞期间不被旧快照拽回去；失败落 error 不抛。
+ *
+ * 0.2.2：501 下映射不再来自服务端，而是从**内核 session 的 cwd** 推导（见最后一个 describe）——
+ * 侧栏项目区因此恢复，且不画「项目加载失败」。
  */
 interface MappingRow {
   threadId: string
@@ -244,5 +250,156 @@ describe('projects-store：在写标记（pending，round 49）', () => {
 
     expect(useProjectsStore.getState().pending).toEqual({})
     expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p1' })
+  })
+})
+
+/**
+ * 0.2.2（501）：项目区的会话归属改从内核 session 的 cwd 推导（旧映射 API 下架）。
+ * 这里钉住推导的触发边界（列表/项目清单变化后重算）、草稿的本地记账，以及"cwd 是真相"的优先级。
+ */
+describe('projects-store：0.2.2 从内核 cwd 推导归属（501）', () => {
+  const ISO = '2026-10-20T00:00:00.000Z'
+  const PROJECTS: AppSettings['projects'] = [
+    { id: 'p1', name: '插件', path: 'D:\\ws\\插件', createdAt: ISO },
+    { id: 'p2', name: '插件子项目', path: 'D:\\ws\\插件\\子项目', createdAt: ISO }
+  ]
+
+  const thread = (id: string, cwd?: string): ThreadSummary => ({
+    id,
+    title: null,
+    updatedAt: ISO,
+    ...(cwd === undefined ? {} : { cwd })
+  })
+
+  function givenProjects(projects: AppSettings['projects'] = PROJECTS): void {
+    useSettingsStore.setState({
+      settings: { ...defaultSettings(), projects },
+      loaded: true
+    })
+  }
+
+  /** 走一次 501 的加载（映射通道下架）——之后 mappings 由 syncFromCwd 负责 */
+  async function enterUnavailable(): Promise<void> {
+    const server = installFakeServer()
+    server.getStatus = 501
+    await useProjectsStore.getState().ensureLoaded()
+    expect(useProjectsStore.getState().unavailable).toBe(true)
+  }
+
+  it('cwd 落在项目路径下 → 归到对应项目（嵌套取最具体）；项目外/没 cwd 的会话不动', async () => {
+    givenProjects()
+    await enterUnavailable()
+
+    useProjectsStore
+      .getState()
+      .syncFromCwd([
+        thread('t1', 'D:\\ws\\插件\\src'),
+        thread('t2', 'D:\\ws\\插件\\子项目\\deep'),
+        thread('t3', 'E:\\外部目录'),
+        thread('t4')
+      ])
+
+    const state = useProjectsStore.getState()
+    expect(state.mappings).toEqual({ t1: 'p1', t2: 'p2' })
+    expect(state.projectOf('t1')).toBe('p1')
+    expect(state.projectOf('t3')).toBeNull()
+    // 501 仍是"写通道没有"，不是错误：不落红字、不反复重试
+    expect(state.unavailable).toBe(true)
+    expect(state.error).toBeNull()
+  })
+
+  it('项目清单变了要重算：删掉项目后，名下会话回到"无项目"', async () => {
+    givenProjects()
+    await enterUnavailable()
+    useProjectsStore.getState().syncFromCwd([thread('t1', 'D:\\ws\\插件\\src')])
+    expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p1' })
+
+    givenProjects(PROJECTS.slice(1))
+    useProjectsStore.getState().syncFromCwd([thread('t1', 'D:\\ws\\插件\\src')])
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+  })
+
+  it('映射通道可用（200）时 syncFromCwd 不改服务端快照（历史口径不变）', async () => {
+    installFakeServer([{ threadId: 't1', projectId: 'p2' }])
+    await useProjectsStore.getState().ensureLoaded()
+    givenProjects()
+
+    useProjectsStore.getState().syncFromCwd([thread('t1', 'D:\\ws\\插件')])
+
+    expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p2' })
+  })
+
+  it('草稿本地记账：侧栏先挂上 + pending；物化带出 cwd 后收敛为 cwd 归属、pending 收起', async () => {
+    givenProjects()
+    await enterUnavailable()
+
+    useProjectsStore.getState().rememberDraftProject('draft-1', 'p1')
+    expect(useProjectsStore.getState().mappings).toEqual({ 'draft-1': 'p1' })
+    expect(useProjectsStore.getState().pending).toEqual({ 'draft-1': true })
+    expect(useProjectsStore.getState().draftProjectOf('draft-1')).toBe('p1')
+
+    // 物化回包没带 cwd（旧服务端/测试桩）：先保留本地记账，别让草稿闪到「任务」组
+    useProjectsStore.getState().syncFromCwd([thread('draft-1')])
+    expect(useProjectsStore.getState().mappings).toEqual({ 'draft-1': 'p1' })
+    expect(useProjectsStore.getState().pending).toEqual({ 'draft-1': true })
+
+    // 列表带出内核 cwd：归属以它为准，本地记账退场
+    useProjectsStore.getState().syncFromCwd([thread('draft-1', 'D:\\ws\\插件')])
+    expect(useProjectsStore.getState().mappings).toEqual({ 'draft-1': 'p1' })
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(useProjectsStore.getState().draftProjectOf('draft-1')).toBeNull()
+  })
+
+  it('草稿记账与内核 cwd 冲突时以 cwd 为准（本地记账不盖过内核事实）', async () => {
+    givenProjects()
+    await enterUnavailable()
+    useProjectsStore.getState().rememberDraftProject('draft-1', 'p1')
+
+    useProjectsStore.getState().syncFromCwd([thread('draft-1', 'E:\\外部目录')])
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(useProjectsStore.getState().draftProjectOf('draft-1')).toBeNull()
+  })
+
+  it('草稿指向已删项目：重算时作废（不挂在已经不存在的项目上）', async () => {
+    givenProjects()
+    await enterUnavailable()
+    useProjectsStore.getState().rememberDraftProject('draft-1', 'p1')
+
+    givenProjects([])
+    useProjectsStore.getState().syncFromCwd([thread('draft-1')])
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().pending).toEqual({})
+  })
+
+  it('forgetLocalSession：草稿删除后本地几笔（mappings / pending / 草稿记账）一起清掉', async () => {
+    givenProjects()
+    await enterUnavailable()
+    useProjectsStore.getState().rememberDraftProject('draft-1', 'p1')
+
+    useProjectsStore.getState().forgetLocalSession('draft-1')
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().pending).toEqual({})
+    expect(useProjectsStore.getState().draftProjectOf('draft-1')).toBeNull()
+  })
+
+  it('删项目：clearProjectMappings 在 501 下只清本地（不 PUT、不报错）', async () => {
+    const server = installFakeServer()
+    server.getStatus = 501
+    await useProjectsStore.getState().ensureLoaded()
+    givenProjects()
+    useProjectsStore.getState().syncFromCwd([thread('t1', 'D:\\ws\\插件')])
+    expect(useProjectsStore.getState().mappings).toEqual({ t1: 'p1' })
+    server.calls.length = 0
+
+    await useProjectsStore.getState().clearProjectMappings('p1')
+
+    expect(useProjectsStore.getState().mappings).toEqual({})
+    expect(useProjectsStore.getState().error).toBeNull()
+    expect(server.calls).toEqual([])
   })
 })

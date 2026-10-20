@@ -178,6 +178,12 @@ if (!app.requestSingleInstanceLock()) {
     askTimeoutMs: 60_000
   })
 
+  /**
+   * 0.2.2：模型配置 → 内核的同步器（晚绑定：agent 服务异步装配，装好后顶上）。
+   * 设置页改 provider / 写密钥 / 删 provider 时调它；服务没起来时是 null（空操作）。
+   */
+  let agentSyncModel: (() => Promise<void>) | null = null
+
   /** 内嵌服务当前对外暴露的端点；服务没起来（或起失败）保持 null，IPC 侧会抛错 */
   let agentEndpoint: AgentEndpoint | null = null
 
@@ -264,7 +270,11 @@ if (!app.requestSingleInstanceLock()) {
       onUpdateUrlSaved: () => updater.reconfigure(),
       // 主题改完同步 nativeTheme 与窗口底色
       onThemeSaved: applyThemeMode,
-      effectiveTheme: currentResolvedTheme
+      effectiveTheme: currentResolvedTheme,
+      // 0.2.2 模型桥：providers/密钥变了 → 重新桥给内核（异步；失败只留日志，不挡保存）
+      onModelSettingsChanged: () => {
+        void agentSyncModel?.()
+      }
     })
     // round 22：启动时后台探一轮模型元数据（真实上下文长度/思考挡位；串行、静默、不挡窗口）
     void probeConfiguredProvidersQuietly({
@@ -436,6 +446,13 @@ if (!app.requestSingleInstanceLock()) {
         asarPath: kernelRoot,
         dshHome: kernelDshHome,
         logFile: kernelLogFile
+      },
+      // 0.2.2 模型桥：内核只认它自己的模型配置，设置页里的 providers + 密钥在这里现读、现桥
+      // （密钥只在主进程内存里过一次 RPC；不落日志、不进 renderer）。
+      model: {
+        providers: () => readSettings(settingsPath(userDataDir)).providers,
+        probedModels: () => readSettings(settingsPath(userDataDir)).probedModels,
+        readKey: (providerId) => getProviderKey(secretsFile, providerId)
       }
     })
       .then((handle) => {
@@ -444,6 +461,10 @@ if (!app.requestSingleInstanceLock()) {
         agentTelemetry = handle.telemetry
         agentRulesRegistered = handle.rules.processorRegistered
         agentProjectIdOf = handle.projectIdOf
+        // 0.2.2：启动时已经桥过一次（见 service.startAgentServer）；这里把「设置变更 → 再桥」接上
+        agentSyncModel = async () => {
+          await handle.syncModelConfig()
+        }
         // round 73：冷启动打点 —— **渲染端"可输入"就卡在这一刻之后**：端点没就绪，对话页一直停在
         // 「正在连接…」；就绪之后还要再等两次 HTTP（会话列表 + 历史回灌）。这一笔单出一行。
         mainMark('agent 服务就绪')
@@ -460,6 +481,7 @@ if (!app.requestSingleInstanceLock()) {
       })
       .catch((error) => {
         agentRulesRegistered = false
+        agentSyncModel = null
         // 验收④：内核启动失败 = 用户可见的可诊断错误（错误码/原因/退出码 + 日志路径）。
         // 非内核类失败（端口/装配）用通用文案，别把 kernel.log 说成它们的日志。
         agentStartupError =
