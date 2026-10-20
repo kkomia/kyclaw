@@ -669,8 +669,17 @@ describe('B3.4 占用/冲突文案（当一等错误，不吞）', () => {
     await expect(b.startTurn('跨目录续接', { threadId: 'thread-shared' })).rejects.toThrow(
       /另一个目录.*session\/conflict/su
     )
-    // 预检就挡住了，没往内核发 create
-    expect(kernel.state.creates.filter((item) => item.cwd === dirB)).toHaveLength(0)
+    // 预检就挡住了，没往内核发这个 thread 的 create。
+    // （PB-051 起 adapter 启动会自动建/复用**带显式稳定 id** 的默认会话，它也会出现在 creates 里；
+    //   这里只排除默认会话，断言 intent 不变：thread-shared 没有被跨目录 create。）
+    expect(
+      kernel.state.creates.filter(
+        (item) => item.cwd === dirB && item.sessionId !== b.defaultSessionId
+      )
+    ).toHaveLength(0)
+    expect(kernel.state.creates.filter((item) => item.sessionId === 'thread-shared')).toHaveLength(
+      1
+    )
   })
 
   it('conflict（内核 create 直接拒绝）→ 同样映射成可读文案', async () => {
@@ -910,11 +919,13 @@ describe('PB-024 cwd 钩子与 defaultSessionId', () => {
     ).rejects.toThrow(/session\/conflict/u)
   })
 
-  it('defaultSessionId 只读暴露（threads 列表过滤幽灵会话用），默认行为不变', async () => {
+  it('defaultSessionId 只读暴露（threads 列表过滤幽灵会话用）；PB-051 起是稳定 id，不再每次启动 mint', async () => {
     const dirA = tempDir('a')
     const adapter = await startAdapter(dirA)
     expect(adapter.defaultSessionId).toBe(adapter.sessionId)
-    expect(adapter.defaultSessionId).toMatch(/^auto-session-/u)
+    // PB-051（预期行为变化）：默认会话 id = 从 cwd 派生的稳定 id。
+    // 旧实现是内核每次启动 mint 的 `auto-session-N`，于是每次启动多一个 blank 会话。
+    expect(adapter.defaultSessionId).toMatch(/^kyclaw-default-[0-9a-f]{16}$/u)
     const listed = await adapter.listKernelSessions()
     expect(listed.some((item) => item.sessionId === adapter.defaultSessionId)).toBe(true)
   })

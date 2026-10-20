@@ -9,20 +9,15 @@ import { CodeBlock } from '../parts/CodeBlock'
  *   - P0-B：Shiki 高亮结果模块级缓存——组件重挂时首帧就是高亮 HTML（不等 promise、不闪纯文本）。
  */
 describe('PB-041 P0-A：结束态不换型、同一节点不重挂', () => {
-  it('streaming → false 后 code-block DOM 节点引用保持不变', () => {
+  it('streaming → false 后 code-block DOM 节点引用保持不变', async () => {
     const text = '```ts\nconst a = 1\n```\n\n正文。'
     const { rerender } = render(<TextPart text={text} streaming />)
-    // 流式中可能因未闭合围栏切块不同，这里直接取当前已渲染的 code-block（若无则补一个分块后的文本）
-    const before = screen.queryByTestId('code-block')
+    // PB-042 起 code-block 在「高亮就绪 + 有正文」之前不落 DOM（首帧即高亮，不闪空），
+    // 所以流式这一侧要先等它首次上屏；之后的断言仍是「同一节点、没有 unmount/remount」。
+    const before = await screen.findByTestId('code-block')
     rerender(<TextPart text={text} streaming={false} />)
     const after = screen.getByTestId('code-block')
-    if (before !== null) {
-      // 同一节点：没有 unmount/remount
-      expect(after).toBe(before)
-    } else {
-      // 流式中该块还没被切出来（未闭合围栏）：结束态首次出现也算正常，不构成重挂
-      expect(after).toBeInTheDocument()
-    }
+    expect(after).toBe(before)
   })
 })
 

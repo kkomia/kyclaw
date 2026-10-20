@@ -43,6 +43,16 @@ function isAuthError(error: Error): boolean {
 }
 
 /**
+ * PB-050：**内核进程已退出是事实**，优先于任何网络/超时正则。
+ *
+ * 主进程的崩溃文案（`内核进程已退出（exitCode=…）：…日志：<绝对路径>`）要原样给到用户；
+ * 即使底层连接错误串（`read ECONNRESET` 等）也被拼进 message，也不能降级成通用
+ * 「连接中断」——那正是 in-flight 杀内核时卡片丢 exitCode/日志路径的最后一环。
+ * 纯网络错误（内核没退）不含这些标记，照旧走下面的「连接中断」分支。
+ */
+const KERNEL_EXIT_PATTERN = /内核进程已退出|内核已退出|kernel\.crashed|KERNEL_EXITED/
+
+/**
  * 给用户看的主文案（中文）；原始串仍保留在详情区。
  * 已经是中文的人话（如「agent 服务未启动」）原样显示，不改写事实。
  *
@@ -51,6 +61,8 @@ function isAuthError(error: Error): boolean {
  */
 function describeError(error: Error): string {
   const message = error.message ?? ''
+  // PB-050：内核崩溃详情最先判定（先于网络正则），不能被「连接中断」覆盖
+  if (KERNEL_EXIT_PATTERN.test(message)) return message
   if (isAuthError(error)) return '模型密钥缺失或失效，请检查模型与 Key 后重试。'
   if (
     /agent 服务未启动|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|fetch failed|socket hang up|network|timed? ?out/i.test(

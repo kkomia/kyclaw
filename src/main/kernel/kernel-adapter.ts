@@ -39,6 +39,7 @@ import {
 import { startKernelProcess } from './kernel-process'
 import { kernelExitMessage } from './kernel-startup'
 import { KernelRpcClient } from './kernel-rpc'
+import { resolveDefaultSessionId } from './kernel-default-session'
 import {
   KernelSseMapper,
   appendEffectiveFrames,
@@ -262,6 +263,31 @@ export function sameCwd(
   return norm(left) === norm(right)
 }
 
+/**
+ * PB-050：socket 意外断开后等 child `exit` 事件的宽限。
+ *
+ * Windows 上内核被杀时，主进程**先**收到 mux socket 的 `read ECONNRESET`，child `exit`
+ * 事件常晚一拍；没有这个宽限，"此刻 kernelExit 有没有值"会决定文案是崩溃详情还是网络错误，
+ * 等于让用户看掷骰子（PB-050 证据：in-flight 4/4 退化成「连接中断」）。
+ */
+export const KERNEL_EXIT_SETTLE_GRACE_MS = 1_500
+
+/**
+ * PB-050：连接层断裂（mux socket close / `read ECONNRESET`）之后的**失败归类**。
+ *
+ * - 内核进程已退出（有 exit 事实，bootstrap 据此写 `kernel.crashed`）→ 用崩溃详情
+ *   （exitCode/signal + 日志绝对路径 + 重启建议），不被网络文案覆盖；
+ * - 内核没退出 → **原样返回**连接层错误（普通网络错误仍走「连接中断」，不扩大到内核崩溃）。
+ */
+export function kernelLossFailure(
+  socketError: Error | undefined,
+  kernelExit: { exitCode: number | null; signal?: string | null } | undefined,
+  logFile: string | undefined
+): Error {
+  if (kernelExit !== undefined) return new Error(kernelExitMessage(kernelExit, logFile))
+  return socketError ?? new Error('kernel adapter: mux socket closed')
+}
+
 /** 把内核错误映射成用户能看懂的文案（session/writer-held 等当一等错误，不吞） */
 export function kernelUserError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error)
@@ -287,6 +313,30 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     options.resolveCwd?.(threadId) ?? options.appDataDir
   /** PB-043：运行期崩溃信息（ready 之后 exit 才有值；之后所有写路径据此给可诊断错误） */
   let kernelExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined
+  /** PB-050：child `exit` 事件的到达信号（socket 先断时给它一拍宽限，见 waitForKernelExit） */
+  let markKernelExited: (() => void) | undefined
+  const kernelExited = new Promise<void>((resolve) => {
+    markKernelExited = resolve
+  })
+  /**
+   * PB-050：等内核退出事件（至多 `KERNEL_EXIT_SETTLE_GRACE_MS`）。
+   * 已退出/等到了 → 立刻返回（`kernelExit` 有值）；内核没退 → 宽限后返回，调用方按连接错误处理。
+   */
+  const waitForKernelExit = async (): Promise<void> => {
+    if (kernelExit !== undefined) return
+    let timer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([
+        kernelExited,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, KERNEL_EXIT_SETTLE_GRACE_MS)
+          timer.unref?.()
+        })
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
   const kernel = await startKernelProcess({
     electronExecutable: options.electronExecutable,
     asarPath: options.asarPath,
@@ -295,6 +345,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     ...(options.readyTimeoutMs === undefined ? {} : { readyTimeoutMs: options.readyTimeoutMs }),
     onExit: (info) => {
       kernelExit = info
+      markKernelExited?.()
       options.onKernelExit?.(info)
     }
   })
@@ -412,6 +463,28 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     }
 
     /**
+     * PB-051：启动时的默认会话 = **每个 cwd 一个稳定 id**；已存在就只复用（follow 零写盘）。
+     *
+     * 旧实现每次启动都 `createSession()`（不带 id），内核每次 mint 一个新 `session-<uuid>` 并
+     * 落盘一个 header-only blank 会话（~330B）+ 一条 projcache → 连续重启 N 次 = 多 N 个空会话。
+     * 这里只做「判存在」：list 走**裸 rpc**（不经 `listKernelSessions()`，避免启动时顺手填
+     * cwdBySession、改变「刚启动 projectIdOf 一律 null」的既有语义）。
+     */
+    const createOrReuseDefaultSession = (): Promise<string> =>
+      resolveDefaultSessionId(resolveCwd(), {
+        listSessionIds: async () => {
+          const listed = await rpc.call<{ items?: Array<Record<string, unknown>> }>(
+            'session/list',
+            { _request: {} }
+          )
+          return (listed.items ?? []).map((item) =>
+            typeof item.sessionId === 'string' ? item.sessionId : undefined
+          )
+        },
+        createSession
+      })
+
+    /**
      * PB-030：**读路径专用**——只回"已知会话"的 sessionId；未知返回 `undefined`，**绝不 session/create**。
      *
      * 为什么：renderer 在还没有真实会话时用占位 threadId（`kyclaw-pending`）轮询投影/命令，
@@ -486,10 +559,21 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
     ws.onClose((error) => {
       if (closed) return
       closed = true
-      for (const state of states.values()) {
-        state.dead = true
-        settleTurn(state, error ?? new Error('kernel adapter: mux socket closed'))
-      }
+      /**
+       * PB-050：mux socket 意外断开 → in-flight 那一轮先别按"网络错误"收尾。
+       *
+       * 内核被杀时 socket 的 `read ECONNRESET` 常比 child `exit` 事件先到；给 exit 一拍宽限后
+       * 再归类：内核已退出 = 崩溃详情（exitCode/signal/日志绝对路径），没退 = 原连接错误
+       * （普通网络错误的「连接中断」文案不变）。
+       */
+      void (async () => {
+        await waitForKernelExit()
+        const failure = kernelLossFailure(error, kernelExit, options.logFile)
+        for (const state of states.values()) {
+          state.dead = true
+          settleTurn(state, failure)
+        }
+      })()
     })
 
     ws.onMessage((text) => {
@@ -605,7 +689,7 @@ export async function startKernelAdapter(options: KernelAdapterOptions): Promise
       }
     })
 
-    const defaultSessionId = await createSession()
+    const defaultSessionId = await createOrReuseDefaultSession()
     let defaultState = await openFollow(defaultSessionId)
     states.set(defaultSessionId, defaultState)
 

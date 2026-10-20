@@ -123,6 +123,50 @@ describe('ErrorCard 渲染', () => {
     expect(screen.getByTestId('error-retry').className).toContain('h-(--control-height-sm)')
   })
 
+  it('PB-050：内核已退出（崩溃详情）→ 主文案就是详情，不被「连接中断」覆盖', () => {
+    const message =
+      '内核路径失败：内核进程已退出（exitCode=1）：内核不再响应，请重启应用。\n日志：C:\\Users\\me\\AppData\\Roaming\\kyclaw\\logs\\kernel.log'
+    render(
+      <MemoryRouter>
+        <ErrorCard error={new Error(message)} onRetry={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const copy = screen.getByTestId('error-message')
+    expect(copy).toHaveTextContent('内核进程已退出（exitCode=1）')
+    expect(copy).toHaveTextContent('请重启应用')
+    expect(copy).toHaveTextContent('kernel.log')
+    expect(copy).not.toHaveTextContent('连接中断')
+    // 原始串仍在「详情」里（不删、可展开）
+    expect(screen.getByTestId('error-raw')).toHaveTextContent('内核进程已退出')
+  })
+
+  it('PB-050：详情里同时带 read ECONNRESET 时，仍以内核崩溃详情为准（不被网络正则抢走）', () => {
+    const message =
+      '内核进程已退出（signal SIGKILL）：内核不再响应，请重启应用。\n日志：C:\\Users\\me\\AppData\\Roaming\\kyclaw\\logs\\kernel.log；底层连接错误：read ECONNRESET'
+    render(
+      <MemoryRouter>
+        <ErrorCard error={new Error(message)} onRetry={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const copy = screen.getByTestId('error-message')
+    expect(copy).toHaveTextContent('内核进程已退出（signal SIGKILL）')
+    expect(copy).not.toHaveTextContent('连接中断')
+  })
+
+  it('PB-050 负向控制：纯网络错误（内核没退）仍是「连接中断」文案', () => {
+    render(
+      <MemoryRouter>
+        <ErrorCard error={new Error('read ECONNRESET')} onRetry={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const copy = screen.getByTestId('error-message')
+    expect(copy).toHaveTextContent('连接中断')
+    expect(copy).not.toHaveTextContent('内核进程已退出')
+  })
+
   it('401：多一条"去设置填 Key"的指引，链接指向设置页', () => {
     const unauthorized = Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     render(
@@ -230,6 +274,40 @@ describe('流报错 → 错误卡 + 重试（端到端）', () => {
     })
     expect(screen.getByTestId('message-list')).toHaveTextContent('完整回答')
     expect(screen.queryByTestId('error-card')).not.toBeInTheDocument()
+  })
+
+  it('PB-050：in-flight 断流且内核已退出 → 卡片给崩溃详情（exitCode/日志路径），不是「连接中断」', async () => {
+    const control = createMockTransport()
+    await renderSession(control)
+
+    await act(async () => {
+      send('长回答：说到一半杀内核')
+    })
+    await act(async () => {
+      control.push('说到一半')
+    })
+    // 与主进程 kernel-chat 实际写进 SSE 的 errorText 同形（前缀由 kernel-chat 加）
+    await act(async () => {
+      control.disconnect(
+        new Error(
+          '内核路径失败：内核进程已退出（exitCode=1）：内核不再响应，请重启应用。\n日志：C:\\Users\\me\\AppData\\Roaming\\kyclaw\\logs\\kernel.log'
+        )
+      )
+    })
+
+    const card = await screen.findByTestId('error-card')
+    const copy = screen.getByTestId('error-message')
+    expect(copy).toHaveTextContent('内核进程已退出（exitCode=1）')
+    expect(copy).toHaveTextContent('请重启应用')
+    expect(copy).toHaveTextContent('kernel.log')
+    expect(copy).not.toHaveTextContent('连接中断')
+    // 已交付的半截内容仍在；重试入口仍在（PB-038 的「重启应用」是启动失败档，不受影响）
+    expect(screen.getByTestId('message-list')).toHaveTextContent('说到一半')
+    expect(
+      card.querySelector('[data-testid="error-retry"], [data-testid="error-retry-keep"]')
+    ).not.toBeNull()
+    // 原始串收在「详情」里（不删）
+    expect(screen.getByTestId('error-raw')).toHaveTextContent('内核进程已退出')
   })
 })
 
